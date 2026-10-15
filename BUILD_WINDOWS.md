@@ -108,7 +108,7 @@ pwsh tools\installer\package-windows.ps1 -BuildDir build -Version 2026.10.1 -Out
 
 It puts the interface and servers in one folder with the Visual C++ runtime beside them, and writes `dist\Darkride-2026.10.1-windows-x64.zip` and `dist\Darkride-2026.10.1-windows-x64-setup.exe`. The installer script is `tools\installer\darkride.iss`.
 
-GitHub builds these the same way: pushing a tag such as `v2026.10.1` runs `.github/workflows/windows-release.yml`, which publishes them as a release.
+GitHub builds these the same way: pushing a tag such as `v2026.10.1` runs `.github/workflows/release.yml`, which publishes them as a release, along with the Linux world server as a Docker image (`docker/server`).
 
 ## What's left out on Windows
 

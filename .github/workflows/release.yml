@@ -1,0 +1,256 @@
+# Builds Darkride for Windows (an installer and a zip) and the Linux world server (a Docker image), and publishes
+# them: the Windows files as a GitHub release, the image as ghcr.io/<owner>/darkride-server.
+#
+#   git tag v2026.10.1 && git push origin v2026.10.1    builds both, makes the release "Darkride 2026.10.1", and
+#                                                        pushes the image as :2026.10.1 and :latest
+#   a tag with a dash, such as v2026.10.1-beta1          the same, marked as a pre-release, and without :latest
+#   a push to the darkride-builds branch                 builds both, to catch breakage; the Windows files are kept
+#                                                        as a workflow artifact for two weeks, and the image is
+#                                                        pushed as :darkride-builds
+#   Actions > Release > Run workflow                      the same for any branch (once this file is on the
+#                                                        repository's default branch, which GitHub requires)
+#
+# The Windows steps follow BUILD_WINDOWS.md. A first run takes a few hours: vcpkg builds every dependency. vcpkg's
+# packages and Qt are cached, so later runs only compile Darkride. The server is docker/server/Dockerfile, started
+# here once to check that its web interface answers before the image is pushed.
+#
+# The jobs are independent: the release is made when the Windows build succeeds, and mentions the server image
+# only when that succeeded too.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [darkride-builds]
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version for the file names (default 0.0.0-<commit>)
+        required: false
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    # VS 2022. windows-2025 has VS 2026, which also works (BUILD_WINDOWS_VISUAL_STUDIO.md) with -T v143
+    runs-on: windows-2022
+    timeout-minutes: 360
+    env:
+      # short paths: vcpkg's folders go deep, and long paths aren't enabled on the runner
+      TIVOLI_VCPKG_BASE: C:\dv
+      VCPKG_DEFAULT_BINARY_CACHE: C:\dvcache
+      QT_DIR_BASE: C:\Qt
+      QT_CMAKE_PREFIX_PATH: C:/Qt/5.15.2/msvc2019_64/lib/cmake
+      BUILD_DIR: C:\b
+      # a production build: the data folder is "Darkride", and the stable metaverse (vr.darkride.ai) is used
+      RELEASE_TYPE: PRODUCTION
+      STABLE_BUILD: 1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") { $v = "${{ github.ref_name }}" -replace '^v', '' }
+          elseif ("${{ inputs.version }}") { $v = "${{ inputs.version }}" }
+          else { $v = "0.0.0-" + "${{ github.sha }}".Substring(0, 8) }
+          "Version $v"
+          "VERSION=$v" >> $env:GITHUB_ENV
+          "RELEASE_NUMBER=$v" >> $env:GITHUB_ENV
+          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          Get-PSDrive C, D | Format-Table Name, @{n="Free GB"; e={[int]($_.Free / 1GB)}}
+
+      # vcpkg's December 2021 version recognises compilers only up to 14.3x, so it needs the 14.39 toolset beside
+      # VS 2022's own 14.4x; ATL is for the speech recognition code (sphelper.h)
+      - name: Add the MSVC 14.39 toolset
+        shell: pwsh
+        run: |
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
+          $vs = & "$installer\vswhere.exe" -latest -property installationPath
+          $p = Start-Process -Wait -PassThru -FilePath "$installer\setup.exe" -ArgumentList @(
+            "modify", "--installPath", "`"$vs`"",
+            "--add", "Microsoft.VisualStudio.Component.VC.14.39.17.9.x86.x64",
+            "--add", "Microsoft.VisualStudio.Component.VC.14.39.17.9.ATL",
+            "--add", "Microsoft.VisualStudio.Component.VC.ATL",
+            "--quiet", "--norestart", "--nocache")
+          Get-ChildItem "$vs\VC\Tools\MSVC" | ForEach-Object Name
+          if (-not (Test-Path "$vs\VC\Tools\MSVC\14.39.*")) { throw "The 14.39 toolset didn't install (exit $($p.ExitCode))" }
+
+      - name: Cache Qt
+        id: qt-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\Qt
+          key: qt-5.15.2-msvc2019_64-webengine-script-webgl
+
+      - name: Install Qt
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          python -m pip install aqtinstall
+          python -m aqt install-qt windows desktop 5.15.2 win64_msvc2019_64 -m qtwebengine qtscript qtwebglplugin -O $env:QT_DIR_BASE
+
+      - name: Restore vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: C:\dvcache
+          key: vcpkg-windows-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+          restore-keys: vcpkg-windows-
+
+      # vcpkg builds (or restores) the dependencies here, as part of configuring
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B $env:BUILD_DIR -G "Visual Studio 17 2022" -A x64 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+
+      - name: Save vcpkg packages
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: C:\dvcache
+          key: vcpkg-windows-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+
+      # /m:2: each project already compiles 4 files at once (/MP), and the runner has 16 GB
+      - name: Build
+        shell: pwsh
+        run: cmake --build $env:BUILD_DIR --config Release --target interface domain-server assignment-client -- /m:2 /v:minimal /nologo
+
+      - name: Package
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          ./tools/installer/package-windows.ps1 -BuildDir $env:BUILD_DIR -Version $env:VERSION -OutDir dist
+
+      - name: Keep the files
+        uses: actions/upload-artifact@v4
+        with:
+          name: Darkride-${{ env.VERSION }}-windows-x64
+          path: |
+            dist/*.exe
+            dist/*.zip
+          retention-days: 14
+          compression-level: 0
+
+  linux-server:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version and image name
+        run: |
+          if [ "${{ github.ref_type }}" = tag ]; then v="${GITHUB_REF_NAME#v}"
+          elif [ -n "${{ inputs.version }}" ]; then v="${{ inputs.version }}"
+          else v="0.0.0-${GITHUB_SHA:0:8}"; fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          # registry names must be lower case
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/darkride-server" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      # The image's layers are cached between runs. vcpkg and the build folder are BuildKit cache mounts, which
+      # aren't, so each run compiles the server; with Ubuntu's Qt that's well under an hour.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/server/Dockerfile
+          load: true
+          tags: darkride-server:test
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=darkride-server
+          cache-to: type=gha,scope=darkride-server,mode=max
+
+      # A world starts: the domain server's web interface answers, and nothing has exited a while later
+      - name: Test
+        run: |
+          mkdir -p "$RUNNER_TEMP/world"
+          docker run -d --name world --network host -v "$RUNNER_TEMP/world:/data" \
+            -e HIFI_METAVERSE_URL=https://vr.darkride.ai darkride-server:test
+          for i in $(seq 60); do curl -fsS -o /dev/null http://localhost:40100 && break; sleep 2; done
+          status=0
+          curl -fsS -o /dev/null http://localhost:40100 || { echo "::error::The domain server's web interface didn't answer"; status=1; }
+          sleep 20
+          [ "$(docker inspect -f '{{.State.Running}}' world)" = true ] || { echo "::error::The server container exited"; status=1; }
+          docker logs world 2>&1 | tail -n 60
+          docker rm -f world > /dev/null
+          exit $status
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Push
+        run: |
+          if [ "${{ github.ref_type }}" = tag ]; then
+            tags="$VERSION"
+            case "$VERSION" in *-*) ;; *) tags="$tags latest" ;; esac
+          else
+            tags="${GITHUB_REF_NAME//\//-}"
+          fi
+          for t in $tags; do
+            docker tag darkride-server:test "$IMAGE:$t"
+            docker push "$IMAGE:$t"
+            echo "Pushed $IMAGE:$t" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  release:
+    needs: [windows, linux-server]
+    # Windows alone is enough for a release; the server image is mentioned only if it was pushed
+    if: always() && github.ref_type == 'tag' && needs.windows.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Darkride-*-windows-x64
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVER: ${{ needs.linux-server.result }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          v="${tag#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/darkride-server"
+          pre=""
+          case "$v" in *-*) pre="--prerelease" ;; esac
+          {
+            echo "## Windows"
+            echo
+            echo "- **Darkride-$v-windows-x64-setup.exe** installs Darkride for you (or for everyone on the PC), with Start menu and optional desktop shortcuts."
+            echo "- **Darkride-$v-windows-x64.zip** is the same files; unzip and run \`interface.exe\`."
+            echo
+            echo "The installer isn't code-signed yet, so Windows SmartScreen may warn: choose *More info* then *Run anyway*."
+            echo
+            echo "## Linux world server"
+            echo
+            if [ "$SERVER" = success ]; then
+              echo "A Docker image with the domain server and assignment clients (Ubuntu 24.04, x64):"
+              echo
+              echo '```'
+              echo "docker pull $image:$v"
+              echo '```'
+              echo
+              echo "See \`docker/server/docker-compose.yml\` for running it."
+            else
+              echo "The server image didn't build for this release."
+            fi
+          } > notes.md
+          gh release create "$tag" dist/*.exe dist/*.zip --repo "$GITHUB_REPOSITORY" --title "Darkride $v" \
+            --notes-file notes.md --verify-tag $pre
