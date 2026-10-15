@@ -21,7 +21,7 @@ else ()
     # else Linux desktop
     vcpkg_download_distfile(
         WEBRTC_SOURCE_ARCHIVE
-        URLS https://cdn.tivolicloud.com/dependencies/webrtc-20190626-linux.tar.gz
+        URLS https://build-deps.overte.org/seth/webrtc-20190626-linux.tar.gz
         SHA512 07d7776551aa78cb09a3ef088a8dee7762735c168c243053b262083d90a1d258cec66dc386f6903da5c4461921a3c2db157a1ee106a2b47e7756cb424b66cc43
         FILENAME webrtc-20190626-linux.tar.gz
     )

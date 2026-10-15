@@ -138,6 +138,9 @@ endif()
             # self.vcpkgUrl = 'https://cdn.tivolicloud.com/dependencies/vcpkg/vcpkg-linux-client.tar'
             # self.vcpkgHash = '6a1ce47ef6621e699a4627e8821ad32528c82fce62a6939d35b205da2d299aaa405b5f392df4a9e5343dd6a296516e341105fbb2dd8b48864781d129d7fba10d'
             self.hostTriplet = 'x64-linux'
+            # The 2021 vcpkg tool uses std::uint64_t without including <cstdint>, which GCC 13
+            # (Ubuntu 24.04) no longer pulls in through other headers.
+            self.bootstrapEnv["CXXFLAGS"] = (self.bootstrapEnv.get("CXXFLAGS", "") + " -include cstdint").strip()
 
             if platform.machine() == "aarch64":
                 self.bootstrapCmds.append("-useSystemBinaries")
@@ -280,6 +283,11 @@ endif()
 
         with open(tripletForBuildTypePath, "a") as tripletForBuildTypeFile:
             tripletForBuildTypeFile.write("set(VCPKG_BUILD_TYPE " + self.vcpkgBuildType + ")\n")
+            if platform.system() == "Linux":
+                # The ports' 2021 sources use std::uint32_t and friends without including <cstdint>,
+                # which GCC 13 (Ubuntu 24.04) no longer pulls in through other headers.
+                tripletForBuildTypeFile.write("set(VCPKG_C_FLAGS \"\")\n")
+                tripletForBuildTypeFile.write("set(VCPKG_CXX_FLAGS \"-include cstdint\")\n")
 
     def getTripletWithBuildType(self, triplet):
         if not self.vcpkgBuildType:
@@ -315,12 +323,14 @@ endif()
         # otherwise detect the host as x64-osx and build host tools for the wrong architecture.
         self.run(['install', '--triplet', hostTriplet, '--host-triplet', hostTriplet, 'hifi-host-tools'])
 
-        # If not android, install the hifi-client-deps libraries
+        # If not android, install the hifi-client-deps libraries (only the server's for a server-only
+        # build: the client's include prebuilt SDKs, such as Leap Motion and Steamworks, that a server never uses)
         if not self.args.android:
             print("Installing build dependencies")
             if (self.vcpkgBuildType):
                 self.copyTripletForBuildType(self.triplet)
-            self.run(['install', '--triplet', self.getTripletWithBuildType(self.triplet), '--host-triplet', hostTriplet, 'hifi-client-deps'])
+            depsPackage = 'hifi-server-deps' if self.args.server_only else 'hifi-client-deps'
+            self.run(['install', '--triplet', self.getTripletWithBuildType(self.triplet), '--host-triplet', hostTriplet, depsPackage])
 
     def cleanBuilds(self):
         if self.noClean:

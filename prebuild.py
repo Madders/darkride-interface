@@ -97,6 +97,7 @@ def parse_args():
     parser.add_argument('--vcpkg-root', type=str, help='The location of the vcpkg distribution')
     parser.add_argument('--vcpkg-build-type', type=str, help='Could be `release` or `debug`. By default it doesn`t set the build-type')
     parser.add_argument('--vcpkg-skip-clean', action='store_true', help='Skip the cleanup of vcpkg downloads and packages folders after vcpkg build completition.')
+    parser.add_argument('--server-only', action='store_true', help='Install only the dependencies of the server components')
     parser.add_argument('--build-root', required=True, type=str, help='The location of the cmake build')
     parser.add_argument('--ports-path', type=str, default=defaultPortsPath)
     parser.add_argument('--ci-build', action='store_true', default=os.getenv('CI_BUILD') is not None)
