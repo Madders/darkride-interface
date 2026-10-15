@@ -23,17 +23,15 @@ if (VCPKG_LIBRARY_LINKAGE STREQUAL dynamic)
     set(MPG123_CONFIGURATION_SUFFIX _Dll)
 endif()
 
-if (NOT VCPKG_TARGET_IS_WINDOWS)
-    vcpkg_from_sourceforge(
-        OUT_SOURCE_PATH SOURCE_PATH
-        REPO mpg123/mpg123
-        REF ${MPG123_VERSION}
-        FILENAME "mpg123-${MPG123_VERSION}.tar.bz2"
-        SHA512 ${MPG123_HASH}
-        PATCHES
-            0001-fix-x86-build.patch
-    )
-endif()
+vcpkg_from_sourceforge(
+    OUT_SOURCE_PATH SOURCE_PATH
+    REPO mpg123/mpg123
+    REF ${MPG123_VERSION}
+    FILENAME "mpg123-${MPG123_VERSION}.tar.bz2"
+    SHA512 ${MPG123_HASH}
+    PATCHES
+        0001-fix-x86-build.patch
+)
 
 # include(${CURRENT_INSTALLED_DIR}/share/yasm-tool-helper/yasm-tool-helper.cmake)
 # yasm_tool_helper(APPEND_TO_PATH)
@@ -54,37 +52,30 @@ if(VCPKG_TARGET_IS_UWP)
         DESTINATION ${CURRENT_PACKAGES_DIR}/include
     )
 elseif(VCPKG_TARGET_IS_WINDOWS)
-    # vcpkg_install_msbuild(
-    #     SOURCE_PATH ${SOURCE_PATH}
-    #     PROJECT_SUBPATH ports/MSVC++/2015/win32/libmpg123/libmpg123.vcxproj
-    #     OPTIONS /p:UseEnv=True
-    #     RELEASE_CONFIGURATION Release${MPG123_CONFIGURATION}${MPG123_CONFIGURATION_SUFFIX}
-    #     DEBUG_CONFIGURATION Debug${MPG123_CONFIGURATION}${MPG123_CONFIGURATION_SUFFIX}
-    # )
-    # file(INSTALL
-    #     ${SOURCE_PATH}/ports/MSVC++/mpg123.h
-    #     ${SOURCE_PATH}/src/libmpg123/fmt123.h
-    #     ${SOURCE_PATH}/src/libmpg123/mpg123.h.in
-    #     DESTINATION ${CURRENT_PACKAGES_DIR}/include
-    # )
+    # Tivoli's prebuilt Windows archive is gone; build the libraries with mpg123's own CMake project.
+    # That project tells x64 from x86 by the Visual Studio platform, which a Ninja build leaves empty.
+    vcpkg_replace_string(${SOURCE_PATH}/ports/cmake/src/libmpg123/CMakeLists.txt
+        "MSVC AND CMAKE_GENERATOR_PLATFORM STREQUAL \"x64\"" "MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8")
+    vcpkg_find_acquire_program(YASM)
 
-    vcpkg_download_distfile(
-		MPG123_ARCHIVE
-		URLS https://cdn.tivolicloud.com/dependencies/mpg123-${MPG123_VERSION}-windows.zip
-		SHA512 ef946260f4444713e8967635e76fcca7cb53c1ab645b38a0455e5cda6658a3a304622a037db2fe0d46d4e2c54d5dede28eaaec3441099078d0da80819535fec1
-		FILENAME mpg123-${MPG123_VERSION}-windows.zip
+    vcpkg_configure_cmake(
+        SOURCE_PATH ${SOURCE_PATH}/ports/cmake
+        PREFER_NINJA
+        OPTIONS
+            -DYASM_ASSEMBLER=${YASM}
+            -DUSE_MODULES=OFF
+            -DBUILD_TESTING=OFF
     )
-    
-    vcpkg_extract_source_archive_ex(
-        OUT_SOURCE_PATH MPG123_EXTRACTED
-        ARCHIVE ${MPG123_ARCHIVE}
-    )
+    vcpkg_install_cmake()
+    vcpkg_copy_pdbs()
+    # Leave out mpg123's CMake config, as the autotools builds elsewhere do: libsndfile would prefer it to its
+    # own FindMpg123 and then not link mpg123, and it names import libraries for libout123 and libsyn123
+    # that MSVC never writes, since those DLLs export nothing.
+    file(REMOVE_RECURSE ${CURRENT_PACKAGES_DIR}/lib/cmake ${CURRENT_PACKAGES_DIR}/debug/lib/cmake)
+    # mpg123.h includes fmt123.h, which this version's CMake project does not install
+    file(INSTALL ${SOURCE_PATH}/src/libmpg123/fmt123.h DESTINATION ${CURRENT_PACKAGES_DIR}/include)
 
-    file(INSTALL ${MPG123_EXTRACTED}/bin/ DESTINATION ${CURRENT_PACKAGES_DIR}/bin)
-    file(INSTALL ${MPG123_EXTRACTED}/debug/ DESTINATION ${CURRENT_PACKAGES_DIR}/debug)
-    file(INSTALL ${MPG123_EXTRACTED}/include/ DESTINATION ${CURRENT_PACKAGES_DIR}/include)
-    file(INSTALL ${MPG123_EXTRACTED}/lib/ DESTINATION ${CURRENT_PACKAGES_DIR}/lib)
-    file(INSTALL ${MPG123_EXTRACTED}/share/ DESTINATION ${CURRENT_PACKAGES_DIR}/share)
+    file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include" "${CURRENT_PACKAGES_DIR}/debug/share")
 
 elseif(VCPKG_TARGET_IS_OSX OR VCPKG_TARGET_IS_LINUX)
     set(MPG123_OPTIONS
@@ -120,8 +111,6 @@ elseif(VCPKG_TARGET_IS_OSX OR VCPKG_TARGET_IS_LINUX)
     file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/share")
 endif()
 
-if (NOT VCPKG_TARGET_IS_WINDOWS)
-    file(INSTALL ${SOURCE_PATH}/COPYING DESTINATION ${CURRENT_PACKAGES_DIR}/share/${PORT} RENAME copyright)
-endif()
+file(INSTALL ${SOURCE_PATH}/COPYING DESTINATION ${CURRENT_PACKAGES_DIR}/share/${PORT} RENAME copyright)
 
 message(STATUS "Installing done")

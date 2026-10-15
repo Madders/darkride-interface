@@ -79,7 +79,8 @@ endif()
         self.version = 1
 
         # when next vcpkg release, lets unify version again
-        if system == 'Darwin':
+        # Windows shares the macOS version: the vcpkg tool of 2021.05.12 skips Visual Studio 2022's v143 toolset
+        if system == 'Darwin' or system == 'Windows':
             self.vcpkgVersion = "5ddd7f02689b7c5aab78711d77f61db5d2e5e79c"
         else:
             self.vcpkgVersion = "2021.05.12"
