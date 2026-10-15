@@ -116,6 +116,7 @@ These SDKs can no longer be downloaded, so the build leaves out the plugins that
 | Errors about paths that are too long | Use a short `TIVOLI_VCPKG_BASE` such as `C:\vcpkg`, and keep the repository near the root of the drive |
 | `'stdext': is not a class or namespace name` in Qt's `qvector.h` | Visual Studio 2026's own compiler can't build Qt 5.15's headers. Configure with `-T v143` (step 4), in a new build folder |
 | `Compatibility with CMake < 3.5 has been removed`, when configuring Darkride | Add `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` to the `cmake` command (step 4) |
+| `generator platform: x64 Does not match the platform used previously` | The build folder was configured before without `-A x64`, for example with a plain `cmake ..`, even if that run failed. Delete the `build` folder (or its `CMakeCache.txt` and `CMakeFiles`) and run step 4 again with the whole command |
 | The same CMake error after you fixed its cause | Delete `build\CMakeCache.txt`, or the whole `build` folder, and run step 4 again |
 | A dependency failed to build | vcpkg's log for it is in `%TIVOLI_VCPKG_BASE%\<id>\buildtrees\<package>\` |
 | Explore shows no worlds | Set `HIFI_METAVERSE_URL` (step 6) |
