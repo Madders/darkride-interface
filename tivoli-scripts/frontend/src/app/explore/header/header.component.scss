@@ -1,4 +1,7 @@
 .header {
+	background: var(--dr-bg-darker);
+	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+
 	::ng-deep .mat-tab-label {
 		min-width: 0;
 		// padding: 0 24px;

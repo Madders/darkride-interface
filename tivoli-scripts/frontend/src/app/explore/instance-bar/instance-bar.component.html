@@ -92,16 +92,16 @@
 			<mat-icon>add</mat-icon>
 			New instance
 		</button>
-		<mat-menu #newMenu="matMenu">
-			<button mat-menu-item (click)="onNewInstance('public')">
+		<mat-menu #newMenu="matMenu" class="dr-instance-menu">
+			<button mat-menu-item class="new" (click)="onNewInstance('public')">
 				<mat-icon>public</mat-icon>
 				Public
 			</button>
-			<button mat-menu-item (click)="onNewInstance('friends')">
+			<button mat-menu-item class="new" (click)="onNewInstance('friends')">
 				<mat-icon>group</mat-icon>
 				Friends
 			</button>
-			<button mat-menu-item (click)="onNewInstance('private')">
+			<button mat-menu-item class="new" (click)="onNewInstance('private')">
 				<mat-icon>lock</mat-icon>
 				Private (by link)
 			</button>

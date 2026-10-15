@@ -3,8 +3,8 @@
 	align-items: center;
 	gap: 12px;
 	padding: 8px 16px;
-	background: rgba(255, 255, 255, 0.06);
-	border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+	background: rgba(0, 175, 255, 0.08);
+	border-bottom: 1px solid rgba(0, 175, 255, 0.25);
 
 	.text {
 		min-width: 0;
@@ -14,16 +14,16 @@
 		}
 
 		.subtitle {
-			opacity: 0.8;
+			color: var(--dr-text-muted);
 			font-size: 0.9em;
 		}
 	}
 
 	.warning {
-		color: #ffb74d;
+		color: #ffb86c;
 	}
 
 	.editing {
-		color: #81c784;
+		color: var(--dr-green);
 	}
 }

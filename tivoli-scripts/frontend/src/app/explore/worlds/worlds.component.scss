@@ -1,11 +1,16 @@
+// a grid, so cards in a row share a height whatever their text
 .worlds {
-	zoom: 0.85;
-	padding: 4px;
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+	gap: 16px;
+	padding: 16px;
 
 	.world {
-		display: inline-block;
-		width: calc(100% / 4);
-		height: 260px;
-		padding: 8px;
+		min-width: 0;
+	}
+
+	.anchor {
+		grid-column: 1 / -1;
+		height: 100px;
 	}
 }

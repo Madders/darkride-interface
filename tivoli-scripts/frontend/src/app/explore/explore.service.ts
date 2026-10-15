@@ -82,6 +82,9 @@ export interface Friend {
 export class ExploreService {
 	loading = false;
 
+	// the world whose instance chooser is open, so the other worlds can step back
+	chooserWorldId: string = null;
+
 	worlds: World[] = [];
 	type: "popular" | "liked" | "private" = "popular";
 	search = "";
