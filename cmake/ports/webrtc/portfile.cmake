@@ -6,7 +6,7 @@ if (ANDROID)
 elseif (WIN32)
     vcpkg_download_distfile(
         WEBRTC_SOURCE_ARCHIVE
-        URLS https://cdn.tivolicloud.com/dependencies/webrtc-20190626-windows.zip
+        URLS https://build-deps.overte.org/seth/webrtc-20190626-windows.zip
         SHA512 c0848eddb1579b3bb0496b8785e24f30470f3c477145035fd729264a326a467b9467ae9f426aa5d72d168ad9e9bf2c279150744832736bdf39064d24b04de1a3
         FILENAME webrtc-20190626-windows.zip
     )

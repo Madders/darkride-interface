@@ -16,7 +16,7 @@
     "hifi-deps",
     {
       "name": "leapmotion",
-      "platform": "!android & !(osx & arm64)"
+      "platform": "!android & !windows & !(osx & arm64)"
     },
     {
       "name": "liblo",
@@ -34,10 +34,6 @@
     {
       "name": "openvr",
       "platform": "x64 & (windows | linux)"
-    },
-    {
-      "name": "ovr",
-      "platform": "windows"
     },
     {
       "name": "quazip",

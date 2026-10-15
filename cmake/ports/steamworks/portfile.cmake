@@ -1,6 +1,6 @@
 vcpkg_download_distfile(
 	STEAMWORKS_ARCHIVE
-	URLS https://cdn.tivolicloud.com/dependencies/steamworks_sdk_137.zip
+	URLS https://build-deps.overte.org/dependencies/steamworks_sdk_137.zip
 	SHA512 c2e07de5e8c3e294583112dc2b3ef63c10275d9b63bea56abb5859ba73a94a11be9510ad6ceda8759ec1733c33ecadd6e6df8cdd669fda02516f282db388b9c1
 	FILENAME steamworks_sdk_137.zip
 )

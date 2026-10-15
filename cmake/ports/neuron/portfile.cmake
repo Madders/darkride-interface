@@ -1,6 +1,6 @@
 vcpkg_download_distfile(
 	NEURON_ARCHIVE
-	URLS https://cdn.tivolicloud.com/dependencies/neuron_datareader_b.12.2.zip
+	URLS https://build-deps.overte.org/dependencies/neuron_datareader_b.12.2.zip
 	SHA512 ab65aefd4f058260ccf4a351a5705a951d3ae7cdf2ff53be6ba5fef9824645e6351c36ddb2cae259e65e0922bc713ef9cfb673fb61eade04d58ee9a00ac5f225
 	FILENAME neuron_datareader_b.12.2.zip
 )

@@ -1,7 +1,7 @@
 if (VCPKG_TARGET_IS_WINDOWS)
 	vcpkg_download_distfile(
 		HIFIAUDIOCODEC_ARCHIVE
-		URLS https://cdn.tivolicloud.com/dependencies/codecSDK-win-2.0.zip
+		URLS https://build-deps.overte.org/dependencies/codecSDK-win-2.0.zip
 		SHA512 8bd3c0c95718db324494b1199ca8e4a1e27b412e2a88e807aa1948f0c221be5aec7f4b1c21725fc23bf589aa4b8aecf669ec36a13376b0632a3c744ecc4dec3a
 		FILENAME codecSDK-win-2.0.zip
 	)
