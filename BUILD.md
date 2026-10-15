@@ -1,14 +1,14 @@
-# OS specific guides (recommended)
+# Building Darkride
 
--   [BUILD_WINDOWS.md](BUILD_WINDOWS.md) - complete instructions for Windows
--   [BUILD_MACOS.md](BUILD_MACOS.md) - additional instructions for macOS
--   [BUILD_LINUX.md](BUILD_LINUX.md) - additional instructions for Linux
--   [BUILD_ANDROID.md](BUILD_ANDROID.md) _...may not work anymore_
+| What | Guide | Status |
+|---|---|---|
+| Windows client and servers | [BUILD_WINDOWS.md](BUILD_WINDOWS.md) | **Tested** with Visual Studio 2022 and 2026. GitHub builds the releases the same way ([.github/workflows/release.yml](.github/workflows/release.yml)) |
+| Linux world server | [docker/README.md](docker/README.md) | **Tested**: Ubuntu 24.04 in Docker. Releases publish it as `ghcr.io/madders/darkride-server` |
+| macOS client | [BUILD_MACOS.md](BUILD_MACOS.md) | Tivoli's guide, not yet updated for Darkride |
+| Linux client | [BUILD_LINUX.md](BUILD_LINUX.md) | Tivoli's guide, not tried with Darkride |
+| Android | [BUILD_ANDROID.md](BUILD_ANDROID.md) | Probably doesn't work any more |
 
-We also recommended learning from example when new to building Tivoli. There are many complex systems in place and it's not always straightforward and easy.
-
-You can find our official production pipelines for GitLab here:
-https://git.tivolicloud.com/tivolicloud/interface/-/tree/main/.gitlab
+The rest of this page is general background for every platform.
 
 # System dependencies
 
@@ -19,31 +19,22 @@ https://git.tivolicloud.com/tivolicloud/interface/-/tree/main/.gitlab
 
 # CMake
 
-Tivoli uses CMake to generate build files and project files for your platform. If you don't know how to use CMake, you may struggle to understand what's going on.
+Darkride uses CMake to generate build files and project files for your platform. If you don't know how to use CMake, you may struggle to understand what's going on.
 
 ## Qt
 
-When CMake is preparing build files, it will download our version of Qt.
-
-Usually this is stored in your home directory as `tivoli/qt`.
-
-As this folder can get quite big, you change the directory of where Qt will be downloaded by setting the environment variable (preferably system-wide) `TIVOLI_QT_BASE`.
+Darkride needs Qt 5.15.2 with Qt WebEngine and Qt Script. Point CMake at it with `QT_CMAKE_PREFIX_PATH`, its **lib/cmake** folder:
 
 ```bash
     # windows
-    set TIVOLI_QT_BASE=C:\TIVOLI_QT
-    # unix
-    export TIVOLI_QT_BASE=/home/user/TIVOLI_QT
-```
-
-Whilst this is not recommended with regular Qt installs, if you want to change the installation of Qt, you will need to set the environment variable `QT_CMAKE_PREFIX_PATH` pointing to your Qt **lib/cmake** folder.
-
-```bash
-    # windows
-    set QT_CMAKE_PREFIX_PATH=C:\path\to\qt\lib\cmake
+    set QT_CMAKE_PREFIX_PATH=C:/Qt/5.15.2/msvc2019_64/lib/cmake
     # unix
     export QT_CMAKE_PREFIX_PATH=/path/to/qt/lib/cmake
 ```
+
+[BUILD_WINDOWS.md](BUILD_WINDOWS.md) installs the official Qt with aqtinstall. The Linux server image uses Ubuntu's own Qt packages.
+
+Without `QT_CMAKE_PREFIX_PATH`, CMake runs `hifi_qt.py` to download a prebuilt Qt into `TIVOLI_QT_BASE` (default `~/tivoli/qt`). That works on Windows, from build-deps.overte.org. The macOS and Linux downloads were on Tivoli's CDN, which is gone, so set `QT_CMAKE_PREFIX_PATH` there.
 
 ## Vcpkg
 
@@ -120,7 +111,7 @@ We recommend using the `pm2` process manager
 -   Install Node.js
 -   `npm i -g pm2`
 
-Enter the root directory of this repo and run:
+Enter the root directory of this repo, after building the servers into `build` (in RelWithDebInfo, which `ecosystem.config.js` expects), and run:
 
 ```bash
 pm2 start ecosystem.config.js

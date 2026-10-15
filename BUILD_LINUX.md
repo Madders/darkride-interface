@@ -1,5 +1,7 @@
 # Building Tivoli for Linux
 
+> **Darkride note:** this is Tivoli's guide for the Linux **client**, and it hasn't been tried with Darkride: its prebuilt Qt and its package list were on Tivoli's servers, which are gone. For a **world server** on Linux, use the Docker image instead; see [docker/README.md](docker/README.md).
+
 # WARNING! NOT ALL DISTROS ARE SUPPORTED!
 
 Tivoli uses a custom version of Qt that needs to be compiled for a list of distros that we choose.

@@ -1,5 +1,11 @@
 This is for building docker images for the server stack and ice server.
 
+**Prebuilt image:** each release (and each push to the `darkride-builds` branch) is built and tested by
+`.github/workflows/release.yml` and published as `ghcr.io/madders/darkride-server`: `:latest` is the newest release,
+`:<version>` a particular one, `:darkride-builds` the branch. To use it instead of building, replace the `build:`
+section of `server/docker-compose.yml` with `image: ghcr.io/madders/darkride-server:latest`, then
+`docker compose pull && docker compose up -d`.
+
 `server/Dockerfile` builds the domain server, assignment client and ice server from source on Ubuntu 24.04
 and packs them into a slim runtime image. From the repository root (a checkout with LF line endings):
 
