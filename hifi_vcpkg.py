@@ -97,7 +97,12 @@ endif()
             # self.vcpkgUrl = 'https://cdn.tivolicloud.com/dependencies/vcpkg/vcpkg-win32-client.zip'
             # self.vcpkgHash = 'a650db47a63ccdc9904b68ddd16af74772e7e78170b513ea8de5a3b47d032751a3b73dcc7526d88bcb500753ea3dd9880639ca842bb176e2bddb1710f9a58cd3'
             self.hostTriplet = 'x64-windows'
-            
+            # This vcpkg builds the ports with the first cmake.exe on PATH, and fetches its own CMake 3.21 only
+            # when there is none. In a Visual Studio 2026 prompt that is CMake 4, which refuses the old
+            # cmake_minimum_required() of the 2021 port sources, so CMake's directories stay off vcpkg's PATH.
+            self.buildEnv['PATH'] = os.pathsep.join(d for d in self.buildEnv.get('PATH', '').split(os.pathsep)
+                                                    if d and not os.path.isfile(os.path.join(d, 'cmake.exe')))
+
             if usePrebuilt:
                self.prebuiltArchive = "https://cdn.tivolicloud.com/dependencies/vcpkg/builds/vcpkg-win32.zip"
         

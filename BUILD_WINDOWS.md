@@ -6,33 +6,21 @@ This guide builds the Darkride client (`interface.exe`) and, if you want them, t
 
 -   **About 1 hour.** The first build compiles every third-party library, which takes 15–20 minutes, then compiles Darkride itself in 30–40 minutes. Later builds take a few minutes.
 -   **About 30 GB of disk space.**
+-   **16 GB of RAM or more.** Step 5 says how to build with less.
 
-Commands are for the **x64 Native Tools Command Prompt for VS 2022**, which step 1 installs. Find it in the Start menu.
+Commands are for the **x64 Native Tools Command Prompt** for your Visual Studio, which step 1 installs. Find it in the Start menu.
 
 ## 1. Install the tools
 
 | Tool | Notes |
 |---|---|
-| [Visual Studio 2022](https://visualstudio.microsoft.com/vs) (Community is free) | Install the components listed below |
+| [Visual Studio 2026](https://visualstudio.microsoft.com/downloads) (Community is free), or Visual Studio 2022 | The **Desktop development with C++** workload plus two components. **[BUILD_WINDOWS_VISUAL_STUDIO.md](BUILD_WINDOWS_VISUAL_STUDIO.md)** has step-by-step instructions |
 | [PowerShell 7](https://github.com/PowerShell/PowerShell/releases) | Use the **`.msi`** installer. The Microsoft Store version won't do: the build looks for `pwsh` in `C:\Program Files\PowerShell\7`. |
 | [Python 3](https://www.python.org/downloads) | Tick "Add python.exe to PATH" |
 | [Node.js](https://nodejs.org/en) (LTS) | Builds the in-world web UI |
 | [Git](https://git-scm.com/downloads) | |
 
-**Visual Studio components.** In the Visual Studio Installer, select the **Desktop development with C++** workload. Under **Individual components**, also select:
-
--   **MSVC v143 - VS 2022 C++ x64/x86 build tools (v14.39-17.9)**
--   **C++ ATL for latest v143 build tools (x86 & x64)**
-
-Or install everything from the command line, which needs administrator rights:
-
-```cmd
-"C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe" modify --installPath "C:\Program Files\Microsoft Visual Studio\2022\Community" --add Microsoft.VisualStudio.Workload.NativeDesktop --includeRecommended --add Microsoft.VisualStudio.Component.VC.14.39.17.9.x86.x64 --add Microsoft.VisualStudio.Component.VC.ATL
-```
-
-> **Why 14.39?** The dependencies are built by vcpkg, and the vcpkg version this project uses only recognises compilers up to 14.3x. Current Visual Studio 2022 releases default to 14.4x. With 14.39 installed alongside, vcpkg uses it for the dependencies, and Darkride itself builds with the default compiler. The two are compatible.
->
-> **Why ATL?** The speech recognition code includes the Windows SDK's `sphelper.h`, which needs it.
+**Visual Studio components, in short:** the **Desktop development with C++** workload, plus the individual components **MSVC v143 - VS 2022 C++ x64/x86 build tools (v14.39-17.9)**, **C++ v14.39 (17.9) ATL for v143 build tools** and **C++ ATL** for the latest MSVC. vcpkg and, under Visual Studio 2026, Darkride itself build with the 14.39 compiler, and the speech recognition code needs ATL. Visual Studio 2026 labels the 14.39 tools "(Out of Support)"; install them anyway. [BUILD_WINDOWS_VISUAL_STUDIO.md](BUILD_WINDOWS_VISUAL_STUDIO.md) covers point-and-click and command-line installs, Build Tools, checking the result, and the extras for the optional codec build.
 
 ## 2. Install Qt 5.15.2
 
@@ -67,8 +55,13 @@ These `set` commands only last for the current window. To keep them, set them on
 ```cmd
 mkdir build
 cd build
-cmake .. -G "Visual Studio 17 2022" -A x64
+cmake .. -G "Visual Studio 18 2026" -A x64 -T v143 -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 ```
+
+With Visual Studio 2022, use `-G "Visual Studio 17 2022"`. The other options stay the same.
+
+-   `-T v143` builds with the Visual Studio 2022 compiler (the 14.39 one from step 1). Qt 5.15's headers use `stdext::make_checked_array_iterator`, which Visual Studio 2026's own compiler (14.5x) no longer has.
+-   `CMAKE_POLICY_VERSION_MINIMUM` is needed with CMake 4, which comes with Visual Studio 2026: it lets CMake accept the older `cmake_minimum_required` lines in the tree. It's harmless with older CMake. In PowerShell, quote the whole argument (`'-DCMAKE_POLICY_VERSION_MINIMUM=3.5'`), or PowerShell splits it at the dot.
 
 The first run downloads and compiles all the dependencies, which takes 15–20 minutes. It's finished when CMake prints `-- Generating done`. Any change to the files in `cmake/ports` makes vcpkg rebuild the dependencies, but it reuses unchanged packages from its cache in `%LOCALAPPDATA%\vcpkg\archives`.
 
@@ -79,6 +72,8 @@ cmake --build . --target interface --config RelWithDebInfo
 ```
 
 To build the servers too, add their targets: `--target interface domain-server assignment-client`.
+
+**If the PC runs short of memory** (the build slows to a crawl, or tools quit with out-of-memory errors), build fewer projects at once by adding `-- /m:4` to the end of the command. By default Visual Studio builds as many projects at once as the PC has CPU threads, each compiling several files at a time, which can need more than 32 GB on a 24-thread CPU.
 
 Or open `build\hifi.sln` in Visual Studio, set the configuration to **RelWithDebInfo**, right-click **interface** in the Solution Explorer and choose **Build**.
 
@@ -116,10 +111,11 @@ These SDKs can no longer be downloaded, so the build leaves out the plugins that
 | Error | Fix |
 |---|---|
 | `Could not find PowerShell Core` | Install PowerShell 7 from the `.msi` (step 1), then open a **new** command prompt |
-| `Cannot open include file: 'atlbase.h'` | Install the ATL component (step 1). If you also have **Build Tools for Visual Studio 2022**, CMake may use that instead of Community, so add the components to it as well, or choose one with `-DCMAKE_GENERATOR_INSTANCE="C:/Program Files/Microsoft Visual Studio/2022/Community"` on the first `cmake` run. |
+| `Cannot open include file: 'atlbase.h'` | Install the ATL component (step 1). With more than one Visual Studio installed (for example **Build Tools** as well as Community), CMake may pick the other one; see [More than one Visual Studio installed](BUILD_WINDOWS_VISUAL_STUDIO.md#more-than-one-visual-studio-installed) |
 | vcpkg can't find a Visual Studio instance or toolset | Install the **v14.39** compiler (step 1) |
 | Errors about paths that are too long | Use a short `TIVOLI_VCPKG_BASE` such as `C:\vcpkg`, and keep the repository near the root of the drive |
-| `Compatibility with CMake < 3.5 has been removed` | Your PATH has CMake 4. Use the CMake that comes with Visual Studio (it's on the Native Tools prompt's PATH), or add `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` |
+| `'stdext': is not a class or namespace name` in Qt's `qvector.h` | Visual Studio 2026's own compiler can't build Qt 5.15's headers. Configure with `-T v143` (step 4), in a new build folder |
+| `Compatibility with CMake < 3.5 has been removed`, when configuring Darkride | Add `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` to the `cmake` command (step 4) |
 | The same CMake error after you fixed its cause | Delete `build\CMakeCache.txt`, or the whole `build` folder, and run step 4 again |
 | A dependency failed to build | vcpkg's log for it is in `%TIVOLI_VCPKG_BASE%\<id>\buildtrees\<package>\` |
 | Explore shows no worlds | Set `HIFI_METAVERSE_URL` (step 6) |
@@ -136,14 +132,9 @@ To play H.264/AAC video in web entities, build Qt WebEngine with Chromium's prop
 -   **About 60 GB** of disk space.
 -   **At least 16 GB of RAM.** Lower `NINJAJOBS` if memory is short.
 
-**Additional tools.** Qt WebEngine 5.15.2 (Chromium 83) predates Visual Studio 2022:
+**Additional tools.** Qt WebEngine 5.15.2 (Chromium 83) predates current Visual Studio:
 
--   In the Visual Studio Installer, under **Individual components**, add:
-    -   **MSVC v142 - VS 2019 C++ x64/x86 build tools (v14.29-16.11)**
-    -   **C++ v14.29 (16.11) ATL for v142 build tools (x86 & x64)**
-    -   **Windows 10 SDK (10.0.19041.0)**
-
-    The equivalent IDs are `Microsoft.VisualStudio.Component.VC.14.29.16.11.x86.x64`, `Microsoft.VisualStudio.Component.VC.14.29.16.11.ATL` and `Microsoft.VisualStudio.Component.Windows10SDK.19041`.
+-   **Visual Studio 2019's compiler (v14.29) with its ATL, and the Windows 10 SDK 10.0.19041.** Visual Studio 2026 and 2022 both still offer the compiler as a component. Visual Studio 2026 doesn't offer that SDK, but Microsoft's SDK archive does. See [Extra components for the optional Qt with H.264 and AAC](BUILD_WINDOWS_VISUAL_STUDIO.md#extra-components-for-the-optional-qt-with-h264-and-aac).
 -   **Python 2.7**, which Chromium 83's build scripts need. It doesn't have to go on your PATH, or even be installed: this unpacks it into a folder without administrator rights:
 
     ```cmd
@@ -181,6 +172,6 @@ To play H.264/AAC video in web entities, build Qt WebEngine with Chromium's prop
     set QT_CMAKE_PREFIX_PATH=C:/Qt-codecs/5.15.2/msvc2019_64/lib/cmake
     mkdir build-codecs
     cd build-codecs
-    cmake .. -G "Visual Studio 17 2022" -A x64
+    cmake .. -G "Visual Studio 18 2026" -A x64 -T v143 -DCMAKE_POLICY_VERSION_MINIMUM=3.5
     cmake --build . --target interface --config RelWithDebInfo
     ```

@@ -25,6 +25,9 @@ file(WRITE ${SOURCE_PATH}/src/nvmath/nvmath.h "${NVMATH_H}")
 
 vcpkg_configure_cmake(
     SOURCE_PATH ${SOURCE_PATH}
+    # Ninja rather than a Visual Studio generator, which vcpkg's CMake 3.21 names "Visual Studio 17 2022"
+    # and so cannot find a Visual Studio 2026 install
+    PREFER_NINJA
     OPTIONS
         -DBUILD_TESTS=OFF
         -DBUILD_TOOLS=OFF
