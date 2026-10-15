@@ -98,6 +98,18 @@ build\assignment-client\RelWithDebInfo\assignment-client.exe --min 6 --max 10
 
 The world's admin page is http://localhost:40100.
 
+## 7. Package (optional)
+
+To make the installer and zip that releases ship, build the interface and both servers in **Release**, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`), then from the repository folder:
+
+```cmd
+pwsh tools\installer\package-windows.ps1 -BuildDir build -Version 2026.10.1 -OutDir dist
+```
+
+It puts the interface and servers in one folder with the Visual C++ runtime beside them, and writes `dist\Darkride-2026.10.1-windows-x64.zip` and `dist\Darkride-2026.10.1-windows-x64-setup.exe`. The installer script is `tools\installer\darkride.iss`.
+
+GitHub builds these the same way: pushing a tag such as `v2026.10.1` runs `.github/workflows/windows-release.yml`, which publishes them as a release.
+
 ## What's left out on Windows
 
 These SDKs can no longer be downloaded, so the build leaves out the plugins that need them:
