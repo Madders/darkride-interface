@@ -81,6 +81,11 @@ else()
   list(APPEND EXTRA_PREBUILD_ARGS --vcpkg-build-type release)
 endif()
   
+# a build without the client needs only the server's dependencies
+if (SERVER_ONLY OR (DEFINED BUILD_CLIENT AND NOT BUILD_CLIENT))
+  list(APPEND EXTRA_PREBUILD_ARGS --server-only)
+endif()
+
 if(HIFI_ANDROID)
   list(APPEND EXTRA_PREBUILD_ARGS --android ${HIFI_ANDROID_APP})
 else()

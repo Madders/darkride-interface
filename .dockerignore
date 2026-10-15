@@ -1,0 +1,5 @@
+.git
+.claude
+build
+build-*
+**/node_modules

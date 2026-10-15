@@ -15,7 +15,7 @@ elseif (VCPKG_TARGET_IS_OSX)
 elseif (VCPKG_TARGET_IS_LINUX)
 	vcpkg_download_distfile(
 		HIFIAUDIOCODEC_ARCHIVE
-		URLS https://cdn.tivolicloud.com/dependencies/codecSDK-linux-2.0.zip
+		URLS https://build-deps.overte.org/dependencies/codecSDK-linux-2.0.zip
 		SHA512 e361a52bd173d33681b4c9f002d719615136154fb60d5cc23570fc66cd5e3a1332ede2ad6db28c40bc790abcc152fc32c9f629e41a3af97e7b7e708d8716296e
 		FILENAME codecSDK-linux-2.0.zip
 	)

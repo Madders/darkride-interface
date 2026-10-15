@@ -1,0 +1,13 @@
+{
+  "name": "hifi-server-deps",
+  "version-string": "0.1",
+  "description": "Collected dependencies for the domain server and assignment client (a server-only build)",
+  "dependencies": [
+    "hifi-deps",
+    "nlohmann-json",
+    {
+      "name": "quazip",
+      "platform": "!android"
+    }
+  ]
+}
