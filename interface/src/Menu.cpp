@@ -429,7 +429,7 @@ Menu::Menu() {
     
 
     // Developer > Tivoli Options >>>
-    MenuWrapper* tivoliOptionsMenu = developerMenu->addMenu("Tivoli Options");
+    MenuWrapper* tivoliOptionsMenu = developerMenu->addMenu("Darkride Options");
 
     addCheckableActionToQMenuAndActionHash(tivoliOptionsMenu, MenuOption::StopRendering);
 
@@ -917,7 +917,7 @@ Menu::Menu() {
     // Help/Application menu ----------------------------------
     MenuWrapper * helpMenu = addMenu("Help");
 
-    action = addActionToQMenuAndActionHash(helpMenu, "About Tivoli Cloud VR");
+    action = addActionToQMenuAndActionHash(helpMenu, "About Darkride");
     connect(action, &QAction::triggered, [] {
         qApp->showDialog(QString("hifi/dialogs/AboutDialog.qml"),
             QString("hifi/dialogs/TabletAboutDialog.qml"), "AboutDialog");
@@ -927,19 +927,20 @@ Menu::Menu() {
     // Help > Online Documentation
     action = addActionToQMenuAndActionHash(helpMenu, "Online Documentation");
     connect(action, &QAction::triggered, qApp, [] {
-        QDesktopServices::openUrl(QUrl("https://docs.tivolicloud.com/"));
+        QDesktopServices::openUrl(QUrl("https://vr.darkride.ai"));
     });
 
     // Help > Discord Server
     action = addActionToQMenuAndActionHash(helpMenu, "Discord Server");
     connect(action, &QAction::triggered, qApp, [] {
-        QDesktopServices::openUrl(QUrl("https://tivolicloud.com/discord"));
+        QDesktopServices::openUrl(QUrl("https://vr.darkride.ai/discord"));
     });
 
     // Help > JavaScript API Reference
     action = addActionToQMenuAndActionHash(helpMenu, "JavaScript API Reference");
     connect(action, &QAction::triggered, qApp, [] {
-        QDesktopServices::openUrl(QUrl("https://apidocs.tivolicloud.com/"));
+        // a placeholder until Darkride publishes its own scripting API reference here
+        QDesktopServices::openUrl(QUrl("https://vr.darkride.ai/docs/api/"));
     });
 
     addActionToQMenuAndActionHash(helpMenu, "Controls Reference", 0, qApp, SLOT(showHelp()));
@@ -949,13 +950,13 @@ Menu::Menu() {
     // Help > Changelog
     action = addActionToQMenuAndActionHash(helpMenu, "Changelog");
     connect(action, &QAction::triggered, qApp, [] {
-        QDesktopServices::openUrl(QUrl("https://docs.tivolicloud.com/changelog/"));
+        QDesktopServices::openUrl(QUrl("https://github.com/caitlynmeeks/darkride-interface/commits/main"));
     });
 
     // Help > Report a bug!
     action = addActionToQMenuAndActionHash(helpMenu, "Report a bug!");
     connect(action, &QAction::triggered, qApp, [] {
-        QDesktopServices::openUrl(QUrl("https://git.tivolicloud.com/tivolicloud/issues"));
+        QDesktopServices::openUrl(QUrl("https://github.com/caitlynmeeks/darkride-interface/issues"));
     });
 }
 

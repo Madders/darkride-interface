@@ -47,7 +47,7 @@ ScrollingWindow {
 
         Image {
             id: logo
-            source: "../images/tivoli-logo.svg"
+            source: "../images/darkride-logo.svg"
             width: updateDialog.logoSize
             height: updateDialog.logoSize
             anchors {

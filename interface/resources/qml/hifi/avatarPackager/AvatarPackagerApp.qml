@@ -229,7 +229,7 @@ Item {
         }
 
         function openDocs() {
-            Qt.openUrlExternally("https://legacydocs.tivolicloud.com/create/avatars/package-avatar.html");
+            Qt.openUrlExternally("https://vr.darkride.ai/docs/avatars/package-avatar.html");
         }
 
         function openVideo() {

@@ -837,7 +837,7 @@ exports.publish = function(taffyData, opts, tutorials) {
 
 	generate(
 		"",
-		"Tivoli Cloud VR",
+		"Darkride",
 		packages
 			.concat([
 				{

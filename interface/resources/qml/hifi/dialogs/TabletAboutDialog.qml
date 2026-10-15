@@ -41,7 +41,7 @@ Rectangle {
         }
         Item { height: 10; width: 1 }
         RobotoRegular {
-            text: "Tivoli Cloud VR"
+            text: "Darkride"
             size: 20
             color: "white"
         }
@@ -49,10 +49,10 @@ Rectangle {
             textFormat: Text.StyledText
             linkColor: "#00B4EF"
             color: "white"
-            text: "<a href=\"https://tivolicloud.com\">tivolicloud.com</a>."
+            text: "<a href=\"https://vr.darkride.ai\">vr.darkride.ai</a>."
             size: 20
             onLinkActivated: {
-                Window.openUrl("https://tivolicloud.com");
+                Window.openUrl("https://vr.darkride.ai");
             }
         }
         Item { height: 40; width: 1 }
@@ -92,7 +92,7 @@ Rectangle {
         
         RobotoRegular {
             color: "white"
-            text: "Copyright 2020 Tivoli Cloud VR, Inc. All rights reserved."
+            text: "Copyright 2020 Darkride, Inc. All rights reserved."
             size: 14
         }
     }

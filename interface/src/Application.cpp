@@ -1063,7 +1063,7 @@ Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bo
 {
     
 #if defined(Q_OS_LINUX)
-    _window->setWindowIcon(QIcon(PathUtils::resourcesPath() + "images/tivoli-logo.svg"));
+    _window->setWindowIcon(QIcon(PathUtils::resourcesPath() + "images/darkride-logo.svg"));
 #endif
 
     auto steamClient = PluginManager::getInstance()->getSteamClientPlugin();
@@ -1165,7 +1165,7 @@ Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bo
 
     QFontDatabase::addApplicationFont(PathUtils::resourcesPath() + "styles/Inconsolata.otf");
     
-    _window->setWindowTitle("Tivoli Cloud VR");
+    _window->setWindowTitle("Darkride");
 
     Model::setAbstractViewStateInterface(this); // The model class will sometimes need to know view state details from us
 
@@ -3268,7 +3268,7 @@ void Application::showLoginScreen() {
         QJsonObject loginData = {};
         loginData["action"] = "login dialog popped up";
         UserActivityLogger::getInstance().logAction("encourageLoginDialog", loginData);
-        _window->setWindowTitle("Tivoli Cloud VR");
+        _window->setWindowTitle("Darkride");
     } else {
         resumeAfterLoginDialogActionTaken();
     }
@@ -7371,7 +7371,7 @@ void Application::updateWindowTitle() const {
         }
     }
     
-    // Not connected, Not logged in - Maki @ Cutelab (Maki) - Tivoli Cloud VR 0.7.2
+    // Not connected, Not logged in - Maki @ Cutelab (Maki) - Darkride 0.7.2
 
     QStringList statusList = { connectionStatus, loginStatus };
     statusList.removeAll(QString(""));
@@ -7382,7 +7382,7 @@ void Application::updateWindowTitle() const {
         username +
         (username.isEmpty() || currentWorldName.isEmpty() ? "" : " @ ")  +
         currentWorldName + " - " +
-        "Tivoli Cloud VR " + buildVersion
+        "Darkride " + buildVersion
     );
 
 #ifndef WIN32
@@ -8054,9 +8054,8 @@ bool Application::askToReplaceDomainContent(const QString& url) {
         if (originURL.host().endsWith(MARKETPLACE_CDN_HOSTNAME)) {
             // Create a confirmation dialog when this call is made
             static const QString infoText = simpleWordWrap("Your domain's content will be replaced with a new content set. "
-                "If you want to save what you have now, create a backup before proceeding. For more information about backing up "
-                "and restoring content, visit the documentation page at: ", MAX_CHARACTERS_PER_LINE) +
-                "\nhttps://legacydocs.tivolicloud.com/create-and-explore/start-working-in-your-sandbox/restoring-sandbox-content";
+                "If you want to save what you have now, create a backup before proceeding: on the domain's settings page, "
+                "under Content Archives.", MAX_CHARACTERS_PER_LINE);
 
             ModalDialogListener* dig = OffscreenUi::asyncQuestion("Are you sure you want to replace this domain's content set?",
                                                                   infoText, QMessageBox::Yes | QMessageBox::No, QMessageBox::No);

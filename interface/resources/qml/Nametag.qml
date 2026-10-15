@@ -10,7 +10,7 @@ Item {
 	function fromScript(data) {
 		if (data.username) {
 			username.text = data.username
-			var imageUrl = "https://tivolicloud.com/api/user/" + data.username + "/image"
+			var imageUrl = "https://vr.darkride.ai/api/user/" + data.username + "/image"
 			avatarImage.source = imageUrl
 			mainBackgroundImage.source = imageUrl
 		}

@@ -95,7 +95,7 @@ public:
     static bool isValidNewProjectName(const QString& projectPath, const QString& projectName);
 
     static QString getDefaultProjectsPath() {
-        return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + "/Tivoli Cloud VR Projects";
+        return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + "/Darkride Projects";
     }
 
 signals:

@@ -251,7 +251,7 @@ void setupPreferences() {
         auto getter = []() -> bool { return !Menu::getInstance()->isOptionChecked(MenuOption::DisableActivityLogger); };
         auto setter = [](bool value) { Menu::getInstance()->setIsOptionChecked(MenuOption::DisableActivityLogger, !value); };
         preferences->addPreference(new CheckPreference("Privacy",
-                                                       "Send data - Allow Tivoli to collect "
+                                                       "Send data - Allow Darkride to collect "
                                                        "information to improve the product. ",
                                                        getter, setter));
     }

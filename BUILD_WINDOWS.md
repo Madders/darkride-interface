@@ -45,7 +45,7 @@ set QT_CMAKE_PREFIX_PATH=C:/Qt/5.15.2/msvc2019_64/lib/cmake
 set TIVOLI_VCPKG_BASE=C:\vcpkg
 ```
 
--   `QT_CMAKE_PREFIX_PATH` tells the build which Qt to use. If it isn't set, the build downloads a prebuilt Qt instead (1.65 GB, from Overte's server). This guide was tested with the official Qt from step 2.
+-   `QT_CMAKE_PREFIX_PATH` tells the build which Qt to use. If it isn't set, the build downloads a prebuilt Qt instead (1.65 GB). This guide was tested with the official Qt from step 2.
 -   `TIVOLI_VCPKG_BASE` is where vcpkg builds and keeps the dependencies. It grows to several gigabytes. **Keep the path short**: Windows limits paths to 260 characters unless long paths are enabled, and vcpkg's folders go deep. The default is `C:\Users\<you>\tivoli\vcpkg`.
 
 These `set` commands only last for the current window. To keep them, set them once under **System Properties → Environment Variables**.
@@ -83,10 +83,10 @@ Or open `build\hifi.sln` in Visual Studio, set the configuration to **RelWithDeb
 build\interface\RelWithDebInfo\interface.exe
 ```
 
-**Darkride's metaverse.** The worlds listed in **Explore**, and accounts, come from `https://vr.darkride.ai`. The client's built-in default is still Tivoli's old server, which is gone, so set this once for your Windows user. Programs started afterwards pick it up.
+**Darkride's metaverse.** The worlds listed in **Explore**, and accounts, come from `https://vr.darkride.ai`, the client's default. To try another metaverse server, set `HIFI_METAVERSE_URL` for your Windows user; programs started afterwards pick it up, and `reg delete HKCU\Environment /v HIFI_METAVERSE_URL /f` goes back to the default.
 
 ```cmd
-setx HIFI_METAVERSE_URL https://vr.darkride.ai
+setx HIFI_METAVERSE_URL https://metaverse.example.com
 ```
 
 **A world on your own PC.** Start the servers in two command prompts, then go to `hifi://localhost` in interface:

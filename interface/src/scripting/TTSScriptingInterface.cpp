@@ -151,7 +151,7 @@ void TTSScriptingInterface::speakText(const QString& textToSpeak) {
     auto newAudioData = AudioData::make(numSamples, numChannels, samples);
     
 #elif defined(Q_OS_LINUX)
-    QString filePath = QDir::tempPath() + QDir::separator() + "tivoli-tts.wav";
+    QString filePath = QDir::tempPath() + QDir::separator() + "darkride-tts.wav";
 
     // -- piping espeak to sox 
 
@@ -195,7 +195,7 @@ void TTSScriptingInterface::speakText(const QString& textToSpeak) {
     process.start("festival", args);
 
 #elif defined(Q_OS_MACOS)
-    QString filePath = QDir::tempPath() + QDir::separator() + "tivoli-tts.wav";
+    QString filePath = QDir::tempPath() + QDir::separator() + "darkride-tts.wav";
 
     QStringList args;
     args << "-o";

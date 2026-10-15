@@ -72,7 +72,7 @@ int main(int argc, const char* argv[]) {
     }
 
     QCommandLineParser parser;
-    parser.setApplicationDescription("Tivoli Cloud VR");
+    parser.setApplicationDescription("Darkride");
     QCommandLineOption versionOption = parser.addVersionOption();
     QCommandLineOption helpOption = parser.addHelpOption();
 

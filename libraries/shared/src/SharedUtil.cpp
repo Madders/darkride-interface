@@ -1028,7 +1028,7 @@ bool getProcessorInfo(ProcessorInfo& info) {
 
 
 const QString& getInterfaceSharedMemoryName() {
-    static const QString applicationName = "Tivoli Cloud VR - " + qgetenv("USERNAME");
+    static const QString applicationName = "Darkride - " + qgetenv("USERNAME");
     return applicationName;
 }
 

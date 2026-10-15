@@ -341,7 +341,7 @@ bool startCrashHandler(std::string appPath) {
 
     // // https://docs.sentry.io/platforms/native/minidump
     // std::map<std::string, std::string> fileAttachments;
-    // fileAttachments["tivoli-log.txt"] = QString(FileLogger::getLogFilename()).toStdString();
+    // fileAttachments["darkride-log.txt"] = QString(FileLogger::getLogFilename()).toStdString();
 
     // Setup Crashpad DB directory
     const auto crashpadDbName = "crashpad-db";

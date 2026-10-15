@@ -87,7 +87,7 @@ FocusScope {
             anchors.centerIn: parent
             width: 500
             height: 150
-            source: "../images/tivoli-banner.svg"
+            source: "../images/darkride-banner.svg"
             horizontalAlignment: Image.AlignHCenter
         }
     }

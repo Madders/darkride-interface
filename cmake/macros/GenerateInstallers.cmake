@@ -18,20 +18,20 @@ macro(GENERATE_INSTALLERS)
   if (CLIENT_ONLY)
     set(_PACKAGE_NAME_EXTRA "-Interface")
     set(INSTALLER_TYPE "client_only")
-    string(REGEX REPLACE "High Fidelity" "High Fidelity Interface" _DISPLAY_NAME ${BUILD_ORGANIZATION})
+    set(_DISPLAY_NAME ${BUILD_ORGANIZATION})
   elseif (SERVER_ONLY)
     set(_PACKAGE_NAME_EXTRA "-Sandbox")
     set(INSTALLER_TYPE "server_only")
-    string(REGEX REPLACE "High Fidelity" "High Fidelity Sandbox" _DISPLAY_NAME ${BUILD_ORGANIZATION})
+    set(_DISPLAY_NAME "${BUILD_ORGANIZATION} Sandbox")
   else ()
     set(_DISPLAY_NAME ${BUILD_ORGANIZATION})
     set(INSTALLER_TYPE "full")
   endif ()
 
   set(CPACK_PACKAGE_NAME ${_DISPLAY_NAME})
-  set(CPACK_PACKAGE_VENDOR "High Fidelity")
+  set(CPACK_PACKAGE_VENDOR "Darkride")
   set(CPACK_PACKAGE_VERSION ${BUILD_VERSION})
-  set(CPACK_PACKAGE_FILE_NAME "HighFidelity-Beta${_PACKAGE_NAME_EXTRA}-${BUILD_VERSION}")
+  set(CPACK_PACKAGE_FILE_NAME "Darkride-Beta${_PACKAGE_NAME_EXTRA}-${BUILD_VERSION}")
   set(CPACK_NSIS_DISPLAY_NAME ${_DISPLAY_NAME})
   set(CPACK_NSIS_PACKAGE_NAME ${_DISPLAY_NAME})
   if (PR_BUILD)
@@ -95,7 +95,7 @@ macro(GENERATE_INSTALLERS)
     set(CPACK_PACKAGING_INSTALL_PREFIX /)
     set(CPACK_OSX_PACKAGE_VERSION ${CMAKE_OSX_DEPLOYMENT_TARGET})
 
-    # make sure a High Fidelity directory exists, in case this hits prior to other installs
+    # make sure a Darkride directory exists, in case this hits prior to other installs
     install(CODE "file(MAKE_DIRECTORY \"\${CMAKE_INSTALL_PREFIX}/${DMG_SUBFOLDER_NAME}\")")
 
     # add the resource file to the Icon file inside the folder
@@ -118,11 +118,11 @@ macro(GENERATE_INSTALLERS)
   set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
 
   if (BUILD_CLIENT)
-    cpack_add_component(${CLIENT_COMPONENT} DISPLAY_NAME "High Fidelity Interface")
+    cpack_add_component(${CLIENT_COMPONENT} DISPLAY_NAME "Darkride")
   endif ()
 
   if (BUILD_SERVER)
-    cpack_add_component(${SERVER_COMPONENT} DISPLAY_NAME "High Fidelity Sandbox")
+    cpack_add_component(${SERVER_COMPONENT} DISPLAY_NAME "Darkride Sandbox")
   endif ()
 
   include(CPack)

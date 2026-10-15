@@ -37,12 +37,12 @@ private:
     QMutex _fileMutex;
 };
 
-static const QString FILENAME_FORMAT = "tivoli-log_%1%2.txt";
+static const QString FILENAME_FORMAT = "darkride-log_%1%2.txt";
 static const QString DATETIME_FORMAT = "yyyy-MM-dd_hh.mm.ss";
 static const QString LOGS_DIRECTORY = "Logs";
 static const QString DATETIME_WILDCARD = "20[0-9][0-9]-[01][0-9]-[0-3][0-9]_[0-2][0-9]\\.[0-6][0-9]\\.[0-6][0-9]";
 static const QString SESSION_WILDCARD = "[0-9a-z]{8}(-[0-9a-z]{4}){3}-[0-9a-z]{12}";
-static QRegExp LOG_FILENAME_REGEX { "tivoli-log_" + DATETIME_WILDCARD + "(_" + SESSION_WILDCARD + ")?\\.txt" };
+static QRegExp LOG_FILENAME_REGEX { "darkride-log_" + DATETIME_WILDCARD + "(_" + SESSION_WILDCARD + ")?\\.txt" };
 static QUuid SESSION_ID;
 
 // Max log size is 512 KB. We send log files to our crash reporter, so we want to keep this relatively
@@ -67,7 +67,7 @@ QString getLogRollerFilename() {
 }
 
 const QString& FileLogger::getLogFilename() {
-    static QString fileName = FileUtils::standardPath(LOGS_DIRECTORY) + "tivoli-log.txt";
+    static QString fileName = FileUtils::standardPath(LOGS_DIRECTORY) + "darkride-log.txt";
     return fileName;
 }
 

@@ -421,7 +421,7 @@ Function GetCampaignName
     Pop $0 ; Discard Path
     Pop $0 ; Recover filename
     ; Parse campaign out of the filename
-    ${RECaptureMatches} $0 "HighFidelity-([^-]*-)Beta-.*" $0 0
+    ${RECaptureMatches} $0 "Darkride-([^-]*-)Beta-.*" $0 0
     ${If} $0 == 1
       Pop $0 ; Recover campaign name
       StrCpy $0 $0 -1 0 ; Remove trailing - and copy to _RetVar
@@ -717,7 +717,7 @@ Function InstallTypesPage
   StrCpy $OffsetUnits u
   StrCpy $Express "0"
 
-  ${NSD_CreateRadioButton} 30% $CurrentOffset$OffsetUnits 100% 10u "Express Install (Recommended)"; $\nInstalls High Fidelity Interface and High Fidelity Sandbox"
+  ${NSD_CreateRadioButton} 30% $CurrentOffset$OffsetUnits 100% 10u "Express Install (Recommended)"; $\nInstalls Darkride and the Darkride Sandbox"
   pop $ExpressInstallRadioButton
   ${NSD_OnClick} $ExpressInstallRadioButton ChangeExpressLabel
   IntOp $CurrentOffset $CurrentOffset + 15
@@ -1289,7 +1289,7 @@ Section "-Core installation"
 
     ${If} "@PRODUCTION_BUILD@" == "1"
       ; hifi:// protocol handler registry entries
-      WriteRegStr HKCR '@HIGH_FIDELITY_PROTOCOL@' '' 'URL:High Fidelity Protocol'
+      WriteRegStr HKCR '@HIGH_FIDELITY_PROTOCOL@' '' 'URL:Darkride Protocol'
       WriteRegStr HKCR '@HIGH_FIDELITY_PROTOCOL@' 'URL Protocol' ''
       WriteRegStr HKCR '@HIGH_FIDELITY_PROTOCOL@\DefaultIcon' '' '$INSTDIR\@INTERFACE_WIN_EXEC_NAME@,1'
       WriteRegStr HKCR '@HIGH_FIDELITY_PROTOCOL@\shell\open\command' '' '$INSTDIR\@INTERFACE_WIN_EXEC_NAME@ --url "%1"'
