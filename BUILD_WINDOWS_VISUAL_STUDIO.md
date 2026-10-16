@@ -37,6 +37,10 @@ Whichever you choose, the build needs the **Desktop development with C++** workl
 
 If Visual Studio is already installed, open the **Visual Studio Installer** from the Start menu, click **Modify** on your installation, and do steps 2–4.
 
+> **No Individual components tab?** The Visual Studio 2026 installer may not show one on a first install. Install the workload first, then open Visual Studio and choose **Tools → Get Tools and Features...**, which opens the installer with the **Individual components** tab, and do step 3.
+>
+> If you already ticked **C++ ATL for x64/x86 (Latest MSVC)** during installation, you only need the two `v14.39` components.
+
 ## Installing from the command line
 
 Run these in a command prompt; Windows asks for administrator rights. `--passive` shows progress without asking questions.
