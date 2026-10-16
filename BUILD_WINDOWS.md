@@ -112,7 +112,7 @@ These SDKs can no longer be downloaded, so the build leaves out the plugins that
 |---|---|
 | `Could not find PowerShell Core` | Install PowerShell 7 from the `.msi` (step 1), then open a **new** command prompt |
 | `Cannot open include file: 'atlbase.h'` | Install the ATL component (step 1). With more than one Visual Studio installed (for example **Build Tools** as well as Community), CMake may pick the other one; see [More than one Visual Studio installed](BUILD_WINDOWS_VISUAL_STUDIO.md#more-than-one-visual-studio-installed) |
-| vcpkg can't find a Visual Studio instance or toolset | Install the **v14.39** compiler (step 1) |
+| `No suitable Visual Studio instances were found`, then `vcpkg configuration missing` (or another sign that vcpkg can't find a Visual Studio instance or toolset) | Install the **v14.39** compiler and its ATL (step 1). Visual Studio 2026 doesn't include them by default |
 | Errors about paths that are too long | Use a short `TIVOLI_VCPKG_BASE` such as `C:\vcpkg`, and keep the repository near the root of the drive |
 | `'stdext': is not a class or namespace name` in Qt's `qvector.h` | Visual Studio 2026's own compiler can't build Qt 5.15's headers. Configure with `-T v143` (step 4), in a new build folder |
 | `Compatibility with CMake < 3.5 has been removed`, when configuring Darkride | Add `"-DCMAKE_POLICY_VERSION_MINIMUM=3.5"` to the `cmake` command (step 4) |
