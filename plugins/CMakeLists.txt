@@ -48,7 +48,7 @@ if (NOT SERVER_ONLY AND NOT ANDROID)
   if (NOT CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
     set(DIR "steam-plugin")
     add_subdirectory(${DIR})
-    # The Leap Motion 2.3 SDK for Windows is no longer downloadable.
+    # The Leap Motion V2 SDK for Windows came from cdn.tivolicloud.com (gone)
     if (NOT APPLE AND NOT WIN32)
       set(DIR "leapmotion-plugin")
       add_subdirectory(${DIR})

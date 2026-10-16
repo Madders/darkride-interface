@@ -1984,7 +1984,7 @@ void Editor::pollModelDimensions() {
     // a new model is a 1 m box until it loads; then it takes its own size, its bottom staying put
     auto entities = DependencyManager::get<EntityScriptingInterface>();
     quint64 now = usecTimestampNow();
-    auto nearlyEqual = [](const glm::vec3& a, const glm::vec3& b) {
+    auto isNear = [](const glm::vec3& a, const glm::vec3& b) {   // not "near": a macro on Windows
         return !glm::any(glm::greaterThan(glm::abs(a - b), glm::vec3(MIN_DIMENSION)));
     };
     for (auto it = _modelsAwaitingDimensions.begin(); it != _modelsAwaitingDimensions.end();) {
@@ -1994,11 +1994,11 @@ void Editor::pollModelDimensions() {
         glm::vec3 size = current.getDimensions();
         glm::vec3 natural = glm::max(current.getNaturalDimensions(), glm::vec3(MIN_DIMENSION));
         bool loaded = glm::any(glm::greaterThan(current.getNaturalDimensions(), glm::vec3(MIN_DIMENSION)));
-        bool isBox = nearlyEqual(size, EditorCreate::MODEL_PLACEHOLDER_DIMENSIONS);
+        bool isBox = isNear(size, EditorCreate::MODEL_PLACEHOLDER_DIMENSIONS);
         bool done = false;
         if (current.getType() != EntityTypes::Model) {
             done = true;   // gone: deleted, or its creation undone
-        } else if (!isBox && !(awaited.sizedAt > 0 && nearlyEqual(size, natural))) {
+        } else if (!isBox && !(awaited.sizedAt > 0 && isNear(size, natural))) {
             done = true;   // resized by hand meanwhile: leave it be
         } else if (awaited.sizedAt > 0 && !isBox) {
             done = now - awaited.sizedAt > MODEL_SIZE_WATCH_USECS;   // kept its size long enough

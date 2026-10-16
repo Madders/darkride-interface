@@ -5,6 +5,7 @@ import os
 import platform
 import re
 import shutil
+import subprocess
 import tempfile
 import json
 import xml.etree.ElementTree as ET
@@ -152,6 +153,38 @@ endif()
             self.androidPackagePath = os.getenv('HIFI_ANDROID_PRECOMPILED', os.path.join(self.path, 'android'))
         else:
             self.triplet = self.hostTriplet
+
+    def patchVcpkgScripts(self):
+        # This vcpkg fetches pkg-config from MSYS2's 32-bit MinGW repository, which MSYS2 has retired:
+        # fetch the last pkg-config from its x86_64 repository instead
+        self.patchVcpkgScript('vcpkg_find_acquire_program.cmake', [
+            ('"https://repo.msys2.org/mingw/i686/mingw-w64-i686-pkg-config-${VERSION}-any.pkg.tar.zst"\n'
+             '            54f8dad3b1a36a4515db47825a3214fbd2bd82f604aec72e7fb8d79068095fda3c836fb2296acd308522d6e12ce15f69e0c26dcf4eb0681fd105d057d912cdb7',
+             '"https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-pkg-config-0.29.2-6-any.pkg.tar.zst"\n'
+             '            8dc4045e16314e24d8361336f989c97d2067ab3476d37e01c98b240cc299f24c8318ac48753653721e0118e0d69eba91f593e7ab0ec1ef3052cbd419595fbfe7'),
+            ('"https://repo.msys2.org/mingw/i686/mingw-w64-i686-libwinpthread-${LIBWINPTHREAD_VERSION}-any.pkg.tar.zst"\n'
+             '            2c3d9e6b2eee6a4c16fd69ddfadb6e2dc7f31156627d85845c523ac85e5c585d4cfa978659b1fe2ec823d44ef57bc2b92a6127618ff1a8d7505458b794f3f01c',
+             '"https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-libwinpthread-git-12.0.0.r747.g1a99f8514-1-any.pkg.tar.zst"\n'
+             '            dd6c5ac767f6ef39afaef822796d8da65bb09ceee35d19332922012266f384cd1907f3f73efa70e5160e2287f5804f2a49788cb16af1a98ba9dffba832e4ba92'),
+            ('"${PKGCONFIG_ROOT}/mingw32/bin/pkg-config.exe"', '"${PKGCONFIG_ROOT}/mingw64/bin/pkg-config.exe"'),
+            # A current NASM instead of 2.15.05 (from 2020)
+            ('set(NASM_VERSION 2.15.05)', 'set(NASM_VERSION 2.16.03)'),
+            ('9412b8caa07e15eac8f500f6f8fab9f038d95dc25e0124b08a80645607cf5761225f98546b52eac7b894420d64f26c3cbf22c19cd286bbe583f7c964256c97ed',
+             '8e93ef2378bd5fafe505f8a2940b1e83f2a7563f994ecc82b5d081d178c7ade80a6bad17d52f693432b44e28c2420f68159b36ffea742f4b7c91ef3a855bcd0c'),
+        ])
+
+    def patchVcpkgScript(self, name, replacements):
+        script = os.path.join(self.path, 'scripts', 'cmake', name)
+        with open(script, 'r') as f:
+            contents = f.read()
+        patched = contents
+        for old, new in replacements:
+            if new not in patched:
+                patched = patched.replace(old, new)
+        if patched != contents:
+            print("Patching vcpkg's {}".format(name))
+            with open(script, 'w') as f:
+                f.write(patched)
 
     def writeEnv(self, var, value=""):
         envPath = os.path.join(self.args.build_root, "_env")
@@ -394,6 +427,9 @@ endif()
         if self.args.android:
             print("Installing Android binaries")
             self.setupAndroidDependencies()
+
+        if platform.system() == 'Windows':
+            self.patchVcpkgScripts()
 
         print("Installing host tools")
         if (self.vcpkgBuildType):
