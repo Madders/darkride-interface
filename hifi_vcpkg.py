@@ -286,6 +286,26 @@ endif()
                 '    "{2}" modify --installPath "{0}" --add {3} --passive --norestart\n').format(
                     path, componentName, installer, componentId)
 
+    # Tools the build runs from PATH, which it otherwise reports only deep inside vcpkg ("Could not find
+    # PowerShell Core" from a port's script), after part of the 15-30 minute dependency build
+    WINDOWS_TOOLS = [
+        ('pwsh', 'PowerShell 7', 'winget install -e --id Microsoft.PowerShell',
+         'vcpkg runs its scripts with it. Windows PowerShell 5 (powershell.exe) does not count'),
+        ('git', 'Git', 'winget install -e --id Git.Git', 'vcpkg and its tool download some sources with it'),
+    ]
+
+    def checkWindowsTools(self):
+        path = self.buildEnv.get('PATH', '')
+        missing = [tool for tool in self.WINDOWS_TOOLS if not shutil.which(tool[0], path=path)]
+        if not missing:
+            return
+        print('')
+        for exe, name, install, why in missing:
+            print('  {0} ({1}) is not on the PATH: {2}. Install it with\n\n    {3}\n'.format(name, exe, why, install))
+        print('  Then close every terminal (and VS Code), open a new one, check that "where.exe {0}" finds it,\n'
+              '  and configure again (BUILD_WINDOWS.md, step 1).\n'.format(missing[0][0]))
+        raise SystemExit(1)
+
     def checkWindowsCompiler(self):
         # Stop early, with the fix, when the Visual Studio CMake builds with has no v143 build tools: otherwise
         # the first sign is an MSBuild error (MSB8020) from deep inside the vcpkg tool's build.
@@ -383,6 +403,7 @@ endif()
     # Make sure the VCPKG prerequisites are all there.
     def bootstrap(self):
         if platform.system() == 'Windows' and self.prebuiltArchive is None:
+            self.checkWindowsTools()
             self.checkWindowsCompiler()
 
         if self.upToDate():
