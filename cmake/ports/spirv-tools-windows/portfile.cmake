@@ -16,6 +16,16 @@ vcpkg_from_github(
     HEAD_REF master
 )
 
+# v2018.5's generator scripts use what newer Pythons removed: the 'rU' file mode (3.11) and distutils (3.12)
+file(READ "${SOURCE_PATH}/utils/update_build_version.py" _contents)
+string(REPLACE "mode='rU'" "mode='r'" _contents "${_contents}")
+file(WRITE "${SOURCE_PATH}/utils/update_build_version.py" "${_contents}")
+file(READ "${SOURCE_PATH}/utils/generate_registry_tables.py" _contents)
+string(REPLACE "import distutils.dir_util" "" _contents "${_contents}")
+string(REPLACE "distutils.dir_util.mkpath(os.path.dirname(args.generator_output))"
+    "os.makedirs(os.path.dirname(args.generator_output) or '.', exist_ok=True)" _contents "${_contents}")
+file(WRITE "${SOURCE_PATH}/utils/generate_registry_tables.py" "${_contents}")
+
 vcpkg_find_acquire_program(PYTHON3)
 get_filename_component(PYTHON3_DIR "${PYTHON3}" DIRECTORY)
 vcpkg_add_to_path("${PYTHON3_DIR}")
