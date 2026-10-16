@@ -174,8 +174,10 @@ def processCommand(line):
     params = line.split(';')
     dialect = params.pop(0)
     variant = params.pop(0)
-    scribeFile  = args.source_dir + '/' + params.pop(0)
-    unoptGlslFile = args.source_dir + '/' + params.pop(0)
+    # relative to the source folder, or absolute when the build folder is on another drive (CMake's relative
+    # path between drives is the absolute one), which os.path.join keeps as it is
+    scribeFile  = os.path.join(args.source_dir, params.pop(0))
+    unoptGlslFile = os.path.join(args.source_dir, params.pop(0))
     defines = ""
     if len(params) > 1 and params[0].startswith("defines:"):
         defines = params.pop(0)
