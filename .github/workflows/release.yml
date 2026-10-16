@@ -85,9 +85,9 @@ jobs:
           Get-ChildItem "$vs\VC\Tools\MSVC" | ForEach-Object Name
           if (-not (Test-Path "$vs\VC\Tools\MSVC\14.39.*")) { throw "The 14.39 toolset didn't install (exit $($p.ExitCode))" }
 
-      - name: Cache Qt
+      - name: Restore Qt
         id: qt-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: C:\Qt
           key: qt-5.15.2-msvc2019_64-webengine-script-webgl
@@ -98,6 +98,14 @@ jobs:
         run: |
           python -m pip install aqtinstall
           python -m aqt install-qt windows desktop 5.15.2 win64_msvc2019_64 -m qtwebengine qtscript qtwebglplugin -O $env:QT_DIR_BASE
+
+      # saved now rather than when the job ends, so a build that fails still keeps it
+      - name: Save Qt
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: C:\Qt
+          key: qt-5.15.2-msvc2019_64-webengine-script-webgl
 
       - name: Restore vcpkg packages
         id: vcpkg-cache
@@ -119,9 +127,20 @@ jobs:
           path: C:\dvcache
           key: vcpkg-windows-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
 
+      # On its own, and briefly, because twice it stalled silently inside the build until the six-hour limit.
+      # Unbuffered, with every thread's stack printed every five minutes, so a stall shows where it is.
+      - name: Generate shaders
+        shell: pwsh
+        timeout-minutes: 30
+        env:
+          PYTHONUNBUFFERED: 1
+          SHADERGEN_STACK_DUMP: 300
+        run: cmake --build $env:BUILD_DIR --config Release --target shadergen -- /v:minimal /nologo
+
       # /m:2: each project already compiles 4 files at once (/MP), and the runner has 16 GB
       - name: Build
         shell: pwsh
+        timeout-minutes: 300
         run: cmake --build $env:BUILD_DIR --config Release --target interface domain-server assignment-client -- /m:2 /v:minimal /nologo
 
       - name: Package
