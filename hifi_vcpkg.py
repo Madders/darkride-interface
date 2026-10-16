@@ -202,9 +202,72 @@ endif()
             print("Removing {}".format(self.path))
             shutil.rmtree(self.path, ignore_errors=True)
 
+    # vcpkg's own Windows tool of this version (2021-11-24) recognises Microsoft's compilers only up to 14.3x, which
+    # Visual Studio 2022 17.10 and later and Visual Studio 2026 don't install by default. So it's built from source
+    # with one change: 14.4x counts as the v143 toolset too, as Microsoft numbers it (14.5x, v145, stays unknown).
+    # It's built with the CMake, generator and toolset Darkride is configured with (CMakeLists.txt passes them on).
+    WINDOWS_TOOL_COMMIT = "48b94a6946b8a70abd21529218927fd478d02b6c"  # vcpkg-tool 2021-11-24
+    WINDOWS_TOOL_MARKER = ".darkride-tool"
+
+    def buildWindowsTool(self):
+        print("Building the vcpkg tool")
+        toolDir = os.path.join(self.path, 'tool')
+        if os.path.isdir(toolDir):
+            shutil.rmtree(toolDir, ignore_errors=True)
+        hifi_utils.downloadAndExtract(
+            "https://codeload.github.com/microsoft/vcpkg-tool/zip/" + self.WINDOWS_TOOL_COMMIT, toolDir, isZip=True
+        )
+        sourceDir = os.path.join(toolDir, "vcpkg-tool-" + self.WINDOWS_TOOL_COMMIT)
+
+        visualStudioSource = os.path.join(sourceDir, 'src', 'vcpkg', 'visualstudio.cpp')
+        with open(visualStudioSource, encoding='utf-8', newline='') as f:
+            source = f.read()
+        v143Test = "else if (toolset_version_prefix.byte_at_index(3) == '3')"
+        if v143Test not in source:
+            raise RuntimeError("Can't patch the vcpkg tool's toolset detection in " + visualStudioSource)
+        source = source.replace(v143Test, "else if (toolset_version_prefix.byte_at_index(3) == '3' || "
+                                          "toolset_version_prefix.byte_at_index(3) == '4')")
+        with open(visualStudioSource, 'w', encoding='utf-8', newline='') as f:
+            f.write(source)
+
+        cmake = os.environ.get('HIFI_CMAKE_COMMAND') or 'cmake'
+        generator = os.environ.get('HIFI_CMAKE_GENERATOR', '')
+        toolset = os.environ.get('HIFI_CMAKE_GENERATOR_TOOLSET', '')
+        instance = os.environ.get('HIFI_CMAKE_GENERATOR_INSTANCE', '')
+        buildDir = os.path.join(toolDir, 'build')
+        configure = [cmake, '-S', sourceDir, '-B', buildDir, '-DCMAKE_BUILD_TYPE=Release', '-DBUILD_TESTING=OFF',
+                     '-DVCPKG_DEVELOPMENT_WARNINGS=OFF', '-DCMAKE_POLICY_VERSION_MINIMUM=3.5']
+        if generator:
+            configure.extend(['-G', generator])
+        if generator.startswith('Visual Studio'):
+            configure.extend(['-A', 'x64'])
+            if toolset:
+                configure.extend(['-T', toolset])
+            if instance:
+                configure.append('-DCMAKE_GENERATOR_INSTANCE=' + instance)
+        hifi_utils.executeSubprocess(configure, env=self.bootstrapEnv)
+        hifi_utils.executeSubprocess([cmake, '--build', buildDir, '--config', 'Release', '--target', 'vcpkg',
+                                      '--parallel'], env=self.bootstrapEnv)
+
+        for built in [os.path.join(buildDir, 'Release', 'vcpkg.exe'), os.path.join(buildDir, 'vcpkg.exe')]:
+            if os.path.isfile(built):
+                shutil.copy(built, self.exe)
+                break
+        else:
+            raise RuntimeError("The vcpkg tool built, but vcpkg.exe isn't in " + buildDir)
+
+        # what bootstrap-vcpkg.bat -disableMetrics does
+        open(os.path.join(self.path, 'vcpkg.disable-metrics'), 'w').close()
+        open(os.path.join(self.path, self.WINDOWS_TOOL_MARKER), 'w').close()
+        shutil.rmtree(toolDir, ignore_errors=True)
+
     # Make sure the VCPKG prerequisites are all there.
     def bootstrap(self):
         if self.upToDate():
+            # an installation from before the tool was built here keeps its packages, and gets the new tool
+            if (platform.system() == 'Windows' and not self.noClean and self.prebuiltArchive is None and
+                    not os.path.isfile(os.path.join(self.path, self.WINDOWS_TOOL_MARKER))):
+                self.buildWindowsTool()
             return
 
         if self.prebuiltArchive is not None:
@@ -229,7 +292,7 @@ endif()
         if downloadVcpkg:
             # print("Cloning vcpkg from github to {}".format(self.path))
             # hifi_utils.executeSubprocess(['git', 'clone', 'https://github.com/microsoft/vcpkg.git', self.path])
-            
+
             print("Download vcpkg from GitHub to {}".format(self.path))
 
             hifi_utils.downloadAndExtract(
@@ -239,14 +302,16 @@ endif()
 
             for filename in os.listdir(vcpkg_extract_dir):
                 shutil.move(os.path.join(vcpkg_extract_dir, filename), os.path.join(self.path, filename))
-            
+
             os.rmdir(vcpkg_extract_dir)
 
-            if platform.system() != "Windows":
+            if platform.system() == "Windows":
+                self.buildWindowsTool()
+            else:
                 hifi_utils.executeSubprocess(["chmod", "+x", os.path.join(self.path, "bootstrap-vcpkg.sh")])
 
-            print("Bootstrapping vcpkg")
-            hifi_utils.executeSubprocess(self.bootstrapCmds, folder=self.path, env=self.bootstrapEnv)      
+                print("Bootstrapping vcpkg")
+                hifi_utils.executeSubprocess(self.bootstrapCmds, folder=self.path, env=self.bootstrapEnv)
 
         print("Replacing port files")
         portsPath = os.path.join(self.path, 'ports')

@@ -69,21 +69,12 @@ jobs:
           New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
           Get-PSDrive C, D | Format-Table Name, @{n="Free GB"; e={[int]($_.Free / 1GB)}}
 
-      # vcpkg's December 2021 version recognises compilers only up to 14.3x, so it needs the 14.39 toolset beside
-      # VS 2022's own 14.4x; ATL is for the speech recognition code (sphelper.h)
-      - name: Add the MSVC 14.39 toolset
+      # VS 2022's own compiler (14.4x) builds everything, vcpkg's dependencies included (hifi_vcpkg.py)
+      - name: Compilers
         shell: pwsh
         run: |
-          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
-          $vs = & "$installer\vswhere.exe" -latest -property installationPath
-          $p = Start-Process -Wait -PassThru -FilePath "$installer\setup.exe" -ArgumentList @(
-            "modify", "--installPath", "`"$vs`"",
-            "--add", "Microsoft.VisualStudio.Component.VC.14.39.17.9.x86.x64",
-            "--add", "Microsoft.VisualStudio.Component.VC.14.39.17.9.ATL",
-            "--add", "Microsoft.VisualStudio.Component.VC.ATL",
-            "--quiet", "--norestart", "--nocache")
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           Get-ChildItem "$vs\VC\Tools\MSVC" | ForEach-Object Name
-          if (-not (Test-Path "$vs\VC\Tools\MSVC\14.39.*")) { throw "The 14.39 toolset didn't install (exit $($p.ExitCode))" }
 
       - name: Restore Qt
         id: qt-cache
@@ -158,6 +149,85 @@ jobs:
             dist/*.zip
           retention-days: 14
           compression-level: 0
+
+  # A newcomer's build, as BUILD_WINDOWS.md describes it: Visual Studio 2026 with the C++ workload's default
+  # components, Qt where aqtinstall puts it, no environment variables, and the vs2026 preset. Only interface is built,
+  # to check that it compiles; nothing is published. Not run for tags.
+  windows-vs2026:
+    if: github.ref_type != 'tag'
+    runs-on: windows-2025
+    timeout-minutes: 360
+    env:
+      TIVOLI_VCPKG_BASE: C:\dv
+      VCPKG_DEFAULT_BINARY_CACHE: C:\dvcache
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The C++ workload installs the v143 build tools (14.44) by default (Microsoft lists them as recommended).
+      # Added here only if the runner image left them out.
+      - name: Compilers
+        shell: pwsh
+        run: |
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
+          $vs = & "$installer\vswhere.exe" -latest -property installationPath
+          "Visual Studio: $vs"
+          Get-ChildItem "$vs\VC\Tools\MSVC" | ForEach-Object Name
+          if (-not (Test-Path "$vs\VC\Tools\MSVC\14.4*")) {
+            "::warning::The image has no v143 (14.4x) build tools; adding them as the C++ workload's default does"
+            Start-Process -Wait -FilePath "$installer\setup.exe" -ArgumentList @(
+              "modify", "--installPath", "`"$vs`"", "--add", "Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64",
+              "--quiet", "--norestart", "--nocache")
+            Get-ChildItem "$vs\VC\Tools\MSVC" | ForEach-Object Name
+          }
+          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+
+      - name: Restore Qt
+        id: qt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: C:\Qt
+          key: qt-5.15.2-msvc2019_64-webengine-script-webgl
+
+      - name: Install Qt
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          python -m pip install aqtinstall
+          python -m aqt install-qt windows desktop 5.15.2 win64_msvc2019_64 -m qtwebengine qtscript qtwebglplugin -O C:\Qt
+
+      - name: Restore vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: C:\dvcache
+          key: vcpkg-windows-vs2026-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+          restore-keys: vcpkg-windows-vs2026-
+
+      # the preset's build folder is "build" in the checkout, on D:; -B keeps it short, on C:
+      - name: Configure
+        shell: pwsh
+        run: cmake --preset vs2026 -B C:\b
+
+      - name: Save vcpkg packages
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: C:\dvcache
+          key: vcpkg-windows-vs2026-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+
+      - name: Generate shaders
+        shell: pwsh
+        timeout-minutes: 30
+        env:
+          PYTHONUNBUFFERED: 1
+          SHADERGEN_STACK_DUMP: 300
+        run: cmake --build C:\b --config RelWithDebInfo --target shadergen -- /v:minimal /nologo
+
+      - name: Build
+        shell: pwsh
+        timeout-minutes: 300
+        run: cmake --build C:\b --config RelWithDebInfo --target interface -- /m:2 /v:minimal /nologo
 
   linux-server:
     runs-on: ubuntu-24.04
