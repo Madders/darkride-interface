@@ -219,16 +219,31 @@ endif()
         )
         sourceDir = os.path.join(toolDir, "vcpkg-tool-" + self.WINDOWS_TOOL_COMMIT)
 
-        visualStudioSource = os.path.join(sourceDir, 'src', 'vcpkg', 'visualstudio.cpp')
-        with open(visualStudioSource, encoding='utf-8', newline='') as f:
-            source = f.read()
-        v143Test = "else if (toolset_version_prefix.byte_at_index(3) == '3')"
-        if v143Test not in source:
-            raise RuntimeError("Can't patch the vcpkg tool's toolset detection in " + visualStudioSource)
-        source = source.replace(v143Test, "else if (toolset_version_prefix.byte_at_index(3) == '3' || "
-                                          "toolset_version_prefix.byte_at_index(3) == '4')")
-        with open(visualStudioSource, 'w', encoding='utf-8', newline='') as f:
-            f.write(source)
+        patches = [
+            ('visualstudio.cpp',
+             "else if (toolset_version_prefix.byte_at_index(3) == '3')",
+             "else if (toolset_version_prefix.byte_at_index(3) == '3' || "
+             "toolset_version_prefix.byte_at_index(3) == '4')"),
+            # It also takes a CMake from C:\Program Files\CMake, whatever is on PATH. CMake 4 refuses the
+            # cmake_minimum_required() of the 2021 ports, so it's passed over, and the tool uses its own 3.21.
+            ('tools.cpp',
+             '            return {Strings::find_exactly_one_enclosed(rc.output, "cmake version ", "\\n").to_string(),\n'
+             '                    expected_left_tag};',
+             '            auto version = Strings::find_exactly_one_enclosed(rc.output, "cmake version ", "\\n").to_string();\n'
+             '            if (!version.empty() && version[0] >= \'0\' && version[0] <= \'9\' && std::stoi(version) >= 4)\n'
+             '            {\n'
+             '                return {Strings::concat("CMake ", version, " is too new for these ports\\n"), expected_right_tag};\n'
+             '            }\n'
+             '            return {std::move(version), expected_left_tag};'),
+        ]
+        for fileName, old, new in patches:
+            sourcePath = os.path.join(sourceDir, 'src', 'vcpkg', fileName)
+            with open(sourcePath, encoding='utf-8', newline='') as f:
+                source = f.read().replace('\r\n', '\n')
+            if source.count(old) != 1:
+                raise RuntimeError("Can't patch the vcpkg tool's " + sourcePath)
+            with open(sourcePath, 'w', encoding='utf-8', newline='') as f:
+                f.write(source.replace(old, new))
 
         cmake = os.environ.get('HIFI_CMAKE_COMMAND') or 'cmake'
         generator = os.environ.get('HIFI_CMAKE_GENERATOR', '')
