@@ -308,6 +308,17 @@ endif()
     def checkWindowsTools(self):
         path = self.buildEnv.get('PATH', '')
         missing = [tool for tool in self.WINDOWS_TOOLS if not shutil.which(tool[0], path=path)]
+        # The Microsoft Store's PowerShell is only an app execution alias in WindowsApps, which CMake's
+        # find_program can't see: the ports then report "Could not find PowerShell Core"
+        pwsh = shutil.which('pwsh', path=path)
+        if pwsh and os.sep + 'WindowsApps' + os.sep in os.path.normpath(pwsh) and not os.path.isfile(
+                os.path.join(os.environ.get('ProgramFiles', r'C:\Program Files'), 'PowerShell', '7', 'pwsh.exe')):
+            print('\n  PowerShell 7 is the Microsoft Store version ({0}), which vcpkg can\'t use.\n'
+                  '  Uninstall it (Settings > Apps > Installed apps > PowerShell), install the regular one with\n\n'
+                  '    winget install -e --id Microsoft.PowerShell --source winget\n\n'
+                  '  then close every terminal (and VS Code), open a new one, check that "where.exe pwsh" finds\n'
+                  '  C:\\Program Files\\PowerShell\\7\\pwsh.exe, and configure again.\n'.format(pwsh))
+            raise SystemExit(1)
         if not missing:
             return
         print('')
