@@ -169,6 +169,14 @@ endif()
             ('9412b8caa07e15eac8f500f6f8fab9f038d95dc25e0124b08a80645607cf5761225f98546b52eac7b894420d64f26c3cbf22c19cd286bbe583f7c964256c97ed',
              '8e93ef2378bd5fafe505f8a2940b1e83f2a7563f994ecc82b5d081d178c7ade80a6bad17d52f693432b44e28c2420f68159b36ffea742f4b7c91ef3a855bcd0c'),
         ])
+        # Ports look for PowerShell 7 only on the PATH vcpkg builds them with, which isn't the user's PATH:
+        # "Could not find PowerShell Core" with PowerShell 7 installed. Look where it installs, and where vcpkg
+        # downloads its own, too.
+        self.patchVcpkgScript('vcpkg_copy_tool_dependencies.cmake', [
+            ('        find_program(Z_VCPKG_POWERSHELL_CORE pwsh)\n',
+             '        find_program(Z_VCPKG_POWERSHELL_CORE pwsh PATHS "$ENV{ProgramFiles}/PowerShell/7"\n'
+             '            "${DOWNLOADS}/tools/powershell-core-7.2.0-windows")\n'),
+        ])
 
     def patchVcpkgScript(self, name, replacements):
         script = os.path.join(self.path, 'scripts', 'cmake', name)
