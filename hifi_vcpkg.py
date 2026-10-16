@@ -242,6 +242,70 @@ endif()
     WINDOWS_TOOL_COMMIT = "48b94a6946b8a70abd21529218927fd478d02b6c"  # vcpkg-tool 2021-11-24
     WINDOWS_TOOL_MARKER = ".darkride-tool"
 
+    # The Visual Studio C++ component with v143 build tools, by Visual Studio's major version: in Visual Studio
+    # 2026 the workload's default "MSVC v143 - VS 2022 C++ x64/x86 build tools (v14.44-17.14)", in 2022 its own
+    V143_COMPONENTS = {
+        '18': ('Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64',
+               'MSVC v143 - VS 2022 C++ x64/x86 build tools (v14.44-17.14)'),
+        '17': ('Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+               'MSVC v143 - VS 2022 C++ x64/x86 build tools (Latest)'),
+    }
+
+    def windowsInstancesForGenerator(self):
+        # The Visual Studio installs CMake may build with: the one CMAKE_GENERATOR_INSTANCE names, or every
+        # install of the generator's version. Each is (path, has v143 build tools).
+        generator = os.environ.get('HIFI_CMAKE_GENERATOR', '')
+        match = re.match(r'Visual Studio (\d+) ', generator)
+        vswhere = os.path.join(os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)'),
+                               'Microsoft Visual Studio', 'Installer', 'vswhere.exe')
+        if not match or not os.path.isfile(vswhere):
+            return None, []
+        major = match.group(1)
+        instance = os.environ.get('HIFI_CMAKE_GENERATOR_INSTANCE', '')
+        if instance:
+            paths = [os.path.normpath(instance)]
+        else:
+            output = subprocess.run([vswhere, '-all', '-prerelease', '-products', '*', '-version',
+                                     '[{0}.0,{1}.0)'.format(major, int(major) + 1), '-property', 'installationPath'],
+                                    stdout=subprocess.PIPE, universal_newlines=True).stdout
+            paths = [line.strip() for line in output.splitlines() if line.strip()]
+
+        def hasV143(path):
+            msvc = os.path.join(path, 'VC', 'Tools', 'MSVC')
+            return os.path.isdir(msvc) and any(
+                re.match(r'14\.[34]\d\.', name) and os.path.isfile(os.path.join(msvc, name, 'bin', 'HostX64', 'x64', 'cl.exe'))
+                for name in os.listdir(msvc))
+
+        return major, [(path, hasV143(path)) for path in paths]
+
+    def v143Instructions(self, major, path):
+        componentId, componentName = self.V143_COMPONENTS.get(major, self.V143_COMPONENTS['18'])
+        installer = os.path.join(os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)'),
+                                 'Microsoft Visual Studio', 'Installer', 'setup.exe')
+        return ('  {0}\n'
+                '  has no v143 build tools, which Darkride and its dependencies build with. In the Visual Studio\n'
+                '  Installer, click Modify on it, and under Individual components tick\n'
+                '  "{1}". Or from a terminal:\n\n'
+                '    "{2}" modify --installPath "{0}" --add {3} --passive --norestart\n').format(
+                    path, componentName, installer, componentId)
+
+    def checkWindowsCompiler(self):
+        # Stop early, with the fix, when the Visual Studio CMake builds with has no v143 build tools: otherwise
+        # the first sign is an MSBuild error (MSB8020) from deep inside the vcpkg tool's build.
+        major, instances = self.windowsInstancesForGenerator()
+        if not instances:
+            return
+        missing = [path for path, has in instances if not has]
+        if len(missing) == len(instances):
+            print('\n' + '\n'.join(self.v143Instructions(major, path) for path in missing) +
+                  '\n  Then delete the build folder and configure again (BUILD_WINDOWS.md, Troubleshooting).\n')
+            raise SystemExit(1)
+        if missing:
+            print('Warning: these Visual Studio installs have no v143 build tools. If CMake picks one of them, the '
+                  'build fails: add the component, or name the install with -DCMAKE_GENERATOR_INSTANCE=<its path>')
+            for path in missing:
+                print('  ' + path)
+
     def buildWindowsTool(self):
         print("Building the vcpkg tool")
         toolDir = os.path.join(self.path, 'tool')
@@ -293,7 +357,17 @@ endif()
                 configure.extend(['-T', toolset])
             if instance:
                 configure.append('-DCMAKE_GENERATOR_INSTANCE=' + instance)
-        hifi_utils.executeSubprocess(configure, env=self.bootstrapEnv)
+        try:
+            hifi_utils.executeSubprocess(configure, env=self.bootstrapEnv)
+        except RuntimeError:
+            major, instances = self.windowsInstancesForGenerator()
+            missing = [path for path, has in instances if not has]
+            if missing:
+                print('\nThe vcpkg tool could not be configured. CMake probably picked a Visual Studio without v143 '
+                      'build tools:\n\n' + '\n'.join(self.v143Instructions(major, path) for path in missing) +
+                      '\n  Then delete the build folder and configure again (BUILD_WINDOWS.md, Troubleshooting).\n')
+                raise SystemExit(1)
+            raise
         hifi_utils.executeSubprocess([cmake, '--build', buildDir, '--config', 'Release', '--target', 'vcpkg',
                                       '--parallel'], env=self.bootstrapEnv)
 
@@ -311,6 +385,9 @@ endif()
 
     # Make sure the VCPKG prerequisites are all there.
     def bootstrap(self):
+        if platform.system() == 'Windows' and self.prebuiltArchive is None:
+            self.checkWindowsCompiler()
+
         if self.upToDate():
             # an installation from before the tool was built here keeps its packages, and gets the new tool
             if (platform.system() == 'Windows' and not self.noClean and self.prebuiltArchive is None and

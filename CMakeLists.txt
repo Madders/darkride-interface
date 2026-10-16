@@ -107,7 +107,7 @@ execute_process(
 )
 
 if(NOT EXISTS "${CMAKE_BINARY_DIR}/vcpkg.cmake")
-    message(FATAL_ERROR "vcpkg configuration missing.")
+    message(FATAL_ERROR "vcpkg configuration missing: setting up the dependencies failed, and the first error above says why.")
 endif()
 include("${CMAKE_BINARY_DIR}/vcpkg.cmake")
 
