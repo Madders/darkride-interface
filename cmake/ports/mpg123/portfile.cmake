@@ -23,15 +23,17 @@ if (VCPKG_LIBRARY_LINKAGE STREQUAL dynamic)
     set(MPG123_CONFIGURATION_SUFFIX _Dll)
 endif()
 
-vcpkg_from_sourceforge(
-    OUT_SOURCE_PATH SOURCE_PATH
-    REPO mpg123/mpg123
-    REF ${MPG123_VERSION}
-    FILENAME "mpg123-${MPG123_VERSION}.tar.bz2"
-    SHA512 ${MPG123_HASH}
-    PATCHES
-        0001-fix-x86-build.patch
-)
+if (NOT VCPKG_TARGET_IS_WINDOWS)
+    vcpkg_from_sourceforge(
+        OUT_SOURCE_PATH SOURCE_PATH
+        REPO mpg123/mpg123
+        REF ${MPG123_VERSION}
+        FILENAME "mpg123-${MPG123_VERSION}.tar.bz2"
+        SHA512 ${MPG123_HASH}
+        PATCHES
+            0001-fix-x86-build.patch
+    )
+endif()
 
 # include(${CURRENT_INSTALLED_DIR}/share/yasm-tool-helper/yasm-tool-helper.cmake)
 # yasm_tool_helper(APPEND_TO_PATH)
@@ -52,30 +54,49 @@ if(VCPKG_TARGET_IS_UWP)
         DESTINATION ${CURRENT_PACKAGES_DIR}/include
     )
 elseif(VCPKG_TARGET_IS_WINDOWS)
-    # Tivoli's prebuilt Windows archive is gone; build the libraries with mpg123's own CMake project.
-    # That project tells x64 from x86 by the Visual Studio platform, which a Ninja build leaves empty.
-    vcpkg_replace_string(${SOURCE_PATH}/ports/cmake/src/libmpg123/CMakeLists.txt
-        "MSVC AND CMAKE_GENERATOR_PLATFORM STREQUAL \"x64\"" "MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8")
-    vcpkg_find_acquire_program(YASM)
+    # vcpkg_install_msbuild(
+    #     SOURCE_PATH ${SOURCE_PATH}
+    #     PROJECT_SUBPATH ports/MSVC++/2015/win32/libmpg123/libmpg123.vcxproj
+    #     OPTIONS /p:UseEnv=True
+    #     RELEASE_CONFIGURATION Release${MPG123_CONFIGURATION}${MPG123_CONFIGURATION_SUFFIX}
+    #     DEBUG_CONFIGURATION Debug${MPG123_CONFIGURATION}${MPG123_CONFIGURATION_SUFFIX}
+    # )
+    # file(INSTALL
+    #     ${SOURCE_PATH}/ports/MSVC++/mpg123.h
+    #     ${SOURCE_PATH}/src/libmpg123/fmt123.h
+    #     ${SOURCE_PATH}/src/libmpg123/mpg123.h.in
+    #     DESTINATION ${CURRENT_PACKAGES_DIR}/include
+    # )
 
-    vcpkg_configure_cmake(
-        SOURCE_PATH ${SOURCE_PATH}/ports/cmake
-        PREFER_NINJA
-        OPTIONS
-            -DYASM_ASSEMBLER=${YASM}
-            -DUSE_MODULES=OFF
-            -DBUILD_TESTING=OFF
+    # Tivoli's prebuilt zip is gone with cdn.tivolicloud.com: use mpg123's own x64 build and make
+    # the MSVC import library from its .def (the 1.26 CMake build can't target x64 under Ninja)
+    vcpkg_download_distfile(
+        MPG123_ARCHIVE
+        URLS https://www.mpg123.de/download/win64/${MPG123_VERSION}/mpg123-${MPG123_VERSION}-x86-64.zip
+        SHA512 affa3fca6fe5ac72778567096f88fc8c4c794c399ac278aa9488e569418c0f6701bb5c0d70d2477f1b8a4f10338bce4a6edced1218599c492be7ee574c6d32c9
+        FILENAME mpg123-${MPG123_VERSION}-x86-64.zip
     )
-    vcpkg_install_cmake()
-    vcpkg_copy_pdbs()
-    # Leave out mpg123's CMake config, as the autotools builds elsewhere do: libsndfile would prefer it to its
-    # own FindMpg123 and then not link mpg123, and it names import libraries for libout123 and libsyn123
-    # that MSVC never writes, since those DLLs export nothing.
-    file(REMOVE_RECURSE ${CURRENT_PACKAGES_DIR}/lib/cmake ${CURRENT_PACKAGES_DIR}/debug/lib/cmake)
-    # mpg123.h includes fmt123.h, which this version's CMake project does not install
-    file(INSTALL ${SOURCE_PATH}/src/libmpg123/fmt123.h DESTINATION ${CURRENT_PACKAGES_DIR}/include)
 
-    file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include" "${CURRENT_PACKAGES_DIR}/debug/share")
+    vcpkg_extract_source_archive_ex(
+        OUT_SOURCE_PATH MPG123_EXTRACTED
+        ARCHIVE ${MPG123_ARCHIVE}
+    )
+
+    file(INSTALL ${MPG123_EXTRACTED}/mpg123.h ${MPG123_EXTRACTED}/fmt123.h DESTINATION ${CURRENT_PACKAGES_DIR}/include)
+    foreach(BUILD_DIR IN ITEMS "" "debug/")
+        if (BUILD_DIR STREQUAL "debug/" AND VCPKG_BUILD_TYPE STREQUAL "release")
+            continue()
+        endif()
+        file(INSTALL ${MPG123_EXTRACTED}/libmpg123-0.dll DESTINATION ${CURRENT_PACKAGES_DIR}/${BUILD_DIR}bin)
+        file(MAKE_DIRECTORY ${CURRENT_PACKAGES_DIR}/${BUILD_DIR}lib)
+        vcpkg_execute_required_process(
+            COMMAND lib /nologo /machine:x64 /def:${MPG123_EXTRACTED}/libmpg123-0.def /out:mpg123.lib
+            WORKING_DIRECTORY ${CURRENT_PACKAGES_DIR}/${BUILD_DIR}lib
+            LOGNAME lib-${TARGET_TRIPLET}-${BUILD_DIR}
+        )
+        file(REMOVE ${CURRENT_PACKAGES_DIR}/${BUILD_DIR}lib/mpg123.exp)
+    endforeach()
+    file(INSTALL ${MPG123_EXTRACTED}/COPYING.txt DESTINATION ${CURRENT_PACKAGES_DIR}/share/${PORT} RENAME copyright)
 
 elseif(VCPKG_TARGET_IS_OSX OR VCPKG_TARGET_IS_LINUX)
     set(MPG123_OPTIONS
@@ -111,6 +132,8 @@ elseif(VCPKG_TARGET_IS_OSX OR VCPKG_TARGET_IS_LINUX)
     file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/share")
 endif()
 
-file(INSTALL ${SOURCE_PATH}/COPYING DESTINATION ${CURRENT_PACKAGES_DIR}/share/${PORT} RENAME copyright)
+if (NOT VCPKG_TARGET_IS_WINDOWS)
+    file(INSTALL ${SOURCE_PATH}/COPYING DESTINATION ${CURRENT_PACKAGES_DIR}/share/${PORT} RENAME copyright)
+endif()
 
 message(STATUS "Installing done")

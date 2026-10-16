@@ -31,6 +31,12 @@ checkout_in_path(
     "c426ff98e1d9e9d59777fe8b883a5c0ceeca9ca3"
 )
 
+if(CMAKE_HOST_WIN32)
+    # This mini_chromium's win_helper.py, which gn runs to set up and wrap the MSVC tools, is Python 2
+    file(COPY "${CMAKE_CURRENT_LIST_DIR}/win_helper.py"
+        DESTINATION "${SOURCE_PATH}/third_party/mini_chromium/mini_chromium/build")
+endif()
+
 if(VCPKG_TARGET_IS_LINUX)
 	# linux support files
 	checkout_in_path(

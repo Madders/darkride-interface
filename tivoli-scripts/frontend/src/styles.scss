@@ -1,5 +1,32 @@
-@use "@material/theme" with
-	($primary: #e91e63, $secondary: #e91e63, $background: #fff);
+@use "sass:map";
+@use "~@angular/material" as mat;
+
+// Darkride's dark theme, the same as the website's (vr.darkride.ai): Dracula's layout of tones (a
+// mid-dark page, lighter cards and menus, soft white text, bright accents) in darkride.ai's navy, with
+// the logo's two colours as accents, the cyan of its d and the violet of its R.
+$dr-bg-darker: #171b2d; // toolbars, side panels
+$dr-bg: #1c2136; // the page
+$dr-surface: #242a44; // cards, menus, dialogs
+$dr-selection: #333a5a; // hover, selected
+$dr-text: #f4f6f8;
+$dr-text-muted: #9aa1bd;
+$dr-night: #091023; // darkride.ai's background; dark text reads better than white on cyan
+$dr-cyan: #00afff;
+$dr-violet: #a548ff;
+$dr-red: #ff5555;
+$dr-green: #50fa7b;
+
+@use "@material/theme" with (
+	$primary: $dr-cyan,
+	$on-primary: $dr-night,
+	$secondary: #b363ff,
+	$on-secondary: $dr-night,
+	$background: $dr-bg,
+	$surface: $dr-surface,
+	$on-surface: $dr-text,
+	$error: $dr-red,
+	$on-error: $dr-night,
+);
 
 @use "@angular-mdc/theme/material";
 
@@ -13,14 +40,182 @@
 @use "@material/top-app-bar/mdc-top-app-bar";
 
 // to be replaced by above
-@use "~@angular/material" as mat;
 @include mat.core();
 
-$primary: mat.define-palette(mat.$pink-palette);
-$accent: mat.define-palette(mat.$pink-palette, A200, A100, A400);
-$warn: mat.define-palette(mat.$red-palette);
-$theme: mat.define-light-theme($primary, $accent, $warn);
+// Material palettes from the logo's cyan and violet (and Dracula's red for warnings), each shade with
+// the text colour that stays readable on it
+$dr-cyan-palette: (
+	50: #e0f5ff,
+	100: #b3e7ff,
+	200: #80d7ff,
+	300: #4dc7ff,
+	400: #26bbff,
+	500: $dr-cyan,
+	600: #00a1f2,
+	700: #008fd9,
+	800: #007cbf,
+	900: #005d94,
+	A100: #b3e7ff,
+	A200: #66cfff,
+	A400: #1ab7ff,
+	A700: #0094e0,
+	contrast: (
+		50: $dr-night,
+		100: $dr-night,
+		200: $dr-night,
+		300: $dr-night,
+		400: $dr-night,
+		500: $dr-night,
+		600: $dr-night,
+		700: $dr-night,
+		800: #fff,
+		900: #fff,
+		A100: $dr-night,
+		A200: $dr-night,
+		A400: $dr-night,
+		A700: $dr-night,
+	),
+);
+
+$dr-violet-palette: (
+	50: #f4e9ff,
+	100: #e4c8ff,
+	200: #d2a4ff,
+	300: #c07fff,
+	400: #b363ff,
+	500: $dr-violet,
+	600: #9a3df5,
+	700: #8a2fe6,
+	800: #7a22d6,
+	900: #5e12b8,
+	A100: #e4c8ff,
+	A200: #c98fff,
+	A400: $dr-violet,
+	A700: #8a2fe6,
+	contrast: (
+		50: $dr-night,
+		100: $dr-night,
+		200: $dr-night,
+		300: $dr-night,
+		400: $dr-night,
+		500: #fff,
+		600: #fff,
+		700: #fff,
+		800: #fff,
+		900: #fff,
+		A100: $dr-night,
+		A200: $dr-night,
+		A400: #fff,
+		A700: #fff,
+	),
+);
+
+$dr-red-palette: (
+	50: #ffeaea,
+	100: #ffcccc,
+	200: #ffaaaa,
+	300: #ff8888,
+	400: #ff6e6e,
+	500: $dr-red,
+	600: #e94a4a,
+	700: #cc3d3d,
+	800: #b33232,
+	900: #8c2222,
+	A100: #ffcccc,
+	A200: #ff8888,
+	A400: $dr-red,
+	A700: #e94a4a,
+	contrast: (
+		50: $dr-night,
+		100: $dr-night,
+		200: $dr-night,
+		300: $dr-night,
+		400: $dr-night,
+		500: $dr-night,
+		600: $dr-night,
+		700: #fff,
+		800: #fff,
+		900: #fff,
+		A100: $dr-night,
+		A200: $dr-night,
+		A400: $dr-night,
+		A700: $dr-night,
+	),
+);
+
+$primary: mat.define-palette($dr-cyan-palette);
+$accent: mat.define-palette($dr-violet-palette, A200, A100, A400);
+$warn: mat.define-palette($dr-red-palette);
+
+// Material's dark theme with its greys swapped for the navy tones above (the theme keeps its colours
+// both under `color` and at the top level, so both get them)
+$dr-background: map.merge(
+	mat.$dark-theme-background-palette,
+	(
+		status-bar: $dr-bg-darker,
+		app-bar: $dr-bg-darker,
+		background: $dr-bg,
+		card: $dr-surface,
+		dialog: $dr-surface,
+		raised-button: $dr-surface,
+		selected-button: $dr-selection,
+		selected-disabled-button: $dr-surface,
+		disabled-button-toggle: $dr-bg-darker,
+		unselected-chip: $dr-selection,
+		disabled-list-option: $dr-bg-darker,
+		tooltip: $dr-selection,
+	)
+);
+$dr-foreground: map.merge(
+	mat.$dark-theme-foreground-palette,
+	(
+		base: $dr-text,
+		text: $dr-text,
+		icon: $dr-text,
+		icons: $dr-text,
+		secondary-text: $dr-text-muted,
+	)
+);
+$theme: mat.define-dark-theme($primary, $accent, $warn);
+$theme: map.merge(
+	$theme,
+	(
+		color:
+			map.merge(
+				map.get($theme, color),
+				(
+					background: $dr-background,
+					foreground: $dr-foreground,
+				)
+			),
+		background: $dr-background,
+		foreground: $dr-foreground,
+	)
+);
 @include mat.all-component-themes($theme);
+
+// the same colours for the components' own styles
+:root {
+	--dr-bg-darker: #{$dr-bg-darker};
+	--dr-bg: #{$dr-bg};
+	--dr-surface: #{$dr-surface};
+	--dr-selection: #{$dr-selection};
+	--dr-text: #{$dr-text};
+	--dr-text-muted: #{$dr-text-muted};
+	--dr-night: #{$dr-night};
+	--dr-cyan: #{$dr-cyan};
+	--dr-violet: #{$dr-violet};
+	--dr-red: #{$dr-red};
+	--dr-green: #{$dr-green};
+}
+
+// Panels that fill their window get the navy page (AppComponent sets the class). Chat and the overview
+// float over the world, so their page stays transparent.
+html.dr-page {
+	color-scheme: dark; // native scrollbars and form controls follow
+	background-color: $dr-bg;
+	color: $dr-text;
+}
 
 @import "./fonts.scss";
 @import "bootstrap/dist/css/bootstrap-grid.css";
@@ -43,18 +238,16 @@ body {
 }
 
 *::-webkit-scrollbar-track {
-	background-color: rgba(29, 31, 33, 0.2);
+	background-color: rgba($dr-bg-darker, 0.6);
 }
 
 *::-webkit-scrollbar-thumb {
-	background-color: rgba(29, 31, 33, 0.6);
+	background-color: $dr-selection;
 }
 
+// message banners, which have white text
 .bg-warn {
-	background-color: mat.get-color-from-palette(
-		mat.$red-palette,
-		500
-	) !important;
+	background-color: mat.get-color-from-palette($dr-red-palette, 700) !important;
 }
 
 h1,
@@ -72,12 +265,12 @@ b {
 
 a {
 	text-decoration: inherit;
-	color: mat.get-color-from-palette(mat.$pink-palette, 500);
+	color: $dr-cyan;
 }
 
 hr {
 	width: 100%;
-	border-color: rgba(0, 0, 0, 0.1);
+	border-color: rgba(255, 255, 255, 0.12);
 }
 
 // .mat-button-wrapper {
@@ -122,5 +315,92 @@ mat-form-field.slim {
 	}
 	.mat-form-field-flex {
 		padding: 0 0.5em;
+	}
+}
+
+// the instance chooser on Explore's world cards (menus render outside their component): lifted off the
+// cards in a lighter navy, with the Hop button's violet as its edge and glow
+.dr-instance-menu {
+	min-width: 260px !important;
+
+	&.mat-menu-panel {
+		background: #303859;
+		border: 1px solid rgba($dr-violet, 0.55);
+		border-radius: 12px;
+		box-shadow: 0 0 22px rgba($dr-violet, 0.28), 0 18px 44px rgba(0, 0, 0, 0.6);
+	}
+
+	// the world's name: the menu can cover its own card
+	.menu-title {
+		padding: 12px 16px 2px 16px;
+		font-size: 15px;
+		font-weight: 500;
+		color: #fff;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.menu-heading {
+		padding: 10px 16px 4px 16px;
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: #4dc7ff; // the cyan palette's 300
+	}
+
+	.menu-divider {
+		height: 1px;
+		margin: 6px 0;
+		background: rgba(255, 255, 255, 0.12);
+	}
+
+	.mat-menu-item {
+		display: flex;
+		align-items: center;
+		height: auto;
+		min-height: 48px;
+		line-height: 1.3;
+		padding-top: 6px;
+		padding-bottom: 6px;
+
+		&:hover:not([disabled]) {
+			background: rgba(255, 255, 255, 0.07);
+		}
+
+		// icons on small tiles: cyan for somewhere already running, violet for starting an instance
+		.mat-icon {
+			width: 32px;
+			height: 32px;
+			line-height: 32px;
+			font-size: 20px;
+			text-align: center;
+			border-radius: 8px;
+			margin-right: 12px;
+			color: #4dc7ff;
+			background: rgba($dr-cyan, 0.16);
+		}
+
+		&.new .mat-icon {
+			color: #d2a4ff;
+			background: rgba($dr-violet, 0.2);
+		}
+	}
+
+	.place {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
+
+	.place-name {
+		font-weight: 500;
+	}
+
+	.place-detail {
+		font-size: 12px;
+		color: #b8bfd9;
+		white-space: normal;
 	}
 }

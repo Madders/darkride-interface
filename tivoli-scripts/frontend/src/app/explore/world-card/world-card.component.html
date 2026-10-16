@@ -1,117 +1,149 @@
-<mat-card
+<div
 	class="world-card"
-	[ngClass]="{ offline: !world.online, small: true }"
+	[class.has-people]="people > 0"
+	[class.selected]="exploreService.chooserWorldId == world.id"
 >
-	<div mat-card-image>
-		<div
-			class="thumbnail"
-			[ngStyle]="{
-				backgroundImage:
-					'url(' +
-					scriptService.metaverseUrl +
-					'/api/domain/' +
-					world.id +
-					'/image' +
-					')'
-			}"
-			(click)="onThumbnail()"
-		>
-			<p
-				class="banner"
-				style="background-color: #f44336"
-				*ngIf="world.restriction == 'open'"
-			>
-				<mat-icon style="margin-right: 4px">error</mat-icon>
-				Allows anonymous users
-			</p>
-			<p
-				class="banner"
-				style="background-color: #f44336"
-				*ngIf="
-					exploreService.protocol && world.protocol
-						? world.protocol != exploreService.protocol
-						: false
-				"
-			>
-				<mat-icon style="margin-right: 4px">error</mat-icon>
-				Incompatible protocol {{ world.version }}
-			</p>
-			<p class="label">{{ world.label }}</p>
+	<div
+		class="thumbnail"
+		[ngStyle]="{
+			backgroundImage:
+				'url(' +
+				scriptService.metaverseUrl +
+				'/api/domain/' +
+				world.id +
+				'/image' +
+				')'
+		}"
+		(click)="onHop()"
+	>
+		<div class="chips">
+			<span class="chip presence" *ngIf="people > 0">
+				<span class="dot"></span>
+				{{ people }} here
+			</span>
+			<span class="chip warn" *ngIf="incompatible">
+				<mat-icon>error</mat-icon>
+				Needs another client version ({{ world.version }})
+			</span>
+			<span class="chip" *ngIf="world.restriction == 'acl'">
+				<mat-icon>lock</mat-icon>
+				Invited only
+			</span>
 		</div>
+		<div class="hop-hint"><mat-icon svgIcon="dr-rabbit"></mat-icon></div>
+		<p class="label">{{ world.label }}</p>
 	</div>
-	<mat-card-header>
-		<div class="header">
-			<h3 class="title">
-				<mat-icon *ngIf="world.restriction == 'acl'">lock</mat-icon>
-				{{ users }}
-			</h3>
-			<p class="subtitle">{{ world.username }}</p>
 
-			<span style="flex-grow: 1"></span>
-
+	<div class="body">
+		<div class="meta">
+			<span class="author">by {{ world.username }}</span>
+			<span class="grow"></span>
 			<button
-				mat-flat-button
+				mat-button
 				class="like-button"
 				[class.active]="world.liked"
 				(click)="onLikeWorld()"
 			>
 				{{ world.likes }}
-				<mat-icon *ngIf="!world.liked">favorite_border</mat-icon>
-				<mat-icon *ngIf="world.liked">favorite</mat-icon>
+				<mat-icon>{{
+					world.liked ? "favorite" : "favorite_border"
+				}}</mat-icon>
 			</button>
 		</div>
+		<p class="description">{{ world.description }}</p>
+		<p class="status">{{ status }}</p>
 
-		<!-- <mat-card-title class="ellipses">
-			{{ world.label }}
-		</mat-card-title>
-		<mat-card-subtitle class="ellipses">
-			{{ world.username }}
-		</mat-card-subtitle> -->
-	</mat-card-header>
-	<mat-card-content>
-		<div class="ellipses">{{ world.description }}</div>
-	</mat-card-content>
-	<mat-card-actions *ngIf="world.instances" class="instance-actions">
-		<div class="instance-summary">{{ instanceSummary }}</div>
-		<button
-			mat-stroked-button
-			*ngIf="world.instances.list.length > 0"
-			(click)="onJoinInstance()"
-		>
-			<mat-icon>launch</mat-icon>
-			Join
-		</button>
-		<button
-			mat-flat-button
-			color="primary"
-			*ngIf="world.instances.canStart"
-			[disabled]="starting"
-			[matMenuTriggerFor]="newInstanceMenu"
-		>
-			<mat-icon>add</mat-icon>
-			{{ starting ? "Starting..." : "New" }}
-		</button>
-		<mat-menu #newInstanceMenu="matMenu">
-			<button mat-menu-item (click)="onNewInstance('public')">
+		<!-- a split button: Hop goes straight in, the caret picks an instance or starts one -->
+		<div class="actions" [class.split]="world.instances">
+			<button
+				mat-flat-button
+				class="hop"
+				[class.starting]="starting"
+				[disabled]="starting || !canHop"
+				(click)="onHop()"
+			>
+				<mat-icon
+					svgIcon="dr-rabbit"
+					class="rabbit"
+					[class.hopping]="starting"
+				></mat-icon>
+				{{
+					starting ? "Hopping..." : canHop ? "Hop" : "Sign in to hop"
+				}}
+			</button>
+			<button
+				mat-flat-button
+				class="more"
+				*ngIf="world.instances"
+				[disabled]="starting"
+				[matMenuTriggerFor]="instanceMenu"
+				(menuOpened)="exploreService.chooserWorldId = world.id"
+				(menuClosed)="exploreService.chooserWorldId = null"
+				matTooltip="Pick an instance, or start a new one"
+			>
+				<mat-icon>arrow_drop_down</mat-icon>
+			</button>
+		</div>
+	</div>
+
+	<mat-menu
+		#instanceMenu="matMenu"
+		class="dr-instance-menu"
+		xPosition="before"
+	>
+		<div class="menu-title">{{ world.label }}</div>
+		<ng-container *ngIf="places.length > 0">
+			<div class="menu-heading">Running now</div>
+			<button
+				mat-menu-item
+				class="running"
+				*ngFor="let place of places"
+				(click)="onJoin(place)"
+			>
+				<mat-icon>{{ place.icon }}</mat-icon>
+				<span class="place">
+					<span class="place-name">{{ place.name }}</span>
+					<span class="place-detail">{{ place.detail }}</span>
+				</span>
+			</button>
+			<div class="menu-divider"></div>
+		</ng-container>
+		<ng-container *ngIf="world.instances?.canStart">
+			<div class="menu-heading">Start a new instance</div>
+			<button mat-menu-item class="new" (click)="onNewInstance('public')">
 				<mat-icon>public</mat-icon>
-				Public
+				<span class="place">
+					<span class="place-name">Public</span>
+					<span class="place-detail">Anyone can join</span>
+				</span>
 			</button>
-			<button mat-menu-item (click)="onNewInstance('friends')">
+			<button
+				mat-menu-item
+				class="new"
+				(click)="onNewInstance('friends')"
+			>
 				<mat-icon>group</mat-icon>
-				Friends
+				<span class="place">
+					<span class="place-name">Friends</span>
+					<span class="place-detail">Your friends can join</span>
+				</span>
 			</button>
-			<button mat-menu-item (click)="onNewInstance('private')">
+			<button
+				mat-menu-item
+				class="new"
+				(click)="onNewInstance('private')"
+			>
 				<mat-icon>lock</mat-icon>
-				Private (by link)
+				<span class="place">
+					<span class="place-name">Private</span>
+					<span class="place-detail"
+						>Only people you send the link to</span
+					>
+				</span>
 			</button>
-		</mat-menu>
-	</mat-card-actions>
-	<!-- <mat-card-actions>
-		<button mat-button (click)="onJoinWorld()">
-			<mat-icon>launch</mat-icon> Join
-			<span style="opacity: 0.5; font-size: 0.8em; padding-left: 8px;">
-				{{ world.networkAddress + ":" + world.networkPort }}
-			</span>
-		</button>
-	</mat-card-actions> -->
-</mat-card>
+		</ng-container>
+		<div class="menu-heading" *ngIf="!world.instances?.canStart">
+			Sign in to start an instance
+		</div>
+	</mat-menu>
+</div>

@@ -3,9 +3,15 @@
 	flex-basis: calc(250px - 24px);
 	padding: 12px;
 	height: 100%;
-	background: #1d1f21;
-	color: #fff;
+	background: var(--dr-bg-darker);
+	color: var(--dr-text);
+	border-left: 1px solid rgba(255, 255, 255, 0.06);
 	overflow-y: auto;
+
+	> p {
+		font-size: 13px;
+		color: var(--dr-text-muted);
+	}
 
 	&::-webkit-scrollbar {
 		width: 0;
@@ -18,16 +24,19 @@
 		white-space: nowrap;
 		text-align: center;
 		margin-bottom: 6px;
+		font-size: 1.25em;
+		font-weight: 500;
 
 		mat-icon {
 			margin-right: 8px;
+			color: var(--dr-cyan);
 		}
 	}
 
 	.domain-friends {
-		background: rgba(#fff, 0.1);
+		background: var(--dr-surface);
 		padding: 12px;
-		border-radius: 4px;
+		border-radius: 8px;
 		margin-bottom: 12px;
 		overflow: hidden;
 
