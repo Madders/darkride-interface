@@ -79,7 +79,7 @@ The first should list a `14.39.xxxxx` folder next to Visual Studio's own version
 CMake uses the newest Visual Studio for the generator you name (`Visual Studio 18 2026` or `Visual Studio 17 2022`), and that can be a **Build Tools** installation rather than Community. Add the components to the installation CMake actually uses, or name one on the first `cmake` run:
 
 ```cmd
-cmake .. -G "Visual Studio 18 2026" -A x64 -T v143 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_GENERATOR_INSTANCE="C:/Program Files/Microsoft Visual Studio/18/Community"
+cmake .. -G "Visual Studio 18 2026" -A x64 -T v143 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" -DCMAKE_GENERATOR_INSTANCE="C:/Program Files/Microsoft Visual Studio/18/Community"
 ```
 
 vcpkg separately picks the newest Visual Studio that has a 14.3x compiler.

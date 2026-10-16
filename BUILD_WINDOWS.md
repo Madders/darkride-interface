@@ -55,13 +55,13 @@ These `set` commands only last for the current window. To keep them, set them on
 ```cmd
 mkdir build
 cd build
-cmake .. -G "Visual Studio 18 2026" -A x64 -T v143 -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake .. -G "Visual Studio 18 2026" -A x64 -T v143 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
 ```
 
 With Visual Studio 2022, use `-G "Visual Studio 17 2022"`. The other options stay the same.
 
 -   `-T v143` builds with the Visual Studio 2022 compiler (the 14.39 one from step 1). Qt 5.15's headers use `stdext::make_checked_array_iterator`, which Visual Studio 2026's own compiler (14.5x) no longer has.
--   `CMAKE_POLICY_VERSION_MINIMUM` is needed with CMake 4, which comes with Visual Studio 2026: it lets CMake accept the older `cmake_minimum_required` lines in the tree. It's harmless with older CMake. In PowerShell, quote the whole argument (`'-DCMAKE_POLICY_VERSION_MINIMUM=3.5'`), or PowerShell splits it at the dot.
+-   `CMAKE_POLICY_VERSION_MINIMUM` is needed with CMake 4, which comes with Visual Studio 2026: it lets CMake accept the older `cmake_minimum_required` lines in the tree. It's harmless with older CMake. Keep the quotes: without them PowerShell splits the argument at the dot.
 
 The first run downloads and compiles all the dependencies, which takes 15–20 minutes. It's finished when CMake prints `-- Generating done`. Any change to the files in `cmake/ports` makes vcpkg rebuild the dependencies, but it reuses unchanged packages from its cache in `%LOCALAPPDATA%\vcpkg\archives`.
 
@@ -115,7 +115,8 @@ These SDKs can no longer be downloaded, so the build leaves out the plugins that
 | vcpkg can't find a Visual Studio instance or toolset | Install the **v14.39** compiler (step 1) |
 | Errors about paths that are too long | Use a short `TIVOLI_VCPKG_BASE` such as `C:\vcpkg`, and keep the repository near the root of the drive |
 | `'stdext': is not a class or namespace name` in Qt's `qvector.h` | Visual Studio 2026's own compiler can't build Qt 5.15's headers. Configure with `-T v143` (step 4), in a new build folder |
-| `Compatibility with CMake < 3.5 has been removed`, when configuring Darkride | Add `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` to the `cmake` command (step 4) |
+| `Compatibility with CMake < 3.5 has been removed`, when configuring Darkride | Add `"-DCMAKE_POLICY_VERSION_MINIMUM=3.5"` to the `cmake` command (step 4) |
+| `Invalid CMAKE_POLICY_VERSION_MINIMUM value "3"` | PowerShell split the unquoted argument at the dot. Quote it: `"-DCMAKE_POLICY_VERSION_MINIMUM=3.5"`, and run step 4 again |
 | `generator platform: x64 Does not match the platform used previously` | The build folder was configured before without `-A x64`, for example with a plain `cmake ..`, even if that run failed. Delete the `build` folder (or its `CMakeCache.txt` and `CMakeFiles`) and run step 4 again with the whole command |
 | The same CMake error after you fixed its cause | Delete `build\CMakeCache.txt`, or the whole `build` folder, and run step 4 again |
 | A dependency failed to build | vcpkg's log for it is in `%TIVOLI_VCPKG_BASE%\<id>\buildtrees\<package>\` |
@@ -173,6 +174,6 @@ To play H.264/AAC video in web entities, build Qt WebEngine with Chromium's prop
     set QT_CMAKE_PREFIX_PATH=C:/Qt-codecs/5.15.2/msvc2019_64/lib/cmake
     mkdir build-codecs
     cd build-codecs
-    cmake .. -G "Visual Studio 18 2026" -A x64 -T v143 -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+    cmake .. -G "Visual Studio 18 2026" -A x64 -T v143 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
     cmake --build . --target interface --config RelWithDebInfo
     ```
