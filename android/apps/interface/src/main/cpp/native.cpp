@@ -301,6 +301,12 @@ Java_io_highfidelity_hifiinterface_HifiUtils_getHifiSettingBoolean(JNIEnv *env,
     return setting.get();
 }
 
+JNIEXPORT jstring JNICALL
+Java_io_highfidelity_hifiinterface_HifiUtils_getAccessToken(JNIEnv *env, jobject instance) {
+    auto accountManager = DependencyManager::get<AccountManager>();
+    return env->NewStringUTF(accountManager->getAccountInfo().getAccessToken().token.toLatin1().data());
+}
+
 JNIEXPORT jboolean JNICALL
 Java_io_highfidelity_hifiinterface_HifiUtils_isUserLoggedIn(JNIEnv *env, jobject instance) {
     return DependencyManager::get<AccountManager>()->isLoggedIn();

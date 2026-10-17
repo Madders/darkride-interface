@@ -17,7 +17,7 @@
             android:id="@+id/hifiLogo"
             android:layout_width="74dp"
             android:layout_height="74dp"
-            android:src="@drawable/hifi_logo_header"
+            android:src="@drawable/darkride_logo_header"
             android:layout_gravity="center_vertical|left" />
 
         <TextView

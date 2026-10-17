@@ -47,8 +47,15 @@ public class AvatarAdapter extends RecyclerView.Adapter<AvatarAdapter.ViewHolder
         AvatarAdapter.Avatar anAvatar = mAvatars.get(position);
         assert(holder.mName != null);
         holder.mName.setText(anAvatar.avatarName);
-        Uri uri = Uri.parse(anAvatar.avatarPreviewUrl);
-        Picasso.get().load(uri).into(holder.mPreviewImage);
+        // avatars without a picture show the Darkride logo
+        if (anAvatar.avatarPreviewUrl == null || anAvatar.avatarPreviewUrl.isEmpty()) {
+            Picasso.get().load(R.drawable.darkride_logo_header).into(holder.mPreviewImage);
+        } else {
+            Picasso.get().load(Uri.parse(anAvatar.avatarPreviewUrl))
+                    .placeholder(R.drawable.darkride_logo_header)
+                    .error(R.drawable.darkride_logo_header)
+                    .into(holder.mPreviewImage);
+        }
     }
 
     @Override

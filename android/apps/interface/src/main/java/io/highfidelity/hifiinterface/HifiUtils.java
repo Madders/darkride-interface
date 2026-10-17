@@ -66,6 +66,9 @@ public class HifiUtils {
 
     public native boolean isUserLoggedIn();
 
+    // the metaverse access token, for the app's own calls to the metaverse API (empty when logged out)
+    public native String getAccessToken();
+
     public native void updateHifiSetting(String group, String key, boolean value);
     public native boolean getHifiSettingBoolean(String group, String key, boolean defaultValue);
 

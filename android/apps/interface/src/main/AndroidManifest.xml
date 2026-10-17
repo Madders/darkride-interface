@@ -26,8 +26,8 @@
         android:extractNativeLibs="true"
         android:allowBackup="true"
         android:theme="@style/NoSystemUI"
-        android:icon="@drawable/ic_launcher"
-        android:roundIcon="@drawable/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher">
 
         <activity android:name="io.highfidelity.hifiinterface.PermissionChecker"
             android:exported="true"

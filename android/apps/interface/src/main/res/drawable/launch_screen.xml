@@ -2,7 +2,7 @@
 
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android" android:opacity="opaque">
     <item android:drawable="@android:color/black"/>
-    <item android:drawable="@drawable/hifi_logo_splash"
+    <item android:drawable="@drawable/darkride_logo_splash"
         android:gravity="center_horizontal"
         android:top="225dp"
         android:height="242dp"

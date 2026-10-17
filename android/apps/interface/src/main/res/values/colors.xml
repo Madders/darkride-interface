@@ -28,4 +28,6 @@
     <color name="slidingUpPanelFadeColor">#40000000</color>
     <color name="clearText">#F2F2F2</color>
 
+    <!-- the Darkride logo's background, behind the app icon -->
+    <color name="ic_launcher_background">#080F22</color>
 </resources>
