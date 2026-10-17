@@ -1,10 +1,12 @@
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
-if (ANDROID)
+if (VCPKG_TARGET_IS_ANDROID)
+    # the GLES 3.2 loader
     vcpkg_download_distfile(
         SOURCE_ARCHIVE
         URLS https://build-deps.overte.org/dependencies/glad/glad32es.zip
         SHA512 2e02ac633eed8f2ba2adbf96ea85d08998f48dd2e9ec9a88ec3c25f48eaf1405371d258066327c783772fcb3793bdb82bd7375fdabb2ba5e2ce0835468b17f65
+        FILENAME glad32es.zip
     )
 else()
     # else Linux desktop

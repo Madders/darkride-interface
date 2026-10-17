@@ -12,7 +12,10 @@
       "platform": "x64 & (osx | windows)"
     },
     "gif-h",
-    "glslang",
+    {
+      "name": "glslang",
+      "platform": "!android"
+    },
     "hifi-deps",
     {
       "name": "leapmotion",

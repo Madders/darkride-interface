@@ -100,6 +100,14 @@ else()
         string(APPEND OPTIONS --with-pic=yes)
     endif()
 
+    if(VCPKG_TARGET_IS_ANDROID)
+        # The NDK's plain clang targets the build machine; autotools needs its target-specific wrappers
+        set(NDK_BIN "$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin")
+        list(APPEND OPTIONS --host=aarch64-linux-android
+            "CC=${NDK_BIN}/aarch64-linux-android26-clang" "CXX=${NDK_BIN}/aarch64-linux-android26-clang++"
+            "AR=${NDK_BIN}/llvm-ar" "RANLIB=${NDK_BIN}/llvm-ranlib" "STRIP=${NDK_BIN}/llvm-strip")
+    endif()
+
     vcpkg_configure_make(
         SOURCE_PATH ${SOURCE_PATH}
         DETERMINE_BUILD_TRIPLET

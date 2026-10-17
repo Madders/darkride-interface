@@ -98,16 +98,23 @@ elseif(VCPKG_TARGET_IS_WINDOWS)
     endforeach()
     file(INSTALL ${MPG123_EXTRACTED}/COPYING.txt DESTINATION ${CURRENT_PACKAGES_DIR}/share/${PORT} RENAME copyright)
 
-elseif(VCPKG_TARGET_IS_OSX OR VCPKG_TARGET_IS_LINUX)
+elseif(VCPKG_TARGET_IS_OSX OR VCPKG_TARGET_IS_LINUX OR VCPKG_TARGET_IS_ANDROID)
     set(MPG123_OPTIONS
         --disable-dependency-tracking
     )
 
-    # Find cross-compiler prefix
-    if(VCPKG_CHAINLOAD_TOOLCHAIN_FILE)
+    # Find cross-compiler prefix. On Android, the NDK's plain clang targets (and -dumpmachine reports) the build
+    # machine, so autotools gets the target-specific wrappers, and the portable C decoder, since its NEON assembly
+    # would go through the build machine's assembler.
+    if(VCPKG_TARGET_IS_ANDROID)
+        set(NDK_BIN "$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin")
+        list(APPEND MPG123_OPTIONS --host=aarch64-linux-android --with-cpu=generic_fpu
+            "CC=${NDK_BIN}/aarch64-linux-android26-clang" "CXX=${NDK_BIN}/aarch64-linux-android26-clang++"
+            "AR=${NDK_BIN}/llvm-ar" "RANLIB=${NDK_BIN}/llvm-ranlib" "STRIP=${NDK_BIN}/llvm-strip")
+    elseif(VCPKG_CHAINLOAD_TOOLCHAIN_FILE)
         include("${VCPKG_CHAINLOAD_TOOLCHAIN_FILE}")
     endif()
-    if(CMAKE_C_COMPILER)
+    if(CMAKE_C_COMPILER AND NOT VCPKG_TARGET_IS_ANDROID)
         vcpkg_execute_required_process(
             COMMAND ${CMAKE_C_COMPILER} -dumpmachine
             WORKING_DIRECTORY ${CURRENT_BUILDTREES_DIR}

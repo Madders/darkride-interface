@@ -16,7 +16,7 @@
     "glm",
     {
       "name": "hifi-audio-codec",
-      "platform": "!(osx & arm64)"
+      "platform": "!(osx & arm64) & !android"
     },
     "libsndfile",
     "nvtt",
@@ -26,13 +26,10 @@
     },
     {
       "name": "openssl",
-      "platform": "windows | osx"
+      "platform": "windows | osx | android"
     },
     "polyvox",
-    {
-      "name": "tbb",
-      "platform": "!android"
-    },
+    "tbb",
     "vhacd",
     {
       "name": "webrtc",

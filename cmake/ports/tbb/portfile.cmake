@@ -1,5 +1,37 @@
 vcpkg_fail_port_install(ON_TARGET "uwp")
 
+# Android: TBB 2020's make build assumes the NDK's old layout (a sysroot at its root, gone by r22), so build oneTBB
+# 2021, which has a CMake build for current NDKs. Darkride only uses its concurrent containers and parallel_for,
+# which oneTBB keeps under the same tbb/*.h headers, and its package config provides the same TBB::tbb target.
+if (VCPKG_TARGET_IS_ANDROID)
+    vcpkg_from_github(
+        OUT_SOURCE_PATH SOURCE_PATH
+        REPO oneapi-src/oneTBB
+        REF v2021.13.0
+        SHA512 1f536b98c4eb331c3ba21e4b36362c932d7852b974ea7237b5f7bffb0e996d76f688c7ac534cb56f5866cfdffd5d3f015521b4c2ca21e584503070782ca82a2f
+        HEAD_REF master
+    )
+    # Qt defines "emit" as an empty macro, and profiling.h declares emit() methods: hide Qt's macro in that header
+    file(READ ${SOURCE_PATH}/include/oneapi/tbb/profiling.h _profiling)
+    string(REPLACE "#define __TBB_profiling_H" "#define __TBB_profiling_H\n#pragma push_macro(\"emit\")\n#undef emit" _profiling "${_profiling}")
+    string(REGEX REPLACE "(#endif[^\n]*__TBB_profiling_H[^\n]*)\n*$" "#pragma pop_macro(\"emit\")\n\\1\n" _profiling "${_profiling}")
+    file(WRITE ${SOURCE_PATH}/include/oneapi/tbb/profiling.h "${_profiling}")
+    vcpkg_configure_cmake(
+        SOURCE_PATH ${SOURCE_PATH}
+        PREFER_NINJA
+        OPTIONS
+            -DTBB_TEST=OFF
+            -DTBB_EXAMPLES=OFF
+            -DTBB_STRICT=OFF
+            -DTBBMALLOC_BUILD=OFF
+    )
+    vcpkg_install_cmake()
+    vcpkg_fixup_cmake_targets(CONFIG_PATH lib/cmake/TBB TARGET_PATH share/tbb)
+    file(REMOVE_RECURSE ${CURRENT_PACKAGES_DIR}/debug/include ${CURRENT_PACKAGES_DIR}/debug/share ${CURRENT_PACKAGES_DIR}/share/doc)
+    file(INSTALL ${SOURCE_PATH}/LICENSE.txt DESTINATION ${CURRENT_PACKAGES_DIR}/share/${PORT} RENAME copyright)
+    return()
+endif()
+
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO oneapi-src/oneTBB
