@@ -11,6 +11,7 @@
 #include <QtCore/QTextStream>
 #include <QtGui/QScreen>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QMainWindow>
 #include <QtWidgets/QWidget>
 
 #include <QtAndroidExtras/QAndroidJniObject>
@@ -215,13 +216,35 @@ Java_io_highfidelity_hifiinterface_InterfaceActivity_nativeSyncWindowSize(JNIEnv
         return;
     }
     QMetaObject::invokeMethod(qApp, [width, height] {
+        // the main window, the container in it and the GL view in that all follow the Android window: Qt can be
+        // left with any of them portrait
         QSize size(width, height);
-        for (QWidget* widget : QApplication::topLevelWidgets()) {
-            if (widget->isVisible() && widget->inherits("QMainWindow") && widget->size() != size) {
-                QScreen* screen = QGuiApplication::primaryScreen();
-                qDebug() << "The main window is" << widget->size() << "in a" << size << "Android window (Qt's screen:"
-                         << (screen ? screen->geometry() : QRect()) << "), resizing it";
-                widget->setGeometry(QRect(QPoint(0, 0), size));
+        QScreen* screen = QGuiApplication::primaryScreen();
+        for (QWidget* window : QApplication::topLevelWidgets()) {
+            auto mainWindow = qobject_cast<QMainWindow*>(window);
+            if (!window->isVisible() || !mainWindow) {
+                continue;
+            }
+            QWidget* central = mainWindow->centralWidget();
+            QWidget* view = nullptr;
+            for (QWidget* child : window->findChildren<QWidget*>()) {
+                if (child->inherits("GLWidget")) {
+                    view = child;
+                    break;
+                }
+            }
+            bool mismatch = window->size() != size || (central && central->size() != size) || (view && view->size() != size);
+            qDebug() << "Android window" << size << "- main window" << window->size() << "container"
+                     << (central ? central->size() : QSize()) << "GL view" << (view ? view->size() : QSize())
+                     << "Qt's screen" << (screen ? screen->geometry() : QRect()) << (mismatch ? "- resizing" : "");
+            if (mismatch) {
+                window->setGeometry(QRect(QPoint(0, 0), size));
+                if (central) {
+                    central->setGeometry(QRect(QPoint(0, 0), size));
+                }
+                if (view) {
+                    view->setGeometry(QRect(QPoint(0, 0), size));
+                }
             }
         }
     }, Qt::QueuedConnection);
