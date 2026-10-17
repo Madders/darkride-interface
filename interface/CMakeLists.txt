@@ -24,11 +24,11 @@ set(RESOURCES_RCC ${CMAKE_CURRENT_SOURCE_DIR}/compiledResources/resources.rcc)
 generate_qrc(OUTPUT ${RESOURCES_QRC} PATH ${CMAKE_CURRENT_SOURCE_DIR}/resources CUSTOM_PATHS ${CUSTOM_INTERFACE_QRC_PATHS} GLOBS *)
 
 if (ANDROID)
-  # on Android, don't compress the rcc binary
+  # on Android, don't compress the rcc binary (Qt5::rcc is the host's rcc from Qt for Android)
   add_custom_command(
     OUTPUT ${RESOURCES_RCC}
     DEPENDS ${RESOURCES_QRC} ${GENERATE_QRC_DEPENDS}
-    COMMAND "${QT_DIR}/bin/rcc"
+    COMMAND Qt5::rcc
     ARGS ${RESOURCES_QRC} -no-compress -binary -o ${RESOURCES_RCC}
   )
 else ()

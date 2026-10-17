@@ -166,16 +166,9 @@ def main():
         with timer('Cleaning builds'):
             pm.cleanBuilds()
 
-        # If we're running in android mode, we also need to grab a bunch of additional binaries
-        # (this logic is all migrated from the old setupDependencies tasks in gradle)
-        if args.android:
-            # Find the target location
-            appPath = hifi_utils.scriptRelative('android/apps/' + args.android)
-            # Copy the non-Qt libraries specified in the config in hifi_android.py
-            hifi_android.copyAndroidLibs(pm.androidPackagePath, appPath)
-            # Determine the Qt package path
-            qtPath = os.path.join(pm.androidPackagePath, 'qt')
-            hifi_android.QtPackager(appPath, qtPath).bundle()
+        # On Android there's nothing more to fetch: the other dependencies are static vcpkg libraries linked into
+        # the app (the prebuilt ones this used to copy came from cdn.tivolicloud.com, which is gone), and Qt 5.15's
+        # androiddeployqt packages Qt's libraries, jars and QML with the APK.
 
         # Fixup the vcpkg cmake to not reset VCPKG_TARGET_TRIPLET
         pm.fixupCmakeScript()

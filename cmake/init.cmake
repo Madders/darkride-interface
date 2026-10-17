@@ -40,6 +40,10 @@ foreach(CUSTOM_MACRO ${HIFI_CUSTOM_MACROS})
 endforeach()
 unset(HIFI_CUSTOM_MACROS)
 
+# the Target* macros use select_library_configurations(); load it here rather than rely on an earlier
+# find_package() having loaded it, which isn't so on Android
+include(SelectLibraryConfigurations)
+
 if (ANDROID)
     set(BUILD_SHARED_LIBS ON)
     set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)

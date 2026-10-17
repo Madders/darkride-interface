@@ -34,6 +34,8 @@
 
 #if defined(Q_OS_ANDROID)
 #include <EGL/egl.h>
+// glad has the GLES extensions: keep Qt's copy of them (qopengles2ext.h, included by qopengl.h) out
+#define __gles2_gl2ext_h_ 1
 #else
 
 #ifndef GL_SLUMINANCE8_EXT

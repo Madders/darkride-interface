@@ -7,14 +7,15 @@
 # 
 macro(TARGET_GLAD)
     if (ANDROID)
+        # vcpkg's glad port builds the GLES 3.2 loader on Android
         include(SelectLibraryConfigurations)
-        set(INSTALL_DIR ${HIFI_ANDROID_PRECOMPILED}/glad)
-        set(GLAD_INCLUDE_DIRS "${INSTALL_DIR}/include")
-        set(GLAD_LIBRARY_DEBUG ${INSTALL_DIR}/lib/libglad_d.a)
-        set(GLAD_LIBRARY_RELEASE ${INSTALL_DIR}/lib/libglad.a)
+        find_library(GLAD_LIBRARY_RELEASE glad PATHS ${VCPKG_INSTALL_ROOT}/lib NO_DEFAULT_PATH)
+        find_library(GLAD_LIBRARY_DEBUG glad_d PATHS ${VCPKG_INSTALL_ROOT}/debug/lib NO_DEFAULT_PATH)
         select_library_configurations(GLAD)
+        set(GLAD_INCLUDE_DIRS "${VCPKG_INSTALL_ROOT}/include")
         find_library(EGL EGL)
-        target_link_libraries(${TARGET_NAME} ${EGL})
+        find_library(GLESV3 GLESv3)
+        list(APPEND GLAD_EXTRA_LIBRARIES ${EGL} ${GLESV3} dl)
     else()
         if (APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
             # The x86_64 build used Mesa (Zink over MoltenVK) instead of Apple's OpenGL.

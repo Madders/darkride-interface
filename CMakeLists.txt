@@ -116,7 +116,12 @@ if (HIFI_ANDROID)
       set(ENV{HIFI_ANDROID_PRECOMPILED} ${HIFI_ANDROID_PRECOMPILED})
   endif()
 
-  set(QT_CMAKE_PREFIX_PATH "$ENV{HIFI_ANDROID_PRECOMPILED}/qt/lib/cmake")
+  # Qt for Android: QT_ANDROID (as android/docker/Dockerfile sets it), or the old precompiled tree
+  if (DEFINED ENV{QT_ANDROID})
+    set(QT_CMAKE_PREFIX_PATH "$ENV{QT_ANDROID}/lib/cmake")
+  else()
+    set(QT_CMAKE_PREFIX_PATH "$ENV{HIFI_ANDROID_PRECOMPILED}/qt/lib/cmake")
+  endif()
 else() 
   if(NOT EXISTS "${CMAKE_BINARY_DIR}/qt.cmake")
       message(FATAL_ERROR "qt configuration missing.")
@@ -127,6 +132,12 @@ endif()
 option(VCPKG_APPLOCAL_DEPS OFF)
 
 project(tivoli)
+if (HIFI_ANDROID)
+  # The NDK's toolchain stays the toolchain on Android (vcpkg.cmake doesn't replace a toolchain given on the
+  # command line), and it only searches its sysroot: let it find vcpkg's arm64-android packages too
+  list(APPEND CMAKE_FIND_ROOT_PATH "${VCPKG_INSTALL_ROOT}")
+  list(APPEND CMAKE_PREFIX_PATH "${VCPKG_INSTALL_ROOT}")
+endif()
 include("cmake/init.cmake")
 include("cmake/compiler.cmake")
 option(VCPKG_APPLOCAL_DEPS OFF)
