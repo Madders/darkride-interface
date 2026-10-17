@@ -513,6 +513,11 @@ HifiAudioDeviceInfo defaultAudioDeviceForMode(QAudio::Mode mode, const QString& 
         bool aecEnabled = enableAEC.get();
         auto audioClient = DependencyManager::get<AudioClient>();
         bool headsetOn = audioClient ? audioClient->isHeadsetPluggedIn() : false;
+        QStringList inputNames;
+        for (QAudioDeviceInfo inputDevice : QAudioDeviceInfo::availableDevices(mode)) {
+            inputNames << inputDevice.deviceName();
+        }
+        qCDebug(audioclient) << "Android audio inputs:" << inputNames << "AEC:" << aecEnabled << "headset:" << headsetOn;
         for (QAudioDeviceInfo inputDevice : QAudioDeviceInfo::availableDevices(mode)) {
             if (((headsetOn || !aecEnabled) && inputDevice.deviceName() == VOICE_RECOGNITION) ||
                 ((!headsetOn && aecEnabled) && inputDevice.deviceName() == VOICE_COMMUNICATION)) {
@@ -826,6 +831,20 @@ void AudioClient::start() {
 #if defined(Q_OS_ANDROID)
     connect(&_checkInputTimer, &QTimer::timeout, this, &AudioClient::checkInputTimeout);
     _checkInputTimer.start(CHECK_INPUT_READS_MSECS);
+
+    // resume the checks a previous stop() paused
+    {
+        Lock lock(_checkDevicesMutex);
+        if (_checkDevicesTimer && !_checkDevicesTimer->isActive()) {
+            _checkDevicesTimer->start();
+        }
+    }
+    {
+        Lock lock(_checkPeakValuesMutex);
+        if (_checkPeakValuesTimer && !_checkPeakValuesTimer->isActive()) {
+            _checkPeakValuesTimer->start();
+        }
+    }
 #endif
 }
 
@@ -836,8 +855,24 @@ void AudioClient::stop() {
     qCDebug(audioclient) << "AudioClient::stop(), requesting switchOutputToAudioDevice() to shut down";
     switchOutputToAudioDevice(HifiAudioDeviceInfo(), true);
 
-    // Stop triggering the checks. On Android this is called each time the app goes into the background, and the
-    // timers are gone after the first time.
+#if defined(Q_OS_ANDROID)
+    // Android stops the audio each time the app goes into the background, from the splash screen on, and starts it
+    // again on the way back: the checks pause, for start() to resume. (The device check is what picks the
+    // microphone: start() opens the input as a dummy.)
+    {
+        Lock lock(_checkDevicesMutex);
+        if (_checkDevicesTimer) {
+            _checkDevicesTimer->stop();
+        }
+    }
+    {
+        Lock lock(_checkPeakValuesMutex);
+        if (_checkPeakValuesTimer) {
+            _checkPeakValuesTimer->stop();
+        }
+    }
+#else
+    // Stop triggering the checks
     // Destruction of the pointers will occur when the parent object (this) is destroyed)
     {
         Lock lock(_checkDevicesMutex);
@@ -854,6 +889,7 @@ void AudioClient::stop() {
             _checkPeakValuesTimer = nullptr;
         }
     }
+#endif
 
 #if defined(Q_OS_ANDROID)
     _checkInputTimer.stop();
@@ -1058,6 +1094,13 @@ bool AudioClient::switchAudioDevice(QAudio::Mode mode, const QString& deviceName
         QReadLocker readLock(&_hmdNameLock);
         hmdName = mode == QAudio::AudioInput ? _hmdInputName : _hmdOutputName;
     }
+#if defined(Q_OS_ANDROID)
+    // Android's inputs go by their real names ("mic", "voicecommunication", ...), none of them "default": the
+    // default input is the one defaultAudioDeviceForMode() chooses (with echo cancellation unless a headset is on)
+    if (mode == QAudio::AudioInput && deviceName.trimmed() == HifiAudioDeviceInfo::DEFAULT_DEVICE_NAME.trimmed()) {
+        return switchAudioDevice(mode, defaultAudioDeviceForMode(mode, hmdName));
+    }
+#endif
     return switchAudioDevice(mode, getNamedAudioDeviceForMode(mode, deviceName, hmdName, isHmd));
 }
 
