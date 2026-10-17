@@ -1,64 +1,81 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.highfidelity.hifiinterface">
+<!-- The %%INSERT_...%% placeholder values are filled in by androiddeployqt (android/docker/package-apk.sh). The
+     package attribute is for androiddeployqt; the APK's namespace and application ID come from build.gradle. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.highfidelity.hifiinterface"
+    android:versionName="-- %%INSERT_VERSION_NAME%% --" android:versionCode="-- %%INSERT_VERSION_CODE%% --"
+    android:installLocation="auto">
 
     <uses-feature android:glEsVersion="0x00030002" android:required="true" />
-    <uses-permission android:name="android.permission.VIBRATE"/>
+    <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false"/>
+    <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false"/>
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
+    <uses-feature android:name="android.hardware.gamepad" android:required="false"/>
+
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="true"/>
-    <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="true"/>
+    <uses-permission android:name="android.permission.VIBRATE"/>
+
+    <supports-screens android:largeScreens="true" android:normalScreens="true" android:anyDensity="true" android:smallScreens="true"/>
 
     <application
         android:name="org.qtproject.qt5.android.bindings.QtApplication"
         android:label="@string/app_name"
         android:hardwareAccelerated="true"
+        android:extractNativeLibs="true"
         android:allowBackup="true"
-        android:screenOrientation="unspecified"
         android:theme="@style/NoSystemUI"
         android:icon="@drawable/ic_launcher"
-        android:launchMode="singleTop"
         android:roundIcon="@drawable/ic_launcher">
+
         <activity android:name="io.highfidelity.hifiinterface.PermissionChecker"
+            android:exported="true"
             android:theme="@style/Theme.AppCompat.Translucent.NoActionBar.Launcher">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
         <activity android:name="io.highfidelity.hifiinterface.WebViewActivity"
+            android:exported="false"
             android:configChanges="orientation|screenSize"
             android:theme="@android:style/Theme.Material.Light.NoActionBar"/>
-        <!-- We don't want to show this on Daydream yet (we need to fix the turn-around problem on this screen)
-         <activity android:name="io.highfidelity.hifiinterface.GvrLoaderActivity">
-           <intent-filter>
-               <action android:name="android.intent.action.MAIN" />
-               <category android:name="com.google.intent.category.DAYDREAM"/>
-           </intent-filter>
-         </activity>
-        -->
+
         <activity
             android:name=".MainActivity"
+            android:exported="false"
             android:screenOrientation="portrait"
-            android:theme="@style/Theme.AppCompat.Translucent.NoActionBar">
-        </activity>
+            android:theme="@style/Theme.AppCompat.Translucent.NoActionBar" />
+
         <activity
-            android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|locale|fontScale|keyboard|keyboardHidden|navigation"
             android:name=".InterfaceActivity"
+            android:exported="false"
+            android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|layoutDirection|locale|fontScale|keyboard|keyboardHidden|navigation|mcc|mnc|density"
             android:label="@string/app_name"
-            android:launchMode="singleTop"
-            >
-            <meta-data android:name="android.app.lib_name" android:value="native-lib"/>
+            android:screenOrientation="sensorLandscape"
+            android:launchMode="singleTop">
+            <!-- Qt 5.15's loader -->
+            <meta-data android:name="android.app.lib_name" android:value="-- %%INSERT_APP_LIB_NAME%% --"/>
+            <meta-data android:name="android.app.qt_sources_resource_id" android:resource="@array/qt_sources"/>
+            <meta-data android:name="android.app.repository" android:value="default"/>
             <meta-data android:name="android.app.qt_libs_resource_id" android:resource="@array/qt_libs"/>
-            <meta-data android:name="android.app.bundled_in_lib_resource_id" android:resource="@array/bundled_in_lib"/>
-            <meta-data android:name="android.app.bundled_in_assets_resource_id" android:resource="@array/bundled_in_assets"/>
-            <meta-data android:name="android.app.load_local_libs" android:value="plugins/platforms/android/libqtforandroid.so:plugins/bearer/libqandroidbearer.so:lib/libQt5QuickParticles.so"/>
+            <meta-data android:name="android.app.bundled_libs_resource_id" android:resource="@array/bundled_libs"/>
+            <meta-data android:name="android.app.bundle_local_qt_libs" android:value="-- %%BUNDLE_LOCAL_QT_LIBS%% --"/>
+            <meta-data android:name="android.app.use_local_qt_libs" android:value="-- %%USE_LOCAL_QT_LIBS%% --"/>
+            <meta-data android:name="android.app.libs_prefix" android:value="/data/local/tmp/qt/"/>
+            <meta-data android:name="android.app.load_local_libs_resource_id" android:resource="@array/load_local_libs"/>
+            <meta-data android:name="android.app.load_local_jars" android:value="-- %%INSERT_LOCAL_JARS%% --"/>
+            <meta-data android:name="android.app.static_init_classes" android:value="-- %%INSERT_INIT_CLASSES%% --"/>
+            <meta-data android:value="@string/ministro_not_found_msg" android:name="android.app.ministro_not_found_msg"/>
+            <meta-data android:value="@string/ministro_needed_msg" android:name="android.app.ministro_needed_msg"/>
+            <meta-data android:value="@string/fatal_error_msg" android:name="android.app.fatal_error_msg"/>
+            <meta-data android:value="@string/unsupported_android_version" android:name="android.app.unsupported_android_version"/>
             <meta-data android:name="android.app.background_running" android:value="false"/>
             <meta-data android:name="android.app.auto_screen_scale_factor" android:value="false"/>
-            <meta-data android:name="android.app.extract_android_style" android:value="full"/>
+            <!-- Darkride draws its own QML UI; extracting the native style uses hidden APIs that new Android refuses -->
+            <meta-data android:name="android.app.extract_android_style" android:value="none"/>
         </activity>
 
         <meta-data
@@ -67,30 +84,23 @@
 
         <activity
             android:name=".SplashActivity"
+            android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.AppCompat.Translucent.NoActionBar" />
 
         <activity android:name=".LoginMenuActivity"
+            android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.AppCompat.Translucent.NoActionBar" />
-
-        <service
-            android:name=".BreakpadUploaderService"
-            android:enabled="true"
-            android:exported="false"
-            android:process=":breakpad_uploader"/>
 
         <receiver
             android:name=".receiver.HeadsetStateReceiver"
             android:enabled="true"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.HEADSET_PLUG" />
             </intent-filter>
         </receiver>
     </application>
-
-    <uses-feature android:name="android.software.vr.mode" android:required="true"/>
-    <uses-feature android:name="android.hardware.vr.high_performance" android:required="true"/>
 
 </manifest>

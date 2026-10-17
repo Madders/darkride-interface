@@ -6,7 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
-import android.support.annotation.Nullable;
+import androidx.annotation.Nullable;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
@@ -41,7 +41,7 @@ public class LoginFragment extends Fragment
 
     private final String OAUTH_CLIENT_ID = BuildConfig.OAUTH_CLIENT_ID;
     private final String OAUTH_REDIRECT_URI = BuildConfig.OAUTH_REDIRECT_URI;
-    private final String OAUTH_AUTHORIZE_BASE_URL = "https://highfidelity.com/oauth/authorize";
+    private final String OAUTH_AUTHORIZE_BASE_URL = HifiUtils.METAVERSE_BASE_URL + "/oauth/authorize";
     private static final int OAUTH_AUTHORIZE_REQUEST = 1;
 
     private EditText mUsername;
@@ -222,7 +222,7 @@ public class LoginFragment extends Fragment
     }
 
     private void onForgotPasswordClicked() {
-        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://highfidelity.com/users/password/new"));
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(HifiUtils.METAVERSE_BASE_URL + "/users/password/new"));
         startActivity(intent);
     }
 

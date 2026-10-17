@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name" translatable="false">Interface</string>
+    <string name="app_name" translatable="false">Darkride</string>
     <string name="home">Home</string>
     <string name="people">People</string>
     <string name="web_view_action_open_in_browser" translatable="false">Open in browser</string>
@@ -27,9 +27,9 @@
     <string name="online">Online</string>
     <string name="signup">Sign Up</string>
     <string name="signup_uppercase">SIGN UP</string>
-    <string name="creating_account">Creating your High Fidelity account</string>
+    <string name="creating_account">Creating your Darkride account</string>
     <string name="signup_email_username_or_password_incorrect">Email, username or password incorrect.</string>
-    <string name="signedin_welcome">You are now signed into High Fidelity</string>
+    <string name="signedin_welcome">You are now signed into Darkride</string>
     <string name="logged_in_welcome">You are now logged in!</string>
     <string name="welcome">Welcome</string>
     <string name="cancel">Cancel</string>

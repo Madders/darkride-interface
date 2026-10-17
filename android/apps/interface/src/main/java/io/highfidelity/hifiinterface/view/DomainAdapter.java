@@ -2,7 +2,7 @@ package io.highfidelity.hifiinterface.view;
 
 import android.content.Context;
 import android.net.Uri;
-import android.support.v7.widget.RecyclerView;
+import androidx.recyclerview.widget.RecyclerView;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -15,6 +15,7 @@ import com.squareup.picasso.Picasso;
 import java.util.Arrays;
 import java.util.List;
 
+import io.highfidelity.hifiinterface.BuildConfig;
 import io.highfidelity.hifiinterface.R;
 import io.highfidelity.hifiinterface.provider.DomainProvider;
 import io.highfidelity.hifiinterface.provider.UserStoryDomainProvider;
@@ -25,7 +26,7 @@ import io.highfidelity.hifiinterface.provider.UserStoryDomainProvider;
 public class DomainAdapter extends RecyclerView.Adapter<DomainAdapter.ViewHolder> {
 
     private static final String TAG = "HiFi Interface";
-    private static final String DEFAULT_THUMBNAIL_PLACE = "android.resource://io.highfidelity.hifiinterface/" + R.drawable.domain_placeholder;
+    private static final String DEFAULT_THUMBNAIL_PLACE = "android.resource://" + BuildConfig.APPLICATION_ID + "/" + R.drawable.domain_placeholder;
     private Context mContext;
     private LayoutInflater mInflater;
     private ItemClickListener mClickListener;

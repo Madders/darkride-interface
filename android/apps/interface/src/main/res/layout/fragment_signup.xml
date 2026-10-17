@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<android.support.constraint.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
@@ -29,7 +29,7 @@
         app:layout_constraintTop_toTopOf="parent"
         app:srcCompat="@drawable/hifi_header" />
 
-    <android.support.constraint.ConstraintLayout
+    <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/loggingInFrame"
         android:layout_width="0dp"
         android:layout_height="0dp"
@@ -60,10 +60,10 @@
             app:layout_constraintRight_toRightOf="parent"
             android:indeterminateTint="#00B4EF"
             />
-    </android.support.constraint.ConstraintLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
 
 
-    <android.support.constraint.ConstraintLayout
+    <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/loggedInFrame"
         android:layout_width="0dp"
         android:layout_height="0dp"
@@ -100,9 +100,9 @@
             app:layout_constraintLeft_toLeftOf="parent"
             app:layout_constraintRight_toRightOf="parent" />
 
-    </android.support.constraint.ConstraintLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
 
-    <android.support.constraint.ConstraintLayout
+    <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/signupForm"
         android:layout_width="0dp"
         android:layout_height="0dp"
@@ -166,7 +166,7 @@
         android:hint="@string/email" />
 
 
-    <android.support.design.widget.TextInputLayout
+    <com.google.android.material.textfield.TextInputLayout
         android:id="@+id/passwordLayout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -180,7 +180,7 @@
         app:layout_constraintTop_toBottomOf="@id/email"
         android:layout_marginTop="15dp"
         >
-    <android.support.design.widget.TextInputEditText
+    <com.google.android.material.textfield.TextInputEditText
         android:id="@+id/password"
         android:layout_width="match_parent"
         android:layout_height="27dp"
@@ -197,7 +197,7 @@
         android:imeOptions="actionDone"
         android:hint="@string/password"
         android:inputType="textPassword" />
-    </android.support.design.widget.TextInputLayout>
+    </com.google.android.material.textfield.TextInputLayout>
 
     <CheckBox
         android:id="@+id/keepMeLoggedIn"
@@ -247,6 +247,6 @@
         android:fontFamily="@font/roboto_bold"
         android:textSize="@dimen/button_medium_text_size"
         android:text="@string/cancel_uppercase" />
-    </android.support.constraint.ConstraintLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
 
-</android.support.constraint.ConstraintLayout>
+</androidx.constraintlayout.widget.ConstraintLayout>

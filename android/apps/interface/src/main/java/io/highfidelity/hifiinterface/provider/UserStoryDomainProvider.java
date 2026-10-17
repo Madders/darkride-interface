@@ -3,9 +3,7 @@ package io.highfidelity.hifiinterface.provider;
 import android.util.Log;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 import io.highfidelity.hifiinterface.HifiUtils;
 import io.highfidelity.hifiinterface.view.DomainAdapter;
@@ -22,29 +20,29 @@ import retrofit2.http.Query;
 
 public class UserStoryDomainProvider implements DomainProvider {
 
-    public static final String BASE_URL = "https://tivolicloud.com/";
+    // Darkride's metaverse lists its worlds (domains) at /api/domains, as the desktop Explore app reads them, in
+    // place of High Fidelity's /api/v1/user_stories
+    public static final String BASE_URL = HifiUtils.METAVERSE_BASE_URL + "/";
 
-    private static final String INCLUDE_ACTIONS_FOR_PLACES = "concurrency";
-    private static final String INCLUDE_ACTIONS_FOR_FULL_SEARCH = "concurrency,announcements,snapshot";
-    private static final String TAGS_TO_SEARCH = "mobile";
+    private static final int WORLDS_PER_PAGE = 50;
     private static final int MAX_PAGES_TO_GET = 10;
 
     private String mProtocol;
     private Retrofit mRetrofit;
-    private UserStoryDomainProviderService mUserStoryDomainProviderService;
+    private WorldsService mWorldsService;
 
     private boolean startedToGetFromAPI = false;
-    private List<UserStory> allStories; // All retrieved stories from the API
-    private List<DomainAdapter.Domain> suggestions; // Filtered places to show
+    private List<World> allWorlds; // All retrieved worlds from the API
+    private List<DomainAdapter.Domain> suggestions; // Filtered worlds to show
 
     public UserStoryDomainProvider(String protocol) {
         mRetrofit = new Retrofit.Builder()
                 .baseUrl(BASE_URL)
                 .addConverterFactory(GsonConverterFactory.create())
                 .build();
-        mUserStoryDomainProviderService = mRetrofit.create(UserStoryDomainProviderService.class);
+        mWorldsService = mRetrofit.create(WorldsService.class);
         mProtocol = protocol;
-        allStories = new ArrayList<>();
+        allWorlds = new ArrayList<>();
         suggestions = new ArrayList<>();
     }
 
@@ -59,163 +57,105 @@ public class UserStoryDomainProvider implements DomainProvider {
     }
 
     private void fillDestinations(String filterText, DomainCallback domainCallback) {
-        StoriesFilter filter = new StoriesFilter(filterText);
-
-        List<UserStory> taggedStories = new ArrayList<>();
-        Set<String> taggedStoriesIds = new HashSet<>();
-        getUserStoryPage(1, taggedStories, TAGS_TO_SEARCH,
-                e -> {
-                    taggedStories.forEach(userStory -> {
-                        taggedStoriesIds.add(userStory.id);
-                    });
-
-                    allStories.clear();
-                    getUserStoryPage(1, allStories, null,
-                            ex -> {
-                                suggestions.clear();
-                                allStories.forEach(userStory -> {
-                                    if (taggedStoriesIds.contains(userStory.id)) {
-                                        userStory.tagFound = true;
-                                    }
-                                    filter.filterOrAdd(userStory);
-                                });
-                                if (domainCallback != null) {
-                                    domainCallback.retrieveOk(suggestions); //ended
-                                }
-                            }
-                    );
-
+        List<World> worlds = new ArrayList<>();
+        getWorldsPage(1, worlds, e -> {
+            if (e != null) {
+                startedToGetFromAPI = false;
+                if (domainCallback != null) {
+                    domainCallback.retrieveError(e, e.getMessage());
                 }
-        );
+                return;
+            }
+            allWorlds.clear();
+            allWorlds.addAll(worlds);
+            filterChoicesByText(filterText, domainCallback);
+        });
     }
 
-    private void handleError(String url, Throwable t, Callback<Exception> restOfPagesCallback) {
-        restOfPagesCallback.callback(new Exception("Error accessing url [" + url + "]", t));
-    }
-
-    private void getUserStoryPage(int pageNumber, List<UserStory> userStoriesList, String tagsFilter, Callback<Exception> restOfPagesCallback) {
-        Call<UserStories> userStories = mUserStoryDomainProviderService.getUserStories(
-                INCLUDE_ACTIONS_FOR_PLACES,
-                "open",
-                true,
-                mProtocol,
-                tagsFilter,
-                pageNumber);
-        Log.d("API-USER-STORY-DOMAINS", "Protocol [" + mProtocol + "] include_actions [" + INCLUDE_ACTIONS_FOR_PLACES + "]");
-        userStories.enqueue(new retrofit2.Callback<UserStories>() {
+    private void getWorldsPage(int pageNumber, List<World> worlds, Callback<Exception> restOfPagesCallback) {
+        Call<List<World>> call = mWorldsService.getDomains(pageNumber, WORLDS_PER_PAGE, "", mProtocol);
+        Log.d("API-WORLDS", "Protocol [" + mProtocol + "] page [" + pageNumber + "]");
+        call.enqueue(new retrofit2.Callback<List<World>>() {
             @Override
-            public void onResponse(Call<UserStories> call, Response<UserStories> response) {
-                UserStories data = response.body();
-                userStoriesList.addAll(data.user_stories);
-                if (data.current_page < data.total_pages && data.current_page <= MAX_PAGES_TO_GET) {
-                    getUserStoryPage(pageNumber + 1, userStoriesList, tagsFilter, restOfPagesCallback);
+            public void onResponse(Call<List<World>> call, Response<List<World>> response) {
+                List<World> page = response.body();
+                if (!response.isSuccessful() || page == null) {
+                    restOfPagesCallback.callback(new Exception("Error accessing url [" + call.request().url()
+                            + "]: HTTP " + response.code()));
+                    return;
+                }
+                worlds.addAll(page);
+                if (page.size() >= WORLDS_PER_PAGE && pageNumber < MAX_PAGES_TO_GET) {
+                    getWorldsPage(pageNumber + 1, worlds, restOfPagesCallback);
                     return;
                 }
                 restOfPagesCallback.callback(null);
             }
 
             @Override
-            public void onFailure(Call<UserStories> call, Throwable t) {
-                handleError(call.request().url().toString(), t, restOfPagesCallback);
+            public void onFailure(Call<List<World>> call, Throwable t) {
+                restOfPagesCallback.callback(new Exception("Error accessing url [" + call.request().url() + "]", t));
             }
         });
     }
 
-    private class StoriesFilter {
-        String[] mWords = new String[]{};
-        public StoriesFilter(String filterText) {
-            mWords = filterText.trim().toUpperCase().split("\\s+");
-            if (mWords.length == 1 && (mWords[0] == null || mWords[0].length() <= 0 ) ) {
-                mWords = null;
+    private boolean matches(World world, String[] words) {
+        for (String word : words) {
+            if (!world.searchText().contains(word)) {
+                return false;
             }
         }
-
-        private boolean matches(UserStory story) {
-            if (mWords == null || mWords.length <= 0) {
-                // No text filter? So filter by tag
-                return story.tagFound;
-            }
-
-            for (String word : mWords) {
-                if (!story.searchText().contains(word)) {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private void addToSuggestions(UserStory story) {
-            suggestions.add(story.toDomain());
-        }
-
-        /**
-         * if the story matches this filter criteria it's added into suggestions
-         * */
-        public void filterOrAdd(UserStory story) {
-            if (matches(story)) {
-                addToSuggestions(story);
-            }
-        }
+        return true;
     }
 
     private void filterChoicesByText(String filterText, DomainCallback domainCallback) {
         suggestions.clear();
-        StoriesFilter storiesFilter = new StoriesFilter(filterText);
-        allStories.forEach(story -> {
-            storiesFilter.filterOrAdd(story);
-        });
-        domainCallback.retrieveOk(suggestions);
+        String trimmed = filterText == null ? "" : filterText.trim().toUpperCase();
+        String[] words = trimmed.isEmpty() ? new String[]{} : trimmed.split("\\s+");
+        for (World world : allWorlds) {
+            if (world.online && matches(world, words)) {
+                suggestions.add(world.toDomain());
+            }
+        }
+        if (domainCallback != null) {
+            domainCallback.retrieveOk(suggestions);
+        }
     }
 
-    public interface UserStoryDomainProviderService {
-        @GET("api/v1/user_stories")
-        Call<UserStories> getUserStories(@Query("include_actions") String includeActions,
-                                         @Query("restriction") String restriction,
-                                         @Query("require_online") boolean requireOnline,
-                                         @Query("protocol") String protocol,
-                                         @Query("tags") String tagsCommaSeparated,
-                                         @Query("page") int pageNumber);
+    public interface WorldsService {
+        @GET("api/domains")
+        Call<List<World>> getDomains(@Query("page") int pageNumber,
+                                     @Query("amount") int amount,
+                                     @Query("search") String search,
+                                     @Query("protocol") String protocol);
     }
 
-    class UserStory {
-        public UserStory() {}
+    class World {
+        public World() {}
         String id;
-        String place_name;
+        String label;
+        String author;
+        String description;
         String path;
-        String thumbnail_url;
-        String place_id;
-        String domain_id;
+        boolean online;
+        int numUsers;
         private String searchText;
-        private boolean tagFound; // Locally used
-
-        // New fields? tags, description
 
         String searchText() {
             if (searchText == null) {
-                searchText = place_name == null? "" : place_name.toUpperCase();
+                searchText = ((label == null ? "" : label) + " " + (author == null ? "" : author)).toUpperCase();
             }
             return searchText;
         }
-        DomainAdapter.Domain toDomain() {
-            // TODO Proper url creation (it can or can't have hifi
-            // TODO Or use host value from api?
-            String absoluteThumbnailUrl = HifiUtils.getInstance().absoluteHifiAssetUrl(thumbnail_url);
-            DomainAdapter.Domain domain = new DomainAdapter.Domain(
-                    place_name,
-                    HifiUtils.getInstance().sanitizeHifiUrl(place_name) + "/" + path,
-                    absoluteThumbnailUrl
-            );
-            return domain;
-        }
-    }
 
-    class UserStories {
-        String status;
-        int current_page;
-        int total_pages;
-        int total_entries;
-        List<UserStory> user_stories;
+        DomainAdapter.Domain toDomain() {
+            // the address manager looks a world up by its ID, as the desktop Explore app joins it
+            return new DomainAdapter.Domain(
+                    label,
+                    id + (path == null ? "" : path),
+                    BASE_URL + "api/domain/" + id + "/image"
+            );
+        }
     }
 
 }

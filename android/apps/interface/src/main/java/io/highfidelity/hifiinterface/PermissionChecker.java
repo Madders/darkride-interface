@@ -36,8 +36,6 @@ public class PermissionChecker extends Activity {
         super.onCreate(savedInstanceState);
         mArgs =(getIntent().getStringExtra(EXTRA_ARGS));
 
-        Intent myIntent = new Intent(this, BreakpadUploaderService.class);
-        startService(myIntent);
         if (CHOOSE_AVATAR_ON_STARTUP) {
             showMenu();
         }
@@ -49,13 +47,8 @@ public class PermissionChecker extends Activity {
             }
         }
 
-        requestAppPermissions(new
-                        String[]{
-                        Manifest.permission.READ_EXTERNAL_STORAGE,
-                        Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                        Manifest.permission.RECORD_AUDIO,
-                        Manifest.permission.CAMERA}
-                ,2,REQUEST_PERMISSIONS);
+        // Only the microphone, for voice: storage is scoped now, and the app has no camera features
+        requestAppPermissions(new String[]{ Manifest.permission.RECORD_AUDIO }, 2, REQUEST_PERMISSIONS);
 
     }
 

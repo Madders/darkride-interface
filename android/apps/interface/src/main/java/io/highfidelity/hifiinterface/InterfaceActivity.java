@@ -153,19 +153,48 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
         }
         unregisterReceiver(headsetStateReceiver);
         //gvrApi.pauseTracking();
+        keepQtActionsRunning();
+    }
+
+    /*
+    Qt 5.15 holds back the work its thread hands to the UI thread while this activity is paused, until it resumes.
+    Interface keeps running under the app's other activities (the splash, home and login screens), and its thread
+    waits on some of that work (registering the clipboard at startup), so it would wait until this activity came
+    back, which the splash screen waits on it for. Let that work run while paused, as High Fidelity's Qt did.
+     */
+    private void keepQtActionsRunning() {
+        try {
+            Field pausedField = QtNative.class.getDeclaredField("m_activityPaused");
+            Field lostActionsField = QtNative.class.getDeclaredField("m_lostActions");
+            pausedField.setAccessible(true);
+            lostActionsField.setAccessible(true);
+            List<Runnable> lostActions;
+            synchronized (QtNative.m_mainActivityMutex) {
+                pausedField.setBoolean(null, false);
+                @SuppressWarnings("unchecked")
+                List<Runnable> queued = (List<Runnable>) lostActionsField.get(null);
+                lostActions = new ArrayList<>(queued);
+                queued.clear();
+            }
+            for (Runnable action : lostActions) {
+                runOnUiThread(action);
+            }
+        } catch (ReflectiveOperationException e) {
+            Log.e(TAG, "Could not keep Qt's UI thread work running while paused", e);
+        }
     }
 
     @Override
     protected void onStart() {
         super.onStart();
         nativeEnterBackgroundCallEnqueued = false;
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
     }
 
     @Override
     protected void onStop() {
         super.onStop();
-
+        keepQtActionsRunning();
     }
 
     @Override
@@ -208,7 +237,7 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
         // Checks the orientation of the screen
         if (newConfig.orientation == Configuration.ORIENTATION_PORTRAIT){
 //            Log.d("[VR]", "Portrait, forcing landscape");
-            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
             if (inVrMode) {
                 inVrMode = false;
 //                Log.d("[VR]", "Starting VR exit");

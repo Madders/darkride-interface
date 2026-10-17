@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+import io.highfidelity.hifiinterface.HifiUtils;
 import io.highfidelity.hifiinterface.view.UserListAdapter;
 import okhttp3.Interceptor;
 import okhttp3.OkHttpClient;
@@ -28,7 +29,7 @@ import retrofit2.http.Query;
 
 public class EndpointUsersProvider implements UsersProvider {
 
-    public static final String BASE_URL = "https://tivolicloud.com/";
+    public static final String BASE_URL = HifiUtils.METAVERSE_BASE_URL + "/";
     private final Retrofit mRetrofit;
     private final EndpointUsersProviderService mEndpointUsersProviderService;
 
