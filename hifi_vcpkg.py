@@ -280,13 +280,31 @@ endif()
                                     stdout=subprocess.PIPE, universal_newlines=True).stdout
             paths = [line.strip() for line in output.splitlines() if line.strip()]
 
-        def hasV143(path):
-            msvc = os.path.join(path, 'VC', 'Tools', 'MSVC')
-            return os.path.isdir(msvc) and any(
-                re.match(r'14\.[34]\d\.', name) and os.path.isfile(os.path.join(msvc, name, 'bin', 'HostX64', 'x64', 'cl.exe'))
-                for name in os.listdir(msvc))
+        return major, [(path, self.hasV143(path)) for path in paths]
 
-        return major, [(path, hasV143(path)) for path in paths]
+    @staticmethod
+    def hasV143(path):
+        # A v143 compiler (14.3x or 14.4x), and MSBuild's v143 platform toolset in the same install, which is
+        # what MSB8020 looks for: Visual Studio 2026 keeps it in VC\v170 too, but a separate Visual Studio 2022
+        # install doesn't add it to Visual Studio 2026
+        msvc = os.path.join(path, 'VC', 'Tools', 'MSVC')
+        toolset = os.path.join(path, 'MSBuild', 'Microsoft', 'VC', 'v170', 'Platforms', 'x64', 'PlatformToolsets', 'v143')
+        return os.path.isdir(toolset) and os.path.isdir(msvc) and any(
+            re.match(r'14\.[34]\d\.', name) and os.path.isfile(os.path.join(msvc, name, 'bin', 'HostX64', 'x64', 'cl.exe'))
+            for name in os.listdir(msvc))
+
+    def vs2022WithV143(self):
+        # A Visual Studio 2022 install that has v143, for the vs2022 preset
+        vswhere = os.path.join(os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)'),
+                               'Microsoft Visual Studio', 'Installer', 'vswhere.exe')
+        if not os.path.isfile(vswhere):
+            return None
+        output = subprocess.run([vswhere, '-all', '-products', '*', '-version', '[17.0,18.0)', '-property',
+                                 'installationPath'], stdout=subprocess.PIPE, universal_newlines=True).stdout
+        for line in output.splitlines():
+            if line.strip() and self.hasV143(line.strip()):
+                return line.strip()
+        return None
 
     def v143Instructions(self, major, path):
         componentId, componentName = self.V143_COMPONENTS.get(major, self.V143_COMPONENTS['18'])
@@ -340,6 +358,10 @@ endif()
         if len(missing) == len(instances):
             print('\n' + '\n'.join(self.v143Instructions(major, path) for path in missing) +
                   '\n  Then delete the build folder and configure again (BUILD_WINDOWS.md, Troubleshooting).\n')
+            vs2022 = self.vs2022WithV143() if major == '18' else None
+            if vs2022:
+                print('  Or build with Visual Studio 2022, which has them ({0}): delete the build folder,\n'
+                      '  then "cmake --preset vs2022" and "cmake --build --preset vs2022".\n'.format(vs2022))
             raise SystemExit(1)
         if missing:
             print('Warning: these Visual Studio installs have no v143 build tools. If CMake picks one of them, the '
