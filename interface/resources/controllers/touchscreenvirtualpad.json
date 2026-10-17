@@ -10,7 +10,7 @@
         { "from": "TouchscreenVirtualPad.RX",  "when": "!Application.CameraIndependent",
             "filters": [
                 { "type": "deadZone", "min": 0.000 },
-                { "type": "scale", "scale": 0.06 },
+                { "type": "scale", "scale": 0.15 },
                 "invert"
             ],
             "to": "Actions.Yaw"

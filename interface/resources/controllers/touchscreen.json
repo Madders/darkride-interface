@@ -1,8 +1,8 @@
 {
     "name": "Touchscreen to Actions",
     "channels": [
-        { "from": "Touchscreen.GesturePinchOut", "to": "Actions.BoomOut", "filters": [ { "type": "scale", "scale": 0.02 } ] },
-        { "from": "Touchscreen.GesturePinchIn", "to": "Actions.BoomIn", "filters": [ { "type": "scale", "scale": 0.02 } ] },
+        { "from": "Touchscreen.GesturePinchOut", "to": "Actions.BoomOut", "filters": [ { "type": "scale", "scale": 0.5 } ] },
+        { "from": "Touchscreen.GesturePinchIn", "to": "Actions.BoomIn", "filters": [ { "type": "scale", "scale": 0.5 } ] },
 
         { "from": { "makeAxis" : [
               [ "Touchscreen.DragLeft" ],

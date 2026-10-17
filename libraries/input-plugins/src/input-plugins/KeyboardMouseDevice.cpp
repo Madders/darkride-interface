@@ -10,6 +10,8 @@
 //
 #include "KeyboardMouseDevice.h"
 
+#include <cmath>
+
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QTouchEvent>
@@ -210,11 +212,19 @@ void KeyboardMouseDevice::touchGestureEvent(const QGestureEvent* event) {
                 break;
 
             case Qt::GestureUpdated: {
-                const float PINCH_DELTA_STEP = 0.04f;
                 qreal totalScaleFactor = pinchGesture->totalScaleFactor();
                 qreal scaleFactorDelta = _lastTotalScaleFactor - totalScaleFactor;
-                _inputDevice->_axisStateMap[_inputDevice->makeInput(TOUCH_GESTURE_PINCH_POS).getChannel()].value = scaleFactorDelta > 0.0 ? PINCH_DELTA_STEP : 0.0f;
-                _inputDevice->_axisStateMap[_inputDevice->makeInput(TOUCH_GESTURE_PINCH_NEG).getChannel()].value = scaleFactorDelta < 0.0 ? PINCH_DELTA_STEP : 0.0f;
+#if defined(Q_OS_ANDROID)
+                // on a phone the zoom follows how far the fingers move, slowly enough to stop at the right distance
+                // (a fixed step for every one of the touchscreen's many updates zoomed too fast to control)
+                const float PINCH_ZOOM_SCALE = 0.4f;
+                float pinchStep = (float)std::abs(scaleFactorDelta) * PINCH_ZOOM_SCALE;
+#else
+                const float PINCH_DELTA_STEP = 0.04f;
+                float pinchStep = PINCH_DELTA_STEP;
+#endif
+                _inputDevice->_axisStateMap[_inputDevice->makeInput(TOUCH_GESTURE_PINCH_POS).getChannel()].value = scaleFactorDelta > 0.0 ? pinchStep : 0.0f;
+                _inputDevice->_axisStateMap[_inputDevice->makeInput(TOUCH_GESTURE_PINCH_NEG).getChannel()].value = scaleFactorDelta < 0.0 ? pinchStep : 0.0f;
                 _lastTotalScaleFactor = totalScaleFactor;
                 break;
             }

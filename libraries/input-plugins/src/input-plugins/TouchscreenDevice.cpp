@@ -9,6 +9,8 @@
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 #include "TouchscreenDevice.h"
+
+#include <cmath>
 #include "KeyboardMouseDevice.h"
 
 #include <QtGui/QTouchEvent>
@@ -56,10 +58,12 @@ void TouchscreenDevice::pluginUpdate(float deltaTime, const controller::InputCal
             _inputDevice->_axisStateMap[_inputDevice->makeInput(TOUCH_AXIS_Y_NEG).getChannel()].value = distanceScaleY;
         }
     } else  if (_touchPointCount == 2) {
-        if (_pinchScale > _lastPinchScale && _pinchScale != 0) {
-            _inputDevice->_axisStateMap[_inputDevice->makeInput(TOUCH_GESTURE_PINCH_POS).getChannel()].value = 1.0f;
-        } else if (_pinchScale != 0) {
-            _inputDevice->_axisStateMap[_inputDevice->makeInput(TOUCH_GESTURE_PINCH_NEG).getChannel()].value = 1.0;
+        // zoom by how far the pinch has moved since the last update, not a fixed step every update (which zoomed
+        // in while two fingers were held still, and too fast to stop at the right distance)
+        qreal pinchDelta = _pinchScale - _lastPinchScale;
+        if (_pinchScale != 0 && _lastPinchScale != 0 && pinchDelta != 0) {
+            auto channel = pinchDelta > 0 ? TOUCH_GESTURE_PINCH_POS : TOUCH_GESTURE_PINCH_NEG;
+            _inputDevice->_axisStateMap[_inputDevice->makeInput(channel).getChannel()].value = (float)std::abs(pinchDelta);
         }
         _lastPinchScale = _pinchScale;
     }
@@ -99,6 +103,10 @@ void TouchscreenDevice::touchGestureEvent(const QGestureEvent* event) {
     if (QGesture* gesture = event->gesture(Qt::PinchGesture)) {
         QPinchGesture* pinch = static_cast<QPinchGesture*>(gesture);
         _pinchScale = pinch->totalScaleFactor();
+        if (pinch->state() == Qt::GestureStarted) {
+            // a new pinch starts from where it is, not from where the last one ended
+            _lastPinchScale = _pinchScale;
+        }
     }
 }
 
