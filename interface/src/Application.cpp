@@ -209,6 +209,9 @@
 #include "SpeechRecognizer.h"
 #endif
 #include "ui/ResourceImageItem.h"
+#if defined(Q_OS_ANDROID)
+#include "android/AndroidWebView.h"
+#endif
 #include "ui/AddressBarDialog.h"
 #include "ui/AvatarInputs.h"
 #include "ui/DialogsManager.h"
@@ -3363,6 +3366,9 @@ void Application::initializeUi() {
     qmlRegisterType<ResourceImageItem>("Hifi", 1, 0, "ResourceImageItem");
     qmlRegisterType<Preference>("Hifi", 1, 0, "Preference");
     qmlRegisterType<WebBrowserSuggestionsEngine>("HifiWeb", 1, 0, "WebBrowserSuggestionsEngine");
+#if defined(Q_OS_ANDROID)
+    qmlRegisterType<AndroidWebView>("Darkride.Android", 1, 0, "AndroidWebView");
+#endif
 
     {
         auto tabletScriptingInterface = DependencyManager::get<TabletScriptingInterface>();

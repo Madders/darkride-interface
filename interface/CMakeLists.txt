@@ -282,6 +282,9 @@ target_include_directories(${TARGET_NAME} PRIVATE "${PROJECT_SOURCE_DIR}/src")
 if (ANDROID)
   find_library(ANDROID_LOG_LIB log)
   target_link_libraries(${TARGET_NAME} ${ANDROID_LOG_LIB})
+  # web entities draw Android's WebView (src/android/AndroidWebView.cpp)
+  find_package(Qt5 COMPONENTS AndroidExtras REQUIRED)
+  target_link_libraries(${TARGET_NAME} Qt5::AndroidExtras)
 endif ()
 
 target_link_libraries(

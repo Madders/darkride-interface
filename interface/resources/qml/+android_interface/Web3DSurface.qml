@@ -10,10 +10,17 @@
 
 import QtQuick 2.5
 import QtGraphicalEffects 1.0
+import Darkride.Android 1.0
 
+// A web entity on Android: the page, drawn by Android's WebView (AndroidWebView, interface/src/android), over a
+// placeholder showing the site's name while it loads
 Item {
+    id: root
 
     property string url
+    property string scriptUrl: ""
+    property bool transparentBackground: false
+    signal sendToScript(var message);
     RadialGradient {
         anchors.fill: parent
         gradient: Gradient {
@@ -73,4 +80,8 @@ Item {
     }
 
 
+    AndroidWebView {
+        anchors.fill: parent
+        url: root.url
+    }
 }
