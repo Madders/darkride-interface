@@ -9,6 +9,9 @@
 #include <QtCore/QStringList>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QTextStream>
+#include <QtGui/QScreen>
+#include <QtWidgets/QApplication>
+#include <QtWidgets/QWidget>
 
 #include <QtAndroidExtras/QAndroidJniObject>
 
@@ -202,6 +205,26 @@ JNIEXPORT void Java_io_highfidelity_hifiinterface_InterfaceActivity_nativeOnCrea
         jint iDuration = (jint) duration;
         __interfaceActivity.callMethod<void>("performHapticFeedback", "(I)V", iDuration);
     });
+}
+
+// The 3D view's window, sized to the Android window it's in (InterfaceActivity.syncQtSize): Qt can be left with a
+// portrait size after the app's portrait screens, which draws half the landscape screen, upside down
+JNIEXPORT void JNICALL
+Java_io_highfidelity_hifiinterface_InterfaceActivity_nativeSyncWindowSize(JNIEnv *env, jobject obj, jint width, jint height) {
+    if (!qApp) {
+        return;
+    }
+    QMetaObject::invokeMethod(qApp, [width, height] {
+        QSize size(width, height);
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            if (widget->isVisible() && widget->inherits("QMainWindow") && widget->size() != size) {
+                QScreen* screen = QGuiApplication::primaryScreen();
+                qDebug() << "The main window is" << widget->size() << "in a" << size << "Android window (Qt's screen:"
+                         << (screen ? screen->geometry() : QRect()) << "), resizing it";
+                widget->setGeometry(QRect(QPoint(0, 0), size));
+            }
+        }
+    }, Qt::QueuedConnection);
 }
 
 JNIEXPORT void Java_io_highfidelity_hifiinterface_InterfaceActivity_nativeOnDestroy(JNIEnv* env, jobject obj) {

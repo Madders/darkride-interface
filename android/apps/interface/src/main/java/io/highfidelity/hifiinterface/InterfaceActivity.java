@@ -25,6 +25,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Vibrator;
 import android.text.TextUtils;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -65,6 +66,7 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
 
     //public static native void handleHifiURL(String hifiURLString);
     private native void nativeOnCreate(AssetManager assetManager);
+    private native void nativeSyncWindowSize(int width, int height);
     private native void nativeOnDestroy();
     private native void nativeGotoUrl(String url);
     private native void nativeGoToUser(String username);
@@ -135,6 +137,11 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
                 getActionBar().hide();
             }
         });
+        rootView.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
+                scheduleQtSizeSync();
+            }
+        });
         Intent splashIntent = new Intent(this, SplashActivity.class);
         splashIntent.putExtra(SplashActivity.EXTRA_START_IN_DOMAIN, mStartInDomain);
         startActivity(splashIntent);
@@ -202,6 +209,7 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
         super.onResume();
         nativeEnterForeground();
         surfacesWorkaround();
+        scheduleQtSizeSync();
         registerReceiver(headsetStateReceiver, new IntentFilter(Intent.ACTION_HEADSET_PLUG));
         //gvrApi.resumeTracking();
     }
@@ -247,6 +255,43 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
             }
         }
         surfacesWorkaround();
+        scheduleQtSizeSync();
+    }
+
+    /*
+    The app's other screens are portrait, and this one goes portrait for a moment behind them (on starting, and on
+    the way back from them). Qt can handle that portrait size after the landscape one that follows it, and the 3D view
+    is then left portrait in a landscape window: half the screen, upside down. Once the window has settled, tell Qt
+    its size again, and size the main window to it.
+     */
+    private final Runnable mSyncQtSize = this::syncQtSize;
+
+    private void scheduleQtSizeSync() {
+        View decorView = getWindow().getDecorView();
+        decorView.removeCallbacks(mSyncQtSize);
+        decorView.postDelayed(mSyncQtSize, 500);
+    }
+
+    private void syncQtSize() {
+        FrameLayout fl = findViewById(android.R.id.content);
+        if (fl == null || fl.getChildCount() == 0) {
+            return;
+        }
+        View qtLayout = fl.getChildAt(0);
+        int width = qtLayout.getWidth();
+        int height = qtLayout.getHeight();
+        if (width <= 0 || height <= 0 || width < height) {
+            // not laid out yet, or not yet back to landscape: the layout change brings us back here
+            return;
+        }
+        // as QtLayout.onSizeChanged reports it
+        DisplayMetrics metrics = new DisplayMetrics();
+        getWindowManager().getDefaultDisplay().getMetrics(metrics);
+        QtNative.setApplicationDisplayMetrics(metrics.widthPixels, metrics.heightPixels, width, height,
+                metrics.xdpi, metrics.ydpi, metrics.scaledDensity, metrics.density);
+        if (!isLoading) {
+            nativeSyncWindowSize(width, height);
+        }
     }
 
     private void surfacesWorkaround() {
@@ -304,6 +349,7 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
+            scheduleQtSizeSync();
             final int uiOptions = View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                 | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                 | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
