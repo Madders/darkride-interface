@@ -96,7 +96,13 @@ public class HomeFragment extends Fragment {
 
             @Override
             public void onError(Exception e, String message) {
-
+                // stop the spinner, so pulling down can try again
+                mSwipeRefreshLayout.setRefreshing(false);
+                if (mDomainAdapter.getItemCount() == 0) {
+                    searchNoResultsView.setText(R.string.domains_load_error);
+                    searchNoResultsView.setVisibility(View.VISIBLE);
+                    mDomainsView.setVisibility(View.GONE);
+                }
             }
         });
         mDomainsView.setAdapter(mDomainAdapter);

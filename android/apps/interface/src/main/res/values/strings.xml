@@ -59,6 +59,7 @@
     <string name="ok">OK</string>
     <string name="profile">Avatar</string>
     <!-- a world in the places list -->
+    <string name="domains_load_error">Couldn\'t reach Darkride. Pull down to try again.</string>
     <string name="domain_by_author">by %1$s</string>
     <plurals name="domain_people">
         <item quantity="one">%d person here</item>
