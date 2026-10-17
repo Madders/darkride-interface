@@ -9,7 +9,9 @@ import android.graphics.PorterDuff;
 import android.graphics.SurfaceTexture;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
+import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.View;
@@ -25,7 +27,7 @@ import org.qtproject.qt5.android.QtNative;
  * A web page for a web entity: a WebView drawing into a SurfaceTexture, which the engine copies into the entity's
  * texture (interface/src/android/AndroidWebView.cpp, which makes these).
  *
- * The WebView is in the activity's views, so that it lays out, draws and (later) takes input and the keyboard like
+ * The WebView is in the activity's views, so that it lays out, draws and takes input (and later the keyboard) like
  * any view, but its container draws it into the SurfaceTexture's Surface rather than the screen: Flutter's "texture
  * layer" way of showing Android views in a GPU scene. Its container takes no touches: the 3D view under it does.
  *
@@ -48,6 +50,7 @@ public class DarkrideWebView {
     private SurfaceTexture mSurfaceTexture;
     private Surface mSurface;
     private boolean mDestroyed;
+    private long mTouchDownTime;
 
     public DarkrideWebView(long id, int width, int height) {
         mId = id;
@@ -109,6 +112,25 @@ public class DarkrideWebView {
             } else {
                 mPendingUrl = url;
             }
+        });
+    }
+
+    // The web entity's pointer, at a position in the page's pixels, as a finger on the WebView
+    public void touch(int action, float x, float y) {
+        long eventTime = SystemClock.uptimeMillis();
+        mMainHandler.post(() -> {
+            if (mWebView == null) {
+                return;
+            }
+            if (action == MotionEvent.ACTION_DOWN) {
+                mTouchDownTime = eventTime;
+                // for the keyboard, when a text field is touched
+                mWebView.requestFocus();
+            }
+            MotionEvent event = MotionEvent.obtain(mTouchDownTime, eventTime, action, x, y, 0);
+            event.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+            mWebView.dispatchTouchEvent(event);
+            event.recycle();
         });
     }
 

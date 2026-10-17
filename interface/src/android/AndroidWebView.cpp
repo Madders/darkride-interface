@@ -18,6 +18,8 @@
 #include <QtAndroidExtras/QAndroidJniEnvironment>
 #include <QtGui/QOpenGLContext>
 #include <QtGui/QOpenGLExtraFunctions>
+#include <QtGui/QMouseEvent>
+#include <QtGui/QTouchEvent>
 #include <QtQuick/QQuickWindow>
 #include <QtQuick/QSGSimpleTextureNode>
 
@@ -207,6 +209,8 @@ public:
 
 AndroidWebView::AndroidWebView(QQuickItem* parent) : QQuickItem(parent), _id(nextId++) {
     setFlag(ItemHasContents, true);
+    setAcceptTouchEvents(true);
+    setAcceptedMouseButtons(Qt::LeftButton);
     {
         std::lock_guard<std::mutex> lock(viewsMutex);
         views[_id] = this;
@@ -247,6 +251,65 @@ void AndroidWebView::geometryChanged(const QRectF& newGeometry, const QRectF& ol
         _javaView.callMethod<void>("resize", "(II)V", (jint)size.width(), (jint)size.height());
         update();
     }
+}
+
+// android.view.MotionEvent's actions
+static const int ACTION_DOWN = 0;
+static const int ACTION_UP = 1;
+static const int ACTION_MOVE = 2;
+static const int ACTION_CANCEL = 3;
+
+void AndroidWebView::sendTouch(int action, const QPointF& position) {
+    if (_javaView.isValid()) {
+        _javaView.callMethod<void>("touch", "(IFF)V", (jint)action, (jfloat)position.x(), (jfloat)position.y());
+    }
+}
+
+void AndroidWebView::touchEvent(QTouchEvent* event) {
+    // one finger: the web entity's pointer
+    if (event->touchPoints().isEmpty()) {
+        event->accept();
+        return;
+    }
+    const auto& point = event->touchPoints().first();
+    switch (event->type()) {
+        case QEvent::TouchBegin:
+            sendTouch(ACTION_DOWN, point.pos());
+            break;
+        case QEvent::TouchUpdate:
+            if (point.state() == Qt::TouchPointReleased) {
+                sendTouch(ACTION_UP, point.pos());
+            } else if (point.state() == Qt::TouchPointMoved) {
+                sendTouch(ACTION_MOVE, point.pos());
+            }
+            break;
+        case QEvent::TouchEnd:
+            sendTouch(ACTION_UP, point.pos());
+            break;
+        case QEvent::TouchCancel:
+            sendTouch(ACTION_CANCEL, point.pos());
+            break;
+        default:
+            break;
+    }
+    event->accept();
+}
+
+void AndroidWebView::mousePressEvent(QMouseEvent* event) {
+    sendTouch(ACTION_DOWN, event->localPos());
+    event->accept();
+}
+
+void AndroidWebView::mouseMoveEvent(QMouseEvent* event) {
+    if (event->buttons() & Qt::LeftButton) {
+        sendTouch(ACTION_MOVE, event->localPos());
+    }
+    event->accept();
+}
+
+void AndroidWebView::mouseReleaseEvent(QMouseEvent* event) {
+    sendTouch(ACTION_UP, event->localPos());
+    event->accept();
 }
 
 void AndroidWebView::frameAvailable(jlong id) {

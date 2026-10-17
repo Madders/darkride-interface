@@ -26,11 +26,9 @@ function intersectsWebOverlay(intersection) {
             Overlays.getOverlayType(intersection.overlayID) == "web3d";
 }
 
+// Web entities take touches themselves (the page is drawn in the world and a finger on it is its pointer), so
+// they're no longer opened in the 2D web view; web overlays still are
 function intersectsWebEntity(intersection) {
-    if (intersection && intersection.intersects && intersection.entityID) {
-        var properties = Entities.getEntityProperties(intersection.entityID, ["type", "sourceUrl"]);
-        return properties.type && properties.type == "Web" && properties.sourceUrl;
-    }
     return false;
 }
 

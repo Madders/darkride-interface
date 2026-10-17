@@ -4976,6 +4976,45 @@ void Application::mouseReleaseEvent(QMouseEvent* event) {
     }
 }
 
+#if defined(Q_OS_ANDROID)
+// A finger that touches a web entity is that entity's pointer (EntityTreeRenderer::webEntityTouchBegin) until it's
+// lifted: it's passed to the entity, and kept from the other touch controls (so a drag on a page scrolls it rather
+// than turning). Returns the event for those controls, with the rest of the fingers, or null when there are none.
+static std::unique_ptr<QTouchEvent> takeWebEntityTouches(EntityTreeRenderer* entities, const QTouchEvent* event) {
+    QList<QTouchEvent::TouchPoint> otherPoints;
+    Qt::TouchPointStates otherStates;
+    bool tookAny = false;
+    for (const auto& point : event->touchPoints()) {
+        if (point.state() == Qt::TouchPointPressed && entities->webEntityTouchBegin(point.id(), point.pos())) {
+            tookAny = true;
+        } else if (entities->isWebEntityTouch(point.id())) {
+            tookAny = true;
+            if (point.state() == Qt::TouchPointReleased) {
+                entities->webEntityTouchEnd(point.id(), point.pos());
+            } else if (point.state() == Qt::TouchPointMoved) {
+                entities->webEntityTouchMove(point.id(), point.pos());
+            }
+        } else {
+            otherPoints.push_back(point);
+            otherStates |= point.state();
+        }
+    }
+    if (!tookAny) {
+        otherPoints = event->touchPoints();
+        otherStates = event->touchPointStates();
+    } else if (otherPoints.empty() && event->type() != QEvent::TouchEnd) {
+        return nullptr;
+    }
+    // (an end with no fingers left still resets the other controls)
+    std::unique_ptr<QTouchEvent> controlsEvent(new QTouchEvent(event->type(), event->device(), event->modifiers(),
+                                                               otherStates, otherPoints));
+    controlsEvent->setWindow(event->window());
+    controlsEvent->setTarget(event->target());
+    controlsEvent->setTimestamp(event->timestamp());
+    return controlsEvent;
+}
+#endif
+
 void Application::touchUpdateEvent(QTouchEvent* event) {
     if (event->type() == QEvent::TouchUpdate) {
         TouchEvent thisEvent(*event, _lastTouchEvent);
@@ -4987,6 +5026,14 @@ void Application::touchUpdateEvent(QTouchEvent* event) {
     if (_controllerScriptingInterface->isTouchCaptured()) {
         return;
     }
+
+#if defined(Q_OS_ANDROID)
+    auto controlsEvent = takeWebEntityTouches(getEntities().data(), event);
+    if (!controlsEvent) {
+        return;
+    }
+    event = controlsEvent.get();
+#endif
 
     if (_keyboardMouseDevice->isActive()) {
         _keyboardMouseDevice->touchUpdateEvent(event);
@@ -5011,6 +5058,15 @@ void Application::touchBeginEvent(QTouchEvent* event) {
         return;
     }
 
+#if defined(Q_OS_ANDROID)
+    // (touchUpdateEvent has already passed the fingers on web entities to them)
+    auto controlsEvent = takeWebEntityTouches(getEntities().data(), event);
+    if (!controlsEvent) {
+        return;
+    }
+    event = controlsEvent.get();
+#endif
+
     if (_keyboardMouseDevice->isActive()) {
         _keyboardMouseDevice->touchBeginEvent(event);
     }
@@ -5032,6 +5088,14 @@ void Application::touchEndEvent(QTouchEvent* event) {
     if (_controllerScriptingInterface->isTouchCaptured()) {
         return;
     }
+
+#if defined(Q_OS_ANDROID)
+    auto controlsEvent = takeWebEntityTouches(getEntities().data(), event);
+    if (!controlsEvent) {
+        return;
+    }
+    event = controlsEvent.get();
+#endif
 
     if (_keyboardMouseDevice->isActive()) {
         _keyboardMouseDevice->touchEndEvent(event);

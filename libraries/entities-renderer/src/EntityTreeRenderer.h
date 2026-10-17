@@ -147,6 +147,14 @@ public:
     void mouseDoublePressEvent(QMouseEvent* event);
     void mouseMoveEvent(QMouseEvent* event);
 
+    // A finger on a touchscreen, for web entities: a touch that begins on a web entity is its pointer, pressing,
+    // moving and releasing on it, until it ends (TouchBegin returns whether it did begin on one). The application
+    // keeps that finger from the other touch controls.
+    bool webEntityTouchBegin(int touchID, const QPointF& position);
+    void webEntityTouchMove(int touchID, const QPointF& position);
+    void webEntityTouchEnd(int touchID, const QPointF& position);
+    bool isWebEntityTouch(int touchID) const { return _webTouchID == touchID && !_webTouchEntityID.isInvalidID(); }
+
     /// connect our signals to anEntityScriptingInterface for firing of events related clicking,
     /// hovering over, and entering entities
     void connectSignalsToSlots(EntityScriptingInterface* entityScriptingInterface);
@@ -232,6 +240,9 @@ private:
 
     EntityItemID _currentHoverOverEntityID;
     EntityItemID _currentClickingOnEntityID;
+    EntityItemID _webTouchEntityID;
+    int _webTouchID { -1 };
+    RayToEntityIntersectionResult _webTouchPickResult;
 
     QScriptValueList createEntityArgs(const EntityItemID& entityID);
     void checkEnterLeaveEntities();

@@ -1115,6 +1115,67 @@ void EntityTreeRenderer::mouseReleaseEvent(QMouseEvent* event) {
     _currentClickingOnEntityID = UNKNOWN_ENTITY_ID;
 }
 
+bool EntityTreeRenderer::webEntityTouchBegin(int touchID, const QPointF& position) {
+    if (!_tree || _shuttingDown || !_webTouchEntityID.isInvalidID()) {
+        return false;
+    }
+    PickRay ray = _viewState->computePickRay(position.x(), position.y());
+    auto entityScriptingInterface = DependencyManager::get<EntityScriptingInterface>();
+    RayToEntityIntersectionResult rayPickResult = entityScriptingInterface->findRayIntersection(ray, true, QScriptValue(),
+                                                                                               QScriptValue(), true);
+    EntityItemPointer entity;
+    if (!rayPickResult.intersects || !(entity = getTree()->findEntityByID(rayPickResult.entityID)) ||
+        entity->getType() != EntityTypes::Web) {
+        return false;
+    }
+
+    _webTouchEntityID = rayPickResult.entityID;
+    _webTouchID = touchID;
+    _webTouchPickResult = rayPickResult;
+    glm::vec2 pos2D = projectOntoEntityXYPlane(entity, ray, rayPickResult);
+    PointerEvent pointerEvent(PointerEvent::Press, PointerManager::MOUSE_POINTER_ID, pos2D, rayPickResult.intersection,
+                              rayPickResult.surfaceNormal, ray.direction, PointerEvent::PrimaryButton,
+                              PointerEvent::PrimaryButton, Qt::NoModifier);
+    emit entityScriptingInterface->mousePressOnEntity(_webTouchEntityID, pointerEvent);
+    emit entityScriptingInterface->clickDownOnEntity(_webTouchEntityID, pointerEvent);
+    return true;
+}
+
+void EntityTreeRenderer::webEntityTouchMove(int touchID, const QPointF& position) {
+    EntityItemPointer entity;
+    if (!isWebEntityTouch(touchID) || !_tree || !(entity = getTree()->findEntityByID(_webTouchEntityID))) {
+        return;
+    }
+    // on the entity's plane, also once the finger has moved off it, as a dragged mouse would be
+    PickRay ray = _viewState->computePickRay(position.x(), position.y());
+    glm::vec2 pos2D = projectOntoEntityXYPlane(entity, ray, _webTouchPickResult);
+    PointerEvent pointerEvent(PointerEvent::Move, PointerManager::MOUSE_POINTER_ID, pos2D, _webTouchPickResult.intersection,
+                              _webTouchPickResult.surfaceNormal, ray.direction, PointerEvent::NoButtons,
+                              PointerEvent::PrimaryButton, Qt::NoModifier);
+    emit DependencyManager::get<EntityScriptingInterface>()->mouseMoveOnEntity(_webTouchEntityID, pointerEvent);
+}
+
+void EntityTreeRenderer::webEntityTouchEnd(int touchID, const QPointF& position) {
+    if (!isWebEntityTouch(touchID)) {
+        return;
+    }
+    EntityItemID entityID = _webTouchEntityID;
+    _webTouchEntityID = UNKNOWN_ENTITY_ID;
+    _webTouchID = -1;
+    EntityItemPointer entity;
+    if (!_tree || !(entity = getTree()->findEntityByID(entityID))) {
+        return;
+    }
+    PickRay ray = _viewState->computePickRay(position.x(), position.y());
+    glm::vec2 pos2D = projectOntoEntityXYPlane(entity, ray, _webTouchPickResult);
+    PointerEvent pointerEvent(PointerEvent::Release, PointerManager::MOUSE_POINTER_ID, pos2D, _webTouchPickResult.intersection,
+                              _webTouchPickResult.surfaceNormal, ray.direction, PointerEvent::PrimaryButton,
+                              PointerEvent::NoButtons, Qt::NoModifier);
+    auto entityScriptingInterface = DependencyManager::get<EntityScriptingInterface>();
+    emit entityScriptingInterface->mouseReleaseOnEntity(entityID, pointerEvent);
+    emit entityScriptingInterface->clickReleaseOnEntity(entityID, pointerEvent);
+}
+
 void EntityTreeRenderer::mouseMoveEvent(QMouseEvent* event) {
     // If we don't have a tree, or we're in the process of shutting down, then don't
     // process these events.

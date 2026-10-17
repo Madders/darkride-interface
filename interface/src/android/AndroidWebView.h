@@ -42,9 +42,16 @@ signals:
 protected:
     QSGNode* updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData* data) override;
     void geometryChanged(const QRectF& newGeometry, const QRectF& oldGeometry) override;
+    // the web entity's pointer (Web3DSurface passes it on as touches, or as a mouse for an entity in mouse mode)
+    void touchEvent(QTouchEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
 
 private:
     QSize pixelSize() const;
+    // to the WebView as an Android MotionEvent action (ACTION_DOWN, ACTION_MOVE, ACTION_UP or ACTION_CANCEL)
+    void sendTouch(int action, const QPointF& position);
 
     const jlong _id;
     QString _url;
