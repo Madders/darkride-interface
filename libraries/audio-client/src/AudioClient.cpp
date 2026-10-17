@@ -992,6 +992,13 @@ void AudioClient::negotiateAudioFormat() {
 
     // grab our audio mixer from the NodeList, if it exists
     SharedNodePointer audioMixer = nodeList->soloNodeOfType(NodeType::AudioMixer);
+    qCDebug(audioclient) << "Offering codecs" << [&] {
+        QStringList names;
+        for (auto& plugin : codecPlugins) {
+            names << plugin->getName();
+        }
+        return names;
+    }() << (audioMixer ? "to the audio mixer" : "but there is no audio mixer");
 
     if (audioMixer) {
         // send off this mute packet
@@ -2054,6 +2061,11 @@ void AudioClient::setHeadsetPluggedIn(bool pluggedIn) {
 }
 
 void AudioClient::outputNotify() {
+#if defined(Q_OS_ANDROID)
+    // Qt's OpenSL ES output reports a whole buffer free whenever one of its buffers is, so nearly every read looks
+    // unfulfilled, and the buffer would grow to the maximum (and its latency) for nothing
+    return;
+#endif
     int recentUnfulfilled = _audioOutputIODevice.getRecentUnfulfilledReads();
     if (recentUnfulfilled > 0) {
         qCDebug(audioclient, "Starve detected, %d new unfulfilled reads", recentUnfulfilled);

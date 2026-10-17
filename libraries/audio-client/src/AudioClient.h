@@ -82,7 +82,12 @@ class Transform;
 class NLPacket;
 
 #define DEFAULT_STARVE_DETECTION_ENABLED true
+#if defined(Q_OS_ANDROID)
+// Qt's OpenSL ES output queues two buffers of this size: one network frame each underruns, and clicks, on phones
+#define DEFAULT_BUFFER_FRAMES 4
+#else
 #define DEFAULT_BUFFER_FRAMES 1
+#endif
 
 class AudioClient : public AbstractAudioInterface, public Dependency {
     Q_OBJECT
