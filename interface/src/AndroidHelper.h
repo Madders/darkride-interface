@@ -22,10 +22,9 @@
 class AndroidHelper : public QObject {
     Q_OBJECT
 public:
-    static AndroidHelper& instance() {
-            static AndroidHelper instance;
-            return instance;
-    }
+    // defined in AndroidHelper.cpp, so the app's native library shares the interface library's instance rather
+    // than resolving a copy of its own
+    static AndroidHelper& instance();
     void requestActivity(const QString &activityName, const bool backToScene, QMap<QString, QString> args = QMap<QString, QString>());
     void notifyLoadComplete();
     void notifyEnterForeground();

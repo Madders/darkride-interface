@@ -584,7 +584,9 @@ void messageHandler(QtMsgType type, const QMessageLogContext& context, const QSt
 
     if (!logMessage.isEmpty()) {
 #ifdef Q_OS_ANDROID
-        const char * local=logMessage.toStdString().c_str();
+        // keep the bytes alive while they're written
+        const QByteArray localBytes = logMessage.toUtf8();
+        const char* local = localBytes.constData();
         switch (type) {
             case QtDebugMsg:
                 __android_log_write(ANDROID_LOG_DEBUG,"Interface",local);

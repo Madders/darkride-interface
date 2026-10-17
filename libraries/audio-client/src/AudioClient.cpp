@@ -836,19 +836,23 @@ void AudioClient::stop() {
     qCDebug(audioclient) << "AudioClient::stop(), requesting switchOutputToAudioDevice() to shut down";
     switchOutputToAudioDevice(HifiAudioDeviceInfo(), true);
 
-    // Stop triggering the checks
-    QObject::disconnect(_checkPeakValuesTimer, &QTimer::timeout, nullptr, nullptr);
-    QObject::disconnect(_checkDevicesTimer, &QTimer::timeout, nullptr, nullptr);
-
+    // Stop triggering the checks. On Android this is called each time the app goes into the background, and the
+    // timers are gone after the first time.
     // Destruction of the pointers will occur when the parent object (this) is destroyed)
     {
         Lock lock(_checkDevicesMutex);
-        _checkDevicesTimer->stop();
-        _checkDevicesTimer = nullptr;
+        if (_checkDevicesTimer) {
+            QObject::disconnect(_checkDevicesTimer, &QTimer::timeout, nullptr, nullptr);
+            _checkDevicesTimer->stop();
+            _checkDevicesTimer = nullptr;
+        }
     }
     {
         Lock lock(_checkPeakValuesMutex);
-        _checkPeakValuesTimer = nullptr;
+        if (_checkPeakValuesTimer) {
+            QObject::disconnect(_checkPeakValuesTimer, &QTimer::timeout, nullptr, nullptr);
+            _checkPeakValuesTimer = nullptr;
+        }
     }
 
 #if defined(Q_OS_ANDROID)

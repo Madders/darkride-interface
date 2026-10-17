@@ -22,6 +22,11 @@
 #endif
 #define qApp (static_cast<Application*>(QCoreApplication::instance()))
 
+AndroidHelper& AndroidHelper::instance() {
+    static AndroidHelper instance;
+    return instance;
+}
+
 AndroidHelper::AndroidHelper() {
     qRegisterMetaType<QAudio::Mode>("QAudio::Mode");
 }
