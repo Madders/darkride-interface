@@ -1,37 +1,22 @@
-//
-// Libraries
-//
-
-include ':oculus'
-project(':oculus').projectDir = new File(settingsDir, 'libraries/oculus')
-
-include ':qt'
-project(':qt').projectDir = new File(settingsDir, 'libraries/qt')
-
-//
-// Applications
-//
-
-if (!getSettings().hasProperty("SUPPRESS_INTERFACE")) {
-    include ':interface'
-    project(':interface').projectDir = new File(settingsDir, 'apps/interface')
+// Darkride for Android phones and tablets (flat screen). The native library is built separately
+// (android/docker/build-native.sh) and packaged with Qt by androiddeployqt (android/docker/package-apk.sh);
+// this project builds the APK from that.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
 }
 
-if (!getSettings().hasProperty("SUPPRESS_QUEST_INTERFACE")) {
-    include ':questInterface'
-    project(':questInterface').projectDir = new File(settingsDir, 'apps/questInterface')
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+    }
 }
 
-//
-// Test projects
-//
+rootProject.name = 'darkride-android'
 
-if (!getSettings().hasProperty("SUPPRESS_FRAME_PLAYER")) {
-    include ':framePlayer'
-    project(':framePlayer').projectDir = new File(settingsDir, 'apps/framePlayer')
-}
-
-if (!getSettings().hasProperty("SUPPRESS_QUEST_FRAME_PLAYER")) {
-    include ':questFramePlayer'
-    project(':questFramePlayer').projectDir = new File(settingsDir, 'apps/questFramePlayer')
-}
+include ':interface'
+project(':interface').projectDir = new File(settingsDir, 'apps/interface')
