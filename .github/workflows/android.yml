@@ -1,0 +1,154 @@
+# Builds Darkride for Android (an arm64 APK) and publishes it for testing.
+#
+#   a push to the android-build branch    builds the APK, keeps it as a workflow artifact for two weeks, and replaces
+#                                         the "android-preview" pre-release with it, for testers to download
+#   Actions > Android > Run workflow      the same for any branch (once this file is on the default branch); the
+#                                         pre-release is only replaced from android-build
+#
+# The build is the one in android/docker: the darkride-android image (Android SDK, NDK r22b, Qt 5.15.2 for Android,
+# Gradle) runs android/docker/build-native.sh and package-apk.sh. That image is kept in the GitHub container registry
+# as darkride-android-builder, tagged with a hash of its Dockerfile, so it's built only when the Dockerfile changes.
+# vcpkg's compiled Android dependencies (small) are kept with actions/cache; the first run builds them (an hour or
+# so), later runs only compile Darkride.
+#
+# The APK is signed with the debug key in the ANDROID_DEBUG_KEYSTORE secret (base64), so that each build installs
+# over the last. Without it, each run signs with a new key, and testers have to uninstall before updating.
+
+name: Android
+
+on:
+  push:
+    branches: [android-build]
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      # the runner's large temporary disk
+      WORK: /mnt/work
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version and image name
+        run: |
+          echo "VERSION_NAME=preview-${GITHUB_SHA:0:8}" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=${{ github.run_number }}" >> "$GITHUB_ENV"
+          # registry names must be lower case
+          echo "BUILDER=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/darkride-android-builder:$(sha256sum android/docker/Dockerfile | cut -c1-16)" >> "$GITHUB_ENV"
+
+      # The builder image (about 9 GB) and the build need more room than the runner's system disk has free
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/.ghcup
+          docker system prune -af > /dev/null
+          sudo mkdir -p "$WORK" && sudo chmod 777 "$WORK"
+          df -h / /mnt
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Builder image
+        run: |
+          if docker pull "$BUILDER"; then
+            echo "Using $BUILDER" >> "$GITHUB_STEP_SUMMARY"
+          else
+            docker build -t "$BUILDER" \
+              --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+              android/docker
+            docker push "$BUILDER"
+            echo "Built and pushed $BUILDER" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Restore vcpkg's Android packages
+        uses: actions/cache/restore@v4
+        with:
+          path: /mnt/work/vcpkg-archives
+          key: android-vcpkg-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}-${{ github.run_id }}
+          restore-keys: |
+            android-vcpkg-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}-
+            android-vcpkg-
+
+      - name: Signing key
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
+        run: |
+          mkdir -p "$WORK/android-user-home"
+          if [ -n "$KEYSTORE" ]; then
+            echo "$KEYSTORE" | base64 -d > "$WORK/android-user-home/debug.keystore"
+          else
+            echo "::warning::No ANDROID_DEBUG_KEYSTORE secret: this APK is signed with a new key, so it won't install over an earlier one"
+          fi
+          echo "PACKAGES_BEFORE=$(find "$WORK/vcpkg-archives" -name '*.zip' 2>/dev/null | wc -l)" >> "$GITHUB_ENV"
+
+      - name: Native build
+        timeout-minutes: 240
+        run: |
+          docker run --rm -v "$WORK:/work" -v "$GITHUB_WORKSPACE:/src" "$BUILDER" \
+            bash /src/android/docker/build-native.sh
+
+      # Saved when vcpkg built something new, even if Darkride's build then failed, so the next run starts further on
+      - name: Keep vcpkg's Android packages
+        if: always()
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" "$WORK/vcpkg-archives" 2>/dev/null || true
+          after=$(find "$WORK/vcpkg-archives" -name '*.zip' 2>/dev/null | wc -l)
+          echo "vcpkg packages: $PACKAGES_BEFORE before, $after after"
+          [ "$after" -gt "$PACKAGES_BEFORE" ] && echo "SAVE_VCPKG=1" >> "$GITHUB_ENV" || true
+
+      - name: Save vcpkg's Android packages
+        if: always() && env.SAVE_VCPKG == '1'
+        uses: actions/cache/save@v4
+        with:
+          path: /mnt/work/vcpkg-archives
+          key: android-vcpkg-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}-${{ github.run_id }}
+
+      - name: APK
+        run: |
+          docker run --rm -v "$WORK:/work" -v "$GITHUB_WORKSPACE:/src" \
+            -e VERSION_NAME -e VERSION_CODE "$BUILDER" bash /src/android/docker/package-apk.sh
+          mkdir -p dist
+          sudo cp "$WORK/apk/interface-debug.apk" "dist/Darkride-$VERSION_NAME-android-arm64.apk"
+          sudo chown -R "$(id -u):$(id -g)" dist
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darkride-android-${{ env.VERSION_NAME }}
+          path: dist/*.apk
+          retention-days: 14
+
+      # One pre-release, replaced by each build of android-build: a stable link for testers
+      - name: Preview release
+        if: github.ref == 'refs/heads/android-build'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<EOF
+          A test build of Darkride for Android phones, from commit [\`${GITHUB_SHA:0:8}\`](${{ github.server_url }}/${{ github.repository }}/commit/$GITHUB_SHA) on \`android-build\`. It's replaced by each new build.
+
+          **Install:** download the APK below on your phone and open it. Android asks to allow installs from your browser or file manager the first time. It needs Android 8 or later and a 64-bit (arm64) phone, which is nearly every phone from the last few years. A newer build installs over an older one.
+
+          **What works:** logging in, the places list, joining worlds, moving and turning with the on-screen controls, choosing an avatar from the \`avatars\` folder of your files, and voice (tap the microphone to unmute).
+
+          **Not yet:** web entities (they show nothing), game controllers, text chat. This is a debug build, so it's larger and slower than a release would be.
+
+          **Found a bug?** [Open an issue](${{ github.server_url }}/${{ github.repository }}/issues/new) with your phone model, Android version, the world you were in, and what happened. If you can, attach a log: with USB debugging on, \`adb logcat -d > darkride-log.txt\` just after it happens.
+          EOF
+          gh release delete android-preview --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes 2>/dev/null || true
+          gh release create android-preview dist/*.apk --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Darkride for Android (preview)" --notes-file notes.md --prerelease --latest=false
+          echo "Published the android-preview pre-release" >> "$GITHUB_STEP_SUMMARY"

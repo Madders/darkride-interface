@@ -94,8 +94,13 @@ sed -i 's/ package="[^"]*"//' "$DEPLOY/AndroidManifest.xml"
 export ANDROID_USER_HOME=/work/android-user-home
 mkdir -p "$ANDROID_USER_HOME"
 
+# the version shown in Android's app info (VERSION_NAME) and the number updates must increase (VERSION_CODE)
+VERSION_ARGS=()
+if [ -n "${VERSION_NAME:-}" ]; then VERSION_ARGS+=(-PRELEASE_NUMBER="$VERSION_NAME"); fi
+if [ -n "${VERSION_CODE:-}" ]; then VERSION_ARGS+=(-PVERSION_CODE="$VERSION_CODE"); fi
+
 cd "$SRC/android"
-gradle --no-daemon :interface:assembleDebug -PDARKRIDE_DEPLOY_DIR="$DEPLOY" -PQT_ANDROID="$QT_ANDROID" \
+gradle --no-daemon :interface:assembleDebug -PDARKRIDE_DEPLOY_DIR="$DEPLOY" -PQT_ANDROID="$QT_ANDROID" "${VERSION_ARGS[@]}" \
     --project-cache-dir /work/gradle-project-cache -g /work/gradle-home
 
 mkdir -p /work/apk
