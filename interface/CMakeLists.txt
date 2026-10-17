@@ -370,7 +370,8 @@ if (APPLE)
   # call the fixup_interface macro to add required bundling commands for installation
   fixup_interface()
 
-else()
+# (Android's APK takes its scripts and resources in its Gradle build, android/apps/interface/build.gradle)
+elseif (NOT ANDROID)
   set(INTERFACE_EXEC_DIR "$<TARGET_FILE_DIR:${TARGET_NAME}>")
   set(RESOURCES_DEV_DIR "${INTERFACE_EXEC_DIR}/resources")
 
@@ -433,7 +434,7 @@ else()
   endif()
 endif()
 
-if (DEV_BUILD AND (APPLE OR UNIX))
+if (DEV_BUILD AND (APPLE OR UNIX) AND NOT ANDROID)
   # create a qt.conf file to override hard-coded search paths in Qt libs
   set(QT_LIB_PATH "${QT_CMAKE_PREFIX_PATH}/../..")
   if (APPLE)
