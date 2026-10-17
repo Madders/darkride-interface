@@ -28,6 +28,7 @@ import android.widget.ImageView;
 import android.widget.TextView;
 
 import com.squareup.picasso.Callback;
+import com.squareup.picasso.MemoryPolicy;
 import com.squareup.picasso.Picasso;
 
 import io.highfidelity.hifiinterface.fragment.FriendsFragment;
@@ -36,7 +37,6 @@ import io.highfidelity.hifiinterface.fragment.PolicyFragment;
 import io.highfidelity.hifiinterface.fragment.ProfileFragment;
 import io.highfidelity.hifiinterface.fragment.SettingsFragment;
 import io.highfidelity.hifiinterface.fragment.SignupFragment;
-import io.highfidelity.hifiinterface.task.DownloadProfileImageTask;
 
 public class MainActivity extends AppCompatActivity implements NavigationView.OnNavigationItemSelectedListener,
                                                                 HomeFragment.OnHomeInteractionListener,
@@ -345,15 +345,13 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         runOnUiThread(() -> updateProfileHeader(username));
     }
 
-    /**
-     * This is a temporary way to get the profile picture URL
-     * TODO: this should be get from an API (at the moment there is no one for this)
-     */
+    // the picture set on the metaverse, fetched afresh each time so a change there shows up
     private void updateProfilePicture(String username) {
         mProfilePicture.setImageResource(PROFILE_PICTURE_PLACEHOLDER);
-        new DownloadProfileImageTask(url ->  { if (url != null && !url.isEmpty()) {
-                Picasso.get().load(url).into(mProfilePicture, new RoundProfilePictureCallback());
-            } } ).execute(username);
+        Picasso.get().load(HifiUtils.userImageUrl(username))
+                .memoryPolicy(MemoryPolicy.NO_CACHE, MemoryPolicy.NO_STORE)
+                .placeholder(PROFILE_PICTURE_PLACEHOLDER)
+                .into(mProfilePicture, new RoundProfilePictureCallback());
     }
 
     public void onPrivacyPolicyClicked(View view) {

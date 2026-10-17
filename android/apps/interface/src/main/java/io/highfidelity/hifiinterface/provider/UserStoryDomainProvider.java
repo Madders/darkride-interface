@@ -66,6 +66,9 @@ public class UserStoryDomainProvider implements DomainProvider {
                 }
                 return;
             }
+            // the busiest worlds first, as the desktop Explore app lists them
+            worlds.sort((a, b) -> a.numUsers != b.numUsers ? Integer.compare(b.numUsers, a.numUsers)
+                    : String.CASE_INSENSITIVE_ORDER.compare(a.label == null ? "" : a.label, b.label == null ? "" : b.label));
             allWorlds.clear();
             allWorlds.addAll(worlds);
             filterChoicesByText(filterText, domainCallback);
@@ -150,11 +153,14 @@ public class UserStoryDomainProvider implements DomainProvider {
 
         DomainAdapter.Domain toDomain() {
             // the address manager looks a world up by its ID, as the desktop Explore app joins it
-            return new DomainAdapter.Domain(
+            DomainAdapter.Domain domain = new DomainAdapter.Domain(
                     label,
                     id + (path == null ? "" : path),
                     BASE_URL + "api/domain/" + id + "/image"
             );
+            domain.author = author;
+            domain.numUsers = numUsers;
+            return domain;
         }
     }
 

@@ -2,6 +2,7 @@ package io.highfidelity.hifiinterface.view;
 
 import android.content.Context;
 import android.net.Uri;
+import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.RecyclerView;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -143,8 +144,23 @@ public class DomainAdapter extends RecyclerView.Adapter<DomainAdapter.ViewHolder
     public void onBindViewHolder(ViewHolder holder, int position) {
         Domain domain = mDomains[position];
         holder.mDomainName.setText(domain.name);
+        boolean hasAuthor = domain.author != null && !domain.author.isEmpty();
+        holder.mDomainAuthor.setVisibility(hasAuthor ? View.VISIBLE : View.GONE);
+        holder.mDomainAuthor.setText(hasAuthor ? mContext.getString(R.string.domain_by_author, domain.author) : "");
+        if (domain.numUsers >= 0) {
+            int color = ContextCompat.getColor(mContext, domain.numUsers > 0 ? R.color.darkrideGreen : R.color.colorButton3);
+            holder.mPeople.setVisibility(View.VISIBLE);
+            holder.mPeopleCount.setText(String.valueOf(domain.numUsers));
+            holder.mPeopleCount.setTextColor(color);
+            holder.mPeopleIcon.setColorFilter(color);
+            holder.mPeople.setContentDescription(mContext.getResources().getQuantityString(
+                    R.plurals.domain_people, domain.numUsers, domain.numUsers));
+        } else {
+            holder.mPeople.setVisibility(View.GONE);
+        }
         Uri uri = Uri.parse(domain.thumbnail);
-        Picasso.get().load(uri).into(holder.mThumbnail);
+        Picasso.get().load(uri).placeholder(R.drawable.domain_placeholder).error(R.drawable.domain_placeholder)
+                .into(holder.mThumbnail);
     }
 
     @Override
@@ -154,12 +170,20 @@ public class DomainAdapter extends RecyclerView.Adapter<DomainAdapter.ViewHolder
 
     public class ViewHolder extends RecyclerView.ViewHolder implements View.OnClickListener {
         TextView mDomainName;
+        TextView mDomainAuthor;
         ImageView mThumbnail;
+        View mPeople;
+        ImageView mPeopleIcon;
+        TextView mPeopleCount;
 
         ViewHolder(View itemView) {
             super(itemView);
             mThumbnail = (ImageView) itemView.findViewById(R.id.domainThumbnail);
             mDomainName = (TextView) itemView.findViewById(R.id.domainName);
+            mDomainAuthor = itemView.findViewById(R.id.domainAuthor);
+            mPeople = itemView.findViewById(R.id.domainPeople);
+            mPeopleIcon = itemView.findViewById(R.id.domainPeopleIcon);
+            mPeopleCount = itemView.findViewById(R.id.domainPeopleCount);
             itemView.setOnClickListener(this);
         }
 
@@ -183,6 +207,8 @@ public class DomainAdapter extends RecyclerView.Adapter<DomainAdapter.ViewHolder
         public String name;
         public String url;
         public String thumbnail;
+        public String author; // who made the world, if known
+        public int numUsers = -1; // how many people are in it; -1 when not known (no count shown)
         public Domain(String name, String url, String thumbnail) {
             this.name = name;
             this.thumbnail = thumbnail;

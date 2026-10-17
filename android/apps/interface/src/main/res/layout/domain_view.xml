@@ -25,20 +25,70 @@
             android:scaleType="centerCrop"
             app:srcCompat="@android:drawable/ic_menu_gallery" />
 
-        <TextView
-            android:id="@+id/domainName"
+        <!-- how many people are in the world: green when anyone is -->
+        <LinearLayout
+            android:id="@+id/domainPeople"
+            android:layout_width="wrap_content"
+            android:layout_height="28dp"
+            android:layout_margin="10dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="12dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:background="@drawable/people_badge_bg"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintRight_toRightOf="parent">
+
+            <ImageView
+                android:id="@+id/domainPeopleIcon"
+                android:layout_width="14dp"
+                android:layout_height="14dp"
+                android:layout_marginEnd="6dp"
+                android:src="@drawable/ic_person"
+                app:tint="@color/colorButton3" />
+
+            <TextView
+                android:id="@+id/domainPeopleCount"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/roboto_medium"
+                android:textSize="14sp"
+                android:textColor="@color/colorButton3"
+                android:text="0" />
+        </LinearLayout>
+
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="@dimen/domainNameHeight"
-            android:fontFamily="@font/roboto_medium"
             android:paddingStart="10dp"
             android:paddingEnd="10dp"
             android:gravity="center_vertical"
-            android:text=""
-            android:textSize="21sp"
-            android:textColor="@color/white_opaque"
+            android:orientation="vertical"
             android:background="@color/black_060"
             app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintLeft_toLeftOf="parent" />
+            app:layout_constraintLeft_toLeftOf="parent">
+
+            <TextView
+                android:id="@+id/domainName"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/roboto_medium"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:text=""
+                android:textSize="21sp"
+                android:textColor="@color/white_opaque" />
+
+            <TextView
+                android:id="@+id/domainAuthor"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:text=""
+                android:textSize="13sp"
+                android:textColor="@color/colorButton3" />
+        </LinearLayout>
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 </androidx.cardview.widget.CardView>

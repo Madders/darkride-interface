@@ -15,7 +15,7 @@
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#B2000000" />
+        android:background="@color/darkrideOverlay" />
 
     <ImageView
         android:id="@+id/header"
@@ -57,7 +57,7 @@
             app:layout_constraintTop_toBottomOf="@id/loggingInText"
             app:layout_constraintLeft_toLeftOf="parent"
             app:layout_constraintRight_toRightOf="parent"
-            android:indeterminateTint="#00B4EF"
+            android:indeterminateTint="@color/colorButton1"
             />
     </androidx.constraintlayout.widget.ConstraintLayout>
 

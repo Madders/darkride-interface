@@ -83,7 +83,7 @@ public class EndpointUsersProvider implements UsersProvider {
                 for (User user : usersResponse.data.users) {
                     UserListAdapter.User adapterUser = new UserListAdapter.User();
                     adapterUser.connection = user.connection;
-                    adapterUser.imageUrl = user.images.thumbnail;
+                    adapterUser.imageUrl = HifiUtils.userImageUrl(user.username);
                     adapterUser.name = user.username;
                     adapterUser.online = user.online;
                     adapterUser.locationName = (user.location != null ?

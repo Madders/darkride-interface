@@ -58,4 +58,10 @@
     <string name="displayName">Name to display</string>
     <string name="ok">OK</string>
     <string name="profile">Avatar</string>
+    <!-- a world in the places list -->
+    <string name="domain_by_author">by %1$s</string>
+    <plurals name="domain_people">
+        <item quantity="one">%d person here</item>
+        <item quantity="other">%d people here</item>
+    </plurals>
 </resources>

@@ -11,6 +11,15 @@ public class HifiUtils {
 
     public static final String METAVERSE_BASE_URL = "https://vr.darkride.ai";
 
+
+    // a user's picture, as set on the metaverse (a default picture when they haven't set one)
+
+    public static String userImageUrl(String username) {
+
+        return METAVERSE_BASE_URL + "/api/user/" + android.net.Uri.encode(username) + "/image";
+
+    }
+
     private static HifiUtils instance;
 
     private HifiUtils() {
