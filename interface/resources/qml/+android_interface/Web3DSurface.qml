@@ -81,7 +81,20 @@ Item {
 
 
     AndroidWebView {
+        id: webView
         anchors.fill: parent
         url: root.url
+        // the page's EventBridge.emitWebEvent, to scripts (Entities.webEventReceived)
+        onWebEventReceived: {
+            if (typeof eventBridge !== "undefined") {
+                eventBridge.emitWebEvent(message);
+            }
+        }
+    }
+
+    // scripts' Entities.emitScriptEvent, to the page's EventBridge.scriptEventReceived
+    Connections {
+        target: typeof eventBridge !== "undefined" ? eventBridge : null
+        onScriptEventReceived: webView.sendScriptEvent(message)
     }
 }

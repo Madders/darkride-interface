@@ -14,6 +14,8 @@
 #include <unordered_map>
 
 #include <QtCore/QDebug>
+#include <QtCore/QJsonArray>
+#include <QtCore/QJsonDocument>
 #include <QtCore/QPointer>
 #include <QtAndroidExtras/QAndroidJniEnvironment>
 #include <QtGui/QOpenGLContext>
@@ -321,6 +323,37 @@ void AndroidWebView::frameAvailable(jlong id) {
     }
 }
 
+void AndroidWebView::sendScriptEvent(const QVariant& message) {
+    if (!_javaView.isValid()) {
+        return;
+    }
+    // as JSON, in an array so that a plain string or number can be one too
+    QByteArray json = QJsonDocument(QJsonArray { QJsonValue::fromVariant(message) }).toJson(QJsonDocument::Compact);
+    json = json.mid(1, json.size() - 2);
+    _javaView.callMethod<void>("scriptEvent", "(Ljava/lang/String;)V",
+                               QAndroidJniObject::fromString(QString::fromUtf8(json)).object<jstring>());
+}
+
+void AndroidWebView::webEvent(jlong id, const QString& json) {
+    QJsonParseError error;
+    QJsonDocument document = QJsonDocument::fromJson(("[" + json + "]").toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError || !document.isArray()) {
+        qWarning() << "AndroidWebView: a web event that isn't JSON:" << json;
+        return;
+    }
+    QVariant message = document.array().first().toVariant();
+    std::lock_guard<std::mutex> lock(viewsMutex);
+    auto found = views.find(id);
+    if (found != views.end() && found->second) {
+        QPointer<AndroidWebView> view = found->second;
+        QMetaObject::invokeMethod(view.data(), [view, message] {
+            if (view) {
+                emit view->webEventReceived(message);
+            }
+        }, Qt::QueuedConnection);
+    }
+}
+
 QSGNode* AndroidWebView::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*) {
     auto node = static_cast<AndroidWebViewNode*>(oldNode);
     if (!_javaView.isValid() || !window() || !QOpenGLContext::currentContext()) {
@@ -344,6 +377,11 @@ QSGNode* AndroidWebView::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
 extern "C" JNIEXPORT void JNICALL
 Java_io_highfidelity_hifiinterface_web_DarkrideWebView_nativeFrameAvailable(JNIEnv*, jclass, jlong id) {
     AndroidWebView::frameAvailable(id);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_io_highfidelity_hifiinterface_web_DarkrideWebView_nativeWebEvent(JNIEnv*, jclass, jlong id, jstring json) {
+    AndroidWebView::webEvent(id, QAndroidJniObject(json).toString());
 }
 
 #endif

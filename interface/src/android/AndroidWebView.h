@@ -35,9 +35,16 @@ public:
 
     // DarkrideWebView has a new frame (on Android's UI thread)
     static void frameAvailable(jlong id);
+    // the page called EventBridge.emitWebEvent (on Android's UI thread), with the message as JSON
+    static void webEvent(jlong id, const QString& json);
+
+    // A message from a script (Entities.emitScriptEvent) to the page: EventBridge.scriptEventReceived's callbacks
+    Q_INVOKABLE void sendScriptEvent(const QVariant& message);
 
 signals:
     void urlChanged();
+    // a message from the page, for Web3DSurface to pass on to scripts (Entities.webEventReceived)
+    void webEventReceived(const QVariant& message);
 
 protected:
     QSGNode* updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData* data) override;
