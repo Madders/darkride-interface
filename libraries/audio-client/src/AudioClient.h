@@ -379,6 +379,13 @@ private:
     QIODevice* _inputDevice{ nullptr };
     int _numInputCallbackBytes{ 0 };
     QAudioOutput* _audioOutput{ nullptr };
+#if defined(Q_OS_ANDROID)
+    // Android's output: AAudio, or Qt's (_audioOutput) if AAudio won't open
+    std::unique_ptr<class AAudioOutput> _aaudioOutput;
+    bool hasOutputDevice() const { return _audioOutput || _aaudioOutput; }
+#else
+    bool hasOutputDevice() const { return _audioOutput != nullptr; }
+#endif
     std::atomic<bool> _audioOutputInitialized { false };
     QAudioFormat _desiredOutputFormat;
     QAudioFormat _outputFormat;

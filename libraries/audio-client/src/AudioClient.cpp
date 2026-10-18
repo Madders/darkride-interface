@@ -56,7 +56,11 @@
 #if defined(Q_OS_ANDROID)
 #include <QtAndroidExtras/QAndroidJniObject>
 #include <sys/system_properties.h>
+#include "AAudioOutput.h"
 #include <QtCore/QStandardPaths>
+#include <QtCore/QDataStream>
+#include <thread>
+#include <QtCore/QTextStream>
 #endif
 
 const int AudioClient::MIN_BUFFER_FRAMES = 1;
@@ -925,7 +929,7 @@ void AudioClient::handleAudioDataPacket(QSharedPointer<ReceivedMessage> message)
     auto nodeList = DependencyManager::get<NodeList>();
     nodeList->flagTimeForConnectionStep(LimitedNodeList::ConnectionStep::ReceiveFirstAudioPacket);
 
-    if (_audioOutput) {
+    if (hasOutputDevice()) {
 
         if (!_hasReceivedFirstPacket) {
             _hasReceivedFirstPacket = true;
@@ -2166,6 +2170,15 @@ bool AudioClient::switchOutputToAudioDevice(const HifiAudioDeviceInfo outputDevi
     Lock localAudioLock(_localAudioMutex);
     
     // cleanup any previously initialized device
+#if defined(Q_OS_ANDROID)
+    if (_aaudioOutput) {
+        // (stopping waits for a read in progress)
+        _aaudioOutput->stop();
+        _aaudioOutput.reset();
+        _audioOutputIODevice.close();
+        _audioOutputInitialized = false;
+    }
+#endif
     if (_audioOutput) {
         _audioOutputIODevice.close();
         _audioOutput->stop();
@@ -2174,11 +2187,15 @@ bool AudioClient::switchOutputToAudioDevice(const HifiAudioDeviceInfo outputDevi
         //must be deleted in next eventloop cycle when its called from notify()
         _audioOutput->deleteLater();
         _audioOutput = NULL;
+    }
+    if (_outputMixBuffer) {
 
         _loopbackOutputDevice = NULL;
         //must be deleted in next eventloop cycle when its called from notify()
-        _loopbackAudioOutput->deleteLater();
-        _loopbackAudioOutput = NULL;
+        if (_loopbackAudioOutput) {
+            _loopbackAudioOutput->deleteLater();
+            _loopbackAudioOutput = NULL;
+        }
 
         delete[] _outputMixBuffer;
         _outputMixBuffer = NULL;
@@ -2241,39 +2258,67 @@ bool AudioClient::switchOutputToAudioDevice(const HifiAudioDeviceInfo outputDevi
 
             outputFormatChanged();
 
-            // setup our general output device for audio-mixer audio
-            _audioOutput = new QAudioOutput(_outputDeviceInfo.getDevice(), _outputFormat, this);
-
             int deviceChannelCount = _outputFormat.channelCount();
             int frameSize = (AudioConstants::NETWORK_FRAME_SAMPLES_PER_CHANNEL * deviceChannelCount * _outputFormat.sampleRate()) / _desiredOutputFormat.sampleRate();
             int requestedSize = _sessionOutputBufferSizeFrames * frameSize * AudioConstants::SAMPLE_SIZE;
-            _audioOutput->setBufferSize(requestedSize);
 
-            connect(_audioOutput, &QAudioOutput::notify, this, &AudioClient::outputNotify);
-
-            // start the output device
-            _audioOutputIODevice.start();
-            _audioOutput->start(&_audioOutputIODevice);
-
-            // initialize mix buffers
-
+            bool started = false;
 #if defined(Q_OS_ANDROID)
-            {
-                // the device takes a whole period at a time (40 ms with Qt's OpenSL output): the jitter buffer aims for
-                // at least that, and a couple of frames more, or every late packet leaves it short
+            // Android: AAudio rather than Qt's OpenSL ES output, which underruns (see AAudioOutput)
+            _audioOutputIODevice.start();
+            _aaudioOutput.reset(new AAudioOutput());
+            if (_aaudioOutput->start(_outputFormat.sampleRate(), deviceChannelCount, &_audioOutputIODevice, [this] {
+                    // the device went (headphones, Bluetooth): start again on whatever's there now
+                    QMetaObject::invokeMethod(this, [this] {
+                        qCDebug(audioclient) << "AAudio: restarting the output";
+                        HifiAudioDeviceInfo device = _outputDeviceInfo;
+                        switchOutputToAudioDevice(HifiAudioDeviceInfo(), true);
+                        switchOutputToAudioDevice(device, true);
+                    }, Qt::QueuedConnection);
+                })) {
+                started = true;
+                // reads of 10 ms (doubled, in case a read asks for more): the jitter buffer aims for that and a couple
+                // of frames more
+                _outputPeriod = _aaudioOutput->framesPerCallback() * deviceChannelCount * 2;
                 const int SPARE_FRAMES = 2;
-                int periodMsecs = _audioOutput->periodSize() / std::max(1, _outputFormat.bytesForDuration(USECS_PER_MSEC));
-                int periodFrames = (periodMsecs * USECS_PER_MSEC + AudioConstants::NETWORK_FRAME_USECS - 1)
-                    / AudioConstants::NETWORK_FRAME_USECS;
+                int framesPer10Msecs = std::max(1, _outputFormat.sampleRate() / 100);
+                int periodFrames = (_aaudioOutput->framesPerCallback() + framesPer10Msecs - 1) / framesPer10Msecs;
                 _receivedAudioStream.setMinJitterBufferFrames(periodFrames + SPARE_FRAMES);
                 qCDebug(audioclient) << "jitter buffer at least (frames):" << periodFrames + SPARE_FRAMES;
+            } else {
+                _aaudioOutput.reset();
             }
 #endif
-            // restrict device callback to _outputPeriod samples
-            _outputPeriod = _audioOutput->periodSize() / AudioConstants::SAMPLE_SIZE;
-            // device callback may exceed reported period, so double it to avoid stutter
-            _outputPeriod *= 2;
+            if (!started) {
+                // setup our general output device for audio-mixer audio
+                _audioOutput = new QAudioOutput(_outputDeviceInfo.getDevice(), _outputFormat, this);
+                _audioOutput->setBufferSize(requestedSize);
 
+                connect(_audioOutput, &QAudioOutput::notify, this, &AudioClient::outputNotify);
+
+                // start the output device
+                _audioOutputIODevice.start();
+                _audioOutput->start(&_audioOutputIODevice);
+
+#if defined(Q_OS_ANDROID)
+                {
+                    // the device takes a whole period at a time (40 ms with Qt's OpenSL output): the jitter buffer aims
+                    // for at least that, and a couple of frames more, or every late packet leaves it short
+                    const int SPARE_FRAMES = 2;
+                    int periodMsecs = _audioOutput->periodSize() / std::max(1, _outputFormat.bytesForDuration(USECS_PER_MSEC));
+                    int periodFrames = (periodMsecs * USECS_PER_MSEC + AudioConstants::NETWORK_FRAME_USECS - 1)
+                        / AudioConstants::NETWORK_FRAME_USECS;
+                    _receivedAudioStream.setMinJitterBufferFrames(periodFrames + SPARE_FRAMES);
+                    qCDebug(audioclient) << "jitter buffer at least (frames):" << periodFrames + SPARE_FRAMES;
+                }
+#endif
+                // restrict device callback to _outputPeriod samples
+                _outputPeriod = _audioOutput->periodSize() / AudioConstants::SAMPLE_SIZE;
+                // device callback may exceed reported period, so double it to avoid stutter
+                _outputPeriod *= 2;
+            }
+
+            // initialize mix buffers
             _outputMixBuffer = new float[_outputPeriod];
             _outputScratchBuffer = new int16_t[_outputPeriod];
 
@@ -2291,7 +2336,7 @@ bool AudioClient::switchOutputToAudioDevice(const HifiAudioDeviceInfo outputDevi
 
             _audioOutputInitialized = true;
 
-            int bufferSize = _audioOutput->bufferSize();
+            int bufferSize = _audioOutput ? _audioOutput->bufferSize() : 0;
             int bufferSamples = bufferSize / AudioConstants::SAMPLE_SIZE;
             int bufferFrames = bufferSamples / (float)frameSize;
             qCDebug(audioclient) << "frame (samples):" << frameSize;
@@ -2518,7 +2563,12 @@ qint64 AudioClient::AudioOutputIODevice::readData(char * data, qint64 maxSize) {
         _audio->_audioFileWav.addRawAudioChunk(data, bytesWritten);
     }
 
-    int bytesAudioOutputUnplayed = _audio->_audioOutput->bufferSize() - _audio->_audioOutput->bytesFree();
+    int bytesAudioOutputUnplayed = _audio->_audioOutput ? _audio->_audioOutput->bufferSize() - _audio->_audioOutput->bytesFree()
+#if defined(Q_OS_ANDROID)
+        : (_audio->_aaudioOutput ? _audio->_aaudioOutput->bufferFrames() * deviceChannelCount * AudioConstants::SAMPLE_SIZE : 0);
+#else
+        : 0;
+#endif
     float msecsAudioOutputUnplayed = bytesAudioOutputUnplayed / (float)_audio->_outputFormat.bytesForDuration(USECS_PER_MSEC);
     _audio->_stats.updateOutputMsUnplayed(msecsAudioOutputUnplayed);
 
@@ -2549,28 +2599,73 @@ qint64 AudioClient::AudioOutputIODevice::readData(char * data, qint64 maxSize) {
         const quint64 LOG_PERIOD_USECS = 5 * USECS_PER_SECOND;
         if (now - counts.since >= LOG_PERIOD_USECS) {
             qCDebug(audioclient, "Output: %d reads of %lld bytes, %d short, %d silent, %d starved, longest gap %.1f ms, "
-                    "jitter buffer %d frames", counts.reads, counts.requestedBytes, counts.shortReads, counts.silentReads,
-                    counts.starves, counts.maxGapUsecs / (float)USECS_PER_MSEC,
-                    _receivedAudioStream.getDesiredJitterBufferFrames());
+                    "jitter buffer %d frames, device %s underruns %d, buffer %d frames", counts.reads, counts.requestedBytes,
+                    counts.shortReads, counts.silentReads, counts.starves, counts.maxGapUsecs / (float)USECS_PER_MSEC,
+                    _receivedAudioStream.getDesiredJitterBufferFrames(), _audio->_aaudioOutput ? "AAudio" : "OpenSL",
+                    _audio->_aaudioOutput ? _audio->_aaudioOutput->xrunCount() : -1,
+                    _audio->_aaudioOutput ? _audio->_aaudioOutput->bufferFrames() : -1);
             counts = ReadCounts();
             counts.since = now;
             counts.lastRead = now;
 
-            // for finding clicks: what goes to the speaker, as a WAV in the app's files
-            // (adb shell setprop debug.darkride.audiorec 1, and 0 to finish)
+        }
+
+        // for finding clicks: what goes to the speaker, into memory (no files on this thread), then as a WAV in the
+        // app's files with each read's time beside it (adb shell setprop debug.darkride.audiorec 1, and 0 to finish)
+        static std::vector<int16_t> capture;
+        static std::vector<quint64> captureReads;
+        static bool capturing = false;
+        static quint64 lastPropertyCheck = 0;
+        if (now - lastPropertyCheck > USECS_PER_SECOND / 2) {
+            lastPropertyCheck = now;
             char record[PROP_VALUE_MAX] = {};
-            bool wantRecording = __system_property_get("debug.darkride.audiorec", record) > 0 && record[0] == '1';
-            if (wantRecording != _audio->_isRecording) {
-                QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/output.wav";
-                QMetaObject::invokeMethod(_audio, [audio = _audio, wantRecording, path] {
-                    if (wantRecording) {
-                        qCDebug(audioclient) << "Recording the output to" << path << audio->startRecording(path);
-                    } else {
-                        audio->stopRecording();
-                        qCDebug(audioclient) << "Finished recording the output";
+            bool wantCapture = __system_property_get("debug.darkride.audiorec", record) > 0 && record[0] == '1';
+            if (wantCapture && !capturing) {
+                const size_t MAX_SECONDS = 60;
+                capture.clear();
+                capture.reserve(MAX_SECONDS * _audio->_outputFormat.sampleRate() * deviceChannelCount);
+                captureReads.clear();
+                captureReads.reserve(MAX_SECONDS * 100);
+                capturing = true;
+                qCDebug(audioclient) << "Capturing the output";
+            } else if (!wantCapture && capturing) {
+                capturing = false;
+                auto samples = std::make_shared<std::vector<int16_t>>(std::move(capture));
+                auto reads = std::make_shared<std::vector<quint64>>(std::move(captureReads));
+                int rate = _audio->_outputFormat.sampleRate();
+                int channels = deviceChannelCount;
+                // (a thread of its own: the shared pool can be busy for a long time)
+                std::thread([samples, reads, rate, channels] {
+                    QString folder = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+                    QFile wav(folder + "/output.wav");
+                    if (wav.open(QIODevice::WriteOnly)) {
+                        quint32 dataBytes = (quint32)(samples->size() * sizeof(int16_t));
+                        QDataStream out(&wav);
+                        out.setByteOrder(QDataStream::LittleEndian);
+                        out.writeRawData("RIFF", 4);
+                        out << (quint32)(36 + dataBytes);
+                        out.writeRawData("WAVEfmt ", 8);
+                        out << (quint32)16 << (quint16)1 << (quint16)channels << (quint32)rate
+                            << (quint32)(rate * channels * 2) << (quint16)(channels * 2) << (quint16)16;
+                        out.writeRawData("data", 4);
+                        out << dataBytes;
+                        out.writeRawData((const char*)samples->data(), dataBytes);
                     }
-                });
+                    QFile times(folder + "/output-reads.txt");
+                    if (times.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                        QTextStream out(&times);
+                        for (quint64 t : *reads) {
+                            out << t << "\n";
+                        }
+                    }
+                    qCDebug(audioclient) << "Wrote the captured output:" << samples->size() / channels << "frames";
+                }).detach();
             }
+        }
+        if (capturing && capture.size() + bytesWritten / sizeof(int16_t) <= capture.capacity()) {
+            const int16_t* written = reinterpret_cast<const int16_t*>(data);
+            capture.insert(capture.end(), written, written + bytesWritten / sizeof(int16_t));
+            captureReads.push_back(now);
         }
     }
 #endif
