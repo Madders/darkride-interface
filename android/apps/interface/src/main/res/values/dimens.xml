@@ -29,6 +29,10 @@
     <dimen name="domainItemHeight">163dp</dimen>
     <!-- the menu rail in landscape (layout-land/activity_main.xml) -->
     <dimen name="menuRailWidth">240dp</dimen>
+    <!-- the "ECU" layout's bars (layout/activity_main_ecu.xml) -->
+    <dimen name="ecuBarHeight">56dp</dimen>
+    <dimen name="ecuBarPadding">16dp</dimen>
+    <dimen name="ecuTabsHeight">56dp</dimen>
     <!-- the menu's profile header (shorter in landscape: values-land) -->
     <dimen name="navHeaderHeight">176dp</dimen>
     <!-- the narrowest a place card gets before the places list has fewer columns (HomeFragment) -->

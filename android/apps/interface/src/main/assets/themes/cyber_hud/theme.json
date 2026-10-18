@@ -31,6 +31,7 @@
         "glow": true,
         "backgroundPattern": "grid"
     },
+    "layout": "ecu",
     "icons": {
         "tint": true
     },

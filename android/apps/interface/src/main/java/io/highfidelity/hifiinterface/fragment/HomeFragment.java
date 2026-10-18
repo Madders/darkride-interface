@@ -199,7 +199,8 @@ public class HomeFragment extends Fragment {
     // The screen's width less the landscape menu rail's
     private float getContentWidthPx() {
         float width = getResources().getDisplayMetrics().widthPixels;
-        if (getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE) {
+        if (getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE
+                && !Theme.LAYOUT_ECU.equals(ThemeManager.get(getContext()).layout)) {
             width -= getResources().getDimension(R.dimen.menuRailWidth);
         }
         return width;

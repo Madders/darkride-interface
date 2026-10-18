@@ -19,6 +19,8 @@ public class Theme {
     public static final String CORNERS_SQUARE = "square";
     public static final String PATTERN_NONE = "none";
     public static final String PATTERN_GRID = "grid";
+    public static final String LAYOUT_STANDARD = "standard";
+    public static final String LAYOUT_ECU = "ecu";
 
     public String id;
     public String name;
@@ -51,6 +53,9 @@ public class Theme {
     public boolean glow;
     // behind the screens: "none" or "grid"
     public String backgroundPattern = PATTERN_NONE;
+
+    // the main screen's layout: "standard" (a menu rail or drawer) or "ecu" (bars top and bottom: EcuBars)
+    public String layout = LAYOUT_STANDARD;
 
     // whether the world's buttons and virtual pad take the icon colour (otherwise they're white)
     public boolean tintIcons;
@@ -97,6 +102,8 @@ public class Theme {
             theme.glow = shape.optBoolean("glow", false);
             theme.backgroundPattern = shape.optString("backgroundPattern", PATTERN_NONE);
         }
+
+        theme.layout = json.optString("layout", LAYOUT_STANDARD);
 
         JSONObject icons = json.optJSONObject("icons");
         if (icons != null) {
