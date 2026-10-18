@@ -220,10 +220,10 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                 } else if (subdata.name == "NormalsIndex") {
                     data.normalIndices = getIntVector(subdata);
 
-                } else if (subdata.name == "MappingInformationType" && subdata.properties.at(0) == BY_VERTICE) {
+                } else if (subdata.name == "MappingInformationType" && subdata.properties.value(0) == BY_VERTICE) {
                     data.normalsByVertex = true;
                     
-                } else if (subdata.name == "ReferenceInformationType" && subdata.properties.at(0) == INDEX_TO_DIRECT) {
+                } else if (subdata.name == "ReferenceInformationType" && subdata.properties.value(0) == INDEX_TO_DIRECT) {
                     indexToDirect = true;
                 }
             }
@@ -240,10 +240,10 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                 } else if (subdata.name == "ColorsIndex" || subdata.name == "ColorIndex") {
                     data.colorIndices = getIntVector(subdata);
 
-                } else if (subdata.name == "MappingInformationType" && subdata.properties.at(0) == BY_VERTICE) {
+                } else if (subdata.name == "MappingInformationType" && subdata.properties.value(0) == BY_VERTICE) {
                     data.colorsByVertex = true;
                     
-                } else if (subdata.name == "ReferenceInformationType" && subdata.properties.at(0) == INDEX_TO_DIRECT) {
+                } else if (subdata.name == "ReferenceInformationType" && subdata.properties.value(0) == INDEX_TO_DIRECT) {
                     indexToDirect = true;
                 }
             }
@@ -266,9 +266,9 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
 #endif
          
         } else if (child.name == "LayerElementUV") {
-            if (child.properties.at(0).toInt() == 0) {
+            if (child.properties.value(0).toInt() == 0) {
                 AttributeData attrib;
-                attrib.index = child.properties.at(0).toInt();
+                attrib.index = child.properties.value(0).toInt();
                 foreach (const FBXNode& subdata, child.children) {
                     if (subdata.name == "UV") {
                         data.texCoords = createVec2Vector(getDoubleVector(subdata));
@@ -277,7 +277,7 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                         data.texCoordIndices = getIntVector(subdata);
                         attrib.texCoordIndices = getIntVector(subdata);
                     } else if (subdata.name == "Name") {
-                        attrib.name = subdata.properties.at(0).toString();
+                        attrib.name = subdata.properties.value(0).toString();
                     } 
 #if defined(DEBUG_FBXSERIALIZER)
                     else {
@@ -296,14 +296,14 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                 data.attributes.push_back(attrib);
             } else {
                 AttributeData attrib;
-                attrib.index = child.properties.at(0).toInt();
+                attrib.index = child.properties.value(0).toInt();
                 foreach (const FBXNode& subdata, child.children) {
                     if (subdata.name == "UV") {
                         attrib.texCoords = createVec2Vector(getDoubleVector(subdata));
                     } else if (subdata.name == "UVIndex") {
                         attrib.texCoordIndices = getIntVector(subdata);
                     } else if  (subdata.name == "Name") {
-                        attrib.name = subdata.properties.at(0).toString();
+                        attrib.name = subdata.properties.value(0).toString();
                     }
 #if defined(DEBUG_FBXSERIALIZER)
                     else {
@@ -334,7 +334,7 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                 if (subdata.name == "Materials") {
                     materials = getIntVector(subdata);
                 } else if (subdata.name == "MappingInformationType") {
-                    if (subdata.properties.at(0) == BY_POLYGON) {
+                    if (subdata.properties.value(0) == BY_POLYGON) {
                         isMaterialPerPolygon = true;
                     }
                 } else {
@@ -372,7 +372,7 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
             // load the draco mesh from the FBX and create a draco::Mesh
             draco::Decoder decoder;
             draco::DecoderBuffer decodedBuffer;
-            hifi::ByteArray dracoArray = child.properties.at(0).value<hifi::ByteArray>();
+            hifi::ByteArray dracoArray = child.properties.value(0).value<hifi::ByteArray>();
             decodedBuffer.Init(dracoArray.data(), dracoArray.size());
 
             std::unique_ptr<draco::Mesh> dracoMesh(new draco::Mesh());
