@@ -10,7 +10,10 @@
 #extension GL_EXT_clip_cull_distance : enable
 #endif
 precision highp float;
+// ints are mediump by default in fragment shaders, which Adreno (Android) phones really make 16 bits: bit packing like
+// the light clusters' (LightClusterGrid.slh) breaks, and every surface gets hundreds of lights
+precision highp int;
 precision highp samplerBuffer;
 precision highp sampler2DShadow;
 precision highp sampler2DArrayShadow;
-precision lowp sampler2DArray;
+precision highp sampler2DArray;
