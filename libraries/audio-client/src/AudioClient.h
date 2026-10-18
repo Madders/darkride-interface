@@ -120,6 +120,19 @@ public:
         MixedProcessedAudioStream& _receivedAudioStream;
         AudioClient* _audio;
         int _unfulfilledReads;
+#if defined(Q_OS_ANDROID)
+        // what the device asked for and got, logged every few seconds, for finding clicks
+        struct ReadCounts {
+            quint64 since { 0 };
+            int reads { 0 };
+            int shortReads { 0 };
+            int silentReads { 0 };
+            int starves { 0 };
+            qint64 maxGapUsecs { 0 };
+            quint64 lastRead { 0 };
+            qint64 requestedBytes { 0 };
+        } _readCounts;
+#endif
     };
     
     void startThread();

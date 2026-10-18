@@ -2497,6 +2497,39 @@ qint64 AudioClient::AudioOutputIODevice::readData(char * data, qint64 maxSize) {
         _unfulfilledReads++;
     }
 
+#if defined(Q_OS_ANDROID)
+    {
+        ReadCounts& counts = _readCounts;
+        quint64 now = usecTimestampNow();
+        if (counts.lastRead) {
+            counts.maxGapUsecs = std::max(counts.maxGapUsecs, (qint64)(now - counts.lastRead));
+        } else {
+            counts.since = now;
+        }
+        counts.lastRead = now;
+        counts.reads++;
+        counts.requestedBytes = maxSize;
+        if (networkSamplesPopped == 0 && injectorSamplesPopped == 0) {
+            counts.silentReads++;
+        } else if (bytesWritten < maxSize) {
+            counts.shortReads++;
+        }
+        if (networkSamplesPopped == 0 && !_receivedAudioStream.lastPopSucceeded()) {
+            counts.starves++;
+        }
+        const quint64 LOG_PERIOD_USECS = 5 * USECS_PER_SECOND;
+        if (now - counts.since >= LOG_PERIOD_USECS) {
+            qCDebug(audioclient, "Output: %d reads of %lld bytes, %d short, %d silent, %d starved, longest gap %.1f ms, "
+                    "jitter buffer %d frames", counts.reads, counts.requestedBytes, counts.shortReads, counts.silentReads,
+                    counts.starves, counts.maxGapUsecs / (float)USECS_PER_MSEC,
+                    _receivedAudioStream.getDesiredJitterBufferFrames());
+            counts = ReadCounts();
+            counts.since = now;
+            counts.lastRead = now;
+        }
+    }
+#endif
+
     return bytesWritten;
 }
 
