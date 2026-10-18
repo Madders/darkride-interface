@@ -13,7 +13,8 @@ Item {
     x:0
     y:0
     width: 300
-    height: 300
+    // tall enough for the back and settings buttons, one above the other
+    height: 640
     z: -1
 
     signal sendToScript(var message);
@@ -43,7 +44,7 @@ Item {
         x = 7;
         y = 7;
         width = 300;
-        height = 300;
+        height = 640;
     }
     
     function addButton(properties) {

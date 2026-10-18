@@ -13,6 +13,7 @@
 
 var actionbar;
 var backButton;
+var settingsButton;
 
 var logEnabled = true;
 
@@ -36,6 +37,22 @@ function init() {
     
     backButton.entered.connect(onBackPressed);
     backButton.clicked.connect(onBackClicked);
+
+    // Settings, over the world (InterfaceActivity's settings panel)
+    settingsButton = actionbar.addButton({
+        icon: "icons/+android_interface/settings.svg",
+        activeIcon: "icons/+android_interface/settings.svg",
+        text: "",
+        bgOpacity: 0.0,
+        hoverBgOpacity: 0.0,
+        activeBgOpacity: 0.0
+    });
+    settingsButton.entered.connect(onBackPressed);
+    settingsButton.clicked.connect(onSettingsClicked);
+}
+
+function onSettingsClicked() {
+   Window.openAndroidActivity("Settings", true);
 }
 
 function onBackPressed() {
@@ -51,6 +68,10 @@ Script.scriptEnding.connect(function() {
     if(backButton) {
         backButton.entered.disconnect(onBackPressed);
         backButton.clicked.disconnect(onBackClicked);
+    }
+    if (settingsButton) {
+        settingsButton.entered.disconnect(onBackPressed);
+        settingsButton.clicked.disconnect(onSettingsClicked);
     }
 });
 

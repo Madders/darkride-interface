@@ -4,6 +4,8 @@
     <color name="darkrideViolet">#A548FF</color>
     <color name="darkrideGreen">#50FA7B</color>
     <color name="darkrideOverlay">#D9171B2D</color>
+    <!-- the in-world settings panel: the world shows faintly through it -->
+    <color name="settingsPanelBackground">#F0171B2D</color>
 
     <color name="white_opaque">#F4F6F8</color>
     <color name="colorPrimary">@color/backgroundLight</color>

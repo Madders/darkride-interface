@@ -74,4 +74,16 @@
     <style name="HifiCircularProgress" parent="Theme.AppCompat.Light">
         <item name="colorAccent">@color/hifiLogoColor</item>
     </style>
+
+    <!-- Laid over the world's theme while the in-world settings panel shows (InterfaceActivity): light text on the
+         panel's dark background, and dark dialogs for the choices -->
+    <style name="SettingsPanelOverlay">
+        <item name="android:textColorPrimary">@color/white_opaque</item>
+        <item name="android:textColorSecondary">@color/colorButton3</item>
+        <item name="android:textColorTertiary">@color/colorButton3</item>
+        <item name="android:colorAccent">@color/darkrideViolet</item>
+        <item name="android:colorControlActivated">@color/darkrideViolet</item>
+        <item name="android:colorControlNormal">@color/colorButton3</item>
+        <item name="android:alertDialogTheme">@android:style/Theme.Material.Dialog.Alert</item>
+    </style>
 </resources>

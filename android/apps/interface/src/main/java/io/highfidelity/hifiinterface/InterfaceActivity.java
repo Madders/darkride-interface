@@ -27,10 +27,14 @@ import android.os.Vibrator;
 import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
+import android.widget.ImageButton;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.SlidingDrawer;
 
 import org.qtproject.qt5.android.QtNative;
@@ -44,6 +48,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import io.highfidelity.hifiinterface.fragment.SettingsFragment;
 import io.highfidelity.hifiinterface.fragment.WebViewFragment;
 import io.highfidelity.hifiinterface.receiver.HeadsetStateReceiver;
 
@@ -82,6 +87,10 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
 
     private boolean nativeEnterBackgroundCallEnqueued = false;
     private SlidingDrawer mWebSlidingDrawer;
+    // Settings, over the world (the in-world gear button)
+    private LinearLayout mSettingsPanel;
+    private static final String SETTINGS_PANEL_TAG = "settingsPanel";
+    private static final int SETTINGS_PANEL_MAX_WIDTH_DP = 420;
     private boolean mStartInDomain;
     private boolean isLoading;
 //    private GvrApi gvrApi;
@@ -430,6 +439,9 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
                 }
                 startActivity(loginIntent);
                 break;
+            case "Settings":
+                runOnUiThread(this::toggleSettingsPanel);
+                break;
             case "WebView":
                 runOnUiThread(() -> {
                     showWebDrawer();
@@ -474,7 +486,75 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
 
     @Override
     public void onBackPressed() {
+        if (mSettingsPanel != null) {
+            hideSettingsPanel();
+            return;
+        }
         openAndroidActivity("Home", false);
+    }
+
+    private void toggleSettingsPanel() {
+        if (mSettingsPanel != null) {
+            hideSettingsPanel();
+        } else {
+            showSettingsPanel();
+        }
+    }
+
+    // The Settings screen down the right of the world, which keeps running under it, so changes show as they're made
+    private void showSettingsPanel() {
+        float density = getResources().getDisplayMetrics().density;
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        int width = Math.min((int) (SETTINGS_PANEL_MAX_WIDTH_DP * density), (int) (screenWidth * 0.6f));
+
+        getTheme().applyStyle(R.style.SettingsPanelOverlay, true);
+        mSettingsPanel = new LinearLayout(this);
+        mSettingsPanel.setOrientation(LinearLayout.VERTICAL);
+        mSettingsPanel.setBackgroundColor(getResources().getColor(R.color.settingsPanelBackground, getTheme()));
+        mSettingsPanel.setClickable(true);
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        int padding = (int) (16 * density);
+        header.setPadding(padding, padding / 2, padding / 2, padding / 2);
+        TextView title = new TextView(this);
+        title.setText(R.string.settings);
+        title.setTextColor(getResources().getColor(R.color.menuOption, getTheme()));
+        title.setTextSize(20);
+        header.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        ImageButton close = new ImageButton(this);
+        close.setImageResource(R.drawable.ic_close);
+        close.setScaleType(ImageButton.ScaleType.FIT_CENTER);
+        close.setBackground(null);
+        close.setContentDescription(getString(R.string.cancel));
+        close.setOnClickListener(view -> hideSettingsPanel());
+        int closeSize = (int) (40 * density);
+        header.addView(close, new LinearLayout.LayoutParams(closeSize, closeSize));
+        mSettingsPanel.addView(header);
+
+        FrameLayout content = new FrameLayout(this);
+        content.setId(R.id.settings_panel_content);
+        mSettingsPanel.addView(content, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
+
+        FrameLayout root = findViewById(android.R.id.content);
+        root.addView(mSettingsPanel, new FrameLayout.LayoutParams(width, FrameLayout.LayoutParams.MATCH_PARENT,
+                Gravity.END));
+        getFragmentManager().beginTransaction()
+                .replace(content.getId(), SettingsFragment.newInstance(), SETTINGS_PANEL_TAG)
+                .commit();
+    }
+
+    private void hideSettingsPanel() {
+        if (mSettingsPanel == null) {
+            return;
+        }
+        android.app.Fragment fragment = getFragmentManager().findFragmentByTag(SETTINGS_PANEL_TAG);
+        if (fragment != null) {
+            getFragmentManager().beginTransaction().remove(fragment).commitAllowingStateLoss();
+        }
+        ((FrameLayout) findViewById(android.R.id.content)).removeView(mSettingsPanel);
+        mSettingsPanel = null;
     }
 
     @Override
