@@ -1,23 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
-<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
+<!-- Loading: the logo, and a spinner under it (or, in a Wonderland theme, the White Rabbit's pocket watch: SplashActivity).
+     Centred, so it fits either way up -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/root_activity_splash"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/backgroundDark">
-<ImageView
-    android:id="@+id/hifi_logo"
-    android:layout_width="242dp"
-    android:layout_height="242dp"
-    android:src="@drawable/darkride_logo_splash"
-    android:layout_centerHorizontal="true"
-    android:layout_marginTop="225dp"/>
-    <ProgressBar
-        style="@style/Widget.AppCompat.ProgressBar"
-        android:theme="@style/HifiCircularProgress"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_below="@id/hifi_logo"
-        android:layout_centerHorizontal="true"/>
-</RelativeLayout>
+    android:background="@color/backgroundDark"
+    android:gravity="center"
+    android:orientation="vertical">
+
+    <ImageView
+        android:id="@+id/hifi_logo"
+        android:layout_width="@dimen/splashLogoSize"
+        android:layout_height="@dimen/splashLogoSize"
+        android:src="@drawable/darkride_logo_splash" />
+
+    <FrameLayout
+        android:id="@+id/splash_progress_container"
+        android:layout_width="64dp"
+        android:layout_height="72dp"
+        android:layout_marginTop="16dp">
+
+        <ProgressBar
+            android:id="@+id/splash_progress"
+            style="@style/Widget.AppCompat.ProgressBar"
+            android:theme="@style/HifiCircularProgress"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center" />
+    </FrameLayout>
+</LinearLayout>

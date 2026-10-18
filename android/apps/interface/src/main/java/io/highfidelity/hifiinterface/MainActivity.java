@@ -436,6 +436,7 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         finish();
         intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
         startActivity(intent);
+        rabbitHole();
     }
 
     private void goToUser(String username) {
@@ -444,6 +445,14 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         finish();
         intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
         startActivity(intent);
+        rabbitHole();
+    }
+
+    // Into a world, in a Wonderland theme: down the rabbit hole
+    private void rabbitHole() {
+        if (mTheme != null && mTheme.whimsy) {
+            overridePendingTransition(R.anim.rabbit_hole_in, R.anim.rabbit_hole_out);
+        }
     }
 
     public void handleUsernameChanged(String username) {

@@ -22,6 +22,8 @@
     <string name="search_hint"><i>Search for a place by name</i>\u00A0</string>
     <string name="search_loading">Loading places…</string>
     <string name="search_no_results">No places exist with that name</string>
+    <!-- the same, in a Wonderland theme (under the Cheshire Cat's grin) -->
+    <string name="search_no_results_whimsy">We\'re all mad here, but there\'s no place by that name</string>
     <string name="privacyPolicy">Privacy Policy</string>
     <string name="your_last_location">Your Last Location</string>
     <string name="online">Online</string>

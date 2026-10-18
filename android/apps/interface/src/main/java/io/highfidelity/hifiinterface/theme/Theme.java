@@ -54,6 +54,10 @@ public class Theme {
     // behind the screens: "none" or "grid"
     public String backgroundPattern = PATTERN_NONE;
 
+    // Wonderland touches (Darkride): the pocket watch while loading, the rabbit hole into worlds, the Cheshire grin when
+    // nothing's found
+    public boolean whimsy;
+
     // the main screen's layout: "standard" (a menu rail or drawer) or "ecu" (bars top and bottom: EcuBars)
     public String layout = LAYOUT_STANDARD;
 
@@ -104,6 +108,7 @@ public class Theme {
         }
 
         theme.layout = json.optString("layout", LAYOUT_STANDARD);
+        theme.whimsy = json.optBoolean("whimsy", false);
 
         JSONObject icons = json.optJSONObject("icons");
         if (icons != null) {

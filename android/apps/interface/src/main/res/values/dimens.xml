@@ -29,6 +29,8 @@
     <dimen name="domainItemHeight">163dp</dimen>
     <!-- the menu rail in landscape (layout-land/activity_main.xml) -->
     <dimen name="menuRailWidth">240dp</dimen>
+    <!-- the logo while loading (smaller in landscape: values-land) -->
+    <dimen name="splashLogoSize">242dp</dimen>
     <!-- the "ECU" layout's bars (layout/activity_main_ecu.xml) -->
     <dimen name="ecuBarHeight">56dp</dimen>
     <dimen name="ecuBarPadding">16dp</dimen>

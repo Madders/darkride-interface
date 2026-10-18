@@ -83,7 +83,7 @@ public class HomeFragment extends Fragment {
         mDomainAdapter.setListener(new DomainAdapter.AdapterListener() {
             @Override
             public void onEmptyAdapter(boolean shouldStopRefreshing) {
-                searchNoResultsView.setText(R.string.search_no_results);
+                showNoResults();
                 searchNoResultsView.setVisibility(View.VISIBLE);
                 mDomainsView.setVisibility(View.GONE);
                 if (shouldStopRefreshing) {
@@ -204,6 +204,22 @@ public class HomeFragment extends Fragment {
             width -= getResources().getDimension(R.dimen.menuRailWidth);
         }
         return width;
+    }
+
+    // No places found: in a Wonderland theme, under the Cheshire Cat's grin
+    private void showNoResults() {
+        Theme theme = ThemeManager.get(getContext());
+        if (theme.whimsy) {
+            searchNoResultsView.setText(R.string.search_no_results_whimsy);
+            android.graphics.drawable.Drawable grin = getContext().getDrawable(R.drawable.ic_cheshire_grin).mutate();
+            grin.setTint(theme.primary);
+            searchNoResultsView.setCompoundDrawablesWithIntrinsicBounds(null, grin, null, null);
+            searchNoResultsView.setCompoundDrawablePadding((int) (12 * getResources().getDisplayMetrics().density));
+            searchNoResultsView.setGravity(android.view.Gravity.CENTER);
+        } else {
+            searchNoResultsView.setText(R.string.search_no_results);
+            searchNoResultsView.setCompoundDrawables(null, null, null, null);
+        }
     }
 
     public interface OnHomeInteractionListener {

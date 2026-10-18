@@ -4,6 +4,11 @@ import android.app.Activity;
 import android.content.Intent;
 import android.os.Bundle;
 import android.view.View;
+import android.widget.FrameLayout;
+
+import io.highfidelity.hifiinterface.theme.PocketWatchView;
+import io.highfidelity.hifiinterface.theme.Theme;
+import io.highfidelity.hifiinterface.theme.ThemeManager;
 
 public class SplashActivity extends Activity {
 
@@ -17,6 +22,14 @@ public class SplashActivity extends Activity {
         super.onCreate(savedInstanceState);
         MenuOrientation.apply(this);
         setContentView(R.layout.activity_splash);
+        Theme theme = ThemeManager.get(this);
+        findViewById(R.id.root_activity_splash).setBackgroundColor(theme.background);
+        if (theme.whimsy) {
+            // the White Rabbit's pocket watch instead of the spinner
+            findViewById(R.id.splash_progress).setVisibility(View.GONE);
+            ((FrameLayout) findViewById(R.id.splash_progress_container)).addView(new PocketWatchView(this, theme),
+                    new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        }
         registerLoadCompleteListener();
     }
 

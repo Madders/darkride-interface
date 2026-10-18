@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Down the rabbit hole: the menu spirals away into the middle, when hopping to a world in a Wonderland theme -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@android:anim/accelerate_interpolator"
+    android:duration="700"
+    android:zAdjustment="top">
+    <scale
+        android:fromXScale="1.0" android:toXScale="0.05"
+        android:fromYScale="1.0" android:toYScale="0.05"
+        android:pivotX="50%" android:pivotY="50%" />
+    <rotate
+        android:fromDegrees="0" android:toDegrees="-270"
+        android:pivotX="50%" android:pivotY="50%" />
+    <alpha android:fromAlpha="1.0" android:toAlpha="0.0" />
+</set>

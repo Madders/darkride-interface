@@ -2,4 +2,5 @@
 <resources>
     <!-- landscape is short: the menu's profile header takes less of it -->
     <dimen name="navHeaderHeight">96dp</dimen>
+    <dimen name="splashLogoSize">160dp</dimen>
 </resources>
