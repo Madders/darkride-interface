@@ -396,6 +396,9 @@ void LightStage::updateLightArrayBuffer(Index lightId) {
     auto lightSize = sizeof(graphics::Light::LightSchema);
     if (!_lightArrayBuffer) {
         _lightArrayBuffer = std::make_shared<gpu::Buffer>(lightSize);
+        // at least as big as the shaders' light array (Light.slh's declareLightBuffer: 256 lights at most): a buffer
+        // bound smaller than its block is undefined in GL, and Adreno phones (Android) read garbage or no lights
+        _lightArrayBuffer->resize(lightSize * 256);
     }
 
     assert(checkLightId(lightId));

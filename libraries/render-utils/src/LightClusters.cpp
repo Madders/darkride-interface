@@ -116,6 +116,10 @@ uint32_t LightClusters::getNumClusters() const {
     return theFrustumGrid.frustumGrid_numClusters();
 }
 
+// The shaders' cluster grid and content blocks are a fixed size (LightClusterGrid.slh: 4096 ivec4s), and a buffer bound
+// smaller than its block is undefined in GL: desktop drivers read what's there, but Adreno phones (Android) see no lights
+static const size_t CLUSTER_BLOCK_SIZE = 4096 * 4 * sizeof(int32_t);
+
  void LightClusters::updateClusterResource() {
     if (!_clusterResourcesInvalid) {
         return;
@@ -125,8 +129,9 @@ uint32_t LightClusters::getNumClusters() const {
     if (numClusters != (uint32_t) _clusterGrid.size()) {
         _clusterGrid.clear();
         _clusterGrid.resize(numClusters, EMPTY_CLUSTER);
-        _clusterGridBuffer._size = (numClusters * sizeof(uint32_t));
-        _clusterGridBuffer._buffer = std::make_shared<gpu::Buffer>(_clusterGridBuffer._size, (gpu::Byte*) _clusterGrid.data(), _clusterGridBuffer._size);
+        _clusterGridBuffer._size = std::max(numClusters * sizeof(uint32_t), CLUSTER_BLOCK_SIZE);
+        std::vector<uint32_t> paddedGrid(_clusterGridBuffer._size / sizeof(uint32_t), EMPTY_CLUSTER);
+        _clusterGridBuffer._buffer = std::make_shared<gpu::Buffer>(_clusterGridBuffer._size, (gpu::Byte*) paddedGrid.data(), _clusterGridBuffer._size);
     }
 
     // Since LightIndex is 2bytes, we can fit 2 in a uint32
@@ -138,8 +143,9 @@ uint32_t LightClusters::getNumClusters() const {
     if (configListBudget != (uint32_t) _clusterContent.size()) {
         _clusterContent.clear();
         _clusterContent.resize(configListBudget, INVALID_LIGHT);
-        _clusterContentBuffer._size = (configListBudget * sizeof(LightIndex));
-        _clusterContentBuffer._buffer = std::make_shared<gpu::Buffer>(_clusterContentBuffer._size, (gpu::Byte*) _clusterContent.data(), _clusterContentBuffer._size);
+        _clusterContentBuffer._size = std::max(configListBudget * sizeof(LightIndex), CLUSTER_BLOCK_SIZE);
+        std::vector<LightIndex> paddedContent(_clusterContentBuffer._size / sizeof(LightIndex), INVALID_LIGHT);
+        _clusterContentBuffer._buffer = std::make_shared<gpu::Buffer>(_clusterContentBuffer._size, (gpu::Byte*) paddedContent.data(), _clusterContentBuffer._size);
     }
 }
 
@@ -521,7 +527,7 @@ glm::ivec3 LightClusters::updateClusters() {
     }
 
     // update the buffers
-    _clusterGridBuffer._buffer->setData(_clusterGridBuffer._size, (gpu::Byte*) _clusterGrid.data());
+    _clusterGridBuffer._buffer->setSubData(0, _clusterGrid.size() * sizeof(uint32_t), (gpu::Byte*) _clusterGrid.data());
     _clusterContentBuffer._buffer->setSubData(0, indexOffset * sizeof(LightIndex), (gpu::Byte*) _clusterContent.data());
     
     return glm::ivec3(numLightsIn, numClusteredLights, numClusterTouched);
