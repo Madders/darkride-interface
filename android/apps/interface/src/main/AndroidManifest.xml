@@ -17,6 +17,12 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.VIBRATE"/>
 
+    <!-- RenderDoc's capture layer, which Android loads into the app from its package for GPU debugging (the package has
+         to be visible to the app since Android 11) -->
+    <queries>
+        <package android:name="org.renderdoc.renderdoccmd.arm64" />
+    </queries>
+
     <supports-screens android:largeScreens="true" android:normalScreens="true" android:anyDensity="true" android:smallScreens="true"/>
 
     <application

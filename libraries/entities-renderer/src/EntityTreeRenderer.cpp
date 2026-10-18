@@ -11,6 +11,10 @@
 
 #include "EntityTreeRenderer.h"
 
+#if defined(Q_OS_ANDROID)
+#include <sys/system_properties.h>
+#endif
+
 #include <glm/gtx/quaternion.hpp>
 #include <queue>
 
@@ -75,6 +79,14 @@ EntityTreeRenderer::EntityTreeRenderer(bool wantScripts,
     EntityRenderer::initEntityRenderers();
     _currentHoverOverEntityID = UNKNOWN_ENTITY_ID;
     _currentClickingOnEntityID = UNKNOWN_ENTITY_ID;
+#if defined(Q_OS_ANDROID)
+    // For GPU captures: RenderDoc can't capture the frames web entities bring in from Android's WebView
+    // (adb shell setprop debug.darkride.noweb 1, then restart the app)
+    char noWeb[PROP_VALUE_MAX] = {};
+    if (__system_property_get("debug.darkride.noweb", noWeb) > 0 && noWeb[0] == '1') {
+        _disableWebEntities = true;
+    }
+#endif
 
     auto entityScriptingInterface = DependencyManager::get<EntityScriptingInterface>().data();
     auto pointerManager = DependencyManager::get<PointerManager>();
