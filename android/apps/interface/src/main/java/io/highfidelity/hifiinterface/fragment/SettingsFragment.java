@@ -177,6 +177,7 @@ public class SettingsFragment extends PreferenceFragment implements SharedPrefer
             case ThemeManager.PREFERENCE_KEY:
                 // the menu screens again, in the new theme
                 if (getActivity() != null && !(getActivity() instanceof InterfaceActivity)) {
+                    ThemeManager.publishToEngine(getActivity());
                     getActivity().recreate();
                 }
                 break;

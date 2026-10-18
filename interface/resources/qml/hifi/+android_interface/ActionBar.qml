@@ -62,7 +62,8 @@ Item {
     }
 
     function urlHelper(src) {
-            if (src.match(/\bhttp/)) {
+            // (a theme's own icons are in the app's assets: assets:/themes/<theme>/icons)
+            if (src.match(/\bhttp/) || src.match(/^(assets|file|qrc):/)) {
                 return src;
             } else {
                 return "../../../" + src;

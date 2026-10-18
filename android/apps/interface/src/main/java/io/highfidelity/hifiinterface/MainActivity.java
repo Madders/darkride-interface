@@ -117,6 +117,7 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
 
         mToolbar = toolbar;
         mTheme = ThemeManager.get(this);
+        ThemeManager.publishToEngine(this);
         ThemeStyler.styleMainScreen(this, mTheme, ((android.view.ViewGroup) findViewById(android.R.id.content)).getChildAt(0),
                 toolbar, mNavigationView);
         ThemeStyler.styleDisplay(mDisplayName, mTheme);

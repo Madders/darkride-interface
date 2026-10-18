@@ -31,6 +31,9 @@
         "glow": true,
         "backgroundPattern": "grid"
     },
+    "icons": {
+        "tint": true
+    },
     "title": {
         "prefix": "DARKRIDE"
     }

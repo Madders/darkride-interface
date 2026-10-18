@@ -328,6 +328,27 @@ Java_io_highfidelity_hifiinterface_HifiUtils_updateHifiSetting(JNIEnv *env, jobj
     setting.set(value);
 }
 
+// A text setting of the engine's (the app theme's colours, for the world's buttons and virtual pad)
+JNIEXPORT void JNICALL
+Java_io_highfidelity_hifiinterface_HifiUtils_updateHifiSettingString(JNIEnv *env, jobject instance,
+                                                                     jstring group_, jstring key_,
+                                                                     jstring value_) {
+    const char *c_group = env->GetStringUTFChars(group_, 0);
+    const char *c_key = env->GetStringUTFChars(key_, 0);
+    const char *c_value = env->GetStringUTFChars(value_, 0);
+
+    const QString group = QString::fromUtf8(c_group);
+    const QString key = QString::fromUtf8(c_key);
+    const QString value = QString::fromUtf8(c_value);
+
+    env->ReleaseStringUTFChars(group_, c_group);
+    env->ReleaseStringUTFChars(key_, c_key);
+    env->ReleaseStringUTFChars(value_, c_value);
+
+    Setting::Handle<QString> setting { QStringList() << group << key, QString() };
+    setting.set(value);
+}
+
 JNIEXPORT jboolean JNICALL
 Java_io_highfidelity_hifiinterface_HifiUtils_getHifiSettingBoolean(JNIEnv *env,
                                                                    jobject instance,

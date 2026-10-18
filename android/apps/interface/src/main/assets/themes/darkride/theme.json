@@ -31,6 +31,9 @@
         "glow": false,
         "backgroundPattern": "none"
     },
+    "icons": {
+        "tint": false
+    },
     "title": {
         "prefix": null
     }

@@ -22,15 +22,30 @@ function printd(str) {
         print("[audio.js] " + str);
 }
 
+// A theme's own icon for a slot (the app's Settings > Theme), or the default
+function themedIcon(slot, fallback) {
+    var icons = (Settings.getValue("Android/themeIcons", "") || "").split(",");
+    return icons.indexOf(slot) >= 0 ? Settings.getValue("Android/themeIconFolder", "") + "/" + slot + ".png" : fallback;
+}
+
+// The theme's colour for a default icon ("" for a theme's own icon, which is coloured already)
+function themedIconColor(slot, colorKey) {
+    var icons = (Settings.getValue("Android/themeIcons", "") || "").split(",");
+    return icons.indexOf(slot) >= 0 ? "" : Settings.getValue(colorKey, "");
+}
+
 function init() {
     audiobar = new QmlFragment({
         qml: "hifi/AudioBar.qml"
     });
 
     audioButton = audiobar.addButton({
-        icon: "icons/mic-unmute-a.svg",
-        activeIcon: "icons/mic-mute-a.svg",
+        icon: themedIcon("mic", "icons/mic-unmute-a.svg"),
+        activeIcon: themedIcon("mic-muted", "icons/mic-mute-a.svg"),
         text: "",
+        // (the app theme's icons and colours: Settings > Theme)
+        iconColor: themedIconColor("mic", "Android/themeIconColor"),
+        activeIconColor: themedIconColor("mic-muted", "Android/themeAlertColor"),
         bgOpacity: 0.0,
         hoverBgOpacity: 0.0,
         activeHoverBgOpacity: 0.0,

@@ -22,14 +22,27 @@ function printd(str) {
         print("[actionbar.js] " + str);
 }
 
+// A theme's own icon for a slot (the app's Settings > Theme), or the default
+function themedIcon(slot, fallback) {
+    var icons = (Settings.getValue("Android/themeIcons", "") || "").split(",");
+    return icons.indexOf(slot) >= 0 ? Settings.getValue("Android/themeIconFolder", "") + "/" + slot + ".png" : fallback;
+}
+
+// The theme's colour for a default icon ("" for a theme's own icon, which is coloured already)
+function themedIconColor(slot, colorKey) {
+    var icons = (Settings.getValue("Android/themeIcons", "") || "").split(",");
+    return icons.indexOf(slot) >= 0 ? "" : Settings.getValue(colorKey, "");
+}
+
 function init() {
     actionbar = new QmlFragment({
         qml: "hifi/ActionBar.qml"
     });
     backButton = actionbar.addButton({
-        icon: "icons/+android_interface/backward.svg",
-        activeIcon: "icons/+android_interface/backward.svg",
+        icon: themedIcon("back", "icons/+android_interface/backward.svg"),
+        activeIcon: themedIcon("back", "icons/+android_interface/backward.svg"),
         text: "",
+        iconColor: themedIconColor("back", "Android/themeIconColor"),
         bgOpacity: 0.0,
         hoverBgOpacity: 0.0,
         activeBgOpacity: 0.0
@@ -40,9 +53,10 @@ function init() {
 
     // Settings, over the world (InterfaceActivity's settings panel)
     settingsButton = actionbar.addButton({
-        icon: "icons/+android_interface/settings.svg",
-        activeIcon: "icons/+android_interface/settings.svg",
+        icon: themedIcon("settings", "icons/+android_interface/settings.svg"),
+        activeIcon: themedIcon("settings", "icons/+android_interface/settings.svg"),
         text: "",
+        iconColor: themedIconColor("settings", "Android/themeIconColor"),
         bgOpacity: 0.0,
         hoverBgOpacity: 0.0,
         activeBgOpacity: 0.0

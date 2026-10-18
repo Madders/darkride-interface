@@ -2,6 +2,7 @@ import QtQuick 2.5
 import QtQuick.Controls 1.4
 import QtQuick.Controls.Styles 1.4
 import QtQuick.Layouts 1.3
+import QtGraphicalEffects 1.0
 
 Item {
     id: button
@@ -10,6 +11,10 @@ Item {
     property string activeIcon: button.icon
     property string activeHoverIcon: button.activeIcon
     property int stableOrder: 0
+    // the app theme's colours for the icon, active or not ("" leaves it as drawn)
+    property string iconColor: ""
+    property string activeIconColor: ""
+    readonly property string currentIconColor: (button.isActive && button.activeIconColor !== "") ? button.activeIconColor : button.iconColor
 
     property int iconSize: 165
     property string text: "."
@@ -86,6 +91,13 @@ Item {
         anchors.horizontalCenter: parent.horizontalCenter
         fillMode: Image.Stretch
         source: urlHelper(button.icon)
+        visible: button.currentIconColor === ""
+    }
+    ColorOverlay {
+        anchors.fill: icon
+        source: icon
+        color: button.currentIconColor !== "" ? button.currentIconColor : "transparent"
+        visible: button.currentIconColor !== ""
     }
     FontLoader {
         id: roboto

@@ -52,6 +52,9 @@ public class Theme {
     // behind the screens: "none" or "grid"
     public String backgroundPattern = PATTERN_NONE;
 
+    // whether the world's buttons and virtual pad take the icon colour (otherwise they're white)
+    public boolean tintIcons;
+
     // shown before screen titles, as "PREFIX // TITLE"; null for the title alone
     public String titlePrefix;
 
@@ -93,6 +96,11 @@ public class Theme {
             theme.borderAlpha = border == null ? 0 : (float) shape.optDouble("borderAlpha", 0.35);
             theme.glow = shape.optBoolean("glow", false);
             theme.backgroundPattern = shape.optString("backgroundPattern", PATTERN_NONE);
+        }
+
+        JSONObject icons = json.optJSONObject("icons");
+        if (icons != null) {
+            theme.tintIcons = icons.optBoolean("tint", false);
         }
 
         JSONObject title = json.optJSONObject("title");
