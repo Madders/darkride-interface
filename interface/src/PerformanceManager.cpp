@@ -110,7 +110,12 @@ void PerformanceManager::applyPerformancePreset(PerformanceManager::PerformanceP
             );
 
             instance->setShadowsEnabled(true);
+#if defined(Q_OS_ANDROID)
+            // ambient occlusion comes out far too dark on phones' GPUs so far: it's a separate, experimental setting there
+            instance->setAmbientOcclusionEnabled(false);
+#else
             instance->setAmbientOcclusionEnabled(true);
+#endif
             // instance->setCustomShadersEnabled(true);
             instance->setViewportResolutionScale(1.0);
             instance->setMaximumTextureMemory(8192);

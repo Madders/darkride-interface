@@ -71,7 +71,7 @@
     <string name="graphics_shadows">Shadows</string>
     <string name="graphics_shadows_summary">Shadows from the sun and lights. Uses more battery.</string>
     <string name="graphics_ambient_occlusion">Ambient occlusion</string>
-    <string name="graphics_ambient_occlusion_summary">Soft shading where surfaces meet. Uses more battery.</string>
+    <string name="graphics_ambient_occlusion_summary">Soft shading where surfaces meet. Experimental on phones: can make places far too dark.</string>
     <string name="graphics_needs_gles32">Needs a phone with OpenGL ES 3.2</string>
     <string name="graphics_resolution">Render resolution</string>
     <string-array name="graphics_preset_names">
