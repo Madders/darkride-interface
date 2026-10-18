@@ -10,7 +10,12 @@
 //
 #include "GLESBackend.h"
 
+#include <cstring>
 #include <mutex>
+#include <vector>
+
+#define BCDEC_IMPLEMENTATION
+#include "bcdec.h"
 
 #include <unordered_set>
 #include <unordered_map>
@@ -20,6 +25,115 @@
 using namespace gpu;
 using namespace gpu::gl;
 using namespace gpu::gles;
+
+// Desktop (BC) compressed textures, as KTX files baked for desktop often are (skyboxes, baked models): a phone's GPU
+// can't sample them, so they're decoded on the CPU as they're uploaded, into formats every OpenGL ES 3 GPU can
+// (desktop GL's names for these, which OpenGL ES's headers don't have; as in GLTexelFormat.cpp)
+#ifndef GL_COMPRESSED_RED_RGTC1
+#define GL_COMPRESSED_RED_RGTC1 0x8DBB
+#endif
+#ifndef GL_COMPRESSED_RG_RGTC2
+#define GL_COMPRESSED_RG_RGTC2 0x8DBD
+#endif
+#ifndef GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM
+#define GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM 0x8E8D
+#endif
+#ifndef GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT
+#define GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT 0x8E8F
+#endif
+
+namespace {
+
+struct BCDecoding {
+    GLTexelFormat texelFormat;  // what the texture holds instead
+    int bytesPerPixel;
+    int blockBytes;
+};
+
+bool getBCDecoding(GLenum compressedFormat, BCDecoding& decoding) {
+    switch (compressedFormat) {
+        case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
+        case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT:
+            decoding = { GLTexelFormat(GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE), 4, 8 };
+            return true;
+        case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
+        case GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM:
+            decoding = { GLTexelFormat(GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE), 4, 16 };
+            return true;
+        case GL_COMPRESSED_RED_RGTC1:
+            decoding = { GLTexelFormat(GL_R8, GL_RED, GL_UNSIGNED_BYTE), 1, 8 };
+            return true;
+        case GL_COMPRESSED_RG_RGTC2:
+            decoding = { GLTexelFormat(GL_RG8, GL_RG, GL_UNSIGNED_BYTE), 2, 16 };
+            return true;
+        case GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT:
+            decoding = { GLTexelFormat(GL_RGB16F, GL_RGB, GL_HALF_FLOAT), 6, 16 };
+            return true;
+        default:
+            return false;
+    }
+}
+
+// The GL format a texture is stored in here: its own, or what a BC format is decoded into
+GLTexelFormat evalGLESTexelFormat(const gpu::Element& format) {
+    GLTexelFormat texelFormat = GLTexelFormat::evalGLTexelFormat(format);
+    BCDecoding decoding { GLTexelFormat(GL_RGBA8), 0, 0 };
+    if (getBCDecoding(texelFormat.internalFormat, decoding)) {
+        return decoding.texelFormat;
+    }
+    return texelFormat;
+}
+
+// Decodes a run of BC blocks, width by height pixels (whole block rows), into tightly packed pixels
+std::vector<uint8_t> decodeBC(GLenum compressedFormat, const BCDecoding& decoding, uint32_t width, uint32_t height,
+                              const void* source, size_t sourceSize) {
+    const uint32_t blocksX = (width + 3) / 4;
+    const uint32_t blocksY = (height + 3) / 4;
+    std::vector<uint8_t> pixels((size_t)width * height * decoding.bytesPerPixel);
+    if (sourceSize < (size_t)blocksX * blocksY * decoding.blockBytes) {
+        return pixels;
+    }
+    const uint8_t* block = static_cast<const uint8_t*>(source);
+    uint8_t decoded[4 * 4 * 6];
+    const int decodedPitch = 4 * decoding.bytesPerPixel;
+    for (uint32_t by = 0; by < blocksY; ++by) {
+        for (uint32_t bx = 0; bx < blocksX; ++bx, block += decoding.blockBytes) {
+            switch (compressedFormat) {
+                case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
+                case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT:
+                    bcdec_bc1(block, decoded, decodedPitch);
+                    break;
+                case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
+                    bcdec_bc3(block, decoded, decodedPitch);
+                    break;
+                case GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM:
+                    bcdec_bc7(block, decoded, decodedPitch);
+                    break;
+                case GL_COMPRESSED_RED_RGTC1:
+                    bcdec_bc4(block, decoded, decodedPitch);
+                    break;
+                case GL_COMPRESSED_RG_RGTC2:
+                    bcdec_bc5(block, decoded, decodedPitch);
+                    break;
+                case GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT:
+                    // (its pitch is in halves, not bytes)
+                    bcdec_bc6h_half(block, decoded, 4 * 3, 0);
+                    break;
+                default:
+                    break;
+            }
+            // the block's pixels that are inside the image (the last row and column of blocks can overhang)
+            for (uint32_t y = 0; y < 4 && by * 4 + y < height; ++y) {
+                uint32_t columns = std::min<uint32_t>(4, width - bx * 4);
+                memcpy(&pixels[(((size_t)(by * 4 + y) * width) + bx * 4) * decoding.bytesPerPixel],
+                       &decoded[y * decodedPitch], columns * decoding.bytesPerPixel);
+            }
+        }
+    }
+    return pixels;
+}
+
+}  // namespace
 
 bool GLESBackend::supportedTextureFormat(const gpu::Element& format) {
     switch (format.getSemantic()) {
@@ -33,6 +147,14 @@ bool GLESBackend::supportedTextureFormat(const gpu::Element& format) {
         case gpu::Semantic::COMPRESSED_EAC_RED_SIGNED:
         case gpu::Semantic::COMPRESSED_EAC_XY:
         case gpu::Semantic::COMPRESSED_EAC_XY_SIGNED:
+        // decoded as they're uploaded (getBCDecoding)
+        case gpu::Semantic::COMPRESSED_BC1_SRGB:
+        case gpu::Semantic::COMPRESSED_BC1_SRGBA:
+        case gpu::Semantic::COMPRESSED_BC3_SRGBA:
+        case gpu::Semantic::COMPRESSED_BC4_RED:
+        case gpu::Semantic::COMPRESSED_BC5_XY:
+        case gpu::Semantic::COMPRESSED_BC6_RGB:
+        case gpu::Semantic::COMPRESSED_BC7_SRGBA:
             return true;
         default:
             return !format.isCompressed();
@@ -184,6 +306,24 @@ bool isCompressedFormat(GLenum internalFormat) {
 
 
 Size GLESTexture::copyMipFaceLinesFromTexture(uint16_t mip, uint8_t face, const uvec3& size, uint32_t yOffset, GLenum internalFormat, GLenum format, GLenum type, Size sourceSize, const void* sourcePointer) const {
+    BCDecoding decoding { GLTexelFormat(GL_RGBA8), 0, 0 };
+    if (getBCDecoding(internalFormat, decoding)) {
+        static std::mutex loggedMutex;
+        static std::unordered_set<GLenum> logged;
+        {
+            std::lock_guard<std::mutex> lock(loggedMutex);
+            if (logged.insert(internalFormat).second) {
+                qCDebug(gpugllogging) << "Decoding desktop (BC) compressed textures on the CPU, format" << QString::number(internalFormat, 16);
+            }
+        }
+        std::vector<uint8_t> pixels = decodeBC(internalFormat, decoding, size.x, size.y, sourcePointer, sourceSize);
+        GLenum target = GL_TEXTURE_CUBE_MAP == _target ? GLTexture::CUBE_FACE_LAYOUT[face] : _target;
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexSubImage2D(target, mip, 0, yOffset, size.x, size.y, decoding.texelFormat.format, decoding.texelFormat.type,
+                        pixels.data());
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        return sourceSize;
+    }
     Size amountCopied = sourceSize;
     if (GL_TEXTURE_2D == _target) {
         if (isCompressedFormat(internalFormat)) {
@@ -271,7 +411,7 @@ GLsizei getCompressedImageSize(int width, int height, GLenum internalFormat) {
 }
 
 void GLESFixedAllocationTexture::allocateStorage() const {
-    const GLTexelFormat texelFormat = GLTexelFormat::evalGLTexelFormat(_gpuObject.getTexelFormat());
+    const GLTexelFormat texelFormat = evalGLESTexelFormat(_gpuObject.getTexelFormat());
     const auto numMips = _gpuObject.getNumMips();
     const auto numSlices = _gpuObject.getNumSlices();
     const auto numSamples = _gpuObject.getNumSamples();
@@ -397,7 +537,7 @@ GLESVariableAllocationTexture::~GLESVariableAllocationTexture() {
 void GLESVariableAllocationTexture::allocateStorage(uint16 allocatedMip) {
     _allocatedMip = allocatedMip;
 
-    const GLTexelFormat texelFormat = GLTexelFormat::evalGLTexelFormat(_gpuObject.getTexelFormat());
+    const GLTexelFormat texelFormat = evalGLESTexelFormat(_gpuObject.getTexelFormat());
     const auto dimensions = _gpuObject.evalMipDimensions(_allocatedMip);
     const auto totalMips = _gpuObject.getNumMips();
     const auto mips = totalMips - _allocatedMip;
@@ -446,7 +586,8 @@ void GLESVariableAllocationTexture::syncSampler() const {
 // EXT_copy_image, as in the Android emulator). Not for compressed textures, which can't be framebuffer attachments.
 static void blitTexGPUMem(const gpu::Texture& texture, GLenum texTarget, GLuint srcId, GLuint destId, uint16_t numMips,
                           uint16_t srcMipOffset, uint16_t destMipOffset, uint16_t populatedMips) {
-    if (texture.getStoredMipFormat().isCompressed()) {
+    // (BC textures are held decoded, getBCDecoding)
+    if (GLTexelFormat::isCompressed(evalGLESTexelFormat(texture.getTexelFormat()).internalFormat)) {
         static std::once_flag once;
         std::call_once(once, [] {
             qCWarning(gpugllogging) << "This driver can't copy compressed textures on the GPU: some will be missing mips";
