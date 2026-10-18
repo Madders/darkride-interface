@@ -16,6 +16,9 @@ import subprocess
 import sys
 
 
+EXECUTABLE_FRAMEWORKS = '@executable_path/../Frameworks/'
+
+
 def is_macho(path):
     try:
         with open(path, 'rb') as f:
@@ -70,6 +73,18 @@ def main():
         done.add(path)
         ident, deps = dependencies(path)
         for dep in deps:
+            # macdeployqt links the frameworks it copies to each other as @executable_path/../Frameworks/...,
+            # which only resolves from the main executable: QtWebEngineProcess, deep inside QtWebEngineCore,
+            # then can't load Qt. Relative to each file instead, it resolves from any executable.
+            if dep.startswith(EXECUTABLE_FRAMEWORKS):
+                target = os.path.join(frameworks, dep[len(EXECUTABLE_FRAMEWORKS):])
+                if not os.path.exists(target):
+                    sys.exit('{} needs {}, which is not in the bundle'.format(path, dep))
+                relative = os.path.relpath(os.path.realpath(target), os.path.dirname(os.path.realpath(path)))
+                subprocess.run(['install_name_tool', '-change', dep, '@loader_path/' + relative, path],
+                               check=True, stderr=subprocess.DEVNULL)
+                changed += 1
+                continue
             if not dep.startswith(prefix):
                 continue
             target, source, copy_to = bundle_target(frameworks, dep)
