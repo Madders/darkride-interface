@@ -475,7 +475,9 @@ void ScriptEngine::waitTillDoneRunning() {
         if (workerThread->isRunning()) {
             workerThread->quit();
 
-            if (isEvaluating()) {
+            if (!isRunning()) {
+                // run() has returned: the script is done, and quitting its event loop is enough
+            } else if (isEvaluating()) {
                 qCWarning(scriptengine) << "Script Engine has been running too long, aborting:" << getFilename();
                 abortEvaluation();
             } else {
@@ -496,6 +498,13 @@ void ScriptEngine::waitTillDoneRunning() {
 #else
         auto startedWaiting = usecTimestampNow();
         while (workerThread->isRunning()) {
+            // Once run() has returned, the script is done, but its thread's event loop only quits when this engine
+            // is destroyed: end it now, rather than wait out the timeout below, which made quitting take a second
+            // for every running script
+            if (!isRunning()) {
+                workerThread->quit();
+            }
+
             // If the final evaluation takes too long, then tell the script engine to stop running
             auto elapsedUsecs = usecTimestampNow() - startedWaiting;
             static const auto MAX_SCRIPT_EVALUATION_TIME = USECS_PER_SECOND;
