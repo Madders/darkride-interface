@@ -2255,6 +2255,18 @@ bool AudioClient::switchOutputToAudioDevice(const HifiAudioDeviceInfo outputDevi
 
             // initialize mix buffers
 
+#if defined(Q_OS_ANDROID)
+            {
+                // the device takes a whole period at a time (40 ms with Qt's OpenSL output): the jitter buffer aims for
+                // at least that, and a couple of frames more, or every late packet leaves it short
+                const int SPARE_FRAMES = 2;
+                int periodMsecs = _audioOutput->periodSize() / std::max(1, _outputFormat.bytesForDuration(USECS_PER_MSEC));
+                int periodFrames = (periodMsecs * USECS_PER_MSEC + AudioConstants::NETWORK_FRAME_USECS - 1)
+                    / AudioConstants::NETWORK_FRAME_USECS;
+                _receivedAudioStream.setMinJitterBufferFrames(periodFrames + SPARE_FRAMES);
+                qCDebug(audioclient) << "jitter buffer at least (frames):" << periodFrames + SPARE_FRAMES;
+            }
+#endif
             // restrict device callback to _outputPeriod samples
             _outputPeriod = _audioOutput->periodSize() / AudioConstants::SAMPLE_SIZE;
             // device callback may exceed reported period, so double it to avoid stutter

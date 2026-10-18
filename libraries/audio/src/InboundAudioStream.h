@@ -70,6 +70,9 @@ public:
 
     void setDynamicJitterBufferEnabled(bool enable);
     void setStaticJitterBufferFrames(int staticJitterBufferFrames);
+    // The least the dynamic jitter buffer aims for: enough for the device's reads, when it takes several frames at a
+    // time (Android's output takes 40 ms)
+    void setMinJitterBufferFrames(int frames);
 
     virtual AudioStreamStats getAudioStreamStats() const;
 
@@ -146,6 +149,7 @@ protected:
     int _numChannels;
 
     bool _lastPopSucceeded { false };
+    int _minJitterBufferFrames { 1 };
     AudioRingBuffer::ConstIterator _lastPopOutput;
     
     bool _dynamicJitterBufferEnabled { DEFAULT_DYNAMIC_JITTER_BUFFER_ENABLED };

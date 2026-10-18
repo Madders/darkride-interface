@@ -81,7 +81,7 @@ void InboundAudioStream::reset() {
 
 void InboundAudioStream::resetStats() {
     if (_dynamicJitterBufferEnabled) {
-        _desiredJitterBufferFrames = 1;
+        _desiredJitterBufferFrames = _minJitterBufferFrames;
     }
     _consecutiveNotMixedCount = 0;
     _starveCount = 0;
@@ -470,11 +470,18 @@ void InboundAudioStream::setDynamicJitterBufferEnabled(bool enable) {
         _desiredJitterBufferFrames = _staticJitterBufferFrames;
     } else {
         if (!_dynamicJitterBufferEnabled) {
-            // if we're enabling dynamic jitter buffer frames, start desired frames at 1
-            _desiredJitterBufferFrames = 1;
+            // if we're enabling dynamic jitter buffer frames, start desired frames at the minimum
+            _desiredJitterBufferFrames = _minJitterBufferFrames;
         }
     }
     _dynamicJitterBufferEnabled = enable;
+}
+
+void InboundAudioStream::setMinJitterBufferFrames(int frames) {
+    _minJitterBufferFrames = std::max(1, frames);
+    if (_dynamicJitterBufferEnabled && _desiredJitterBufferFrames < _minJitterBufferFrames) {
+        _desiredJitterBufferFrames = _minJitterBufferFrames;
+    }
 }
 
 void InboundAudioStream::setStaticJitterBufferFrames(int staticJitterBufferFrames) {
@@ -510,6 +517,7 @@ void InboundAudioStream::packetReceivedUpdateTimingStats() {
             if (_timeGapStatsForDesiredReduction.getNewStatsAvailableFlag() && _timeGapStatsForDesiredReduction.isWindowFilled()) {
                 int calculatedJitterBufferFrames = ceilf((float)_timeGapStatsForDesiredReduction.getWindowMax()
                                                          / (float)AudioConstants::NETWORK_FRAME_USECS);
+                calculatedJitterBufferFrames = std::max(calculatedJitterBufferFrames, _minJitterBufferFrames);
                 if (calculatedJitterBufferFrames < _desiredJitterBufferFrames) {
                     _desiredJitterBufferFrames = calculatedJitterBufferFrames;
                     qCInfo(audiostream, "Set desired jitter frames to %d (reduced)", _desiredJitterBufferFrames);
