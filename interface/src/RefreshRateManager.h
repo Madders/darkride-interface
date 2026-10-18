@@ -117,7 +117,12 @@ private:
     UXMode _uxMode;
 
     mutable ReadWriteLockable _refreshRateProfileSettingLock;
+#if defined(Q_OS_ANDROID)
+    // phones' screens run at up to 120 Hz: drawing that often heats them for little gain (the app's Settings change it)
+    Setting::Handle<int> _refreshRateProfileSetting { "refreshRateProfile", RefreshRateProfile::REALTIME };
+#else
     Setting::Handle<int> _refreshRateProfileSetting { "refreshRateProfile", RefreshRateProfile::DISPLAY_BASED };
+#endif
 
     std::function<void(int)> _refreshRateOperator { nullptr };
 

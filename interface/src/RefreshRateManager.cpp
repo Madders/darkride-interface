@@ -147,6 +147,16 @@ std::string RefreshRateManager::uxModeToString(RefreshRateManager::RefreshRateMa
 }
 
 RefreshRateManager::RefreshRateManager() {
+#if defined(Q_OS_ANDROID)
+    // Earlier Android builds saved the screen's rate (up to 120 Hz), which heats phones: once, it becomes 60
+    Setting::Handle<bool> frameRateDefaulted { "Android/frameRateDefaulted", false };
+    if (!frameRateDefaulted.get()) {
+        if (_refreshRateProfileSetting.get() == RefreshRateProfile::DISPLAY_BASED) {
+            _refreshRateProfileSetting.set(RefreshRateProfile::REALTIME);
+        }
+        frameRateDefaulted.set(true);
+    }
+#endif
     _refreshRateProfile = (RefreshRateManager::RefreshRateProfile) _refreshRateProfileSetting.get();
     _inactiveTimer->setInterval(INACTIVE_TIMER_LIMIT);
     _inactiveTimer->setSingleShot(true);

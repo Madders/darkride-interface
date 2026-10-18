@@ -25,6 +25,9 @@ public class SettingsFragment extends PreferenceFragment implements SharedPrefer
     private static final String PREFERENCE_KEY_SHADOWS = "graphics_shadows";
     private static final String PREFERENCE_KEY_AMBIENT_OCCLUSION = "graphics_ambient_occlusion";
     private static final String PREFERENCE_KEY_RESOLUTION = "graphics_resolution";
+    private static final String PREFERENCE_KEY_FRAME_RATE = "graphics_frame_rate";
+    private static final String PREFERENCE_KEY_WORLD_DETAIL = "graphics_world_detail";
+    private static final String PREFERENCE_KEY_DRAW_DISTANCE = "graphics_draw_distance";
     // a preset is put in place on the engine's thread: the switches it sets are read back after this
     private static final int PRESET_APPLY_DELAY_MSECS = 300;
 
@@ -37,6 +40,12 @@ public class SettingsFragment extends PreferenceFragment implements SharedPrefer
     private native void nativeSetAmbientOcclusionEnabled(boolean enabled);
     private native float nativeGetResolutionScale();
     private native void nativeSetResolutionScale(float scale);
+    private native int nativeGetFrameRateProfile();
+    private native void nativeSetFrameRateProfile(int profile);
+    private native int nativeGetWorldDetail();
+    private native void nativeSetWorldDetail(int quality);
+    private native float nativeGetDrawDistance();
+    private native void nativeSetDrawDistance(float meters);
 
     private boolean mLoadingGraphicsSettings;
 
@@ -80,6 +89,14 @@ public class SettingsFragment extends PreferenceFragment implements SharedPrefer
         ((SwitchPreference) findPreference(PREFERENCE_KEY_SHADOWS)).setChecked(nativeGetShadowsEnabled());
         ((SwitchPreference) findPreference(PREFERENCE_KEY_AMBIENT_OCCLUSION)).setChecked(nativeGetAmbientOcclusionEnabled());
         ((ListPreference) findPreference(PREFERENCE_KEY_RESOLUTION)).setValue(resolution);
+        // (30 fps and below show as 30; the screen's rate as the fastest)
+        int frameRate = Math.max(1, Math.min(3, nativeGetFrameRateProfile()));
+        ((ListPreference) findPreference(PREFERENCE_KEY_FRAME_RATE)).setValue(String.valueOf(frameRate));
+        int worldDetail = Math.max(0, Math.min(2, nativeGetWorldDetail()));
+        ((ListPreference) findPreference(PREFERENCE_KEY_WORLD_DETAIL)).setValue(String.valueOf(worldDetail));
+        float distance = nativeGetDrawDistance();
+        String drawDistance = distance <= 100.0f ? "100" : (distance <= 400.0f ? "400" : "16384");
+        ((ListPreference) findPreference(PREFERENCE_KEY_DRAW_DISTANCE)).setValue(drawDistance);
         mLoadingGraphicsSettings = false;
     }
 
@@ -122,6 +139,21 @@ public class SettingsFragment extends PreferenceFragment implements SharedPrefer
             case PREFERENCE_KEY_AMBIENT_OCCLUSION:
                 if (!mLoadingGraphicsSettings) {
                     nativeSetAmbientOcclusionEnabled(sharedPreferences.getBoolean(key, false));
+                }
+                break;
+            case PREFERENCE_KEY_FRAME_RATE:
+                if (!mLoadingGraphicsSettings) {
+                    nativeSetFrameRateProfile(Integer.parseInt(sharedPreferences.getString(key, "2")));
+                }
+                break;
+            case PREFERENCE_KEY_WORLD_DETAIL:
+                if (!mLoadingGraphicsSettings) {
+                    nativeSetWorldDetail(Integer.parseInt(sharedPreferences.getString(key, "1")));
+                }
+                break;
+            case PREFERENCE_KEY_DRAW_DISTANCE:
+                if (!mLoadingGraphicsSettings) {
+                    nativeSetDrawDistance(Float.parseFloat(sharedPreferences.getString(key, "16384")));
                 }
                 break;
             case PREFERENCE_KEY_RESOLUTION:

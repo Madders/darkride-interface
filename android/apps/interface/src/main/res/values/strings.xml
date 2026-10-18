@@ -94,4 +94,38 @@
         <item>0.75</item>
         <item>0.5</item>
     </string-array>
+    <string name="graphics_frame_rate">Frame rate</string>
+    <string name="graphics_world_detail">World detail</string>
+    <string name="graphics_draw_distance">Draw distance</string>
+    <string-array name="graphics_frame_rate_names">
+        <item>30 fps (coolest, saves battery)</item>
+        <item>60 fps</item>
+        <item>As fast as the screen (hottest)</item>
+    </string-array>
+    <!-- RefreshRateManager's profiles: INTERACTIVE, REALTIME, DISPLAY_BASED -->
+    <string-array name="graphics_frame_rate_values" translatable="false">
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
+    <string-array name="graphics_world_detail_names">
+        <item>Low (fastest)</item>
+        <item>Medium</item>
+        <item>High</item>
+    </string-array>
+    <string-array name="graphics_world_detail_values" translatable="false">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+    <string-array name="graphics_draw_distance_names">
+        <item>Near (100 m, fastest)</item>
+        <item>Medium (400 m)</item>
+        <item>Far</item>
+    </string-array>
+    <string-array name="graphics_draw_distance_values" translatable="false">
+        <item>100</item>
+        <item>400</item>
+        <item>16384</item>
+    </string-array>
 </resources>

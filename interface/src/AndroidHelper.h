@@ -42,6 +42,12 @@ public:
     void setAmbientOcclusionEnabled(bool enabled);
     float getResolutionScale() const;
     void setResolutionScale(float scale);
+    int getFrameRateProfile() const;
+    void setFrameRateProfile(int profile);
+    int getWorldDetail() const;
+    void setWorldDetail(int quality);
+    float getDrawDistance() const;
+    void setDrawDistance(float meters);
 
     void performHapticFeedback(int duration);
     void processURL(const QString &url);

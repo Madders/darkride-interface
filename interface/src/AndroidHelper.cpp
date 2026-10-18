@@ -14,6 +14,7 @@
 #include <AudioClient.h>
 #include <src/ui/LoginDialog.h>
 #include "Application.h"
+#include "LODManager.h"
 #include "PerformanceManager.h"
 #include "scripting/RenderScriptingInterface.h"
 #include <gl/GLHelpers.h>
@@ -97,6 +98,38 @@ float AndroidHelper::getResolutionScale() const {
 void AndroidHelper::setResolutionScale(float scale) {
     QMetaObject::invokeMethod(qApp, [scale] {
         RenderScriptingInterface::getInstance()->setViewportResolutionScale(scale);
+    }, Qt::QueuedConnection);
+}
+
+// RefreshRateManager's profiles: INTERACTIVE draws at 30 frames a second, REALTIME at 60, DISPLAY_BASED at the screen's rate
+int AndroidHelper::getFrameRateProfile() const {
+    return (int)qApp->getRefreshRateManager().getRefreshRateProfile();
+}
+
+void AndroidHelper::setFrameRateProfile(int profile) {
+    QMetaObject::invokeMethod(qApp, [profile] {
+        qApp->getRefreshRateManager().setRefreshRateProfile((RefreshRateManager::RefreshRateProfile)profile);
+    }, Qt::QueuedConnection);
+}
+
+// how much small and distant detail is drawn (LODManager lowers it to keep up its frame rate target)
+int AndroidHelper::getWorldDetail() const {
+    return (int)DependencyManager::get<LODManager>()->getWorldDetailQuality();
+}
+
+void AndroidHelper::setWorldDetail(int quality) {
+    QMetaObject::invokeMethod(qApp, [quality] {
+        DependencyManager::get<LODManager>()->setWorldDetailQuality((WorldDetailQuality)quality);
+    }, Qt::QueuedConnection);
+}
+
+float AndroidHelper::getDrawDistance() const {
+    return RenderScriptingInterface::getInstance()->getFarClip();
+}
+
+void AndroidHelper::setDrawDistance(float meters) {
+    QMetaObject::invokeMethod(qApp, [meters] {
+        RenderScriptingInterface::getInstance()->setFarClip(meters);
     }, Qt::QueuedConnection);
 }
 

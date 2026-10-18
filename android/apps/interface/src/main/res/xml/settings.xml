@@ -22,6 +22,27 @@
             android:summary="@string/graphics_ambient_occlusion_summary"
             android:defaultValue="false" />
         <ListPreference
+            android:key="graphics_frame_rate"
+            android:title="@string/graphics_frame_rate"
+            android:summary="%s"
+            android:entries="@array/graphics_frame_rate_names"
+            android:entryValues="@array/graphics_frame_rate_values"
+            android:defaultValue="2" />
+        <ListPreference
+            android:key="graphics_world_detail"
+            android:title="@string/graphics_world_detail"
+            android:summary="%s"
+            android:entries="@array/graphics_world_detail_names"
+            android:entryValues="@array/graphics_world_detail_values"
+            android:defaultValue="1" />
+        <ListPreference
+            android:key="graphics_draw_distance"
+            android:title="@string/graphics_draw_distance"
+            android:summary="%s"
+            android:entries="@array/graphics_draw_distance_names"
+            android:entryValues="@array/graphics_draw_distance_values"
+            android:defaultValue="16384" />
+        <ListPreference
             android:key="graphics_resolution"
             android:title="@string/graphics_resolution"
             android:summary="%s"

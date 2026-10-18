@@ -97,7 +97,10 @@ void PerformanceManager::applyPerformancePreset(PerformanceManager::PerformanceP
     auto instance = RenderScriptingInterface::getInstance();
 
     instance->setAntialiasingMethod(RenderScriptingInterface::AntialiasingMethod::NONE);
+#if !defined(Q_OS_ANDROID)
+    // (on a phone the frame rate is its own setting)
     qApp->getRefreshRateManager().setRefreshRateProfile(RefreshRateManager::RefreshRateProfile::DISPLAY_BASED);
+#endif
 
     switch (preset) {
         case PerformancePreset::HIGH:

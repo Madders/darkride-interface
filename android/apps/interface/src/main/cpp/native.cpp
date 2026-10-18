@@ -393,6 +393,36 @@ Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeSetResolution
     AndroidHelper::instance().setResolutionScale(scale);
 }
 
+JNIEXPORT jint JNICALL
+Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeGetFrameRateProfile(JNIEnv*, jobject) {
+    return AndroidHelper::instance().getFrameRateProfile();
+}
+
+JNIEXPORT void JNICALL
+Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeSetFrameRateProfile(JNIEnv*, jobject, jint value) {
+    AndroidHelper::instance().setFrameRateProfile(value);
+}
+
+JNIEXPORT jint JNICALL
+Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeGetWorldDetail(JNIEnv*, jobject) {
+    return AndroidHelper::instance().getWorldDetail();
+}
+
+JNIEXPORT void JNICALL
+Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeSetWorldDetail(JNIEnv*, jobject, jint value) {
+    AndroidHelper::instance().setWorldDetail(value);
+}
+
+JNIEXPORT jfloat JNICALL
+Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeGetDrawDistance(JNIEnv*, jobject) {
+    return AndroidHelper::instance().getDrawDistance();
+}
+
+JNIEXPORT void JNICALL
+Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeSetDrawDistance(JNIEnv*, jobject, jfloat value) {
+    AndroidHelper::instance().setDrawDistance(value);
+}
+
 JNIEXPORT jstring JNICALL
 Java_io_highfidelity_hifiinterface_HifiUtils_getAccessToken(JNIEnv *env, jobject instance) {
     auto accountManager = DependencyManager::get<AccountManager>();
