@@ -1,5 +1,6 @@
-# Builds Darkride for Windows (an installer and a zip) and the Linux world server (a Docker image), and publishes
-# them: the Windows files as a GitHub release, the image as ghcr.io/<owner>/darkride-server.
+# Builds Darkride for Windows (an installer and a zip), macOS (a disk image for Apple silicon) and the Linux world
+# server (a Docker image), and publishes them: the Windows and Mac files as a GitHub release, the image as
+# ghcr.io/<owner>/darkride-server.
 #
 #   git tag v2026.10.1 && git push origin v2026.10.1    builds both, makes the release "Darkride 2026.10.1", and
 #                                                        pushes the image as :2026.10.1 and :latest
@@ -229,6 +230,112 @@ jobs:
         timeout-minutes: 300
         run: cmake --build C:\b --config RelWithDebInfo --target interface -- /m:2 /v:minimal /nologo
 
+  # Apple Silicon. Qt 5.15 with WebEngine comes prebuilt from MacPorts (Qt's own 5.15.2 is Intel only, and Homebrew's
+  # qt@5 has no WebEngine). MacPorts builds for the macOS it runs on, so the app needs macOS 14 Sonoma or later.
+  # interface only: the servers ship as the Linux image. The app isn't signed with an Apple Developer ID.
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 360
+    env:
+      RELEASE_TYPE: PRODUCTION
+      STABLE_BUILD: 1
+      # CMake 4 refuses the 2021 ports' cmake_minimum_required(); vcpkg runs ports in this environment on macOS
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      QT_PORTS: >-
+        qt5-qtbase qt5-qtdeclarative qt5-qtquickcontrols qt5-qtquickcontrols2 qt5-qtgraphicaleffects qt5-qtsvg
+        qt5-qtscript qt5-qtmultimedia qt5-qtwebsockets qt5-qtwebchannel qt5-qtwebengine qt5-qtxmlpatterns
+        qt5-qtimageformats qt5-qtmacextras qt5-qtlocation qt5-qttools
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        run: |
+          if [ "${{ github.ref_type }}" = tag ]; then v="${GITHUB_REF_NAME#v}"
+          elif [ -n "${{ inputs.version }}" ]; then v="${{ inputs.version }}"
+          else v="0.0.0-${GITHUB_SHA:0:8}"; fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "RELEASE_NUMBER=$v" >> "$GITHUB_ENV"
+          echo "TIVOLI_VCPKG_BASE=$HOME/dv" >> "$GITHUB_ENV"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$HOME/dvcache" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/dvcache"
+          sw_vers; uname -m; cmake --version | head -1
+
+      # -b: MacPorts' prebuilt archives only, never a build from source (WebEngine would take many hours)
+      - name: Install MacPorts and Qt
+        run: |
+          curl -fsSL -o MacPorts.pkg https://github.com/macports/macports-base/releases/download/v2.12.7/MacPorts-2.12.7-14-Sonoma.pkg
+          sudo installer -pkg MacPorts.pkg -target /
+          echo "/opt/local/bin" >> "$GITHUB_PATH"
+          export PATH="/opt/local/bin:/opt/local/sbin:$PATH"
+          sudo port -q selfupdate
+          sudo port -N -b install $QT_PORTS
+          ls /opt/local/libexec/qt5/lib/cmake
+          ls /opt/local/libexec/qt5/bin/macdeployqt
+
+      - name: Build tools
+        run: brew install ninja
+
+      - name: Restore vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/dvcache
+          key: vcpkg-macos-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+          restore-keys: vcpkg-macos-
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DQT_CMAKE_PREFIX_PATH=/opt/local/libexec/qt5/lib/cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Save vcpkg packages
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/dvcache
+          key: vcpkg-macos-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+
+      - name: Generate shaders
+        timeout-minutes: 30
+        env:
+          PYTHONUNBUFFERED: 1
+          SHADERGEN_STACK_DUMP: 300
+        run: cmake --build build --target shadergen
+
+      # a production build runs macdeployqt after linking, which copies Qt and MacPorts' libraries into the bundle
+      - name: Build
+        timeout-minutes: 300
+        run: cmake --build build --target interface
+
+      # The bundle's own name is still interface.app; Darkride.app in the disk image. macdeployqt changed the
+      # binaries, so they're signed again ad hoc (Apple Silicon runs nothing unsigned).
+      - name: Package
+        run: |
+          app=$(find build/interface -maxdepth 2 -name '*.app' -type d | head -1)
+          echo "Bundle: $app"
+          mkdir -p dist/dmg
+          ditto "$app" dist/dmg/Darkride.app
+          # nothing may still point at MacPorts: the app would only start where MacPorts is installed
+          if find dist/dmg/Darkride.app -type f \( -perm -u+x -o -name '*.dylib' \) -exec otool -L {} \; 2>/dev/null | grep -q "/opt/local/"; then
+            find dist/dmg/Darkride.app -type f \( -perm -u+x -o -name '*.dylib' \) -exec otool -L {} \; 2>/dev/null | grep -B3 "/opt/local/" | head -40
+            echo "::error::The bundle still links to /opt/local"; exit 1
+          fi
+          codesign --force --deep --sign - dist/dmg/Darkride.app
+          codesign --verify --deep --strict dist/dmg/Darkride.app
+          ln -s /Applications dist/dmg/Applications
+          hdiutil create -volname "Darkride $VERSION" -srcfolder dist/dmg -ov -format UDZO "dist/Darkride-$VERSION-macos-arm64.dmg"
+          ls -la dist
+
+      - name: Keep the files
+        uses: actions/upload-artifact@v4
+        with:
+          name: Darkride-${{ env.VERSION }}-macos-arm64
+          path: dist/*.dmg
+          retention-days: 14
+          compression-level: 0
+
   linux-server:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
@@ -298,14 +405,14 @@ jobs:
           done
 
   release:
-    needs: [windows, linux-server]
-    # Windows alone is enough for a release; the server image is mentioned only if it was pushed
+    needs: [windows, macos, linux-server]
+    # Windows alone is enough for a release; the Mac disk image and the server image are included when they built
     if: always() && github.ref_type == 'tag' && needs.windows.result == 'success'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: Darkride-*-windows-x64
+          pattern: Darkride-*
           path: dist
           merge-multiple: true
 
@@ -313,6 +420,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SERVER: ${{ needs.linux-server.result }}
+          MAC: ${{ needs.macos.result }}
         run: |
           tag="$GITHUB_REF_NAME"
           v="${tag#v}"
@@ -326,6 +434,16 @@ jobs:
             echo "- **Darkride-$v-windows-x64.zip** is the same files; unzip and run \`interface.exe\`."
             echo
             echo "The installer isn't code-signed yet, so Windows SmartScreen may warn: choose *More info* then *Run anyway*."
+            echo
+            echo "## macOS"
+            echo
+            if [ "$MAC" = success ]; then
+              echo "- **Darkride-$v-macos-arm64.dmg**: for Macs with Apple silicon (M1 or later) on macOS 14 Sonoma or later. Open it and drag **Darkride** to **Applications**."
+              echo
+              echo 'The app is not signed with an Apple Developer ID yet. The first time, right-click **Darkride** in Applications and choose **Open**, then **Open** again. If macOS says it is damaged, run `xattr -dr com.apple.quarantine /Applications/Darkride.app` in Terminal.'
+            else
+              echo "The Mac build didn't succeed for this release."
+            fi
             echo
             echo "## Linux world server"
             echo
@@ -341,5 +459,7 @@ jobs:
               echo "The server image didn't build for this release."
             fi
           } > notes.md
-          gh release create "$tag" dist/*.exe dist/*.zip --repo "$GITHUB_REPOSITORY" --title "Darkride $v" \
+          shopt -s nullglob
+          files=(dist/*.exe dist/*.zip dist/*.dmg)
+          gh release create "$tag" "${files[@]}" --repo "$GITHUB_REPOSITORY" --title "Darkride $v" \
             --notes-file notes.md --verify-tag $pre
