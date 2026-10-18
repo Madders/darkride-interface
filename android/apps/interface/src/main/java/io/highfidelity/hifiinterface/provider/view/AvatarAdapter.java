@@ -1,7 +1,10 @@
 package io.highfidelity.hifiinterface.view;
 
 import android.content.Context;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.InsetDrawable;
 import android.net.Uri;
+import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.RecyclerView;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -17,6 +20,7 @@ import java.util.List;
 
 import io.highfidelity.hifiinterface.R;
 import io.highfidelity.hifiinterface.provider.AvatarProvider;
+import io.highfidelity.hifiinterface.theme.ThemeManager;
 
 /**
  * Created by gcalero on 1/21/19
@@ -24,6 +28,7 @@ import io.highfidelity.hifiinterface.provider.AvatarProvider;
 public class AvatarAdapter extends RecyclerView.Adapter<AvatarAdapter.ViewHolder> {
 
     private static final String TAG = "Interface";
+    private static final float PLACEHOLDER_INSET = 0.2f;
     private final Context mContext;
     private final LayoutInflater mInflater;
     private final AvatarProvider mProvider;
@@ -47,15 +52,23 @@ public class AvatarAdapter extends RecyclerView.Adapter<AvatarAdapter.ViewHolder
         AvatarAdapter.Avatar anAvatar = mAvatars.get(position);
         assert(holder.mName != null);
         holder.mName.setText(anAvatar.avatarName);
-        // avatars without a picture show the Darkride logo
+        // avatars without a picture show a figure, in the theme
         if (anAvatar.avatarPreviewUrl == null || anAvatar.avatarPreviewUrl.isEmpty()) {
-            Picasso.get().load(R.drawable.darkride_logo_header).into(holder.mPreviewImage);
+            Picasso.get().cancelRequest(holder.mPreviewImage);
+            holder.mPreviewImage.setImageDrawable(placeholder());
         } else {
             Picasso.get().load(Uri.parse(anAvatar.avatarPreviewUrl))
-                    .placeholder(R.drawable.darkride_logo_header)
-                    .error(R.drawable.darkride_logo_header)
+                    .placeholder(placeholder())
+                    .error(placeholder())
                     .into(holder.mPreviewImage);
         }
+    }
+
+    // A figure in the theme's secondary colour, with room round it
+    private Drawable placeholder() {
+        Drawable figure = ContextCompat.getDrawable(mContext, R.drawable.ic_avatar_placeholder).mutate();
+        figure.setTint(ThemeManager.get(mContext).textSecondary);
+        return new InsetDrawable(figure, PLACEHOLDER_INSET);
     }
 
     @Override

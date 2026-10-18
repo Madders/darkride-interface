@@ -20,6 +20,7 @@
 #include <gl/GLHelpers.h>
 #include "Constants.h"
 #include "avatar/AvatarManager.h"
+#include <display-plugins/Basic2DWindowOpenGLDisplayPlugin.h>
 
 #if defined(qApp)
 #undef qApp
@@ -269,4 +270,13 @@ void AndroidHelper::setDisplayName(const QString &displayName) {
 void AndroidHelper::setMyAvatarUrl(const QString &avatarUrl) {
     QUrl url = QUrl(avatarUrl);
     DependencyManager::get<AvatarManager>()->getMyAvatar()->useFullAvatarURL(url);
+}
+
+void AndroidHelper::reloadTheme() {
+#if defined(Q_OS_ANDROID)
+    // (the scripts' buttons notice by themselves: actionbar.js, audio.js)
+    QMetaObject::invokeMethod(qApp, [] {
+        Basic2DWindowOpenGLDisplayPlugin::reloadTheme();
+    }, Qt::QueuedConnection);
+#endif
 }

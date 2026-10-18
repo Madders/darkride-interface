@@ -40,23 +40,44 @@ function init() {
     });
 
     audioButton = audiobar.addButton({
-        icon: themedIcon("mic", "icons/mic-unmute-a.svg"),
-        activeIcon: themedIcon("mic-muted", "icons/mic-mute-a.svg"),
         text: "",
-        // (the app theme's icons and colours: Settings > Theme)
-        iconColor: themedIconColor("mic", "Android/themeIconColor"),
-        activeIconColor: themedIconColor("mic-muted", "Android/themeAlertColor"),
         bgOpacity: 0.0,
         hoverBgOpacity: 0.0,
         activeHoverBgOpacity: 0.0,
         activeBgOpacity: 0.0
     });
 
+    applyTheme();
+    themeTimer = Script.setInterval(checkTheme, THEME_CHECK_MSECS);
     onMuteToggled();
 
     audioButton.clicked.connect(onMuteClicked);
     audioButton.entered.connect(onMutePressed);
     Audio.mutedChanged.connect(onMuteToggled);
+}
+
+// The app theme's icons and colours (Settings > Theme), and again when the theme changes in the app's menus
+var THEME_CHECK_MSECS = 2000;
+var themeTimer;
+var appliedTheme;
+
+function currentTheme() {
+    return Settings.getValue("Android/themeIconFolder", "") + "|" + Settings.getValue("Android/themeIcons", "") + "|" +
+        Settings.getValue("Android/themeIconColor", "") + "|" + Settings.getValue("Android/themeAlertColor", "");
+}
+
+function applyTheme() {
+    appliedTheme = currentTheme();
+    audioButton.icon = themedIcon("mic", "icons/mic-unmute-a.svg");
+    audioButton.activeIcon = themedIcon("mic-muted", "icons/mic-mute-a.svg");
+    audioButton.iconColor = themedIconColor("mic", "Android/themeIconColor");
+    audioButton.activeIconColor = themedIconColor("mic-muted", "Android/themeAlertColor");
+}
+
+function checkTheme() {
+    if (currentTheme() !== appliedTheme) {
+        applyTheme();
+    }
 }
 
 function onMuteClicked() {
@@ -74,6 +95,9 @@ function onMuteToggled() {
 }
 
 Script.scriptEnding.connect(function () {
+    if (themeTimer) {
+        Script.clearInterval(themeTimer);
+    }
     if(audioButton) {
         audioButton.clicked.disconnect(onMuteClicked);
         audioButton.entered.disconnect(onMutePressed);

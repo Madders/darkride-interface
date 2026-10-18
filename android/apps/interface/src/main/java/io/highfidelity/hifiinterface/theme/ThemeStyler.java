@@ -148,6 +148,39 @@ public final class ThemeStyler {
         }
     }
 
+    // The "dR Darkride" header (login, sign-up, avatar...): the logo, then the name in the theme's display font and
+    // primary colour, glowing if the theme glows
+    public static void styleHeader(android.widget.ImageView header, Theme theme) {
+        android.content.res.Resources resources = header.getResources();
+        float density = resources.getDisplayMetrics().density;
+        int height = header.getLayoutParams() != null && header.getLayoutParams().height > 0
+                ? header.getLayoutParams().height : (int) (64 * density);
+        android.graphics.Bitmap logo = android.graphics.BitmapFactory.decodeResource(resources,
+                io.highfidelity.hifiinterface.R.drawable.darkride_logo_header);
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        paint.setTypeface(theme.displayFont);
+        paint.setColor(theme.primary);
+        paint.setTextSize(height * 0.42f);
+        paint.setLetterSpacing(theme.displayLetterSpacing);
+        if (theme.glow) {
+            paint.setShadowLayer(GLOW_RADIUS_DP * density, 0, 0, Theme.withAlpha(theme.primary, GLOW_ALPHA));
+        }
+        String name = theme.displayText("Darkride");
+        float gap = height * 0.25f;
+        float glow = GLOW_RADIUS_DP * density;
+        int width = (int) (height + gap + paint.measureText(name) + 2 * glow);
+        android.graphics.Bitmap bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
+        if (logo != null) {
+            canvas.drawBitmap(logo, null, new android.graphics.RectF(0, 0, height, height), new Paint(Paint.FILTER_BITMAP_FLAG));
+        }
+        Paint.FontMetrics metrics = paint.getFontMetrics();
+        float baseline = height / 2f - (metrics.ascent + metrics.descent) / 2f;
+        canvas.drawText(name, height + gap, baseline, paint);
+        header.setImageBitmap(bitmap);
+        header.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+    }
+
     // A link-like menu option (log out, the privacy policy)
     public static void styleMenuOption(TextView view, Theme theme) {
         styleDisplay(view, theme);

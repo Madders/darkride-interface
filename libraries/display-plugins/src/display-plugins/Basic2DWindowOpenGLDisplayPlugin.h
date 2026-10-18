@@ -39,6 +39,12 @@ public:
 
     virtual gpu::PipelinePointer getRenderTexturePipeline() override;
 
+#if defined(Q_OS_ANDROID)
+    // The app theme has changed (the Android app's Settings > Theme): the virtual pad's images are made again in it.
+    // On the main thread.
+    static void reloadTheme();
+#endif
+
 protected:
     mutable bool _isThrottled = false;
 
@@ -52,6 +58,8 @@ private:
 
 #if defined(Q_OS_ANDROID)
     gpu::TexturePointer _virtualPadStickTexture;
+    // makes the virtual pad's images (in the app theme's colours or its own images)
+    void loadVirtualPad();
     gpu::TexturePointer _virtualPadStickBaseTexture;
     qreal _virtualPadPixelSize;
 

@@ -9,6 +9,7 @@
 #include "CompositorHelper.h"
 #include "VirtualPadManager.h"
 
+#include <atomic>
 #include <mutex>
 
 #include <QScreen>
@@ -37,6 +38,18 @@ static QString themedImage(const QString& slot, const QString& defaultPath) {
     return themeIcons.contains(slot) ? themeIconFolder + "/" + slot + ".png" : defaultPath;
 }
 
+// Set (on the main thread) when the theme has changed, for the render thread to make the pad's images again
+static std::atomic<bool> themeChanged { false };
+
+static void readTheme() {
+    Setting::Handle<QString> iconColor { QStringList() << "Android" << "themeIconColor", QString() };
+    themeIconColor = QColor(iconColor.get());
+    Setting::Handle<QString> iconFolder { QStringList() << "Android" << "themeIconFolder", QString() };
+    themeIconFolder = iconFolder.get();
+    Setting::Handle<QString> icons { QStringList() << "Android" << "themeIcons", QString() };
+    themeIcons = icons.get().split(",", Qt::SkipEmptyParts);
+}
+
 // The virtual pad's white images in the theme's icon colour
 static void tintForTheme(QImage& image, const QString& path) {
     if (!themeIconFolder.isEmpty() && path.startsWith(themeIconFolder)) {
@@ -62,8 +75,23 @@ static void tintForTheme(QImage& image, const QString& path) {
 }
 #endif
 
+#if defined(Q_OS_ANDROID)
+void Basic2DWindowOpenGLDisplayPlugin::reloadTheme() {
+    readTheme();
+    themeChanged.store(true, std::memory_order_release);
+}
+#endif
+
 void Basic2DWindowOpenGLDisplayPlugin::customizeContext() {
 #if defined(Q_OS_ANDROID)
+    loadVirtualPad();
+#endif
+    Parent::customizeContext();
+}
+
+#if defined(Q_OS_ANDROID)
+// The virtual pad's images, in the theme's colours or its own (on the render thread)
+void Basic2DWindowOpenGLDisplayPlugin::loadVirtualPad() {
     qreal dpi = getFullscreenTarget()->physicalDotsPerInch();
     _virtualPadPixelSize = dpi * VirtualPad::Manager::BASE_DIAMETER_PIXELS / VirtualPad::Manager::DPI;
 
@@ -125,9 +153,8 @@ void Basic2DWindowOpenGLDisplayPlugin::customizeContext() {
                 themedImage("handshake", PathUtils::resourcesPath() + "images/handshake.png"),
                 VirtualPad::Manager::Button::HANDSHAKE));
     }
-#endif
-    Parent::customizeContext();
 }
+#endif
 
 void Basic2DWindowOpenGLDisplayPlugin::uncustomizeContext() {
     Parent::uncustomizeContext();
@@ -136,12 +163,7 @@ void Basic2DWindowOpenGLDisplayPlugin::uncustomizeContext() {
 bool Basic2DWindowOpenGLDisplayPlugin::internalActivate() {
     _framerateActions.clear();
 #if defined(Q_OS_ANDROID)
-    Setting::Handle<QString> iconColor { QStringList() << "Android" << "themeIconColor", QString() };
-    themeIconColor = QColor(iconColor.get());
-    Setting::Handle<QString> iconFolder { QStringList() << "Android" << "themeIconFolder", QString() };
-    themeIconFolder = iconFolder.get();
-    Setting::Handle<QString> icons { QStringList() << "Android" << "themeIcons", QString() };
-    themeIcons = icons.get().split(",", Qt::SkipEmptyParts);
+    readTheme();
     _container->setFullscreen(nullptr, true);
 #endif
     _container->addMenuItem(PluginType::DISPLAY_PLUGIN, MENU_PATH(), FULLSCREEN,
@@ -166,6 +188,12 @@ gpu::PipelinePointer Basic2DWindowOpenGLDisplayPlugin::getRenderTexturePipeline(
 
 void Basic2DWindowOpenGLDisplayPlugin::compositeExtra() {
 #if defined(Q_OS_ANDROID)
+    if (themeChanged.exchange(false, std::memory_order_acquire)) {
+        _virtualPadStickTexture.reset();
+        _virtualPadStickBaseTexture.reset();
+        _virtualPadButtons.clear();
+        loadVirtualPad();
+    }
     auto& virtualPadManager = VirtualPad::Manager::instance();
     if(virtualPadManager.getLeftVirtualPad()->isShown()) {
         // render stick base

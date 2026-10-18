@@ -55,7 +55,9 @@ public class ProfileFragment extends Fragment {
         rootView.findViewById(R.id.cancel).setOnClickListener(view -> onCancelProfileEdit());
 
         RecyclerView avatarsView = rootView.findViewById(R.id.gridview);
-        int numberOfColumns = 1;
+        // one column in portrait, two side by side in landscape
+        int numberOfColumns = getResources().getConfiguration().orientation
+                == android.content.res.Configuration.ORIENTATION_LANDSCAPE ? 2 : 1;
         mAvatarsProvider = new AvatarProvider(getContext());
         GridLayoutManager gridLayoutMgr = new GridLayoutManager(getContext(), numberOfColumns);
         avatarsView.setLayoutManager(gridLayoutMgr);

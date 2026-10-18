@@ -84,6 +84,9 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
     private native void nativeEnterForeground();
     private native long nativeOnExitVr();
     private native void nativeInitAfterAppLoaded();
+    private native void nativeReloadTheme();
+    // the app theme the world has (ThemeManager's published version)
+    private int mThemeVersion = -1;
 
     private AssetManager assetManager;
 
@@ -223,6 +226,14 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
     protected void onResume() {
         super.onResume();
         nativeEnterForeground();
+        // a new theme from the menus since the world last had one
+        int themeVersion = ThemeManager.getPublishedVersion();
+        if (!isLoading && (mThemeVersion >= 0 ? themeVersion != mThemeVersion : themeVersion > 0)) {
+            nativeReloadTheme();
+        }
+        if (!isLoading) {
+            mThemeVersion = themeVersion;
+        }
         surfacesWorkaround();
         scheduleQtSizeSync();
         registerReceiver(headsetStateReceiver, new IntentFilter(Intent.ACTION_HEADSET_PLUG));

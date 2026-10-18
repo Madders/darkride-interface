@@ -20,8 +20,17 @@ public final class ThemeManager {
     public static final String PREFERENCE_KEY = "app_theme";
     public static final String DEFAULT_THEME = "darkride";
     private static final String THEMES_FOLDER = "themes";
+    private static final String ENGINE_THEME_KEY = "engine_theme";
 
     private static Theme sTheme;
+    // the theme last handed to the engine, and how many times one has been (InterfaceActivity compares this to know
+    // when the world should take a new one up)
+    private static String sPublishedThemeId;
+    private static int sPublishedVersion;
+
+    public static int getPublishedVersion() {
+        return sPublishedVersion;
+    }
 
     private ThemeManager() {}
 
@@ -54,6 +63,17 @@ public final class ThemeManager {
     // display plugin read when the world starts): none for a theme that leaves them white
     public static void publishToEngine(Context context) {
         Theme theme = get(context);
+        android.content.SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(context);
+        if (sPublishedThemeId == null) {
+            // what the engine was given last time (its settings keep it)
+            sPublishedThemeId = preferences.getString(ENGINE_THEME_KEY, "");
+        }
+        if (theme.id.equals(sPublishedThemeId)) {
+            return;
+        }
+        sPublishedThemeId = theme.id;
+        sPublishedVersion++;
+        preferences.edit().putString(ENGINE_THEME_KEY, theme.id).apply();
         HifiUtils utils = HifiUtils.getInstance();
         utils.updateHifiSettingString("Android", "themeIconColor", theme.tintIcons ? hex(theme.icon) : "");
         utils.updateHifiSettingString("Android", "themeAlertColor", theme.tintIcons ? hex(theme.alert) : "");

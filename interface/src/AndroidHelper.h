@@ -48,6 +48,8 @@ public:
     void setWorldDetail(int quality);
     float getDrawDistance() const;
     void setDrawDistance(float meters);
+    // The app theme changed (the app's Settings > Theme): the virtual pad takes it up
+    void reloadTheme();
 
     void performHapticFeedback(int duration);
     void processURL(const QString &url);

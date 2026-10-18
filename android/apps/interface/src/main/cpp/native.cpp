@@ -328,6 +328,13 @@ Java_io_highfidelity_hifiinterface_HifiUtils_updateHifiSetting(JNIEnv *env, jobj
     setting.set(value);
 }
 
+// The app theme changed while the world was running (InterfaceActivity, coming back from the menus): the virtual pad
+// and the scripts' buttons take it up
+JNIEXPORT void JNICALL
+Java_io_highfidelity_hifiinterface_InterfaceActivity_nativeReloadTheme(JNIEnv *env, jobject instance) {
+    AndroidHelper::instance().reloadTheme();
+}
+
 // A text setting of the engine's (the app theme's colours, for the world's buttons and virtual pad)
 JNIEXPORT void JNICALL
 Java_io_highfidelity_hifiinterface_HifiUtils_updateHifiSettingString(JNIEnv *env, jobject instance,

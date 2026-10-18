@@ -15,6 +15,7 @@ import android.widget.AbsListView;
 import android.widget.Button;
 import android.widget.CompoundButton;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.recyclerview.widget.RecyclerView;
@@ -51,7 +52,7 @@ public final class ThemeWalker {
     }
 
     public static void apply(View view, Theme theme) {
-        apply(view, theme, roles(view.getResources()));
+        apply(view, theme, roles(view));
     }
 
     private static void apply(View view, Theme theme, SparseIntArray roles) {
@@ -68,6 +69,11 @@ public final class ThemeWalker {
             } else if (role != 0) {
                 view.setBackgroundColor(color(theme, role));
             }
+        }
+
+        if (view.getId() == R.id.header && view instanceof ImageView && theme.displayFont != null) {
+            // the "dR Darkride" header image: drawn in the theme's own font and colour
+            ThemeStyler.styleHeader((ImageView) view, theme);
         }
 
         if (view instanceof EditText) {
@@ -141,8 +147,16 @@ public final class ThemeWalker {
     }
 
     // The app's own colours (res/values/colors.xml), by what they're for
-    private static SparseIntArray roles(Resources resources) {
+    private static SparseIntArray roles(View view) {
+        Resources resources = view.getResources();
         SparseIntArray roles = new SparseIntArray();
+        // the activity's own accent (Settings' headings, among others)
+        android.util.TypedValue accent = new android.util.TypedValue();
+        if (view.getContext().getTheme().resolveAttribute(android.R.attr.colorAccent, accent, true)
+                && accent.type >= android.util.TypedValue.TYPE_FIRST_COLOR_INT
+                && accent.type <= android.util.TypedValue.TYPE_LAST_COLOR_INT) {
+            roles.put(accent.data, PRIMARY);
+        }
         int[][] table = {
             { TEXT, R.color.menuOption, R.color.white_opaque, R.color.clearText },
             { TEXT_SECONDARY, R.color.colorButton3, R.color.editTextHint, R.color.starUnselectedTint },

@@ -39,10 +39,7 @@ function init() {
         qml: "hifi/ActionBar.qml"
     });
     backButton = actionbar.addButton({
-        icon: themedIcon("back", "icons/+android_interface/backward.svg"),
-        activeIcon: themedIcon("back", "icons/+android_interface/backward.svg"),
         text: "",
-        iconColor: themedIconColor("back", "Android/themeIconColor"),
         bgOpacity: 0.0,
         hoverBgOpacity: 0.0,
         activeBgOpacity: 0.0
@@ -53,16 +50,44 @@ function init() {
 
     // Settings, over the world (InterfaceActivity's settings panel)
     settingsButton = actionbar.addButton({
-        icon: themedIcon("settings", "icons/+android_interface/settings.svg"),
-        activeIcon: themedIcon("settings", "icons/+android_interface/settings.svg"),
         text: "",
-        iconColor: themedIconColor("settings", "Android/themeIconColor"),
         bgOpacity: 0.0,
         hoverBgOpacity: 0.0,
         activeBgOpacity: 0.0
     });
     settingsButton.entered.connect(onBackPressed);
     settingsButton.clicked.connect(onSettingsClicked);
+
+    applyTheme();
+    themeTimer = Script.setInterval(checkTheme, THEME_CHECK_MSECS);
+}
+
+// The app theme's icons and colours on the buttons, and again when the theme changes in the app's menus
+var THEME_CHECK_MSECS = 2000;
+var themeTimer;
+var appliedTheme;
+
+function currentTheme() {
+    return Settings.getValue("Android/themeIconFolder", "") + "|" + Settings.getValue("Android/themeIcons", "") + "|" +
+        Settings.getValue("Android/themeIconColor", "");
+}
+
+function applyTheme() {
+    appliedTheme = currentTheme();
+    var back = themedIcon("back", "icons/+android_interface/backward.svg");
+    backButton.icon = back;
+    backButton.activeIcon = back;
+    backButton.iconColor = themedIconColor("back", "Android/themeIconColor");
+    var settings = themedIcon("settings", "icons/+android_interface/settings.svg");
+    settingsButton.icon = settings;
+    settingsButton.activeIcon = settings;
+    settingsButton.iconColor = themedIconColor("settings", "Android/themeIconColor");
+}
+
+function checkTheme() {
+    if (currentTheme() !== appliedTheme) {
+        applyTheme();
+    }
 }
 
 function onSettingsClicked() {
@@ -79,6 +104,9 @@ function onBackClicked() {
 
 
 Script.scriptEnding.connect(function() {
+    if (themeTimer) {
+        Script.clearInterval(themeTimer);
+    }
     if(backButton) {
         backButton.entered.disconnect(onBackPressed);
         backButton.clicked.disconnect(onBackClicked);
