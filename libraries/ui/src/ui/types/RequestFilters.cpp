@@ -27,6 +27,9 @@
 
 #if !defined(Q_OS_ANDROID)
 
+#include <QtWebEngine/QQuickWebEngineProfile>
+#include <QtWebEngine/QQuickWebEngineScript>
+
 namespace {
 
     bool isAuthableTivoliURL(const QUrl& url) {
@@ -80,24 +83,43 @@ namespace {
     }
 }
 
-void RequestFilters::clearServiceWorkers(const QString& persistentStoragePath) {
-    // Blocking new service workers (below) doesn't stop the ones already registered on disk from starting
+// Sites in Darkride get no Cache Storage and no service workers. Qt 5.15's Chromium can crash the whole client in
+// Cache Storage: while it adds up a site's storage, a cache that's being replaced can be missing, and
+// LegacyCacheStorage::SizeImpl calls Size() on it unchecked (Chromium 87 and 90 too). YouTube's player uses Cache
+// Storage, so a web entity showing it took Darkride down. Sites check for both APIs before using them, as plain
+// http pages and older browsers don't have them; they only cache for offline use and speed.
+void RequestFilters::disableServiceWorkers(QQuickWebEngineProfile* profile) {
+    // before the page's own scripts, in every frame (the YouTube player is in an iframe), so 'caches' in window
+    // and 'serviceWorker' in navigator are false
+    static const QString NO_CACHE_STORAGE = QStringLiteral(
+        "(function () {"
+        "  try { delete Window.prototype.caches; delete window.caches; } catch (e) {}"
+        "  try { delete Navigator.prototype.serviceWorker; } catch (e) {}"
+        "})();");
+    auto script = new QQuickWebEngineScript(profile);
+    script->setName("darkride-no-cache-storage");
+    script->setSourceCode(NO_CACHE_STORAGE);
+    script->setInjectionPoint(QQuickWebEngineScript::DocumentCreation);
+    script->setWorldId(QQuickWebEngineScript::MainWorld);
+    script->setRunOnSubframes(true);
+    auto scripts = profile->userScripts();
+    scripts.append(&scripts, script);
+
+    // The service workers and Cache Storage that sites stored in earlier runs
     static std::once_flag once;
-    std::call_once(once, [&persistentStoragePath] {
-        QDir serviceWorkers(persistentStoragePath + "/Service Worker");
+    std::call_once(once, [profile] {
+        QDir serviceWorkers(profile->persistentStoragePath() + "/Service Worker");
         if (serviceWorkers.exists()) {
-            qDebug() << "Deleting the web views' service workers in" << serviceWorkers.absolutePath() << ":"
-                     << (serviceWorkers.removeRecursively() ? "done" : "failed");
+            qDebug() << "Deleting the web views' service workers and Cache Storage in" << serviceWorkers.absolutePath()
+                     << ":" << (serviceWorkers.removeRecursively() ? "done" : "failed");
         }
     });
 }
 
 void RequestFilters::interceptTivoliWebEngineRequest(QWebEngineUrlRequestInfo& info, bool restricted) {
-    // Sites in Darkride don't get service workers. Qt 5.15's Chromium crashes the whole client in the Cache
-    // Storage they use: while it adds up a site's storage, a cache the worker is replacing can be missing, and
-    // LegacyCacheStorage::SizeImpl calls Size() on it unchecked. YouTube's player registers one, so a web entity
-    // showing it took Darkride down. Sites work without; a service worker only caches for offline use and speed.
+    // A service worker's script is refused too, in case a page registers one anyway (see disableServiceWorkers)
     if (info.resourceType() == QWebEngineUrlRequestInfo::ResourceTypeServiceWorker) {
+        qDebug() << "Blocked a service worker:" << info.requestUrl().toString();
         info.block(true);
         return;
     }

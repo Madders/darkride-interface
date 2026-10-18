@@ -21,15 +21,17 @@
 #include <QWebEngineUrlRequestInfo>
 
 class QQmlContext;
+class QQuickWebEngineProfile;
 
 class RequestFilters : public QObject {
 public:
     static void interceptTivoliWebEngineRequest(QWebEngineUrlRequestInfo& info, bool restricted);
     static void interceptFileType(QWebEngineUrlRequestInfo& info);
 
-    // Deletes the service workers (and their Cache Storage) that sites registered in earlier runs, once per run,
-    // before the first page loads. Call it with the profile's persistent storage path.
-    static void clearServiceWorkers(const QString& persistentStoragePath);
+    // Sites in the profile's web views get no Cache Storage and no service workers (see RequestFilters.cpp):
+    // a script removes the APIs from every page and frame, and the service workers and Cache Storage that sites
+    // stored in earlier runs are deleted, once per run, before the first page loads.
+    static void disableServiceWorkers(QQuickWebEngineProfile* profile);
 };
 #endif
 

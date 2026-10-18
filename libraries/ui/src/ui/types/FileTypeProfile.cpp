@@ -35,7 +35,7 @@ FileTypeProfile::FileTypeProfile(QQmlContext* parent) :
 
     setStorageName(QML_WEB_ENGINE_STORAGE_NAME);
     setOffTheRecord(false);
-    RequestFilters::clearServiceWorkers(persistentStoragePath());
+    RequestFilters::disableServiceWorkers(this);
 
     auto requestInterceptor = new RequestInterceptor(this);
     setUrlRequestInterceptor(requestInterceptor);
