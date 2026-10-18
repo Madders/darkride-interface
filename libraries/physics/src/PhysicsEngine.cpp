@@ -169,21 +169,42 @@ PhysicsWorld* PhysicsEngine::characterWorld() const {
 }
 
 // private
-void PhysicsEngine::removeDynamicsForObject(ObjectMotionState* motionState) {
+std::vector<EntityDynamicPointer> PhysicsEngine::removeDynamicsForObject(ObjectMotionState* motionState) {
+    std::vector<EntityDynamicPointer> removed;
     JPH::Body* body = motionState->getBody();
     PhysicsWorld* world = motionState->getWorld();
     if (!body || !world) {
-        return;
+        return removed;
     }
     auto key = std::make_pair(world, body->GetID().GetIndexAndSequenceNumber());
     auto itr = _objectDynamicsByBody.find(key);
     if (itr == _objectDynamicsByBody.end()) {
-        return;
+        return removed;
     }
     QSet<QUuid> ids = itr->second;
     for (const QUuid& dynamicID : ids) {
         if (!dynamicID.isNull() && _objectDynamics.contains(dynamicID)) {
+            EntityDynamicPointer dynamic = _objectDynamics[dynamicID];
             removeDynamic(dynamicID);
+            if (dynamic) {
+                removed.push_back(dynamic);
+            }
+        }
+    }
+    return removed;
+}
+
+// private: puts back the dynamics that couldn't go back on a rebuilt body at once
+void PhysicsEngine::restoreDynamics() {
+    if (_dynamicsToRestore.isEmpty()) {
+        return;
+    }
+    // (addDynamic can remove a dynamic, which takes it out of _dynamicsToRestore too)
+    QHash<QUuid, EntityDynamicPointer> pending;
+    pending.swap(_dynamicsToRestore);
+    for (const EntityDynamicPointer& dynamic : pending) {
+        if (!addDynamic(dynamic)) {
+            _dynamicsToRestore[dynamic->getID()] = dynamic;
         }
     }
 }
@@ -258,9 +279,15 @@ void PhysicsEngine::reinsertObject(ObjectMotionState* object) {
     }
     PhysicsWorld* oldWorld = object->getWorld();
     PhysicsWorld* newWorld = worldFor(object);
+
+    // The body is rebuilt (PhysicsWorld::addObject destroys it and creates a new one), and Jolt's constraints hold
+    // pointers to their bodies: a constraint left on the old body crashed the next step, in
+    // ConstraintManager::GetActiveConstraints, as a world with hinges loaded. They come off first, and go back on
+    // the new body after, built afresh; one that can't yet (its other body isn't there) is retried every transaction.
+    std::vector<EntityDynamicPointer> dynamics = removeDynamicsForObject(object);
+
     if (oldWorld && oldWorld != newWorld) {
         // the object changed frame: out of one world, into another, in the new frame's coordinates
-        removeDynamicsForObject(object);
         oldWorld->removeObject(object);
     }
     newWorld->addObject(object);
@@ -271,9 +298,17 @@ void PhysicsEngine::reinsertObject(ObjectMotionState* object) {
         // in case it was a frame until now
         unregisterFrame(object->getObjectID());
     }
+
+    for (const EntityDynamicPointer& dynamic : dynamics) {
+        if (!addDynamic(dynamic)) {
+            _dynamicsToRestore[dynamic->getID()] = dynamic;
+        }
+    }
 }
 
 void PhysicsEngine::processTransaction(PhysicsEngine::Transaction& transaction) {
+    restoreDynamics();
+
     // removes
     for (auto object : transaction.objectsToRemove) {
         PhysicsWorld* world = object->getWorld();
@@ -600,6 +635,8 @@ bool PhysicsEngine::addDynamic(EntityDynamicPointer dynamic) {
 }
 
 void PhysicsEngine::removeDynamic(const QUuid dynamicID) {
+    // (one waiting to go back on a rebuilt body is removed for good)
+    _dynamicsToRestore.remove(dynamicID);
     if (_objectDynamics.contains(dynamicID)) {
         ObjectDynamicPointer dynamic = std::static_pointer_cast<ObjectDynamic>(_objectDynamics[dynamicID]);
         if (!dynamic) {
