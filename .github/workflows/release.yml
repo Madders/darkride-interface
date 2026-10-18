@@ -278,7 +278,7 @@ jobs:
           echo "TIVOLI_VCPKG_BASE=$HOME/dv" >> "$GITHUB_ENV"
           echo "VCPKG_DEFAULT_BINARY_CACHE=$HOME/dvcache" >> "$GITHUB_ENV"
           mkdir -p "$HOME/dvcache"
-          sw_vers; uname -m; cmake --version | head -1
+          sw_vers; uname -m
 
       # -b: MacPorts' prebuilt archives only, never a build from source (WebEngine would take many hours)
       - name: Install MacPorts and Qt
@@ -293,6 +293,16 @@ jobs:
 
       - name: Build tools
         run: brew install ninja
+
+      # vcpkg builds the ports with the first CMake on PATH, and the runner's is CMake 4, which refuses a
+      # CMakeLists.txt without cmake_minimum_required() at all (tbb's), whatever CMAKE_POLICY_VERSION_MINIMUM says
+      - name: CMake 3.31
+        uses: jwlawson/actions-setup-cmake@v2.2.0
+        with:
+          cmake-version: "3.31.6"
+
+      - name: Which CMake
+        run: which cmake && cmake --version | head -1
 
       - name: Restore vcpkg packages
         id: vcpkg-cache
