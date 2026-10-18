@@ -1,0 +1,37 @@
+{
+    "id": "cyber_hud",
+    "name": "Cyber HUD",
+    "description": "JARVIS cyan and amber on near-black, from the Home Assistant dashboards",
+    "colors": {
+        "background": "#05080D",
+        "surface": "#0A1520",
+        "panel": "#DB08121C",
+        "primary": "#00E5FF",
+        "accent": "#FF9E2C",
+        "alert": "#FF2A4D",
+        "ok": "#39FF88",
+        "text": "#CFEFFF",
+        "textSecondary": "#6F9BB0",
+        "disabled": "#3D5563",
+        "icon": "#4FC3D9"
+    },
+    "fonts": {
+        "display": "fonts/orbitron.ttf",
+        "body": "fonts/rajdhani.ttf",
+        "mono": "fonts/sharetechmono.ttf",
+        "displayUppercase": true,
+        "displayLetterSpacing": 0.18
+    },
+    "shape": {
+        "corners": "cut",
+        "cornerSize": 14,
+        "brackets": true,
+        "border": "primary",
+        "borderAlpha": 0.35,
+        "glow": true,
+        "backgroundPattern": "grid"
+    },
+    "title": {
+        "prefix": "DARKRIDE"
+    }
+}

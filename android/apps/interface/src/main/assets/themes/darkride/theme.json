@@ -1,0 +1,37 @@
+{
+    "id": "darkride",
+    "name": "Darkride",
+    "description": "Darkride's own look",
+    "colors": {
+        "background": "#1C2136",
+        "surface": "#171B2D",
+        "panel": "#CC171B2D",
+        "primary": "#A548FF",
+        "accent": "#00AFFF",
+        "alert": "#FF5555",
+        "ok": "#50FA7B",
+        "text": "#F4F6F8",
+        "textSecondary": "#9AA1BD",
+        "disabled": "#4A5070",
+        "icon": "#F4F6F8"
+    },
+    "fonts": {
+        "display": null,
+        "body": null,
+        "mono": null,
+        "displayUppercase": false,
+        "displayLetterSpacing": 0
+    },
+    "shape": {
+        "corners": "rounded",
+        "cornerSize": 8,
+        "brackets": false,
+        "border": null,
+        "borderAlpha": 0,
+        "glow": false,
+        "backgroundPattern": "none"
+    },
+    "title": {
+        "prefix": null
+    }
+}
