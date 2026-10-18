@@ -28,6 +28,7 @@ TivoliWebEngineProfile::TivoliWebEngineProfile(QQmlContext* parent) : Parent(par
 {
     setStorageName(QML_WEB_ENGINE_STORAGE_NAME);
     setOffTheRecord(false);
+    RequestFilters::clearServiceWorkers(persistentStoragePath());
 
     // we use the HFWebEngineRequestInterceptor to make sure that web requests are authenticated for the interface user
     setUrlRequestInterceptor(new RequestInterceptor(this));
