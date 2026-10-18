@@ -3,8 +3,6 @@ package io.highfidelity.hifiinterface.theme;
 import android.app.Activity;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
-import android.os.Handler;
-import android.os.Looper;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.Menu;
@@ -14,25 +12,20 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Locale;
-
 import io.highfidelity.hifiinterface.R;
 
 /**
- * The main screen's bars in the "ECU" layout (layout/activity_main_ecu.xml): the top bar with the section, status,
- * profile, date and clock, and the sections as tabs along the bottom, the current one in the primary colour with the
- * accent under it. The Home Assistant boiler ECU display's look.
+ * The main screen's bars in the console layout (layout/activity_main_console.xml), like a ship's console: the top bar
+ * with the section, status and profile, and the sections as tabs along the bottom, the current one in the primary colour
+ * with the accent under it.
  */
-public class EcuBars {
+public class ConsoleBars {
     public interface Listener {
         // a section's tab (the navigation menu's item)
         void onSectionSelected(MenuItem item);
         void onProfileClicked(View anchor);
     }
 
-    private static final long CLOCK_TICK_MSECS = 15 * 1000;
     private static final float RULE_ALPHA = 0.35f;
     private static final int UNDERLINE_DP = 3;
 
@@ -41,59 +34,31 @@ public class EcuBars {
     private final Listener mListener;
     private final TextView mTitle;
     private final TextView mStatus;
-    private final TextView mDate;
-    private final TextView mClock;
     private final ImageView mProfilePicture;
     private final TextView mProfileName;
     private final LinearLayout mTabs;
-    private final Handler mHandler = new Handler(Looper.getMainLooper());
     private CharSequence mCurrentTitle = "";
 
-    private final Runnable mTick = new Runnable() {
-        @Override
-        public void run() {
-            Date now = new Date();
-            mDate.setText(new SimpleDateFormat("EEE d MMM", Locale.getDefault()).format(now).toUpperCase(Locale.getDefault()));
-            mClock.setText(new SimpleDateFormat("HH:mm", Locale.getDefault()).format(now));
-            mHandler.postDelayed(this, CLOCK_TICK_MSECS);
-        }
-    };
-
-    public EcuBars(Activity activity, Theme theme, Listener listener) {
+    public ConsoleBars(Activity activity, Theme theme, Listener listener) {
         mActivity = activity;
         mTheme = theme;
         mListener = listener;
-        mTitle = activity.findViewById(R.id.ecu_title);
-        mStatus = activity.findViewById(R.id.ecu_status);
-        mDate = activity.findViewById(R.id.ecu_date);
-        mClock = activity.findViewById(R.id.ecu_clock);
-        mProfilePicture = activity.findViewById(R.id.ecu_profile_picture);
-        mProfileName = activity.findViewById(R.id.ecu_profile_name);
-        mTabs = activity.findViewById(R.id.ecu_tabs);
+        mTitle = activity.findViewById(R.id.console_title);
+        mStatus = activity.findViewById(R.id.console_status);
+        mProfilePicture = activity.findViewById(R.id.console_profile_picture);
+        mProfileName = activity.findViewById(R.id.console_profile_name);
+        mTabs = activity.findViewById(R.id.console_tabs);
 
         int rule = Theme.withAlpha(theme.primary, RULE_ALPHA);
-        activity.findViewById(R.id.ecu_top_bar).setBackgroundColor(Theme.withAlpha(theme.surface, 0.88f));
-        activity.findViewById(R.id.ecu_top_rule).setBackgroundColor(rule);
-        activity.findViewById(R.id.ecu_bottom_rule).setBackgroundColor(rule);
+        activity.findViewById(R.id.console_top_bar).setBackgroundColor(Theme.withAlpha(theme.surface, 0.88f));
+        activity.findViewById(R.id.console_top_rule).setBackgroundColor(rule);
+        activity.findViewById(R.id.console_bottom_rule).setBackgroundColor(rule);
         mTabs.setBackgroundColor(Theme.withAlpha(theme.surface, 0.88f));
 
         ThemeStyler.styleDisplay(mProfileName, theme);
         mProfileName.setTextColor(theme.text);
-        ThemeStyler.styleMono(mDate, theme);
-        mDate.setTextColor(theme.textSecondary);
-        ThemeStyler.styleMono(mClock, theme);
-        mClock.setTextColor(theme.text);
         ThemeStyler.styleMono(mStatus, theme);
-        activity.findViewById(R.id.ecu_profile).setOnClickListener(listener::onProfileClicked);
-    }
-
-    public void start() {
-        mHandler.removeCallbacks(mTick);
-        mTick.run();
-    }
-
-    public void stop() {
-        mHandler.removeCallbacks(mTick);
+        activity.findViewById(R.id.console_profile).setOnClickListener(listener::onProfileClicked);
     }
 
     // The section shown: the title, and its tab

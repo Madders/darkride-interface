@@ -107,7 +107,7 @@ public final class ThemeStyler {
         navigation.setBackgroundColor(theme.surface);
         if (navigation.getVisibility() == View.VISIBLE && navigation.getParent() instanceof ViewGroup
                 && !(navigation.getParent() instanceof androidx.drawerlayout.widget.DrawerLayout)) {
-            // the landscape rail's column (in the ECU layout the menu is hidden, and its parent is the whole screen)
+            // the landscape rail's column (in the console layout the menu is hidden, and its parent is the whole screen)
             ((View) navigation.getParent()).setBackgroundColor(theme.surface);
         }
         int[][] states = { { android.R.attr.state_checked }, {} };

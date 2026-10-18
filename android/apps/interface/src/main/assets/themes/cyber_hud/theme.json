@@ -31,7 +31,7 @@
         "glow": true,
         "backgroundPattern": "grid"
     },
-    "layout": "ecu",
+    "layout": "console",
     "icons": {
         "tint": true
     },

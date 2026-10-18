@@ -20,7 +20,7 @@ public class Theme {
     public static final String PATTERN_NONE = "none";
     public static final String PATTERN_GRID = "grid";
     public static final String LAYOUT_STANDARD = "standard";
-    public static final String LAYOUT_ECU = "ecu";
+    public static final String LAYOUT_CONSOLE = "console";
 
     public String id;
     public String name;
@@ -58,7 +58,7 @@ public class Theme {
     // nothing's found
     public boolean whimsy;
 
-    // the main screen's layout: "standard" (a menu rail or drawer) or "ecu" (bars top and bottom: EcuBars)
+    // the main screen's layout: "standard" (a menu rail or drawer) or "console" (bars top and bottom: ConsoleBars)
     public String layout = LAYOUT_STANDARD;
 
     // whether the world's buttons and virtual pad take the icon colour (otherwise they're white)
@@ -67,8 +67,42 @@ public class Theme {
     // shown before screen titles, as "PREFIX // TITLE"; null for the title alone
     public String titlePrefix;
 
+    // Where a theme's files are: the app's own (assets/themes/<id>) or installed ones (files/themes/<id>)
+    interface Source {
+        String read(String path) throws java.io.IOException;
+        Typeface font(String path);
+    }
+
     static Theme load(AssetManager assets, String folder) throws Exception {
-        JSONObject json = new JSONObject(ThemeManager.readAsset(assets, folder + "/theme.json"));
+        return load(new Source() {
+            @Override
+            public String read(String path) throws java.io.IOException {
+                return ThemeManager.readAsset(assets, folder + "/" + path);
+            }
+
+            @Override
+            public Typeface font(String path) {
+                return Typeface.createFromAsset(assets, folder + "/" + path);
+            }
+        });
+    }
+
+    static Theme load(java.io.File folder) throws Exception {
+        return load(new Source() {
+            @Override
+            public String read(String path) throws java.io.IOException {
+                return ThemeManager.readFile(new java.io.File(folder, path));
+            }
+
+            @Override
+            public Typeface font(String path) {
+                return Typeface.createFromFile(new java.io.File(folder, path));
+            }
+        });
+    }
+
+    private static Theme load(Source source) throws Exception {
+        JSONObject json = new JSONObject(source.read("theme.json"));
         Theme theme = new Theme();
         theme.id = json.getString("id");
         theme.name = json.optString("name", theme.id);
@@ -88,9 +122,9 @@ public class Theme {
 
         JSONObject fonts = json.optJSONObject("fonts");
         if (fonts != null) {
-            theme.displayFont = font(assets, folder, fonts, "display");
-            theme.bodyFont = font(assets, folder, fonts, "body");
-            theme.monoFont = font(assets, folder, fonts, "mono");
+            theme.displayFont = font(source, fonts, "display");
+            theme.bodyFont = font(source, fonts, "body");
+            theme.monoFont = font(source, fonts, "mono");
             theme.displayUppercase = fonts.optBoolean("displayUppercase", false);
             theme.displayLetterSpacing = (float) fonts.optDouble("displayLetterSpacing", 0);
         }
@@ -145,7 +179,7 @@ public class Theme {
         }
     }
 
-    private static Typeface font(AssetManager assets, String folder, JSONObject fonts, String key) {
+    private static Typeface font(Source source, JSONObject fonts, String key) {
         if (fonts.isNull(key)) {
             return null;
         }
@@ -155,7 +189,7 @@ public class Theme {
             return null;
         }
         try {
-            return Typeface.createFromAsset(assets, folder + "/" + path);
+            return source.font(path);
         } catch (RuntimeException e) {
             Log.w(TAG, "Couldn't load the font " + path, e);
             return null;

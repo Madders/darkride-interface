@@ -31,10 +31,10 @@
     <dimen name="menuRailWidth">240dp</dimen>
     <!-- the logo while loading (smaller in landscape: values-land) -->
     <dimen name="splashLogoSize">242dp</dimen>
-    <!-- the "ECU" layout's bars (layout/activity_main_ecu.xml) -->
-    <dimen name="ecuBarHeight">56dp</dimen>
-    <dimen name="ecuBarPadding">16dp</dimen>
-    <dimen name="ecuTabsHeight">56dp</dimen>
+    <!-- the console layout's bars (layout/activity_main_console.xml) -->
+    <dimen name="consoleBarHeight">56dp</dimen>
+    <dimen name="consoleBarPadding">16dp</dimen>
+    <dimen name="consoleTabsHeight">56dp</dimen>
     <!-- the menu's profile header (shorter in landscape: values-land) -->
     <dimen name="navHeaderHeight">176dp</dimen>
     <!-- the narrowest a place card gets before the places list has fewer columns (HomeFragment) -->

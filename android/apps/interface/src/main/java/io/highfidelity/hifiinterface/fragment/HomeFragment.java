@@ -200,7 +200,7 @@ public class HomeFragment extends Fragment {
     private float getContentWidthPx() {
         float width = getResources().getDisplayMetrics().widthPixels;
         if (getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE
-                && !Theme.LAYOUT_ECU.equals(ThemeManager.get(getContext()).layout)) {
+                && !Theme.LAYOUT_CONSOLE.equals(ThemeManager.get(getContext()).layout)) {
             width -= getResources().getDimension(R.dimen.menuRailWidth);
         }
         return width;

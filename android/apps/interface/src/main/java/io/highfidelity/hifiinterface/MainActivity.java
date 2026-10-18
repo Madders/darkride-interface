@@ -37,7 +37,7 @@ import io.highfidelity.hifiinterface.fragment.PolicyFragment;
 import io.highfidelity.hifiinterface.fragment.ProfileFragment;
 import io.highfidelity.hifiinterface.fragment.SettingsFragment;
 import io.highfidelity.hifiinterface.fragment.SignupFragment;
-import io.highfidelity.hifiinterface.theme.EcuBars;
+import io.highfidelity.hifiinterface.theme.ConsoleBars;
 import io.highfidelity.hifiinterface.theme.Theme;
 import io.highfidelity.hifiinterface.theme.ThemeManager;
 import io.highfidelity.hifiinterface.theme.ThemeStyler;
@@ -63,8 +63,8 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
     private DrawerLayout mDrawerLayout;
     private Toolbar mToolbar;
     private Theme mTheme;
-    // the bars in the "ECU" layout (themes like Cyber HUD), or null
-    private EcuBars mEcuBars;
+    // the bars in the console layout (themes like Cyber HUD), or null
+    private ConsoleBars mConsoleBars;
     private NavigationView mNavigationView;
     private ImageView mProfilePicture;
     private TextView mDisplayName;
@@ -83,8 +83,8 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         MenuOrientation.apply(this);
         ThemeWalker.themeFragments(this, getFragmentManager());
         mTheme = ThemeManager.get(this);
-        boolean ecu = Theme.LAYOUT_ECU.equals(mTheme.layout);
-        setContentView(ecu ? R.layout.activity_main_ecu : R.layout.activity_main);
+        boolean console = Theme.LAYOUT_CONSOLE.equals(mTheme.layout);
+        setContentView(console ? R.layout.activity_main_console : R.layout.activity_main);
 
         mNavigationView = findViewById(R.id.nav_view);
         mNavigationView.setNavigationItemSelectedListener(this);
@@ -128,8 +128,8 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         mDisplayName.setTextColor(mTheme.text);
         ThemeStyler.styleMenuOption(mLogoutOption, mTheme);
         ThemeStyler.styleMenuOption(findViewById(R.id.policy), mTheme);
-        if (ecu) {
-            mEcuBars = new EcuBars(this, mTheme, new EcuBars.Listener() {
+        if (console) {
+            mConsoleBars = new ConsoleBars(this, mTheme, new ConsoleBars.Listener() {
                 @Override
                 public void onSectionSelected(MenuItem item) {
                     onNavigationItemSelected(item);
@@ -274,8 +274,8 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
             mLogoutOption.setVisibility(View.VISIBLE);
             mPeopleMenuItem.setVisible(true);
             updateProfileHeader();
-            if (mEcuBars != null) {
-                mEcuBars.setUser(getUsername(), true);
+            if (mConsoleBars != null) {
+                mConsoleBars.setUser(getUsername(), true);
             }
         } else {
             mLoginPanel.setVisibility(View.VISIBLE);
@@ -283,13 +283,13 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
             mLogoutOption.setVisibility(View.GONE);
             mPeopleMenuItem.setVisible(false);
             mDisplayName.setText("");
-            if (mEcuBars != null) {
-                mEcuBars.setUser(null, false);
-                mEcuBars.setProfilePicture(getDrawable(PROFILE_PICTURE_PLACEHOLDER));
+            if (mConsoleBars != null) {
+                mConsoleBars.setUser(null, false);
+                mConsoleBars.setProfilePicture(getDrawable(PROFILE_PICTURE_PLACEHOLDER));
             }
         }
-        if (mEcuBars != null) {
-            mEcuBars.setSections(mNavigationView.getMenu());
+        if (mConsoleBars != null) {
+            mConsoleBars.setSections(mNavigationView.getMenu());
         }
     }
 
@@ -312,8 +312,8 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         }
         super.setTitle(ThemeStyler.title(mTheme, title));
         mToolbar.post(() -> ThemeStyler.styleToolbarTitle(mToolbar, mTheme));
-        if (mEcuBars != null) {
-            mEcuBars.setTitle(title);
+        if (mConsoleBars != null) {
+            mConsoleBars.setTitle(title);
         }
     }
 
@@ -365,21 +365,15 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         super.onStart();
         setUsernameChangedListener(this);
         updateLoginMenu();
-        if (mEcuBars != null) {
-            mEcuBars.start();
-        }
     }
 
     @Override
     protected void onStop() {
         super.onStop();
         setUsernameChangedListener(null);
-        if (mEcuBars != null) {
-            mEcuBars.stop();
-        }
     }
 
-    // The ECU layout's profile: log in, or log out, and the privacy policy
+    // The console layout's profile: log in, or log out, and the privacy policy
     private void showProfileMenu(View anchor) {
         android.widget.PopupMenu menu = new android.widget.PopupMenu(this, anchor);
         boolean loggedIn = HifiUtils.getInstance().isUserLoggedIn();
@@ -500,8 +494,8 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
             imageDrawable.setCircular(true);
             imageDrawable.setCornerRadius(Math.max(imageBitmap.getWidth(), imageBitmap.getHeight()) / 2.0f);
             mProfilePicture.setImageDrawable(imageDrawable);
-            if (mEcuBars != null) {
-                mEcuBars.setProfilePicture(imageDrawable);
+            if (mConsoleBars != null) {
+                mConsoleBars.setProfilePicture(imageDrawable);
             }
         }
 
