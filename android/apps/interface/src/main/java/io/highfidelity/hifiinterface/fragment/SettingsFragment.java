@@ -14,6 +14,7 @@ import io.highfidelity.hifiinterface.InterfaceActivity;
 import io.highfidelity.hifiinterface.MenuOrientation;
 import io.highfidelity.hifiinterface.theme.BackgroundDrawable;
 import io.highfidelity.hifiinterface.theme.ThemeManager;
+import io.highfidelity.hifiinterface.theme.ThemeSettings;
 import io.highfidelity.hifiinterface.R;
 
 public class SettingsFragment extends PreferenceFragment implements SharedPreferences.OnSharedPreferenceChangeListener {
@@ -52,6 +53,15 @@ public class SettingsFragment extends PreferenceFragment implements SharedPrefer
     private native void nativeSetDrawDistance(float meters);
 
     private boolean mLoadingGraphicsSettings;
+    // choosing, installing and customising themes (not over the world)
+    private ThemeSettings mThemeSettings;
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, android.content.Intent data) {
+        if (mThemeSettings == null || !mThemeSettings.onActivityResult(requestCode, resultCode, data)) {
+            super.onActivityResult(requestCode, resultCode, data);
+        }
+    }
 
     @Override
     public void onCreate(@Nullable Bundle savedInstanceState) {
@@ -79,6 +89,8 @@ public class SettingsFragment extends PreferenceFragment implements SharedPrefer
         // the menu's orientation is nothing to do with the world
         if (getActivity() instanceof InterfaceActivity) {
             getPreferenceScreen().removePreference(findPreference("pref_key_app"));
+        } else {
+            mThemeSettings = new ThemeSettings(this);
         }
     }
 

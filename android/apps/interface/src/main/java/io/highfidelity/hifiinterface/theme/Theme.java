@@ -156,6 +156,11 @@ public class Theme {
         return theme;
     }
 
+    // Whether this is a light theme (dark text on a light background)
+    public boolean isLight() {
+        return Color.luminance(surface) > 0.5f;
+    }
+
     // A screen's title in this theme's style
     public String displayText(CharSequence text) {
         String value = text == null ? "" : text.toString();

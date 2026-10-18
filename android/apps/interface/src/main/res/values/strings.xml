@@ -100,6 +100,58 @@
     <string name="settings_app">App</string>
     <string name="menu_orientation">Menu orientation</string>
     <string name="app_theme">Theme</string>
+    <string name="theme_install">Install a theme…</string>
+    <string name="theme_install_summary">From a theme\'s .zip file</string>
+    <string name="theme_installed">Installed %1$s</string>
+    <string name="theme_install_failed">Couldn\'t install the theme: %1$s</string>
+    <string name="theme_customise">Customise…</string>
+    <string name="theme_customise_summary">Make your own from this theme: colours, corners, glow</string>
+    <string name="theme_export">Export…</string>
+    <string name="theme_export_summary">Save this theme as a .zip to share</string>
+    <string name="theme_exported">Saved the theme</string>
+    <string name="theme_remove">Remove this theme</string>
+    <string name="theme_remove_summary">%1$s is installed: remove it</string>
+    <string name="theme_remove_builtin">The app\'s own themes can\'t be removed</string>
+    <string name="theme_custom_primary">Main colour</string>
+    <string name="theme_custom_accent">Accent colour</string>
+    <string name="theme_custom_corners">Corners</string>
+    <string name="theme_custom_layout">Layout</string>
+    <string name="theme_custom_glow">Glowing titles</string>
+    <string name="theme_custom_grid">Grid background</string>
+    <string name="theme_custom_save">Save as My theme</string>
+    <string-array name="theme_custom_colour_names" translatable="false">
+        <item>Theme\'s own</item>
+        <item>Cyan</item>
+        <item>Amber</item>
+        <item>Violet</item>
+        <item>Sky blue</item>
+        <item>Green</item>
+        <item>Red</item>
+        <item>Pink</item>
+        <item>Gold</item>
+        <item>White</item>
+    </string-array>
+    <string-array name="theme_custom_colour_values" translatable="false">
+        <item></item>
+        <item>#00E5FF</item>
+        <item>#FF9E2C</item>
+        <item>#A548FF</item>
+        <item>#00AFFF</item>
+        <item>#39FF88</item>
+        <item>#FF2A4D</item>
+        <item>#FF2BD6</item>
+        <item>#F7C548</item>
+        <item>#F4F6F8</item>
+    </string-array>
+    <string-array name="theme_custom_corner_names">
+        <item>Rounded</item>
+        <item>Cut</item>
+        <item>Square</item>
+    </string-array>
+    <string-array name="theme_custom_layout_names">
+        <item>Menu at the side</item>
+        <item>Console (tabs along the bottom)</item>
+    </string-array>
     <!-- the themes in assets/themes -->
     <string-array name="app_theme_names" translatable="false">
         <item>Darkride</item>

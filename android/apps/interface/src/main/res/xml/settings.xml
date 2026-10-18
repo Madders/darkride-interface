@@ -61,6 +61,21 @@
             android:entries="@array/app_theme_names"
             android:entryValues="@array/app_theme_values"
             android:defaultValue="darkride" />
+        <Preference
+            android:key="theme_install"
+            android:title="@string/theme_install"
+            android:summary="@string/theme_install_summary" />
+        <Preference
+            android:key="theme_customise"
+            android:title="@string/theme_customise"
+            android:summary="@string/theme_customise_summary" />
+        <Preference
+            android:key="theme_export"
+            android:title="@string/theme_export"
+            android:summary="@string/theme_export_summary" />
+        <Preference
+            android:key="theme_remove"
+            android:title="@string/theme_remove" />
         <ListPreference
             android:key="menu_orientation"
             android:title="@string/menu_orientation"

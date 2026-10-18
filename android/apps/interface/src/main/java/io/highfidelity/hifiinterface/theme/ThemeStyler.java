@@ -103,6 +103,15 @@ public final class ThemeStyler {
         toolbar.setTitleTextColor(theme.text);
         activity.getWindow().setStatusBarColor(theme.surface);
         activity.getWindow().setNavigationBarColor(theme.surface);
+        // dark status and navigation bar icons on a light theme
+        View decor = activity.getWindow().getDecorView();
+        int flags = decor.getSystemUiVisibility();
+        if (theme.isLight()) {
+            flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        } else {
+            flags &= ~(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        }
+        decor.setSystemUiVisibility(flags);
 
         navigation.setBackgroundColor(theme.surface);
         if (navigation.getVisibility() == View.VISIBLE && navigation.getParent() instanceof ViewGroup
@@ -198,6 +207,12 @@ public final class ThemeStyler {
         if (!Theme.CORNERS_ROUNDED.equals(theme.corners)) {
             field.setBackground(new ColorDrawable(theme.surface));
             field.setForeground(new PanelFrameDrawable(theme, theme.background, density));
+        } else if (theme.isLight()) {
+            GradientDrawable shape = new GradientDrawable();
+            shape.setColor(theme.surface);
+            shape.setCornerRadius(theme.cornerSizeDp * density);
+            shape.setStroke((int) Math.max(1, density), Theme.withAlpha(theme.textSecondary, 0.35f));
+            field.setBackground(shape);
         }
     }
 

@@ -60,9 +60,10 @@ public final class ThemeWalker {
             // styled already, by ThemeStyler
             return;
         }
-        boolean ownShapes = !Theme.CORNERS_ROUNDED.equals(theme.corners);
+        // themes that change shapes or are light restyle fields and buttons (the app's own are dark and rounded)
+        boolean ownShapes = !Theme.CORNERS_ROUNDED.equals(theme.corners) || theme.isLight();
         Drawable background = view.getBackground();
-        if (background instanceof ColorDrawable) {
+        if (background instanceof ColorDrawable && !(ownShapes && view instanceof EditText)) {
             int role = roles.get(((ColorDrawable) background).getColor(), 0);
             if (role == BACKGROUND && ownShapes) {
                 view.setBackground(new BackgroundDrawable(theme, view.getResources().getDisplayMetrics().density));
@@ -123,6 +124,16 @@ public final class ThemeWalker {
     // A button: outlined in the primary colour on a panel, its text in the display font
     private static void styleButton(Button button, Theme theme) {
         float density = button.getResources().getDisplayMetrics().density;
+        if (Theme.CORNERS_ROUNDED.equals(theme.corners)) {
+            // a light, rounded theme: filled with the primary colour
+            GradientDrawable shape = new GradientDrawable();
+            shape.setColor(theme.primary);
+            shape.setCornerRadius(theme.cornerSizeDp * density);
+            button.setBackground(shape);
+            ThemeStyler.styleDisplay(button, theme);
+            button.setTextColor(0xFFFFFFFF);
+            return;
+        }
         GradientDrawable shape = new GradientDrawable();
         shape.setColor(theme.panel);
         shape.setStroke((int) Math.max(1, density), theme.primary);
@@ -150,6 +161,23 @@ public final class ThemeWalker {
     private static SparseIntArray roles(View view) {
         Resources resources = view.getResources();
         SparseIntArray roles = new SparseIntArray();
+        // the activity's own text colours (Settings' titles and summaries, among others)
+        int[][] themeText = { { android.R.attr.textColorPrimary, TEXT }, { android.R.attr.textColorSecondary, TEXT_SECONDARY },
+            { android.R.attr.textColorTertiary, TEXT_SECONDARY } };
+        for (int[] entry : themeText) {
+            android.util.TypedValue value = new android.util.TypedValue();
+            if (view.getContext().getTheme().resolveAttribute(entry[0], value, true)) {
+                try {
+                    android.content.res.ColorStateList colors = value.resourceId != 0
+                        ? view.getContext().getColorStateList(value.resourceId)
+                        : android.content.res.ColorStateList.valueOf(value.data);
+                    roles.put(colors.getDefaultColor(), entry[1]);
+                    roles.put(colors.getColorForState(new int[] { -android.R.attr.state_enabled }, colors.getDefaultColor()), entry[1]);
+                } catch (android.content.res.Resources.NotFoundException e) {
+                    // not a colour
+                }
+            }
+        }
         // the activity's own accent (Settings' headings, among others)
         android.util.TypedValue accent = new android.util.TypedValue();
         if (view.getContext().getTheme().resolveAttribute(android.R.attr.colorAccent, accent, true)
