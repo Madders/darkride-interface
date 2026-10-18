@@ -17,6 +17,7 @@ import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -34,7 +35,7 @@ import java.util.Collections;
  * A web page for a web entity: a WebView drawing into a SurfaceTexture, which the engine copies into the entity's
  * texture (interface/src/android/AndroidWebView.cpp, which makes these).
  *
- * The WebView is in the activity's views, so that it lays out, draws and takes input (and later the keyboard) like
+ * The WebView is in the activity's views, so that it lays out, draws and takes input and the keyboard like
  * any view, but its container draws it into the SurfaceTexture's Surface rather than the screen: Flutter's "texture
  * layer" way of showing Android views in a GPU scene. Its container takes no touches: the 3D view under it does.
  *
@@ -68,6 +69,19 @@ public class DarkrideWebView {
             "      try { callback(message); } catch (e) { console.error(e); }" +
             "    });" +
             "  };" +
+            // the keyboard, for typing into the page's text fields
+            "  var NOT_TEXT = ['button', 'checkbox', 'radio', 'submit', 'reset', 'range', 'color', 'file', 'image'];" +
+            "  function isTextField(element) {" +
+            "    if (!element) { return false; }" +
+            "    if (element.isContentEditable || element.tagName === 'TEXTAREA') { return true; }" +
+            "    return element.tagName === 'INPUT' && NOT_TEXT.indexOf((element.type || '').toLowerCase()) < 0;" +
+            "  }" +
+            "  document.addEventListener('focusin', function(event) {" +
+            "    if (isTextField(event.target)) { DarkrideNative.textFieldFocused(true); }" +
+            "  }, true);" +
+            "  document.addEventListener('focusout', function(event) {" +
+            "    if (isTextField(event.target)) { DarkrideNative.textFieldFocused(false); }" +
+            "  }, true);" +
             "})();";
 
     private final long mId;
@@ -105,7 +119,7 @@ public class DarkrideWebView {
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
-        mWebView.addJavascriptInterface(new EventBridgeInterface(mId), "DarkrideNative");
+        mWebView.addJavascriptInterface(new PageInterface(), "DarkrideNative");
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             WebViewCompat.addDocumentStartJavaScript(mWebView, EVENT_BRIDGE_SCRIPT, Collections.singleton("*"));
             mWebView.setWebViewClient(new WebViewClient());
@@ -227,17 +241,32 @@ public class DarkrideWebView {
         });
     }
 
-    // window.DarkrideNative in pages, which EventBridge.emitWebEvent calls (on a WebView thread)
-    private static class EventBridgeInterface {
-        private final long mId;
-
-        EventBridgeInterface(long id) {
-            mId = id;
-        }
-
+    // window.DarkrideNative in pages (called on a WebView thread)
+    private class PageInterface {
+        // EventBridge.emitWebEvent
         @JavascriptInterface
         public void emitWebEvent(String json) {
             nativeWebEvent(mId, json);
+        }
+
+        // A text field in the page has focus, or lost it: the keyboard shows while one has it, typing into the
+        // page, and the 3D view gets its input back after
+        @JavascriptInterface
+        public void textFieldFocused(boolean focused) {
+            mMainHandler.post(() -> {
+                if (mWebView == null) {
+                    return;
+                }
+                InputMethodManager keyboard =
+                        (InputMethodManager) mWebView.getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (focused) {
+                    mWebView.requestFocus();
+                    keyboard.showSoftInput(mWebView, InputMethodManager.SHOW_IMPLICIT);
+                } else {
+                    keyboard.hideSoftInputFromWindow(mWebView.getWindowToken(), 0);
+                    mWebView.clearFocus();
+                }
+            });
         }
     }
 
