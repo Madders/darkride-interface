@@ -44,6 +44,7 @@ public class LoginMenuActivity extends AppCompatActivity
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        MenuOrientation.apply(this);
         setContentView(R.layout.activity_encourage_login);
 
         finishOnBack = getIntent().getBooleanExtra(EXTRA_FINISH_ON_BACK, false);

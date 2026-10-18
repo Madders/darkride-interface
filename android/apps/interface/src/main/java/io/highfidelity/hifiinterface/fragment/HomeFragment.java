@@ -2,6 +2,7 @@ package io.highfidelity.hifiinterface.fragment;
 
 import android.app.Fragment;
 import android.content.Context;
+import android.content.res.Configuration;
 import android.os.Bundle;
 import android.os.Handler;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
@@ -62,7 +63,8 @@ public class HomeFragment extends Fragment {
         mSwipeRefreshLayout = rootView.findViewById(R.id.swipeRefreshLayout);
 
         mDomainsView = rootView.findViewById(R.id.rvDomains);
-        int numberOfColumns = 1;
+        // as many columns as fit (one in portrait, two or more in landscape)
+        int numberOfColumns = Math.max(1, (int) (getContentWidthPx() / getResources().getDimension(R.dimen.domainMinColumnWidth)));
         GridLayoutManager gridLayoutMgr = new GridLayoutManager(getContext(), numberOfColumns);
         mDomainsView.setLayoutManager(gridLayoutMgr);
         mDomainAdapter = new DomainAdapter(getContext(), HifiUtils.getInstance().protocolVersionSignature(), nativeGetLastLocation());
@@ -178,6 +180,15 @@ public class HomeFragment extends Fragment {
     public void onDetach() {
         super.onDetach();
         mListener = null;
+    }
+
+    // The screen's width less the landscape menu rail's
+    private float getContentWidthPx() {
+        float width = getResources().getDisplayMetrics().widthPixels;
+        if (getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE) {
+            width -= getResources().getDimension(R.dimen.menuRailWidth);
+        }
+        return width;
     }
 
     public interface OnHomeInteractionListener {

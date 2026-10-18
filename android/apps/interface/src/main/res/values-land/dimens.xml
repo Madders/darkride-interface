@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- landscape is short: the menu's profile header takes less of it -->
+    <dimen name="navHeaderHeight">96dp</dimen>
+</resources>

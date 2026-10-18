@@ -71,6 +71,7 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        MenuOrientation.apply(this);
         setContentView(R.layout.activity_main);
 
         mNavigationView = findViewById(R.id.nav_view);
@@ -79,7 +80,8 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         mLoginPanel = mNavigationView.getHeaderView(0).findViewById(R.id.loginPanel);
         mProfilePanel = mNavigationView.getHeaderView(0).findViewById(R.id.profilePanel);
 
-        mLogoutOption = mNavigationView.findViewById(R.id.logout);
+        // (inside the drawer in portrait, under the rail in landscape)
+        mLogoutOption = findViewById(R.id.logout);
 
         mDisplayName = mNavigationView.getHeaderView(0).findViewById(R.id.displayName);
         mProfilePicture = mNavigationView.getHeaderView(0).findViewById(R.id.profilePicture);
@@ -94,18 +96,28 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         toolbar.setTitleTextAppearance(this, R.style.HomeActionBarTitleStyle);
         setSupportActionBar(toolbar);
 
-        ActionBar actionbar = getSupportActionBar();
-        actionbar.setDisplayHomeAsUpEnabled(true);
-        actionbar.setHomeAsUpIndicator(R.drawable.ic_menu);
-
+        // (in landscape the menu is a rail that's always there, not a drawer: layout-land/activity_main.xml)
         mDrawerLayout = findViewById(R.id.drawer_layout);
+
+        ActionBar actionbar = getSupportActionBar();
+        actionbar.setDisplayHomeAsUpEnabled(mDrawerLayout != null);
+        actionbar.setHomeAsUpIndicator(R.drawable.ic_menu);
 
         Window window = getWindow();
         window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS);
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
         window.setStatusBarColor(ContextCompat.getColor(this, R.color.statusbar_color));
 
-        if (getIntent() != null) {
+        if (savedInstanceState != null) {
+            // turned round: the fragments are put back by themselves
+            FragmentManager fragmentManager = getFragmentManager();
+            int count = fragmentManager.getBackStackEntryCount();
+            if (count > 0) {
+                setTitle(fragmentManager.getBackStackEntryAt(count - 1).getName());
+            }
+            backToScene = savedInstanceState.getBoolean(EXTRA_BACK_TO_SCENE, false);
+            backToUrl = getIntent() != null ? getIntent().getStringExtra(EXTRA_BACK_TO_URL) : null;
+        } else if (getIntent() != null) {
             if (getIntent().hasExtra(EXTRA_FRAGMENT)) {
                 loadFragment(getIntent().getStringExtra(EXTRA_FRAGMENT));
             } else {
@@ -188,7 +200,7 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
                 ? fragmentManager.getBackStackEntryAt(fragmentManager.getBackStackEntryCount() - 1).getName()
                 : "";
         if (currentFragmentName.equals(title)) {
-            mDrawerLayout.closeDrawer(mNavigationView);
+            closeDrawer();
             return; // cancel as we are already in that fragment
         }
 
@@ -211,7 +223,13 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         }
         ft.commit();
         setTitle(title);
-        mDrawerLayout.closeDrawer(mNavigationView);
+        closeDrawer();
+    }
+
+    private void closeDrawer() {
+        if (mDrawerLayout != null) {
+            mDrawerLayout.closeDrawer(mNavigationView);
+        }
     }
 
     
@@ -256,7 +274,9 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         int id = item.getItemId();
         switch (id) {
             case android.R.id.home:
-                mDrawerLayout.openDrawer(GravityCompat.START);
+                if (mDrawerLayout != null) {
+                    mDrawerLayout.openDrawer(GravityCompat.START);
+                }
                 return true;
         }
 

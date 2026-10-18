@@ -53,7 +53,6 @@
         <activity
             android:name=".MainActivity"
             android:exported="false"
-            android:screenOrientation="portrait"
             android:theme="@style/Theme.AppCompat.Translucent.NoActionBar" />
 
         <activity
@@ -93,12 +92,10 @@
         <activity
             android:name=".SplashActivity"
             android:exported="false"
-            android:screenOrientation="portrait"
             android:theme="@style/Theme.AppCompat.Translucent.NoActionBar" />
 
         <activity android:name=".LoginMenuActivity"
             android:exported="false"
-            android:screenOrientation="portrait"
             android:theme="@style/Theme.AppCompat.Translucent.NoActionBar" />
 
         <receiver

@@ -27,6 +27,12 @@
     <dimen name="searchEditClearMarginEnd">22dp</dimen>
 
     <dimen name="domainItemHeight">163dp</dimen>
+    <!-- the menu rail in landscape (layout-land/activity_main.xml) -->
+    <dimen name="menuRailWidth">240dp</dimen>
+    <!-- the menu's profile header (shorter in landscape: values-land) -->
+    <dimen name="navHeaderHeight">176dp</dimen>
+    <!-- the narrowest a place card gets before the places list has fewer columns (HomeFragment) -->
+    <dimen name="domainMinColumnWidth">300dp</dimen>
     <dimen name="domainMarginStart">14dp</dimen>
     <dimen name="domainMarginEnd">14dp</dimen>
     <dimen name="domainMarginTop">2dp</dimen>

@@ -10,6 +10,8 @@ import android.preference.SwitchPreference;
 import androidx.annotation.Nullable;
 
 import io.highfidelity.hifiinterface.HifiUtils;
+import io.highfidelity.hifiinterface.InterfaceActivity;
+import io.highfidelity.hifiinterface.MenuOrientation;
 import io.highfidelity.hifiinterface.R;
 
 public class SettingsFragment extends PreferenceFragment implements SharedPreferences.OnSharedPreferenceChangeListener {
@@ -71,6 +73,11 @@ public class SettingsFragment extends PreferenceFragment implements SharedPrefer
             }
         }
         loadGraphicsSettings();
+
+        // the menu's orientation is nothing to do with the world
+        if (getActivity() instanceof InterfaceActivity) {
+            getPreferenceScreen().removePreference(findPreference("pref_key_app"));
+        }
     }
 
     // The engine's graphics settings into the screen's preferences
@@ -154,6 +161,11 @@ public class SettingsFragment extends PreferenceFragment implements SharedPrefer
             case PREFERENCE_KEY_DRAW_DISTANCE:
                 if (!mLoadingGraphicsSettings) {
                     nativeSetDrawDistance(Float.parseFloat(sharedPreferences.getString(key, "16384")));
+                }
+                break;
+            case MenuOrientation.PREFERENCE_KEY:
+                if (getActivity() != null && !(getActivity() instanceof InterfaceActivity)) {
+                    MenuOrientation.apply(getActivity());
                 }
                 break;
             case PREFERENCE_KEY_RESOLUTION:

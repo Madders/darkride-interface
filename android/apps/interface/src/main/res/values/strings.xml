@@ -94,6 +94,20 @@
         <item>0.75</item>
         <item>0.5</item>
     </string-array>
+    <!-- the Settings screen's app settings -->
+    <string name="settings_app">App</string>
+    <string name="menu_orientation">Menu orientation</string>
+    <string-array name="menu_orientation_names">
+        <item>Landscape</item>
+        <item>Portrait</item>
+        <item>Follow the phone</item>
+    </string-array>
+    <!-- MenuOrientation's values -->
+    <string-array name="menu_orientation_values" translatable="false">
+        <item>landscape</item>
+        <item>portrait</item>
+        <item>auto</item>
+    </string-array>
     <string name="graphics_frame_rate">Frame rate</string>
     <string name="graphics_world_detail">World detail</string>
     <string name="graphics_draw_distance">Draw distance</string>

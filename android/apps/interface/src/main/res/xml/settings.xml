@@ -50,6 +50,18 @@
             android:entryValues="@array/graphics_resolution_values"
             android:defaultValue="1.0" />
     </PreferenceCategory>
+    <!-- the app's own settings (MenuOrientation); not shown over the world -->
+    <PreferenceCategory
+        android:title="@string/settings_app"
+        android:key="pref_key_app">
+        <ListPreference
+            android:key="menu_orientation"
+            android:title="@string/menu_orientation"
+            android:summary="%s"
+            android:entries="@array/menu_orientation_names"
+            android:entryValues="@array/menu_orientation_values"
+            android:defaultValue="landscape" />
+    </PreferenceCategory>
     <PreferenceCategory
         android:title="@string/settings_developer"
         android:key="pref_key_developer">

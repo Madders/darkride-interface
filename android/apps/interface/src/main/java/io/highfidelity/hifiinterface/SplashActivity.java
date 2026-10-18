@@ -15,6 +15,7 @@ public class SplashActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        MenuOrientation.apply(this);
         setContentView(R.layout.activity_splash);
         registerLoadCompleteListener();
     }
