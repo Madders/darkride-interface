@@ -26,6 +26,10 @@ class RequestFilters : public QObject {
 public:
     static void interceptTivoliWebEngineRequest(QWebEngineUrlRequestInfo& info, bool restricted);
     static void interceptFileType(QWebEngineUrlRequestInfo& info);
+
+    // Deletes the service workers (and their Cache Storage) that sites registered in earlier runs, once per run,
+    // before the first page loads. Call it with the profile's persistent storage path.
+    static void clearServiceWorkers(const QString& persistentStoragePath);
 };
 #endif
 

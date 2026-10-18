@@ -11,7 +11,10 @@
 
 #include "RequestFilters.h"
 
+#include <mutex>
+
 #include <QtCore/QDebug>
+#include <QtCore/QDir>
 #include <QtCore/QFileInfo>
 // #include <QWebEngineProfile>
 
@@ -77,7 +80,28 @@ namespace {
     }
 }
 
+void RequestFilters::clearServiceWorkers(const QString& persistentStoragePath) {
+    // Blocking new service workers (below) doesn't stop the ones already registered on disk from starting
+    static std::once_flag once;
+    std::call_once(once, [&persistentStoragePath] {
+        QDir serviceWorkers(persistentStoragePath + "/Service Worker");
+        if (serviceWorkers.exists()) {
+            qDebug() << "Deleting the web views' service workers in" << serviceWorkers.absolutePath() << ":"
+                     << (serviceWorkers.removeRecursively() ? "done" : "failed");
+        }
+    });
+}
+
 void RequestFilters::interceptTivoliWebEngineRequest(QWebEngineUrlRequestInfo& info, bool restricted) {
+    // Sites in Darkride don't get service workers. Qt 5.15's Chromium crashes the whole client in the Cache
+    // Storage they use: while it adds up a site's storage, a cache the worker is replacing can be missing, and
+    // LegacyCacheStorage::SizeImpl calls Size() on it unchecked. YouTube's player registers one, so a web entity
+    // showing it took Darkride down. Sites work without; a service worker only caches for offline use and speed.
+    if (info.resourceType() == QWebEngineUrlRequestInfo::ResourceTypeServiceWorker) {
+        info.block(true);
+        return;
+    }
+
     if (restricted && blockLocalFiles(info)) {
         return;
     }
