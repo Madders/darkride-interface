@@ -3,4 +3,6 @@
     <!-- the in-world settings panel's fragment container (InterfaceActivity): a fixed id, since Qt numbers its own
          views and View.generateViewId() can hand out one of theirs -->
     <item name="settings_panel_content" type="id" />
+    <!-- on a view ThemeStyler has styled, so ThemeWalker leaves it be -->
+    <item name="theme_styled" type="id" />
 </resources>

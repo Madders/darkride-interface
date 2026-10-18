@@ -12,6 +12,7 @@ import androidx.annotation.Nullable;
 import io.highfidelity.hifiinterface.HifiUtils;
 import io.highfidelity.hifiinterface.InterfaceActivity;
 import io.highfidelity.hifiinterface.MenuOrientation;
+import io.highfidelity.hifiinterface.theme.BackgroundDrawable;
 import io.highfidelity.hifiinterface.theme.ThemeManager;
 import io.highfidelity.hifiinterface.R;
 
@@ -106,6 +107,15 @@ public class SettingsFragment extends PreferenceFragment implements SharedPrefer
         String drawDistance = distance <= 100.0f ? "100" : (distance <= 400.0f ? "400" : "16384");
         ((ListPreference) findPreference(PREFERENCE_KEY_DRAW_DISTANCE)).setValue(drawDistance);
         mLoadingGraphicsSettings = false;
+    }
+
+    @Override
+    public void onViewCreated(android.view.View view, Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
+        // over the world the panel is the background; on the menu screens, the theme's
+        if (!(getActivity() instanceof InterfaceActivity)) {
+            view.setBackground(new BackgroundDrawable(ThemeManager.get(getActivity()), getResources().getDisplayMetrics().density));
+        }
     }
 
     public static SettingsFragment newInstance() {

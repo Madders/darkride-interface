@@ -40,6 +40,7 @@ import io.highfidelity.hifiinterface.fragment.SignupFragment;
 import io.highfidelity.hifiinterface.theme.Theme;
 import io.highfidelity.hifiinterface.theme.ThemeManager;
 import io.highfidelity.hifiinterface.theme.ThemeStyler;
+import io.highfidelity.hifiinterface.theme.ThemeWalker;
 
 public class MainActivity extends AppCompatActivity implements NavigationView.OnNavigationItemSelectedListener,
                                                                 HomeFragment.OnHomeInteractionListener,
@@ -77,6 +78,7 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         MenuOrientation.apply(this);
+        ThemeWalker.themeFragments(this, getFragmentManager());
         setContentView(R.layout.activity_main);
 
         mNavigationView = findViewById(R.id.nav_view);

@@ -49,6 +49,10 @@ import java.util.List;
 import java.util.Map;
 
 import io.highfidelity.hifiinterface.fragment.SettingsFragment;
+import io.highfidelity.hifiinterface.theme.Theme;
+import io.highfidelity.hifiinterface.theme.ThemeManager;
+import io.highfidelity.hifiinterface.theme.ThemeStyler;
+import io.highfidelity.hifiinterface.theme.ThemeWalker;
 import io.highfidelity.hifiinterface.fragment.WebViewFragment;
 import io.highfidelity.hifiinterface.receiver.HeadsetStateReceiver;
 
@@ -89,8 +93,10 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
     private SlidingDrawer mWebSlidingDrawer;
     // Settings, over the world (the in-world gear button)
     private LinearLayout mSettingsPanel;
+    private boolean mThemingFragments;
     private static final String SETTINGS_PANEL_TAG = "settingsPanel";
     private static final int SETTINGS_PANEL_MAX_WIDTH_DP = 420;
+    private static final float SETTINGS_PANEL_ALPHA = 0.94f;
     private boolean mStartInDomain;
     private boolean isLoading;
 //    private GvrApi gvrApi;
@@ -510,7 +516,8 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
         getTheme().applyStyle(R.style.SettingsPanelOverlay, true);
         mSettingsPanel = new LinearLayout(this);
         mSettingsPanel.setOrientation(LinearLayout.VERTICAL);
-        mSettingsPanel.setBackgroundColor(getResources().getColor(R.color.settingsPanelBackground, getTheme()));
+        Theme theme = ThemeManager.get(this);
+        mSettingsPanel.setBackgroundColor(Theme.withAlpha(theme.surface, SETTINGS_PANEL_ALPHA));
         mSettingsPanel.setClickable(true);
 
         LinearLayout header = new LinearLayout(this);
@@ -520,8 +527,9 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
         header.setPadding(padding, padding / 2, padding / 2, padding / 2);
         TextView title = new TextView(this);
         title.setText(R.string.settings);
-        title.setTextColor(getResources().getColor(R.color.menuOption, getTheme()));
+        title.setTextColor(theme.text);
         title.setTextSize(20);
+        ThemeStyler.styleDisplay(title, theme);
         header.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
         ImageButton close = new ImageButton(this);
         close.setImageResource(R.drawable.ic_close);
@@ -540,6 +548,10 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
         FrameLayout root = findViewById(android.R.id.content);
         root.addView(mSettingsPanel, new FrameLayout.LayoutParams(width, FrameLayout.LayoutParams.MATCH_PARENT,
                 Gravity.END));
+        if (!mThemingFragments) {
+            ThemeWalker.themeFragments(this, getFragmentManager());
+            mThemingFragments = true;
+        }
         getFragmentManager().beginTransaction()
                 .replace(content.getId(), SettingsFragment.newInstance(), SETTINGS_PANEL_TAG)
                 .commit();

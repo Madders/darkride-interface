@@ -1,6 +1,8 @@
 package io.highfidelity.hifiinterface;
 
 
+import io.highfidelity.hifiinterface.theme.ThemeManager;
+import io.highfidelity.hifiinterface.theme.ThemeWalker;
 import android.app.Fragment;
 import android.app.FragmentManager;
 import android.app.FragmentTransaction;
@@ -45,7 +47,9 @@ public class LoginMenuActivity extends AppCompatActivity
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         MenuOrientation.apply(this);
+        ThemeWalker.themeFragments(this, getFragmentManager());
         setContentView(R.layout.activity_encourage_login);
+        findViewById(android.R.id.content).setBackgroundColor(ThemeManager.get(this).background);
 
         finishOnBack = getIntent().getBooleanExtra(EXTRA_FINISH_ON_BACK, false);
         backToScene = getIntent().getBooleanExtra(EXTRA_BACK_TO_SCENE, false);

@@ -121,6 +121,7 @@ public final class ThemeStyler {
     // A place's card in the places list
     public static void styleCard(CardView card, Theme theme, TextView name, TextView author, View nameStrip,
                                  View people, TextView peopleCount) {
+        card.setTag(io.highfidelity.hifiinterface.R.id.theme_styled, true);
         float density = card.getResources().getDisplayMetrics().density;
         boolean rounded = Theme.CORNERS_ROUNDED.equals(theme.corners);
         card.setRadius(rounded ? theme.cornerSizeDp * density : 0);
