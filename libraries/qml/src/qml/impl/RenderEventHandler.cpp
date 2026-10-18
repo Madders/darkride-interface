@@ -140,7 +140,7 @@ void RenderEventHandler::qmlRender(bool sceneGraphSync) {
         PROFILE_RANGE(render_qml_gl, "render");
         GLuint texture = SharedObject::getTextureCache().acquireTexture(_currentSize);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, _fbo);
-        glFramebufferTexture(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
         if (nsightActive()) {
             glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
             glClear(GL_COLOR_BUFFER_BIT);

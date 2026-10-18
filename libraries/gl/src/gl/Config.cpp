@@ -94,6 +94,20 @@ void gl::initModuleGl() {
 
 #if defined(USE_GLES)
         gladLoadGLES2Loader(getGlProcessAddress);
+        // OpenGL ES 3.1 (the emulator, older phones) has these 3.2 functions as extensions
+        if (!glad_glTexBuffer) {
+            glad_glTexBuffer = glad_glTexBufferEXT ? glad_glTexBufferEXT : glad_glTexBufferOES;
+        }
+        if (!glad_glCopyImageSubData) {
+            glad_glCopyImageSubData = glad_glCopyImageSubDataEXT ? glad_glCopyImageSubDataEXT : glad_glCopyImageSubDataOES;
+        }
+        if (!glad_glFramebufferTexture) {
+            glad_glFramebufferTexture = glad_glFramebufferTextureEXT ? glad_glFramebufferTextureEXT : glad_glFramebufferTextureOES;
+        }
+        if (!glad_glPushDebugGroup) {
+            glad_glPushDebugGroup = glad_glPushDebugGroupKHR;
+            glad_glPopDebugGroup = glad_glPopDebugGroupKHR;
+        }
 #else
         gladLoadGLLoader(getGlProcessAddress);
 #endif

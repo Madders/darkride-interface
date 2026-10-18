@@ -10,6 +10,8 @@
 //
 #include "GLESBackend.h"
 
+#include <mutex>
+
 #include <unordered_set>
 #include <unordered_map>
 
@@ -440,7 +442,48 @@ void GLESVariableAllocationTexture::syncSampler() const {
     });
 }
 
+// Copies texture mips with a framebuffer blit, for drivers without glCopyImageSubData (OpenGL ES 3.1 without
+// EXT_copy_image, as in the Android emulator). Not for compressed textures, which can't be framebuffer attachments.
+static void blitTexGPUMem(const gpu::Texture& texture, GLenum texTarget, GLuint srcId, GLuint destId, uint16_t numMips,
+                          uint16_t srcMipOffset, uint16_t destMipOffset, uint16_t populatedMips) {
+    if (texture.getStoredMipFormat().isCompressed()) {
+        static std::once_flag once;
+        std::call_once(once, [] {
+            qCWarning(gpugllogging) << "This driver can't copy compressed textures on the GPU: some will be missing mips";
+        });
+        return;
+    }
+    GLint previousRead = 0, previousDraw = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
+    GLuint framebuffers[2];
+    glGenFramebuffers(2, framebuffers);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffers[0]);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffers[1]);
+    for (uint16_t mip = populatedMips; mip < numMips; ++mip) {
+        auto mipDimensions = texture.evalMipDimensions(mip);
+        GLint targetMip = mip - destMipOffset;
+        GLint sourceMip = mip - srcMipOffset;
+        auto faces = GLTexture::getFaceCount(texTarget);
+        for (uint8_t face = 0; face < faces; ++face) {
+            GLenum faceTarget = texTarget == GL_TEXTURE_CUBE_MAP ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + face : texTarget;
+            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, faceTarget, srcId, sourceMip);
+            glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, faceTarget, destId, targetMip);
+            glBlitFramebuffer(0, 0, mipDimensions.x, mipDimensions.y, 0, 0, mipDimensions.x, mipDimensions.y,
+                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            (void)CHECK_GL_ERROR();
+        }
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, previousRead);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, previousDraw);
+    glDeleteFramebuffers(2, framebuffers);
+}
+
 void copyTexGPUMem(const gpu::Texture& texture, GLenum texTarget, GLuint srcId, GLuint destId, uint16_t numMips, uint16_t srcMipOffset, uint16_t destMipOffset, uint16_t populatedMips) {
+    if (!glad_glCopyImageSubData) {
+        blitTexGPUMem(texture, texTarget, srcId, destId, numMips, srcMipOffset, destMipOffset, populatedMips);
+        return;
+    }
     for (uint16_t mip = populatedMips; mip < numMips; ++mip) {
         auto mipDimensions = texture.evalMipDimensions(mip);
         uint16_t targetMip = mip - destMipOffset;

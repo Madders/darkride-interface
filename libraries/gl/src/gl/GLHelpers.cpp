@@ -1,5 +1,11 @@
 #include "GLHelpers.h"
 
+#if defined(Q_OS_ANDROID)
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#endif
+#include <algorithm>
+
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -122,12 +128,38 @@ gl::ViewChangeGuard::~ViewChangeGuard() {
 }
 
 
+#if defined(Q_OS_ANDROID)
+// Whether this device can make an OpenGL ES context of this version (asked of EGL directly, before Qt makes any)
+static bool canCreateGLESContext(EGLint major, EGLint minor) {
+    EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (display == EGL_NO_DISPLAY || !eglInitialize(display, nullptr, nullptr)) {
+        return false;
+    }
+    // (the display stays initialized: Qt uses the same one)
+    const EGLint configAttributes[] = { EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR, EGL_NONE };
+    EGLConfig config;
+    EGLint configCount = 0;
+    if (!eglChooseConfig(display, configAttributes, &config, 1, &configCount) || configCount == 0) {
+        return false;
+    }
+    const EGLint contextAttributes[] = { EGL_CONTEXT_MAJOR_VERSION_KHR, major, EGL_CONTEXT_MINOR_VERSION_KHR, minor, EGL_NONE };
+    EGLContext context = eglCreateContext(display, config, EGL_NO_CONTEXT, contextAttributes);
+    if (context == EGL_NO_CONTEXT) {
+        return false;
+    }
+    eglDestroyContext(display, context);
+    return true;
+}
+#endif
+
 uint16_t gl::getTargetVersion() {
     uint8_t major = 0, minor = 0;
 
 #if defined(USE_GLES)
+    // the available version, up to 3.2 (the shaders are GLSL ES 3.10 with texture buffers)
+    uint16_t available = getAvailableVersion();
     major = 3;
-    minor = 2;
+    minor = std::min<uint8_t>(2, GL_GET_MINOR_VERSION(available));
 #elif defined(Q_OS_MACOS)
     major = 4;
     minor = 1;
@@ -225,9 +257,15 @@ uint16_t gl::getAvailableVersion() {
     static std::once_flag once;
     std::call_once(once, [&] {
 #if defined(USE_GLES)
-        // FIXME do runtime detection of the available GL version
         major = 3;
         minor = 2;
+#if defined(Q_OS_ANDROID)
+        // the emulator, and older phones, have OpenGL ES 3.1
+        if (!canCreateGLESContext(3, 2)) {
+            minor = 1;
+            qCWarning(glLogging) << "OpenGL ES 3.2 isn't available; using 3.1";
+        }
+#endif
 #elif defined(Q_OS_MACOS)
         // Damn it Apple.
         major = 4;

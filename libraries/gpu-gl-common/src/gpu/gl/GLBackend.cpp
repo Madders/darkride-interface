@@ -397,10 +397,15 @@ public:
     GlDuration(const char* name) {
         // We need to use strlen here instead of -1, because the Snapdragon profiler
         // will crash otherwise 
-        glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, strlen(name), name);
+        // (not every OpenGL ES 3.1 driver has debug groups)
+        if (glad_glPushDebugGroup) {
+            glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, strlen(name), name);
+        }
     }
     ~GlDuration() {
-        glPopDebugGroup();
+        if (glad_glPopDebugGroup) {
+            glPopDebugGroup();
+        }
     }
 #else
     GlDuration(const char* name) {
