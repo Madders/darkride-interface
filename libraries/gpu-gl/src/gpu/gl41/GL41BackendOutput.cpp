@@ -171,6 +171,9 @@ void GL41Backend::do_blit(const Batch& batch, size_t paramOffset) {
     // which GL copies only point for point
     GLbitfield mask = GL_COLOR_BUFFER_BIT;
     GLenum filter = GL_LINEAR;
+    if (!srcframebuffer || !dstframebuffer) {
+        return;
+    }
     if (!srcframebuffer->hasColor() && srcframebuffer->hasDepth() && dstframebuffer->hasDepth()) {
         mask = GL_DEPTH_BUFFER_BIT;
         filter = GL_NEAREST;
