@@ -532,11 +532,14 @@ void EntityRenderer::onAddToScene(const EntityItemPointer& entity) {
             }
         },
     Qt::QueuedConnection);
-    _changeHandlerId = entity->registerChangeHandler([](const EntityItemID& changedEntity) {
-        auto renderer = DependencyManager::get<EntityTreeRenderer>();
-        if (renderer) {
-            auto renderable = renderer->renderableForEntityId(changedEntity);
-            if (renderable && renderable->needsRenderUpdate()) {
+    // Called on whichever thread changed the entity (often the entity packets' thread), so this renderer is held here
+    // rather than looked up in EntityTreeRenderer's renderables, which the main thread changes unlocked
+    std::weak_ptr<EntityRenderer> weakRenderable = weak_from_this();
+    _changeHandlerId = entity->registerChangeHandler([weakRenderable](const EntityItemID& changedEntity) {
+        auto renderable = weakRenderable.lock();
+        if (renderable && renderable->needsRenderUpdate()) {
+            auto renderer = DependencyManager::get<EntityTreeRenderer>();
+            if (renderer) {
                 renderer->onEntityChanged(changedEntity);
             }
         }
