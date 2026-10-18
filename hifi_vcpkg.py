@@ -323,7 +323,7 @@ endif()
     # Tools the build runs from PATH, which it otherwise reports only deep inside vcpkg ("Could not find
     # PowerShell Core" from a port's script), after part of the 15-30 minute dependency build
     WINDOWS_TOOLS = [
-        ('pwsh', 'PowerShell 7', 'winget install -e --id Microsoft.PowerShell',
+        ('pwsh', 'PowerShell 7', 'winget install -e --id Microsoft.PowerShell --source winget --installer-type wix',
          'vcpkg runs its scripts with it. Windows PowerShell 5 (powershell.exe) does not count'),
         ('git', 'Git', 'winget install -e --id Git.Git', 'vcpkg and its tool download some sources with it'),
     ]
@@ -336,9 +336,9 @@ endif()
         pwsh = shutil.which('pwsh', path=path)
         if pwsh and os.sep + 'WindowsApps' + os.sep in os.path.normpath(pwsh) and not os.path.isfile(
                 os.path.join(os.environ.get('ProgramFiles', r'C:\Program Files'), 'PowerShell', '7', 'pwsh.exe')):
-            print('\n  PowerShell 7 is the Microsoft Store version ({0}), which vcpkg can\'t use.\n'
+            print('\n  PowerShell 7 is the Microsoft Store version or winget\'s MSIX package ({0}), which vcpkg can\'t use.\n'
                   '  Uninstall it (Settings > Apps > Installed apps > PowerShell), install the regular one with\n\n'
-                  '    winget install -e --id Microsoft.PowerShell --source winget\n\n'
+                  '    winget install -e --id Microsoft.PowerShell --source winget --installer-type wix\n\n'
                   '  then close every terminal (and VS Code), open a new one, check that "where.exe pwsh" finds\n'
                   '  C:\\Program Files\\PowerShell\\7\\pwsh.exe, and configure again.\n'.format(pwsh))
             raise SystemExit(1)

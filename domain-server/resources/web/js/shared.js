@@ -49,7 +49,8 @@ $.extend(Settings, {
 });
 
 var URLs = {
-  // Darkride's metaverse; the domain server itself follows HIFI_METAVERSE_URL, this page does not
+  // STABLE METAVERSE_URL: https://vr.darkride.ai
+  // STAGING METAVERSE_URL: https://staging.highfidelity.com
   METAVERSE_URL: 'https://vr.darkride.ai',
   PLACE_URL: 'https://hifi.place',
 };
