@@ -60,6 +60,6 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string></string>
+	<string>Darkride uses your microphone so that people near you in a world can hear you talk.</string>
 </dict>
 </plist>

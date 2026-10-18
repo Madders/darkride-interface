@@ -1,0 +1,31 @@
+Darkride for Mac
+================
+
+INSTALL
+Drag Darkride onto the Applications folder in this window. Then eject the Darkride disk
+(click the eject button next to it in a Finder window's sidebar).
+
+OPEN IT THE FIRST TIME
+Darkride isn't registered with Apple yet, so the first time, macOS stops it. This happens once:
+
+  1. Open your Applications folder and double-click Darkride. When macOS says it can't open
+     it, click Done (or OK). Don't choose Move to Trash.
+  2. Open System Settings > Privacy & Security, and scroll down to Security. Next to the
+     message about Darkride, click "Open Anyway", and enter your Mac's password if asked.
+  3. In the window that appears, click "Open Anyway" (or Open).
+
+On macOS 14 Sonoma there's a shortcut: right-click (or Control-click) Darkride in
+Applications, choose Open, then click Open.
+
+MICROPHONE
+When Darkride asks to use the microphone, click Allow so people near you can hear you.
+To change it later: System Settings > Privacy & Security > Microphone.
+
+IF MACOS SAYS DARKRIDE "IS DAMAGED AND CAN'T BE OPENED"
+Nothing is broken: it's the same protection. Open Terminal (Applications > Utilities),
+paste this line, press Return, then open Darkride again:
+
+  xattr -dr com.apple.quarantine /Applications/Darkride.app
+
+WHAT YOU NEED
+A Mac with an Apple chip (M1 or later) and macOS 14 Sonoma or later.

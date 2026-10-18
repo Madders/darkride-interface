@@ -545,6 +545,11 @@ endif()
                 # which GCC 13 (Ubuntu 24.04) no longer pulls in through other headers.
                 tripletForBuildTypeFile.write("set(VCPKG_C_FLAGS \"\")\n")
                 tripletForBuildTypeFile.write("set(VCPKG_CXX_FLAGS \"-include cstdint\")\n")
+            if platform.system() == "Darwin":
+                # CMake searches MacPorts' /opt/local by default on macOS. With MacPorts' Qt installed (as GitHub's
+                # Mac build has), its other libraries, such as minizip, are found instead of the ports' own.
+                # Qt is found by its own path, /opt/local/libexec/qt5, which is a different prefix.
+                tripletForBuildTypeFile.write("set(VCPKG_CMAKE_CONFIGURE_OPTIONS \"-DCMAKE_IGNORE_PREFIX_PATH=/opt/local\")\n")
 
     def getTripletWithBuildType(self, triplet):
         if not self.vcpkgBuildType:

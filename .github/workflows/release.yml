@@ -151,6 +151,15 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+      - name: Keep vcpkg's logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcpkg-logs-windows
+          path: C:\dv\*\buildtrees\**\*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
   # A newcomer's build, as BUILD_WINDOWS.md describes it: Visual Studio 2026 with the C++ workload's default
   # components, Qt where aqtinstall puts it, no environment variables, and the vs2026 preset. Only interface is built,
   # to check that it compiles; nothing is published. Not run for tags.
@@ -230,6 +239,15 @@ jobs:
         timeout-minutes: 300
         run: cmake --build C:\b --config RelWithDebInfo --target interface -- /m:2 /v:minimal /nologo
 
+      - name: Keep vcpkg's logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcpkg-logs-windows-vs2026
+          path: C:\dv\*\buildtrees\**\*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
   # Apple Silicon. Qt 5.15 with WebEngine comes prebuilt from MacPorts (Qt's own 5.15.2 is Intel only, and Homebrew's
   # qt@5 has no WebEngine). MacPorts builds for the macOS it runs on, so the app needs macOS 14 Sonoma or later.
   # interface only: the servers ship as the Linux image. The app isn't signed with an Apple Developer ID.
@@ -267,7 +285,6 @@ jobs:
         run: |
           curl -fsSL -o MacPorts.pkg https://github.com/macports/macports-base/releases/download/v2.12.7/MacPorts-2.12.7-14-Sonoma.pkg
           sudo installer -pkg MacPorts.pkg -target /
-          echo "/opt/local/bin" >> "$GITHUB_PATH"
           export PATH="/opt/local/bin:/opt/local/sbin:$PATH"
           sudo port -q selfupdate
           sudo port -N -b install $QT_PORTS
@@ -288,7 +305,8 @@ jobs:
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-            -DQT_CMAKE_PREFIX_PATH=/opt/local/libexec/qt5/lib/cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+            -DQT_CMAKE_PREFIX_PATH=/opt/local/libexec/qt5/lib/cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_IGNORE_PREFIX_PATH=/opt/local
 
       - name: Save vcpkg packages
         if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
@@ -325,6 +343,7 @@ jobs:
           codesign --force --deep --sign - dist/dmg/Darkride.app
           codesign --verify --deep --strict dist/dmg/Darkride.app
           ln -s /Applications dist/dmg/Applications
+          cp "tools/installer/macos/Read me first.txt" dist/dmg/
           hdiutil create -volname "Darkride $VERSION" -srcfolder dist/dmg -ov -format UDZO "dist/Darkride-$VERSION-macos-arm64.dmg"
           ls -la dist
 
@@ -335,6 +354,15 @@ jobs:
           path: dist/*.dmg
           retention-days: 14
           compression-level: 0
+
+      - name: Keep vcpkg's logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcpkg-logs-macos
+          path: ${{ env.TIVOLI_VCPKG_BASE }}/*/buildtrees/**/*.log
+          retention-days: 7
+          if-no-files-found: ignore
 
   linux-server:
     runs-on: ubuntu-24.04
@@ -410,6 +438,10 @@ jobs:
     if: always() && github.ref_type == 'tag' && needs.windows.result == 'success'
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/installer/macos
+
       - uses: actions/download-artifact@v4
         with:
           pattern: Darkride-*
@@ -435,13 +467,11 @@ jobs:
             echo
             echo "The installer isn't code-signed yet, so Windows SmartScreen may warn: choose *More info* then *Run anyway*."
             echo
-            echo "## macOS"
-            echo
             if [ "$MAC" = success ]; then
-              echo "- **Darkride-$v-macos-arm64.dmg**: for Macs with Apple silicon (M1 or later) on macOS 14 Sonoma or later. Open it and drag **Darkride** to **Applications**."
-              echo
-              echo 'The app is not signed with an Apple Developer ID yet. The first time, right-click **Darkride** in Applications and choose **Open**, then **Open** again. If macOS says it is damaged, run `xattr -dr com.apple.quarantine /Applications/Darkride.app` in Terminal.'
+              sed "s/@VERSION@/$v/g" tools/installer/macos/release-notes.md
             else
+              echo "## macOS"
+              echo
               echo "The Mac build didn't succeed for this release."
             fi
             echo

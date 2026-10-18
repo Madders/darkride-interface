@@ -122,7 +122,7 @@ if (APPLE)
   # configure CMake to use a custom Info.plist
   set_target_properties(${this_target} PROPERTIES MACOSX_BUNDLE_INFO_PLIST MacOSXBundleInfo.plist.in)
 
-  set(MACOSX_BUNDLE_BUNDLE_NAME "Tivoli Cloud VR")
+  set(MACOSX_BUNDLE_BUNDLE_NAME "Darkride")
   if (PRODUCTION_BUILD)
     set(MACOSX_BUNDLE_GUI_IDENTIFIER com.tivolicloud.interface)
   else ()
