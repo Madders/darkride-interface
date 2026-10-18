@@ -55,6 +55,13 @@
         android:title="@string/settings_app"
         android:key="pref_key_app">
         <ListPreference
+            android:key="app_theme"
+            android:title="@string/app_theme"
+            android:summary="%s"
+            android:entries="@array/app_theme_names"
+            android:entryValues="@array/app_theme_values"
+            android:defaultValue="darkride" />
+        <ListPreference
             android:key="menu_orientation"
             android:title="@string/menu_orientation"
             android:summary="%s"

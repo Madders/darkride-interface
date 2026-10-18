@@ -21,6 +21,10 @@ import android.widget.TextView;
 
 import io.highfidelity.hifiinterface.HifiUtils;
 import io.highfidelity.hifiinterface.R;
+import io.highfidelity.hifiinterface.theme.BackgroundDrawable;
+import io.highfidelity.hifiinterface.theme.Theme;
+import io.highfidelity.hifiinterface.theme.ThemeManager;
+import io.highfidelity.hifiinterface.theme.ThemeStyler;
 import io.highfidelity.hifiinterface.view.DomainAdapter;
 
 public class HomeFragment extends Fragment {
@@ -115,6 +119,16 @@ public class HomeFragment extends Fragment {
         mClearSearch = rootView.findViewById(R.id.search_clear);
 
         getActivity().getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
+
+        Theme theme = ThemeManager.get(getContext());
+        rootView.setBackground(new BackgroundDrawable(theme, getResources().getDisplayMetrics().density));
+        ThemeStyler.styleField(mSearchView, theme);
+        mSearchIconView.setColorFilter(theme.icon);
+        mClearSearch.setColorFilter(theme.icon);
+        ThemeStyler.styleBody(searchNoResultsView, theme);
+        searchNoResultsView.setTextColor(theme.textSecondary);
+        mSwipeRefreshLayout.setColorSchemeColors(theme.primary, theme.accent);
+        mSwipeRefreshLayout.setProgressBackgroundColorSchemeColor(theme.surface);
 
         return rootView;
     }

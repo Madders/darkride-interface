@@ -37,6 +37,9 @@ import io.highfidelity.hifiinterface.fragment.PolicyFragment;
 import io.highfidelity.hifiinterface.fragment.ProfileFragment;
 import io.highfidelity.hifiinterface.fragment.SettingsFragment;
 import io.highfidelity.hifiinterface.fragment.SignupFragment;
+import io.highfidelity.hifiinterface.theme.Theme;
+import io.highfidelity.hifiinterface.theme.ThemeManager;
+import io.highfidelity.hifiinterface.theme.ThemeStyler;
 
 public class MainActivity extends AppCompatActivity implements NavigationView.OnNavigationItemSelectedListener,
                                                                 HomeFragment.OnHomeInteractionListener,
@@ -56,6 +59,8 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
     public native String getUsername();
 
     private DrawerLayout mDrawerLayout;
+    private Toolbar mToolbar;
+    private Theme mTheme;
     private NavigationView mNavigationView;
     private ImageView mProfilePicture;
     private TextView mDisplayName;
@@ -107,6 +112,15 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS);
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
         window.setStatusBarColor(ContextCompat.getColor(this, R.color.statusbar_color));
+
+        mToolbar = toolbar;
+        mTheme = ThemeManager.get(this);
+        ThemeStyler.styleMainScreen(this, mTheme, ((android.view.ViewGroup) findViewById(android.R.id.content)).getChildAt(0),
+                toolbar, mNavigationView);
+        ThemeStyler.styleDisplay(mDisplayName, mTheme);
+        mDisplayName.setTextColor(mTheme.text);
+        ThemeStyler.styleMenuOption(mLogoutOption, mTheme);
+        ThemeStyler.styleMenuOption(findViewById(R.id.policy), mTheme);
 
         if (savedInstanceState != null) {
             // turned round: the fragments are put back by themselves
@@ -257,6 +271,17 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
             mDisplayName.setText(username);
             updateProfilePicture(username);
         }
+    }
+
+    // Screen titles in the theme's style
+    @Override
+    public void setTitle(CharSequence title) {
+        if (mTheme == null) {
+            super.setTitle(title);
+            return;
+        }
+        super.setTitle(ThemeStyler.title(mTheme, title));
+        mToolbar.post(() -> ThemeStyler.styleToolbarTitle(mToolbar, mTheme));
     }
 
     @Override

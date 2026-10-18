@@ -97,6 +97,16 @@
     <!-- the Settings screen's app settings -->
     <string name="settings_app">App</string>
     <string name="menu_orientation">Menu orientation</string>
+    <string name="app_theme">Theme</string>
+    <!-- the themes in assets/themes -->
+    <string-array name="app_theme_names" translatable="false">
+        <item>Darkride</item>
+        <item>Cyber HUD</item>
+    </string-array>
+    <string-array name="app_theme_values" translatable="false">
+        <item>darkride</item>
+        <item>cyber_hud</item>
+    </string-array>
     <string-array name="menu_orientation_names">
         <item>Landscape</item>
         <item>Portrait</item>

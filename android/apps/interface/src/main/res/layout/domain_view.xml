@@ -58,6 +58,7 @@
         </LinearLayout>
 
         <LinearLayout
+            android:id="@+id/domainNameStrip"
             android:layout_width="match_parent"
             android:layout_height="@dimen/domainNameHeight"
             android:paddingStart="10dp"

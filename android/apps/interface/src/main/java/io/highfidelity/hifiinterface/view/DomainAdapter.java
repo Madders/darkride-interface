@@ -11,6 +11,8 @@ import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import androidx.cardview.widget.CardView;
+
 import com.squareup.picasso.Picasso;
 
 import java.util.Arrays;
@@ -20,6 +22,9 @@ import io.highfidelity.hifiinterface.BuildConfig;
 import io.highfidelity.hifiinterface.R;
 import io.highfidelity.hifiinterface.provider.DomainProvider;
 import io.highfidelity.hifiinterface.provider.UserStoryDomainProvider;
+import io.highfidelity.hifiinterface.theme.Theme;
+import io.highfidelity.hifiinterface.theme.ThemeManager;
+import io.highfidelity.hifiinterface.theme.ThemeStyler;
 
 /**
  * Created by Gabriel Calero & Cristian Duarte on 3/20/18.
@@ -29,6 +34,7 @@ public class DomainAdapter extends RecyclerView.Adapter<DomainAdapter.ViewHolder
     private static final String TAG = "HiFi Interface";
     private static final String DEFAULT_THUMBNAIL_PLACE = "android.resource://" + BuildConfig.APPLICATION_ID + "/" + R.drawable.domain_placeholder;
     private Context mContext;
+    private final Theme mTheme;
     private LayoutInflater mInflater;
     private ItemClickListener mClickListener;
     private String mProtocol;
@@ -43,6 +49,7 @@ public class DomainAdapter extends RecyclerView.Adapter<DomainAdapter.ViewHolder
 
     public DomainAdapter(Context c, String protocol, String lastLocation) {
         mContext = c;
+        mTheme = ThemeManager.get(c);
         this.mInflater = LayoutInflater.from(mContext);
         mProtocol = protocol;
         mLastLocation = lastLocation;
@@ -137,7 +144,10 @@ public class DomainAdapter extends RecyclerView.Adapter<DomainAdapter.ViewHolder
     @Override
     public ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
         View view = mInflater.inflate(R.layout.domain_view, parent, false);
-        return new ViewHolder(view);
+        ViewHolder holder = new ViewHolder(view);
+        ThemeStyler.styleCard((CardView) view, mTheme, holder.mDomainName, holder.mDomainAuthor,
+                view.findViewById(R.id.domainNameStrip), holder.mPeople, holder.mPeopleCount);
+        return holder;
     }
 
     @Override
@@ -148,7 +158,7 @@ public class DomainAdapter extends RecyclerView.Adapter<DomainAdapter.ViewHolder
         holder.mDomainAuthor.setVisibility(hasAuthor ? View.VISIBLE : View.GONE);
         holder.mDomainAuthor.setText(hasAuthor ? mContext.getString(R.string.domain_by_author, domain.author) : "");
         if (domain.numUsers >= 0) {
-            int color = ContextCompat.getColor(mContext, domain.numUsers > 0 ? R.color.darkrideGreen : R.color.colorButton3);
+            int color = domain.numUsers > 0 ? mTheme.ok : mTheme.textSecondary;
             holder.mPeople.setVisibility(View.VISIBLE);
             holder.mPeopleCount.setText(String.valueOf(domain.numUsers));
             holder.mPeopleCount.setTextColor(color);

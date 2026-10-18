@@ -12,6 +12,7 @@ import androidx.annotation.Nullable;
 import io.highfidelity.hifiinterface.HifiUtils;
 import io.highfidelity.hifiinterface.InterfaceActivity;
 import io.highfidelity.hifiinterface.MenuOrientation;
+import io.highfidelity.hifiinterface.theme.ThemeManager;
 import io.highfidelity.hifiinterface.R;
 
 public class SettingsFragment extends PreferenceFragment implements SharedPreferences.OnSharedPreferenceChangeListener {
@@ -161,6 +162,12 @@ public class SettingsFragment extends PreferenceFragment implements SharedPrefer
             case PREFERENCE_KEY_DRAW_DISTANCE:
                 if (!mLoadingGraphicsSettings) {
                     nativeSetDrawDistance(Float.parseFloat(sharedPreferences.getString(key, "16384")));
+                }
+                break;
+            case ThemeManager.PREFERENCE_KEY:
+                // the menu screens again, in the new theme
+                if (getActivity() != null && !(getActivity() instanceof InterfaceActivity)) {
+                    getActivity().recreate();
                 }
                 break;
             case MenuOrientation.PREFERENCE_KEY:
