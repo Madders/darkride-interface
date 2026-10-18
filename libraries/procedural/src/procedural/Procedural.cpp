@@ -223,9 +223,7 @@ void Procedural::setProceduralData(const ProceduralData& proceduralData) {
 }
 
 bool Procedural::isReady() const {
-#if defined(USE_GLES)
-    return false;
-#endif
+    // (on OpenGL ES too: the shaders go into a GLSL ES template, and one that doesn't compile is just not drawn)
 
     std::lock_guard<std::mutex> lock(_mutex);
 
