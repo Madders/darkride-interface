@@ -154,7 +154,8 @@ bool Profiler::isRenderMethodDeferredCapable() {
 #if defined(Q_OS_MACOS)
     return true;
 #elif defined(Q_OS_ANDROID)
-    return false;
+    // a phone with OpenGL ES 3.2 (float render targets) can choose it (PerformanceManager checks the version)
+    return true;
 #else
     return true;
 #endif

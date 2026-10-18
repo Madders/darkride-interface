@@ -1,5 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- the engine's graphics settings (SettingsFragment reads and changes them in the engine) -->
+    <PreferenceCategory
+        android:title="@string/settings_graphics"
+        android:key="pref_key_graphics">
+        <ListPreference
+            android:key="graphics_preset"
+            android:title="@string/graphics_quality"
+            android:summary="%s"
+            android:entries="@array/graphics_preset_names"
+            android:entryValues="@array/graphics_preset_values"
+            android:defaultValue="2" />
+        <SwitchPreference
+            android:key="graphics_shadows"
+            android:title="@string/graphics_shadows"
+            android:summary="@string/graphics_shadows_summary"
+            android:defaultValue="false" />
+        <SwitchPreference
+            android:key="graphics_ambient_occlusion"
+            android:title="@string/graphics_ambient_occlusion"
+            android:summary="@string/graphics_ambient_occlusion_summary"
+            android:defaultValue="false" />
+        <ListPreference
+            android:key="graphics_resolution"
+            android:title="@string/graphics_resolution"
+            android:summary="%s"
+            android:entries="@array/graphics_resolution_names"
+            android:entryValues="@array/graphics_resolution_values"
+            android:defaultValue="1.0" />
+    </PreferenceCategory>
     <PreferenceCategory
         android:title="@string/settings_developer"
         android:key="pref_key_developer">

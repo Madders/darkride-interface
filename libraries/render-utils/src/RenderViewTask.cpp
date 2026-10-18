@@ -52,11 +52,7 @@ void RenderViewTask::build(JobModel& task, const render::Varying& input, render:
     // Assemble the lighting stages current frames
     const auto lightingStageFramesAndZones = task.addJob<AssembleLightingStageTask>("AssembleStages", items);
 
-#ifndef Q_OS_ANDROID
-        const auto deferredForwardIn = DeferredForwardSwitchJob::Input(items, lightingModel, lightingStageFramesAndZones).asVarying();
-        task.addJob<DeferredForwardSwitchJob>("DeferredForwardSwitch", deferredForwardIn, cullFunctor, tagBits, tagMask);
-#else
-        const auto renderInput = RenderForwardTask::Input(items, lightingModel, lightingStageFramesAndZones).asVarying();
-        task.addJob<RenderForwardTask>("RenderForwardTask", renderInput);
-#endif
+    // (on Android too: the deferred renderer, with shadows and ambient occlusion, is a setting for capable phones)
+    const auto deferredForwardIn = DeferredForwardSwitchJob::Input(items, lightingModel, lightingStageFramesAndZones).asVarying();
+    task.addJob<DeferredForwardSwitchJob>("DeferredForwardSwitch", deferredForwardIn, cullFunctor, tagBits, tagMask);
 }

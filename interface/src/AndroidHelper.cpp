@@ -14,6 +14,9 @@
 #include <AudioClient.h>
 #include <src/ui/LoginDialog.h>
 #include "Application.h"
+#include "PerformanceManager.h"
+#include "scripting/RenderScriptingInterface.h"
+#include <gl/GLHelpers.h>
 #include "Constants.h"
 #include "avatar/AvatarManager.h"
 
@@ -36,6 +39,65 @@ AndroidHelper::~AndroidHelper() {
 
 void AndroidHelper::requestActivity(const QString &activityName, const bool backToScene, QMap<QString, QString> args) {
     emit androidActivityRequested(activityName, backToScene, args);
+}
+
+int AndroidHelper::getGraphicsPreset() const {
+    return (int)qApp->getPerformanceManager().getPerformancePreset();
+}
+
+void AndroidHelper::setGraphicsPreset(int preset) {
+    QMetaObject::invokeMethod(qApp, [preset] {
+        qApp->getPerformanceManager().setPerformancePreset((PerformanceManager::PerformancePreset)preset);
+    }, Qt::QueuedConnection);
+}
+
+bool AndroidHelper::isDeferredRenderingAvailable() const {
+    // (as PerformanceManager decides it)
+    return gl::getAvailableVersion() >= GL_MAKE_VERSION(3, 2);
+}
+
+
+// Shadows and ambient occlusion are the deferred renderer's: switching one on switches to it
+bool AndroidHelper::getShadowsEnabled() const {
+    auto render = RenderScriptingInterface::getInstance();
+    return render->getShadowsEnabled() && render->getRenderMethod() == RenderScriptingInterface::RenderMethod::DEFERRED;
+}
+
+void AndroidHelper::setShadowsEnabled(bool enabled) {
+    bool deferred = isDeferredRenderingAvailable();
+    QMetaObject::invokeMethod(qApp, [enabled, deferred] {
+        auto render = RenderScriptingInterface::getInstance();
+        if (enabled && deferred) {
+            render->setRenderMethod(RenderScriptingInterface::RenderMethod::DEFERRED);
+        }
+        render->setShadowsEnabled(enabled);
+    }, Qt::QueuedConnection);
+}
+
+bool AndroidHelper::getAmbientOcclusionEnabled() const {
+    auto render = RenderScriptingInterface::getInstance();
+    return render->getAmbientOcclusionEnabled() && render->getRenderMethod() == RenderScriptingInterface::RenderMethod::DEFERRED;
+}
+
+void AndroidHelper::setAmbientOcclusionEnabled(bool enabled) {
+    bool deferred = isDeferredRenderingAvailable();
+    QMetaObject::invokeMethod(qApp, [enabled, deferred] {
+        auto render = RenderScriptingInterface::getInstance();
+        if (enabled && deferred) {
+            render->setRenderMethod(RenderScriptingInterface::RenderMethod::DEFERRED);
+        }
+        render->setAmbientOcclusionEnabled(enabled);
+    }, Qt::QueuedConnection);
+}
+
+float AndroidHelper::getResolutionScale() const {
+    return RenderScriptingInterface::getInstance()->getViewportResolutionScale();
+}
+
+void AndroidHelper::setResolutionScale(float scale) {
+    QMetaObject::invokeMethod(qApp, [scale] {
+        RenderScriptingInterface::getInstance()->setViewportResolutionScale(scale);
+    }, Qt::QueuedConnection);
 }
 
 void AndroidHelper::notifyLoadComplete() {

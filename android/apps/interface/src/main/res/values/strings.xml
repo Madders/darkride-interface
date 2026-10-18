@@ -65,4 +65,33 @@
         <item quantity="one">%d person here</item>
         <item quantity="other">%d people here</item>
     </plurals>
+    <!-- the Settings screen's graphics settings -->
+    <string name="settings_graphics">Graphics</string>
+    <string name="graphics_quality">Quality</string>
+    <string name="graphics_shadows">Shadows</string>
+    <string name="graphics_shadows_summary">Shadows from the sun and lights. Uses more battery.</string>
+    <string name="graphics_ambient_occlusion">Ambient occlusion</string>
+    <string name="graphics_ambient_occlusion_summary">Soft shading where surfaces meet. Uses more battery.</string>
+    <string name="graphics_needs_gles32">Needs a phone with OpenGL ES 3.2</string>
+    <string name="graphics_resolution">Render resolution</string>
+    <string-array name="graphics_preset_names">
+        <item>Low (fastest)</item>
+        <item>Medium</item>
+        <item>High (shadows, needs a powerful phone)</item>
+    </string-array>
+    <string-array name="graphics_preset_values" translatable="false">
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+    </string-array>
+    <string-array name="graphics_resolution_names">
+        <item>Full</item>
+        <item>75%</item>
+        <item>50% (fastest)</item>
+    </string-array>
+    <string-array name="graphics_resolution_values" translatable="false">
+        <item>1.0</item>
+        <item>0.75</item>
+        <item>0.5</item>
+    </string-array>
 </resources>

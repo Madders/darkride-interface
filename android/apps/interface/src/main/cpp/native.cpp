@@ -347,6 +347,52 @@ Java_io_highfidelity_hifiinterface_HifiUtils_getHifiSettingBoolean(JNIEnv *env,
     return setting.get();
 }
 
+// The Settings screen's graphics settings (AndroidHelper)
+JNIEXPORT jint JNICALL
+Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeGetGraphicsPreset(JNIEnv*, jobject) {
+    return AndroidHelper::instance().getGraphicsPreset();
+}
+
+JNIEXPORT void JNICALL
+Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeSetGraphicsPreset(JNIEnv*, jobject, jint preset) {
+    AndroidHelper::instance().setGraphicsPreset(preset);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeIsDeferredRenderingAvailable(JNIEnv*, jobject) {
+    return AndroidHelper::instance().isDeferredRenderingAvailable();
+}
+
+JNIEXPORT jboolean JNICALL
+Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeGetShadowsEnabled(JNIEnv*, jobject) {
+    return AndroidHelper::instance().getShadowsEnabled();
+}
+
+JNIEXPORT void JNICALL
+Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeSetShadowsEnabled(JNIEnv*, jobject, jboolean enabled) {
+    AndroidHelper::instance().setShadowsEnabled(enabled);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeGetAmbientOcclusionEnabled(JNIEnv*, jobject) {
+    return AndroidHelper::instance().getAmbientOcclusionEnabled();
+}
+
+JNIEXPORT void JNICALL
+Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeSetAmbientOcclusionEnabled(JNIEnv*, jobject, jboolean enabled) {
+    AndroidHelper::instance().setAmbientOcclusionEnabled(enabled);
+}
+
+JNIEXPORT jfloat JNICALL
+Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeGetResolutionScale(JNIEnv*, jobject) {
+    return AndroidHelper::instance().getResolutionScale();
+}
+
+JNIEXPORT void JNICALL
+Java_io_highfidelity_hifiinterface_fragment_SettingsFragment_nativeSetResolutionScale(JNIEnv*, jobject, jfloat scale) {
+    AndroidHelper::instance().setResolutionScale(scale);
+}
+
 JNIEXPORT jstring JNICALL
 Java_io_highfidelity_hifiinterface_HifiUtils_getAccessToken(JNIEnv *env, jobject instance) {
     auto accountManager = DependencyManager::get<AccountManager>();

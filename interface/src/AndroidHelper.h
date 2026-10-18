@@ -32,6 +32,17 @@ public:
     void notifyEnterBackground();
     void notifyToggleAwayMode();
 
+    // Graphics settings, for the app's Settings screen: read from any thread, changed on the app's thread
+    int getGraphicsPreset() const;
+    void setGraphicsPreset(int preset);
+    bool isDeferredRenderingAvailable() const;
+    bool getShadowsEnabled() const;
+    void setShadowsEnabled(bool enabled);
+    bool getAmbientOcclusionEnabled() const;
+    void setAmbientOcclusionEnabled(bool enabled);
+    float getResolutionScale() const;
+    void setResolutionScale(float scale);
+
     void performHapticFeedback(int duration);
     void processURL(const QString &url);
     void notifyHeadsetOn(bool pluggedIn);

@@ -10,6 +10,8 @@
 //
 #include "PerformanceManager.h"
 
+#include <gl/GLHelpers.h>
+
 #include <platform/Platform.h>
 #include <platform/PlatformKeys.h>
 #include <platform/Profiler.h>
@@ -41,6 +43,10 @@ void PerformanceManager::setupPerformancePresetSettings(bool evaluatePlatformTie
 
         // What is our profile?
         auto platformTier = platform::Profiler::profilePlatform();
+#if defined(Q_OS_ANDROID)
+        // phones start with the simple renderer; the higher presets are in the app's Settings
+        platformTier = platform::Profiler::LOW;
+#endif
         // Then let's assign the performance preset setting from it
         setPerformancePreset(platformToPerformancePresetMap[platformTier]);
     }
@@ -70,6 +76,10 @@ void PerformanceManager::applyPerformancePreset(PerformanceManager::PerformanceP
 
     // Ugly case that prevent us to run deferred everywhere...
     bool isDeferredCapable = platform::Profiler::isRenderMethodDeferredCapable();
+#if defined(Q_OS_ANDROID)
+    // the deferred renderer draws to float colour buffers, which OpenGL ES 3.2 guarantees
+    isDeferredCapable = isDeferredCapable && gl::getAvailableVersion() >= GL_MAKE_VERSION(3, 2);
+#endif
     
     // eval recommended PPI and Scale
     // float recommendedPpiScale = 1.0f;
