@@ -25,7 +25,12 @@ function printd(str) {
 // A theme's own icon for a slot (the app's Settings > Theme), or the default
 function themedIcon(slot, fallback) {
     var icons = (Settings.getValue("Android/themeIcons", "") || "").split(",");
-    return icons.indexOf(slot) >= 0 ? Settings.getValue("Android/themeIconFolder", "") + "/" + slot + ".png" : fallback;
+    if (icons.indexOf(slot) < 0) {
+        return fallback;
+    }
+    // (an installed theme's folder is a path in the app's files)
+    var folder = Settings.getValue("Android/themeIconFolder", "");
+    return (folder.charAt(0) === "/" ? "file://" : "") + folder + "/" + slot + ".png";
 }
 
 // The theme's colour for a default icon ("" for a theme's own icon, which is coloured already)
@@ -72,16 +77,18 @@ function currentTheme() {
         Settings.getValue("Android/themeIconColor", "");
 }
 
+function themedButton(slot, icon) {
+    var image = themedIcon(slot, icon);
+    return { icon: image, activeIcon: image, iconColor: themedIconColor(slot, "Android/themeIconColor") };
+}
+
+// (through the bar's QML, on its own thread: the buttons are QML objects, which can't be changed from this one)
 function applyTheme() {
     appliedTheme = currentTheme();
-    var back = themedIcon("back", "icons/+android_interface/backward.svg");
-    backButton.icon = back;
-    backButton.activeIcon = back;
-    backButton.iconColor = themedIconColor("back", "Android/themeIconColor");
-    var settings = themedIcon("settings", "icons/+android_interface/settings.svg");
-    settingsButton.icon = settings;
-    settingsButton.activeIcon = settings;
-    settingsButton.iconColor = themedIconColor("settings", "Android/themeIconColor");
+    actionbar.sendToQml({ buttons: [
+        themedButton("back", "icons/+android_interface/backward.svg"),
+        themedButton("settings", "icons/+android_interface/settings.svg")
+    ] });
 }
 
 function checkTheme() {

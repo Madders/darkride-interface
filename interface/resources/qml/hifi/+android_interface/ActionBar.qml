@@ -47,6 +47,25 @@ Item {
         height = 640;
     }
     
+    // Messages from the bar's script (sendToQml, on this thread): {buttons: [properties, ...]} sets the properties of
+    // the buttons, in the order they were added (the app theme's icons and colours, when it changes)
+    function fromScript(message) {
+        if (!message || !message.buttons) {
+            return;
+        }
+        var index = 0;
+        for (var i = 0; i < flowMain.children.length && index < message.buttons.length; i++) {
+            var button = flowMain.children[i];
+            if (button.icon === undefined) {
+                continue;
+            }
+            var properties = message.buttons[index++];
+            Object.keys(properties).forEach(function (key) {
+                button[key] = properties[key];
+            });
+        }
+    }
+
     function addButton(properties) {
         var component = Qt.createComponent("button.qml");
         if (component.status == Component.Ready) {

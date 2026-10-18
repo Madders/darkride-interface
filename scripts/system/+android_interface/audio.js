@@ -25,7 +25,12 @@ function printd(str) {
 // A theme's own icon for a slot (the app's Settings > Theme), or the default
 function themedIcon(slot, fallback) {
     var icons = (Settings.getValue("Android/themeIcons", "") || "").split(",");
-    return icons.indexOf(slot) >= 0 ? Settings.getValue("Android/themeIconFolder", "") + "/" + slot + ".png" : fallback;
+    if (icons.indexOf(slot) < 0) {
+        return fallback;
+    }
+    // (an installed theme's folder is a path in the app's files)
+    var folder = Settings.getValue("Android/themeIconFolder", "");
+    return (folder.charAt(0) === "/" ? "file://" : "") + folder + "/" + slot + ".png";
 }
 
 // The theme's colour for a default icon ("" for a theme's own icon, which is coloured already)
@@ -66,12 +71,15 @@ function currentTheme() {
         Settings.getValue("Android/themeIconColor", "") + "|" + Settings.getValue("Android/themeAlertColor", "");
 }
 
+// (through the bar's QML, on its own thread: the button is a QML object, which can't be changed from this one)
 function applyTheme() {
     appliedTheme = currentTheme();
-    audioButton.icon = themedIcon("mic", "icons/mic-unmute-a.svg");
-    audioButton.activeIcon = themedIcon("mic-muted", "icons/mic-mute-a.svg");
-    audioButton.iconColor = themedIconColor("mic", "Android/themeIconColor");
-    audioButton.activeIconColor = themedIconColor("mic-muted", "Android/themeAlertColor");
+    audiobar.sendToQml({ buttons: [{
+        icon: themedIcon("mic", "icons/mic-unmute-a.svg"),
+        activeIcon: themedIcon("mic-muted", "icons/mic-mute-a.svg"),
+        iconColor: themedIconColor("mic", "Android/themeIconColor"),
+        activeIconColor: themedIconColor("mic-muted", "Android/themeAlertColor")
+    }] });
 }
 
 function checkTheme() {
@@ -90,8 +98,8 @@ function onMutePressed() {
 
 function onMuteToggled() {
     printd("On Mute Toggled");
-    audioButton.isActive = Audio.muted; // Menu.isOptionChecked("Mute Microphone")
-    printd("Audio button is active: " + audioButton.isActive);
+    // (through the bar's QML, on its own thread)
+    audiobar.sendToQml({ buttons: [{ isActive: Audio.muted }] });
 }
 
 Script.scriptEnding.connect(function () {
