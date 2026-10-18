@@ -2405,7 +2405,14 @@ qint64 AudioClient::AudioOutputIODevice::readData(char * data, qint64 maxSize) {
 
     int samplesRequested = maxSamplesRequested;
     int networkSamplesPopped;
-    if ((networkSamplesPopped = _receivedAudioStream.popSamples(samplesRequested, false)) > 0) {
+#if defined(Q_OS_ANDROID)
+    // all or nothing: when the stream falls short its packet loss concealment makes up the rest, rather than a short read
+    // leaving a gap in Qt's OpenSL output (two buffers, each played whole: any gap is heard as a click)
+    const bool allOrNothing = true;
+#else
+    const bool allOrNothing = false;
+#endif
+    if ((networkSamplesPopped = _receivedAudioStream.popSamples(samplesRequested, allOrNothing)) > 0) {
         qCDebug(audiostream, "Read %d samples from buffer (%d available, %d requested)", networkSamplesPopped, _receivedAudioStream.getSamplesAvailable(), samplesRequested);
         AudioRingBuffer::ConstIterator lastPopOutput = _receivedAudioStream.getLastPopOutput();
         lastPopOutput.readSamples(scratchBuffer, networkSamplesPopped);
@@ -2453,6 +2460,14 @@ qint64 AudioClient::AudioOutputIODevice::readData(char * data, qint64 maxSize) {
         samplesPopped = maxSamplesRequested;
         memset(mixBuffer, 0, samplesPopped * sizeof(float));
     }
+#if defined(Q_OS_ANDROID)
+    else if (samplesPopped < maxSamplesRequested) {
+        // still short (the injectors alone, or concealment couldn't make it all up): silence for the rest, so the
+        // device gets a whole buffer
+        memset(mixBuffer + samplesPopped, 0, (maxSamplesRequested - samplesPopped) * sizeof(float));
+        samplesPopped = maxSamplesRequested;
+    }
+#endif
     int framesPopped = samplesPopped / OUTPUT_CHANNEL_COUNT;
 
     // apply output gain

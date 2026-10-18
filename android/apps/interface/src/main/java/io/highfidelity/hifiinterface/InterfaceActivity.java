@@ -21,6 +21,7 @@ import android.content.res.AssetManager;
 import android.content.res.Configuration;
 import android.graphics.Point;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Vibrator;
@@ -96,6 +97,7 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
     private SlidingDrawer mWebSlidingDrawer;
     // Settings, over the world (the in-world gear button)
     private LinearLayout mSettingsPanel;
+    private WifiManager.WifiLock mWifiLock;
     private boolean mThemingFragments;
     private static final String SETTINGS_PANEL_TAG = "settingsPanel";
     private static final int SETTINGS_PANEL_MAX_WIDTH_DP = 420;
@@ -168,9 +170,30 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
         headsetStateReceiver = new HeadsetStateReceiver();
     }
 
+    // Wi-Fi without its power saving while in the world: otherwise the phone wakes for packets every beacon or so and gets
+    // them in bursts, the audio's jitter buffer swings and the sound clicks when it runs dry
+    private void holdLowLatencyWifi(boolean hold) {
+        if (hold) {
+            if (mWifiLock == null) {
+                WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                if (wifi == null) {
+                    return;
+                }
+                int mode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                        ? WifiManager.WIFI_MODE_FULL_LOW_LATENCY : WifiManager.WIFI_MODE_FULL_HIGH_PERF;
+                mWifiLock = wifi.createWifiLock(mode, "darkride:world");
+                mWifiLock.setReferenceCounted(false);
+            }
+            mWifiLock.acquire();
+        } else if (mWifiLock != null && mWifiLock.isHeld()) {
+            mWifiLock.release();
+        }
+    }
+
     @Override
     protected void onPause() {
         super.onPause();
+        holdLowLatencyWifi(false);
         if (isLoading) {
             nativeEnterBackgroundCallEnqueued = true;
         } else {
@@ -226,6 +249,7 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
     protected void onResume() {
         super.onResume();
         nativeEnterForeground();
+        holdLowLatencyWifi(true);
         // a new theme from the menus since the world last had one
         int themeVersion = ThemeManager.getPublishedVersion();
         if (!isLoading && (mThemeVersion >= 0 ? themeVersion != mThemeVersion : themeVersion > 0)) {
