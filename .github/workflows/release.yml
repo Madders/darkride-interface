@@ -367,6 +367,29 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+      # Nobody building this has a Mac, so the packaged app is started here: a library macOS can't load stops it
+      # at once (the job fails, and a release leaves the Mac build out). The runner is a virtual machine, so a
+      # graphics problem only warns.
+      - name: Start the app
+        run: |
+          app=dist/dmg/Darkride.app
+          helper="$app/Contents/Frameworks/QtWebEngineCore.framework/Versions/5/Helpers/QtWebEngineProcess.app/Contents/MacOS/QtWebEngineProcess"
+          start() {  # start, wait, stop; the output goes to $2
+            "$1" > "$2" 2>&1 &
+            pid=$!
+            sleep "$3"
+            if kill -0 $pid 2>/dev/null; then echo "$1: still running after $3 s"; kill $pid; sleep 3; kill -9 $pid 2>/dev/null || true
+            else wait $pid; echo "$1: exited with $?"; fi
+          }
+          start "$helper" helper.log 5
+          start "$app/Contents/MacOS/interface" interface.log 45
+          echo "--- interface"; tail -n 60 interface.log
+          echo "--- QtWebEngineProcess"; tail -n 20 helper.log
+          if grep -h -E "Library not loaded|Symbol not found|image not found|dyld\[" interface.log helper.log; then
+            echo "::error::The app can't load one of its libraries"; exit 1
+          fi
+          grep -q -i -E "OpenGL|GL version|renderer" interface.log || echo "::warning::interface printed nothing about OpenGL"
+
       - name: Keep vcpkg's logs
         if: failure()
         uses: actions/upload-artifact@v4
