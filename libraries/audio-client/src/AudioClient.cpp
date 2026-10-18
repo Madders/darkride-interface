@@ -55,6 +55,8 @@
 
 #if defined(Q_OS_ANDROID)
 #include <QtAndroidExtras/QAndroidJniObject>
+#include <sys/system_properties.h>
+#include <QtCore/QStandardPaths>
 #endif
 
 const int AudioClient::MIN_BUFFER_FRAMES = 1;
@@ -2553,6 +2555,22 @@ qint64 AudioClient::AudioOutputIODevice::readData(char * data, qint64 maxSize) {
             counts = ReadCounts();
             counts.since = now;
             counts.lastRead = now;
+
+            // for finding clicks: what goes to the speaker, as a WAV in the app's files
+            // (adb shell setprop debug.darkride.audiorec 1, and 0 to finish)
+            char record[PROP_VALUE_MAX] = {};
+            bool wantRecording = __system_property_get("debug.darkride.audiorec", record) > 0 && record[0] == '1';
+            if (wantRecording != _audio->_isRecording) {
+                QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/output.wav";
+                QMetaObject::invokeMethod(_audio, [audio = _audio, wantRecording, path] {
+                    if (wantRecording) {
+                        qCDebug(audioclient) << "Recording the output to" << path << audio->startRecording(path);
+                    } else {
+                        audio->stopRecording();
+                        qCDebug(audioclient) << "Finished recording the output";
+                    }
+                });
+            }
         }
     }
 #endif
