@@ -69,6 +69,8 @@ void RenderScriptingInterface::forceRenderMethod(RenderMethod renderMethod) {
             )
         );
         if (config) config->setBranch((int)renderMethod);
+        qDebug() << "Render method:" << (renderMethod == RenderMethod::DEFERRED ? "deferred" : "forward")
+                 << (config ? "" : "(the render engine isn't set up yet)");
 
         auto secondaryConfig = dynamic_cast<render::SwitchConfig*>(
             qApp->getRenderEngine()->getConfiguration()->getConfig(
