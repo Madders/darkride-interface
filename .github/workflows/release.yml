@@ -345,6 +345,8 @@ jobs:
           echo "Bundle: $app"
           mkdir -p dist/dmg
           ditto "$app" dist/dmg/Darkride.app
+          # macdeployqt leaves helpers such as QtWebEngineProcess pointing at MacPorts' Qt
+          python3 tools/installer/macos/fix-bundle.py dist/dmg/Darkride.app /opt/local/
           # nothing may still point at MacPorts: the app would only start where MacPorts is installed
           if find dist/dmg/Darkride.app -type f \( -perm -u+x -o -name '*.dylib' \) -exec otool -L {} \; 2>/dev/null | grep -q "/opt/local/"; then
             find dist/dmg/Darkride.app -type f \( -perm -u+x -o -name '*.dylib' \) -exec otool -L {} \; 2>/dev/null | grep -B3 "/opt/local/" | head -40
