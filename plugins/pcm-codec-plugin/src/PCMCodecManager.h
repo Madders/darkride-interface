@@ -13,6 +13,7 @@
 #define hifi__PCMCodecManager_h
 
 #include <plugins/CodecPlugin.h>
+#include <AudioConstants.h>
 
 class PCMCodec : public CodecPlugin, public Encoder, public Decoder {
     Q_OBJECT
@@ -44,6 +45,8 @@ public:
     }
 
     virtual void lostFrame(QByteArray& decodedBuffer) override {
+        // a frame of silence (whatever size the buffer was given)
+        decodedBuffer.resize(AudioConstants::NETWORK_FRAME_BYTES_STEREO);
         memset(decodedBuffer.data(), 0, decodedBuffer.size());
     }
 
@@ -81,6 +84,8 @@ public:
     }
 
     virtual void lostFrame(QByteArray& decodedBuffer) override {
+        // a frame of silence (whatever size the buffer was given)
+        decodedBuffer.resize(AudioConstants::NETWORK_FRAME_BYTES_STEREO);
         memset(decodedBuffer.data(), 0, decodedBuffer.size());
     }
 

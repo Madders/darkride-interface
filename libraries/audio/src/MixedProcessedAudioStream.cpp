@@ -45,11 +45,16 @@ int MixedProcessedAudioStream::lostAudioData(int numPackets) {
             qCInfo(audiostream, "Packet currently being unpacked or lost frame already being generated.  Not generating lost frame.");
             return 0;
         }
+        // a frame of silence, which a codec's concealment replaces: the PCM and zlib codecs' only zero what they're
+        // given, and an empty buffer left processSamples reading a frame from nowhere, a full-volume burst of noise
+        decodedBuffer.resize(AudioConstants::NETWORK_FRAME_BYTES_STEREO);
+        memset(decodedBuffer.data(), 0, decodedBuffer.size());
         if (_decoder) {
             _decoder->lostFrame(decodedBuffer);
-        } else {
-            decodedBuffer.resize(AudioConstants::NETWORK_FRAME_BYTES_STEREO);
-            memset(decodedBuffer.data(), 0, decodedBuffer.size());
+            if (decodedBuffer.size() != AudioConstants::NETWORK_FRAME_BYTES_STEREO) {
+                decodedBuffer.resize(AudioConstants::NETWORK_FRAME_BYTES_STEREO);
+                memset(decodedBuffer.data(), 0, decodedBuffer.size());
+            }
         }
         emit addedStereoSamples(decodedBuffer);
 
