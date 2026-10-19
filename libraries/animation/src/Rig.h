@@ -473,6 +473,24 @@ protected:
     bool _headEnabled { false };
     bool _computeNetworkAnimation { false };
     bool _humanoidRotationOffsets { false };
+
+    // A model's node constraints (hfm::NodeConstraint) by joint index, with the rest rotations they turn from, in the
+    // model's own joint axes (those before any humanoid rotation offset), as its constraints were made in them
+    struct NodeConstraint {
+        hfm::NodeConstraint::Type type { hfm::NodeConstraint::Type::Rotation };
+        int joint { -1 };
+        int source { -1 };
+        glm::vec3 axis;
+        float weight { 1.0f };
+        glm::quat sourceRestLocal;
+        glm::quat jointRestLocal;
+        glm::quat sourceToJoint;  // the joint's rest axes in the source's
+    };
+    std::vector<NodeConstraint> _nodeConstraints;
+    void initNodeConstraints(const HFMModel& hfmModel);
+    void applyNodeConstraints(AnimPoseVec& relativePoses, AnimPoseVec& absolutePoses) const;
+    glm::quat modelAxesRotation(const AnimPoseVec& absolutePoses, int joint) const;
+    glm::quat modelAxesLocalRotation(const AnimPoseVec& absolutePoses, int joint) const;
     bool _sendNetworkNode { false };
 
     AnimContext _lastContext;

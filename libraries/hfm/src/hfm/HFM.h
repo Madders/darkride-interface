@@ -299,6 +299,18 @@ public:
     {}
 };
 
+// A joint that turns with another (a VRM's VRMC_node_constraint): by its twist about an axis (Roll), to point an axis at
+// it (Aim), or by all of its turn (Rotation). The rig applies them after the animations and before Flow.
+class NodeConstraint {
+public:
+    enum class Type { Roll, Aim, Rotation };
+    Type type { Type::Rotation };
+    QString joint;   // the joint it turns, by the name it ends up with
+    QString source;  // the joint it follows
+    glm::vec3 axis;  // Roll: the axis of the source's twist; Aim: the joint's axis that points at the source
+    float weight { 1.0f };
+};
+
 class FlowData {
 public:
     FlowData() {};
@@ -385,6 +397,7 @@ public:
     QMap<int, glm::quat> jointRotationOffsets;
     std::vector<ShapeVertices> shapeVertices;
     FlowData flowData;
+    std::vector<NodeConstraint> nodeConstraints;
 
     void debugDump() const;
 };

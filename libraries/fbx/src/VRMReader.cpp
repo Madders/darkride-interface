@@ -318,6 +318,45 @@ VRMInfo readVRM(const QByteArray& glb) {
             }
         }
     }
+    // Node constraints (1.0): twist bones that follow an arm's twist, parts that aim at others
+    auto finalName = [&](int node) {
+        const QString name = nodeName(node);
+        return info.jointNames.value(name, info.flowJointNames.value(name, name));
+    };
+    for (int node = 0; node < nodes.size(); node++) {
+        const QJsonObject constraint =
+            nodes.at(node).toObject()["extensions"].toObject()["VRMC_node_constraint"].toObject()["constraint"].toObject();
+        if (constraint.isEmpty()) {
+            continue;
+        }
+        hfm::NodeConstraint nodeConstraint;
+        QJsonObject settings;
+        if (constraint.contains("roll")) {
+            settings = constraint["roll"].toObject();
+            nodeConstraint.type = hfm::NodeConstraint::Type::Roll;
+            const QString axis = settings["rollAxis"].toString("X");
+            nodeConstraint.axis = axis == "Y" ? glm::vec3(0.0f, 1.0f, 0.0f) : axis == "Z" ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+        } else if (constraint.contains("aim")) {
+            settings = constraint["aim"].toObject();
+            nodeConstraint.type = hfm::NodeConstraint::Type::Aim;
+            const QString axis = settings["aimAxis"].toString("PositiveX");
+            const float sign = axis.startsWith("Negative") ? -1.0f : 1.0f;
+            nodeConstraint.axis = sign * (axis.endsWith("Y") ? glm::vec3(0.0f, 1.0f, 0.0f) : axis.endsWith("Z") ? glm::vec3(0.0f, 0.0f, 1.0f)
+                                                                                                 : glm::vec3(1.0f, 0.0f, 0.0f));
+        } else if (constraint.contains("rotation")) {
+            settings = constraint["rotation"].toObject();
+            nodeConstraint.type = hfm::NodeConstraint::Type::Rotation;
+        } else {
+            continue;
+        }
+        nodeConstraint.joint = finalName(node);
+        nodeConstraint.source = finalName(settings["source"].toInt(-1));
+        nodeConstraint.weight = (float)settings["weight"].toDouble(1.0);
+        if (!nodeConstraint.joint.isEmpty() && !nodeConstraint.source.isEmpty()) {
+            info.nodeConstraints.push_back(nodeConstraint);
+        }
+    }
+
     for (auto itr = colliders.begin(); itr != colliders.end(); itr++) {
         const QString name = nodeName(itr.key());
         const QString jointName = info.jointNames.value(name, info.flowJointNames.value(name, name));

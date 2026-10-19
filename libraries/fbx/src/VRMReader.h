@@ -18,6 +18,7 @@
 #include <QVector>
 
 #include <BlendshapeConstants.h>
+#include <hfm/HFM.h>
 
 // What Darkride uses of a VRM avatar (https://vrm.dev), from the VRM (0.x) or VRMC_vrm and VRMC_springBone (1.0)
 // extensions of a glTF binary (.vrm, or a .glb that kept them): which nodes are which humanoid bones, which morph targets
@@ -32,6 +33,7 @@ struct VRMInfo {
     QHash<QString, QString> flowJointNames;  // a node's name: its name for Flow
     QVariantMap flowPhysics;                  // a Flow group: its stiffness, damping, gravity and radius
     QVariantMap flowCollisions;               // a joint (by the name it ends up with): a sphere's radius and offset
+    std::vector<hfm::NodeConstraint> nodeConstraints;  // 1.0's VRMC_node_constraint, by the joints' final names
     QString title;
     QString authors;
     QString licence;
