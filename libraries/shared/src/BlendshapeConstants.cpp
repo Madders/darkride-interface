@@ -12,6 +12,7 @@
 #include "BlendshapeConstants.h"
 
 #include <QHash>
+#include <QRegularExpression>
 #include <QVector>
 
 const char* BLENDSHAPE_NAMES[] = {
@@ -170,16 +171,19 @@ BlendshapeSource findBlendshapeSource(int index, const QStringList& modelNames) 
         return {};
     }
 
-    // the model's names by their lower case, and by the lower case of what follows their last '.'
+    // the model's names by their lower case, by the lower case of what follows their last '.', and without the
+    // numbered prefix Microsoft's Rocketbox avatars give their ARKit names (AK_25_JawOpen)
+    static const QRegularExpression ROCKETBOX_PREFIX("^ak_[0-9]+_");
     QHash<QString, QString> byLowerCase;
     for (const QString& name : modelNames) {
         QString lower = name.toLower();
-        if (!byLowerCase.contains(lower)) {
-            byLowerCase.insert(lower, name);
-        }
         int dot = lower.lastIndexOf('.');
-        if (dot >= 0 && !byLowerCase.contains(lower.mid(dot + 1))) {
-            byLowerCase.insert(lower.mid(dot + 1), name);
+        QString unprefixed = lower;
+        unprefixed.remove(ROCKETBOX_PREFIX);
+        for (const QString& key : { lower, dot >= 0 ? lower.mid(dot + 1) : QString(), unprefixed }) {
+            if (!key.isEmpty() && !byLowerCase.contains(key)) {
+                byLowerCase.insert(key, name);
+            }
         }
     }
 

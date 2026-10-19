@@ -32,7 +32,7 @@ struct BlendshapeSource {
 // one named exactly like the blendshape; else, for the four that voice drives (JawOpen, MouthSmile_L/_R,
 // LipsUpperClose, LipsFunnel), Ready Player Me's targets; else Apple's ARKit names, which Ready Player Me, VRoid,
 // Avaturn, MetaPerson, MakeHuman and iPhone face capture use. Names are compared regardless of case, and also by
-// what follows the last '.' (blendShape1.jawOpen).
+// what follows the last '.' (blendShape1.jawOpen) or Rocketbox's AK_nn_ (AK_25_JawOpen).
 BlendshapeSource findBlendshapeSource(int index, const QStringList& modelNames);
 
 enum class Blendshapes : int {
