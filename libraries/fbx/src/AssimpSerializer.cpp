@@ -516,11 +516,6 @@ void AssimpSerializer::processBones() {
     };
     if (!hasBones) return;
 
-    // multiple skin deformers will affect other models unfortunately
-    uint32_t skinDeformerIndex = hfmModel->skinDeformers.size(); 
-    hfmModel->skinDeformers.emplace_back();
-    hfm::SkinDeformer* skinDeformer = &hfmModel->skinDeformers.back();
-
     for (size_t meshIndex = 0; meshIndex < scene->mNumMeshes; meshIndex++) {
         aiMesh* mMesh = scene->mMeshes[meshIndex];
         if (mMesh->mNumBones == 0) continue;
@@ -529,7 +524,16 @@ void AssimpSerializer::processBones() {
         meshPtr->clusterWeightsPerVertex = 4;
         hfmModel->hasSkeletonJoints = true;
 
-        // should put skin deformer here
+        // A skin for each mesh, its clusters numbered from 0: the skinning shader takes 128 clusters a mesh
+        // (Skinning.slh), and one skin for the whole model gave the later meshes of a VRM numbers past that, which drew
+        // its hair and skirt as spikes
+        uint32_t skinDeformerIndex = hfmModel->skinDeformers.size();
+        hfmModel->skinDeformers.emplace_back();
+        hfm::SkinDeformer* skinDeformer = &hfmModel->skinDeformers.back();
+        if (mMesh->mNumBones > 128) {
+            qCWarning(modelformat) << "AssimpSerializer: mesh" << mMesh->mName.C_Str() << "has" << mMesh->mNumBones
+                                   << "bones; the skinning shader takes 128";
+        }
 
         QList<hfm::Shape*> shapes = getHfmShapesByMeshIndex(meshIndex);
         for (auto shape : shapes) {
