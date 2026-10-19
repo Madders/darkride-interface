@@ -48,6 +48,8 @@ MediaType AssimpSerializer::getMediaType() const {
         mediaType.extensions.push_back(ext.toStdString());
         // mediaType.webMediaTypes.push_back("");
     }
+    // VRM avatars are glTF binaries (VRMReader)
+    mediaType.extensions.push_back("vrm");
 
     return mediaType;
 }
@@ -207,7 +209,7 @@ void AssimpSerializer::processMaterials() {
         materialPtr->_material = std::make_shared<graphics::Material>();
         auto modelMaterial = materialPtr->_material;
 
-        bool isGltf = ext == "gltf" || ext == "glb";
+        bool isGltf = ext == "gltf" || ext == "glb" || ext == "vrm";
         if (isGltf) {
             materialPtr->isPBSMaterial = true;
         }
@@ -415,54 +417,67 @@ void AssimpSerializer::processMeshes(const hifi::VariantHash& mapping) {
                 meshPtr->blendshapes.push_back(hfm::Blendshape());
                 hfm::Blendshape* blendshapePtr = &meshPtr->blendshapes.back();
 
-                QString toName;
-                float weight = 1.0f;
-
+                QVector<BlendshapeSource> sources;
                 if (blendshapeMappings.contains(fromName)) {
                     auto mapping = blendshapeMappings[fromName].toList();
                     if (mapping.count() >= 2) {
-                        toName = mapping.at(0).toString();
-                        weight = mapping.at(1).toFloat();
+                        sources.append({ mapping.at(0).toString(), mapping.at(1).toFloat() });
                     }
+                } else if (vrm.blendshapes.contains((int)i)) {
+                    // a VRM's expression, which may blend several morph targets
+                    sources = vrm.blendshapes.value((int)i);
                 } else {
                     // its own name, or another the model may use for it, such as ARKit's
                     BlendshapeSource source = findBlendshapeSource((int)i, morphTargetNames);
-                    if (source.name.isEmpty()) {
+                    if (!source.name.isEmpty()) {
+                        sources.append(source);
+                    }
+                }
+                if (sources.isEmpty()) {
+                    continue;
+                }
+
+                // the sum of the sources' offsets from the mesh
+                const size_t vertexCount = mMesh->mNumVertices;
+                std::vector<glm::vec3> vertices(vertexCount), normals(vertexCount), tangents(vertexCount);
+                bool hasNormals = false;
+                bool hasTangents = false;
+                for (const BlendshapeSource& source : sources) {
+                    if (source.weight == 0.0f && fromName == source.name) {
                         continue;
                     }
-                    toName = source.name;
-                    weight = source.weight;
+                    aiAnimMesh* animMesh = getBlendshapeByName(source.name, mMesh);
+                    if (animMesh == nullptr) {
+                        continue;
+                    }
+                    const bool sourceHasNormals = animMesh->HasNormals() && mMesh->HasNormals();
+                    const bool sourceHasTangents = animMesh->HasTangentsAndBitangents() && mMesh->HasTangentsAndBitangents();
+                    hasNormals = hasNormals || sourceHasNormals;
+                    hasTangents = hasTangents || sourceHasTangents;
+                    for (size_t vertexIndex = 0; vertexIndex < animMesh->mNumVertices && vertexIndex < vertexCount; vertexIndex++) {
+                        vertices[vertexIndex] += (asVec3(animMesh->mVertices[vertexIndex]) - asVec3(mMesh->mVertices[vertexIndex])) * source.weight;
+                        if (sourceHasNormals) {
+                            normals[vertexIndex] += (asVec3(animMesh->mNormals[vertexIndex]) - asVec3(mMesh->mNormals[vertexIndex])) * source.weight;
+                        }
+                        if (sourceHasTangents) {
+                            tangents[vertexIndex] += (asVec3(animMesh->mTangents[vertexIndex]) - asVec3(mMesh->mTangents[vertexIndex])) * source.weight;
+                        }
+                    }
                 }
 
-                if (weight == 0.0f && fromName == toName) {
-                    continue;
-                }
-
-                aiAnimMesh* animMesh = getBlendshapeByName(toName, mMesh);
-                if (animMesh == nullptr) {
-                    continue;
-                }
-                
-                for (size_t vertexIndex = 0; vertexIndex < animMesh->mNumVertices; vertexIndex++) {
-                    auto v = (asVec3(animMesh->mVertices[vertexIndex]) - asVec3(mMesh->mVertices[vertexIndex])) * weight;
-
-                    auto n = animMesh->HasNormals() ?
-                        (asVec3(animMesh->mNormals[vertexIndex]) - asVec3(mMesh->mNormals[vertexIndex])) * weight :
-                        vec3(0.0f);
-
-                    auto t = animMesh->HasTangentsAndBitangents() ?
-                        (asVec3(animMesh->mTangents[vertexIndex]) - asVec3(mMesh->mTangents[vertexIndex])) * weight :
-                        vec3(0.0f);
-                    
+                for (size_t vertexIndex = 0; vertexIndex < vertexCount; vertexIndex++) {
+                    const auto& v = vertices[vertexIndex];
+                    const auto& n = normals[vertexIndex];
+                    const auto& t = tangents[vertexIndex];
                     if (isEmptyVec3(v) && isEmptyVec3(n) && isEmptyVec3(t)) {
                         continue;
                     }
 
                     blendshapePtr->indices.push_back(vertexIndex);
-                    
+
                     blendshapePtr->vertices.push_back(v);
-                    if (animMesh->HasNormals()) blendshapePtr->normals.push_back(n);
-                    if (animMesh->HasTangentsAndBitangents()) blendshapePtr->tangents.push_back(t);
+                    if (hasNormals) blendshapePtr->normals.push_back(n);
+                    if (hasTangents) blendshapePtr->tangents.push_back(t);
                 }
             }
         }
@@ -727,6 +742,22 @@ void AssimpSerializer::processScene(const hifi::VariantHash& mapping) {
     processBones();
 
     processAnimations();
+
+    // a VRM's humanoid bones get Darkride's names
+    if (vrm.isVRM()) {
+        int named = 0;
+        for (auto& joint : hfmModel->joints) {
+            auto name = vrm.jointNames.find(joint.name);
+            if (name != vrm.jointNames.end()) {
+                hfmModel->jointIndices.insert(name.value(), hfmModel->jointIndices.take(joint.name));
+                joint.name = name.value();
+                named++;
+            }
+        }
+        qCInfo(modelformat) << "VRM" << (vrm.version == 0 ? "0.x" : "1.0") << url.fileName() << "-" << vrm.title << "by"
+                            << vrm.authors << "-" << vrm.licence << "-" << named << "humanoid joints,"
+                            << vrm.blendshapes.size() << "blendshapes from its expressions";
+    }
 }
 
 #ifdef ENABLE_ASSIMP_LOGGING
@@ -751,6 +782,7 @@ HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi
     }
 
     ext = QFileInfo(url.path()).completeSuffix();
+    vrm = readVRM(data);
 
     // qCDebug(modelformat) << "AssimpSerializer::read url"<<url<<ext;
 
@@ -795,7 +827,8 @@ HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi
         aiProcess_OptimizeMeshes | // joins meshes together
         // aiProcess_OptimizeGraph |
         aiProcess_FlipUVs,
-        ext.toLocal8Bit()
+        // Assimp knows a VRM by what it is, a glTF binary
+        (ext.toLower() == "vrm" ? QString("glb") : ext).toLocal8Bit()
     );
     
     if (!scene) {
