@@ -743,20 +743,29 @@ void AssimpSerializer::processScene(const hifi::VariantHash& mapping) {
 
     processAnimations();
 
-    // a VRM's humanoid bones get Darkride's names
+    // a VRM's humanoid bones get Darkride's names, and its spring bones Flow's, with Flow's data for them
     if (vrm.isVRM()) {
         int named = 0;
+        int springs = 0;
         for (auto& joint : hfmModel->joints) {
             auto name = vrm.jointNames.find(joint.name);
+            auto flowName = vrm.flowJointNames.find(joint.name);
             if (name != vrm.jointNames.end()) {
                 hfmModel->jointIndices.insert(name.value(), hfmModel->jointIndices.take(joint.name));
                 joint.name = name.value();
                 named++;
+            } else if (flowName != vrm.flowJointNames.end()) {
+                hfmModel->jointIndices.insert(flowName.value(), hfmModel->jointIndices.take(joint.name));
+                joint.name = flowName.value();
+                springs++;
             }
         }
+        hfmModel->flowData._physicsConfig = vrm.flowPhysics;
+        hfmModel->flowData._collisionsConfig = vrm.flowCollisions;
         qCInfo(modelformat) << "VRM" << (vrm.version == 0 ? "0.x" : "1.0") << url.fileName() << "-" << vrm.title << "by"
                             << vrm.authors << "-" << vrm.licence << "-" << named << "humanoid joints,"
-                            << vrm.blendshapes.size() << "blendshapes from its expressions";
+                            << vrm.blendshapes.size() << "blendshapes from its expressions," << springs << "spring joints in"
+                            << vrm.flowPhysics.size() << "groups," << vrm.flowCollisions.size() << "colliders";
     }
 }
 

@@ -531,12 +531,18 @@ void Flow::calculateConstraints(const std::shared_ptr<AnimSkeleton>& skeleton,
         }
     }
 
+    // Flow keeps joints' translations in centimetres (the 0.01s in FlowThread), as an FBX's are; a skeleton in other
+    // units, as glTF's and VRM's metres, has its translations put in centimetres
+    const float CENTIMETRES_PER_METRE = 100.0f;
+    const float unitScale = extractScale(skeleton->getGeometryOffset()).x;
+    const float toCentimetres = unitScale > 0.0f ? unitScale * CENTIMETRES_PER_METRE : 1.0f;
     for (auto &jointData : _flowJointData) {
         int jointIndex = jointData.first;
         glm::vec3 jointPosition, parentPosition, jointTranslation;
         glm::quat jointRotation;
         getJointPositionInWorldFrame(absolutePoses, jointIndex, jointPosition, _entityPosition, _entityRotation);
         getJointTranslation(relativePoses, jointIndex, jointTranslation);
+        jointTranslation *= toCentimetres;
         getJointRotation(relativePoses, jointIndex, jointRotation);
         getJointPositionInWorldFrame(absolutePoses, jointData.second.getParentIndex(), parentPosition, _entityPosition, _entityRotation);
 

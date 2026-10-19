@@ -14,17 +14,24 @@
 #include <QByteArray>
 #include <QHash>
 #include <QString>
+#include <QVariantMap>
 #include <QVector>
 
 #include <BlendshapeConstants.h>
 
-// What Darkride uses of a VRM avatar (https://vrm.dev), from the VRM (0.x) or VRMC_vrm (1.0) extension of a glTF binary
-// (.vrm, or a .glb that kept the extension): which nodes are which humanoid bones, which morph targets make the mouth
-// shapes and blinks, and who made it and on what terms.
+// What Darkride uses of a VRM avatar (https://vrm.dev), from the VRM (0.x) or VRMC_vrm and VRMC_springBone (1.0)
+// extensions of a glTF binary (.vrm, or a .glb that kept them): which nodes are which humanoid bones, which morph targets
+// make the mouth shapes and blinks, its spring bones (hair, skirts, ears) and their colliders as Flow's, and who made it
+// and on what terms.
 struct VRMInfo {
     int version { -1 };  // 0 for 0.x, 1 for 1.0; -1 if it isn't a VRM
     QHash<QString, QString> jointNames;  // a node's name: Darkride's name for its joint
     QHash<int, QVector<BlendshapeSource>> blendshapes;  // a Blendshapes value: the morph targets to blend for it
+    // Flow finds its joints by name (flow_<group>_...), so each spring's joints are renamed into a group of their own,
+    // with that group's physics; and the colliders become its collision spheres, as an FST's flow data would give them
+    QHash<QString, QString> flowJointNames;  // a node's name: its name for Flow
+    QVariantMap flowPhysics;                  // a Flow group: its stiffness, damping, gravity and radius
+    QVariantMap flowCollisions;               // a joint (by the name it ends up with): a sphere's radius and offset
     QString title;
     QString authors;
     QString licence;

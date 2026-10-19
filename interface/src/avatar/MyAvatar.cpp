@@ -6553,6 +6553,11 @@ void MyAvatar::useFlow(bool isActive, bool isCollidable, const QVariantMap& phys
                 }
                 if (settings.contains("offset")) {
                     collisionsSettings._offset = vec3FromVariant(settings["offset"]);
+                    // in the joint's own axes, before any automatic humanoid offset
+                    auto skeleton = _skeletonModel->getRig().getAnimSkeleton();
+                    if (skeleton && jointIndex >= 0 && jointIndex < skeleton->getNumJoints()) {
+                        collisionsSettings._offset = skeleton->getShapeOffset(jointIndex).rot() * collisionsSettings._offset;
+                    }
                 }
                 collisionSystem.addCollisionSphere(jointIndex, collisionsSettings);
             }

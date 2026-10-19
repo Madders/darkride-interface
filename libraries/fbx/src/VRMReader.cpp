@@ -16,6 +16,11 @@
 #include <QStringList>
 #include <QtEndian>
 
+#include <cmath>
+#include <functional>
+
+#include <glm/glm.hpp>
+
 namespace {
 
 // VRM's humanoid bones (1.0's names; 0.x's are the same but for the thumb's), Darkride's names for them
@@ -176,6 +181,150 @@ VRMInfo readVRM(const QByteArray& glb) {
         // both eyes in one, so half each: blinks close both together
         use(Blendshapes::EyeBlink_L, "blink", 0.5f);
         use(Blendshapes::EyeBlink_R, "blink", 0.5f);
+    }
+
+    // Spring bones as Flow threads. VRM moves a joint's tail each frame by (1 - drag) of its last move, plus gravity
+    // power and stiffness (towards its rest direction) times the frame's time; Flow by damping times its last move plus
+    // gravity times delta squared (0.55^2, Flow's default delta) and, towards its rest, stiffness cubed times delta
+    // squared of the way. At 60 frames a second, and taking a hair joint as about 8 cm long:
+    const float FRAME = 1.0f / 60.0f;
+    const float DELTA_SQUARED = 0.55f * 0.55f;
+    const float JOINT_LENGTH = 0.08f;
+    auto nodeName = [&](int node) { return nodes.at(node).toObject()["name"].toString(); };
+    auto children = [&](int node) {
+        QVector<int> result;
+        for (const QJsonValue& child : nodes.at(node).toObject()["children"].toArray()) {
+            result.append(child.toInt());
+        }
+        return result;
+    };
+    int groupCount = 0;
+    auto addSpring = [&](const QVector<int>& springNodes, float stiffness, float drag, float gravityPower, float gravityY, float radius) {
+        const QString group = QString("vrm%1").arg(groupCount);
+        int added = 0;
+        for (int node : springNodes) {
+            const QString name = nodeName(node);
+            if (!name.isEmpty() && !info.jointNames.contains(name) && !info.flowJointNames.contains(name)) {
+                info.flowJointNames.insert(name, "flow_" + group + "_" + name);
+                added++;
+            }
+        }
+        if (added == 0) {
+            return;
+        }
+        groupCount++;
+        const float pull = glm::clamp(stiffness * FRAME / JOINT_LENGTH, 0.0f, 1.0f);
+        QVariantMap physics;
+        physics["active"] = true;
+        physics["stiffness"] = glm::clamp(std::cbrt(glm::min(pull / DELTA_SQUARED, 1.0f)), 0.0f, 1.0f);
+        // VRoid exports next to no drag, which Flow, keeping all of a move each frame, would never stop swinging from
+        const float MOST_DAMPING = 0.9f;
+        physics["damping"] = glm::clamp(1.0f - drag, 0.0f, MOST_DAMPING);
+        physics["gravity"] = gravityPower * gravityY * FRAME / DELTA_SQUARED;
+        physics["radius"] = glm::max(radius, 0.005f);
+        info.flowPhysics.insert(group, physics);
+    };
+    // a joint that branches stays as animated, and each branch is a thread of its own, as Flow follows one child
+    std::function<void(int, QVector<int>&)> collectChain = [&](int node, QVector<int>& chain) {
+        const QVector<int> nodeChildren = children(node);
+        if (nodeChildren.size() >= 2) {
+            for (int child : nodeChildren) {
+                QVector<int> branch;
+                collectChain(child, branch);
+                chain += branch;
+            }
+            return;
+        }
+        chain.append(node);
+        if (nodeChildren.size() == 1) {
+            collectChain(nodeChildren[0], chain);
+        }
+    };
+    // a node's collider, kept if it's the largest so far (Flow has one sphere a joint)
+    QHash<int, std::pair<glm::vec3, float>> colliders;
+    auto addCollider = [&](int node, const glm::vec3& offset, float radius) {
+        if (node >= 0 && (!colliders.contains(node) || colliders[node].second < radius)) {
+            colliders[node] = { offset, radius };
+        }
+    };
+    auto vectorOf = [](const QJsonValue& value) {
+        if (value.isArray()) {
+            const QJsonArray array = value.toArray();
+            return glm::vec3(array.at(0).toDouble(), array.at(1).toDouble(), array.at(2).toDouble());
+        }
+        const QJsonObject object = value.toObject();
+        return glm::vec3(object["x"].toDouble(), object["y"].toDouble(), object["z"].toDouble());
+    };
+    if (info.version == 1) {
+        const QJsonObject springBone = extensions["VRMC_springBone"].toObject();
+        for (const QJsonValue& spring : springBone["springs"].toArray()) {
+            const QJsonArray joints = spring.toObject()["joints"].toArray();
+            QVector<int> springNodes;
+            float stiffness = 0.0f, drag = 0.0f, gravityPower = 0.0f, gravityY = 0.0f, radius = 0.0f;
+            // a joint's settings are for the segment to the next joint, so the last one's go unused
+            const int counted = glm::max(joints.size() - 1, 1);
+            for (int j = 0; j < joints.size(); j++) {
+                const QJsonObject joint = joints.at(j).toObject();
+                springNodes.append(joint["node"].toInt(-1));
+                if (j < counted) {
+                    stiffness += (float)joint["stiffness"].toDouble(1.0) / counted;
+                    drag += (float)joint["dragForce"].toDouble(0.5) / counted;
+                    gravityPower += (float)joint["gravityPower"].toDouble(0.0) / counted;
+                    gravityY += (joint.contains("gravityDir") ? vectorOf(joint["gravityDir"]).y : -1.0f) / counted;
+                    radius += (float)joint["hitRadius"].toDouble(0.0) / counted;
+                }
+            }
+            addSpring(springNodes, stiffness, drag, gravityPower, gravityY, radius);
+        }
+        for (const QJsonValue& collider : springBone["colliders"].toArray()) {
+            const int node = collider.toObject()["node"].toInt(-1);
+            const QJsonObject shape = collider.toObject()["shape"].toObject();
+            if (shape.contains("sphere")) {
+                const QJsonObject sphere = shape["sphere"].toObject();
+                addCollider(node, vectorOf(sphere["offset"]), (float)sphere["radius"].toDouble());
+            } else if (shape.contains("capsule")) {
+                // the sphere at its middle
+                const QJsonObject capsule = shape["capsule"].toObject();
+                addCollider(node, 0.5f * (vectorOf(capsule["offset"]) + vectorOf(capsule["tail"])), (float)capsule["radius"].toDouble());
+            }
+        }
+    } else {
+        const QJsonObject secondary = vrm0["secondaryAnimation"].toObject();
+        for (const QJsonValue& boneGroup : secondary["boneGroups"].toArray()) {
+            const QJsonObject group = boneGroup.toObject();
+            QVector<int> springNodes;
+            for (const QJsonValue& bone : group["bones"].toArray()) {
+                collectChain(bone.toInt(-1), springNodes);
+            }
+            const float gravityY = group.contains("gravityDir") ? vectorOf(group["gravityDir"]).y : -1.0f;
+            // 0.x's misspelling
+            addSpring(springNodes, (float)group["stiffiness"].toDouble(1.0), (float)group["dragForce"].toDouble(0.4),
+                      (float)group["gravityPower"].toDouble(0.0), gravityY, (float)group["hitRadius"].toDouble(0.02));
+        }
+        for (const QJsonValue& colliderGroup : secondary["colliderGroups"].toArray()) {
+            const int node = colliderGroup.toObject()["node"].toInt(-1);
+            for (const QJsonValue& collider : colliderGroup.toObject()["colliders"].toArray()) {
+                // 0.x's offsets are Unity's, whose z is glTF's turned round
+                glm::vec3 offset = vectorOf(collider.toObject()["offset"]);
+                offset.z = -offset.z;
+                addCollider(node, offset, (float)collider.toObject()["radius"].toDouble());
+            }
+        }
+    }
+    for (auto itr = colliders.begin(); itr != colliders.end(); itr++) {
+        const QString name = nodeName(itr.key());
+        const QString jointName = info.jointNames.value(name, info.flowJointNames.value(name, name));
+        if (jointName.isEmpty()) {
+            continue;
+        }
+        QVariantMap offset;
+        offset["x"] = itr.value().first.x;
+        offset["y"] = itr.value().first.y;
+        offset["z"] = itr.value().first.z;
+        QVariantMap collision;
+        collision["radius"] = itr.value().second;
+        collision["offset"] = offset;
+        info.flowCollisions.insert(jointName, collision);
     }
 
     // who made it, and on what terms
