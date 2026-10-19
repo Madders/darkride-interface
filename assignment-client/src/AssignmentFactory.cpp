@@ -19,6 +19,7 @@
 #include "avatars/AvatarMixer.h"
 #include "entities/EntityServer.h"
 #include "messages/MessagesMixer.h"
+#include "physics/PhysicsServer.h"
 #include "scripts/EntityScriptServer.h"
 
 ThreadedAssignment* AssignmentFactory::unpackAssignment(ReceivedMessage& message) {
@@ -45,6 +46,8 @@ ThreadedAssignment* AssignmentFactory::unpackAssignment(ReceivedMessage& message
             return new MessagesMixer(message);
         case Assignment::EntityScriptServerType:
             return new EntityScriptServer(message);
+        case Assignment::PhysicsServerType:
+            return new PhysicsServer(message);
         default:
             return nullptr;
     }

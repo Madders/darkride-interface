@@ -11,6 +11,8 @@
 #include <algorithm>
 
 #include <Jolt/Jolt.h>
+#include <Jolt/Physics/StateRecorderImpl.h>
+#include <atomic>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Core/JobSystem.h>
 #include <Jolt/Physics/PhysicsSettings.h>
@@ -72,13 +74,29 @@ public:
         out.swap(_records);
         _records.clear();
     }
+    // a replayed substep's contacts are not events (they happened already, or will again)
+    void setMuted(bool muted) { _muted = muted; }
 
 private:
     void record(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold) {
+        if (_muted) {
+            return;
+        }
         ObjectMotionState* a = PhysicsWorld::motionStateOf(body1);
         ObjectMotionState* b = PhysicsWorld::motionStateOf(body2);
         if (!a && !b) {
             return;
+        }
+        // a contact with a frame's copy of its interior (round 8) is a contact with that part
+        if (a) {
+            if (ObjectMotionState* part = a->interiorPartAt(manifold.mSubShapeID1)) {
+                a = part;
+            }
+        }
+        if (b) {
+            if (ObjectMotionState* part = b->interiorPartAt(manifold.mSubShapeID2)) {
+                b = part;
+            }
         }
         // A body without a motion state is MyAvatar's inner body; it always takes the A side of a contact.
         bool swap = (b == nullptr);
@@ -108,6 +126,7 @@ private:
 
     std::mutex _mutex;
     std::vector<Record> _records;
+    std::atomic<bool> _muted { false };
 };
 
 // Jolt tells us when bodies fall asleep, also from its worker threads.
@@ -187,10 +206,32 @@ uint32_t PhysicsWorld::getNumActiveBodies() const {
     return _system ? _system->GetNumActiveBodies(JPH::EBodyType::RigidBody) : 0;
 }
 
+uint32_t PhysicsWorld::getNumActiveDynamicBodies(QStringList* names, int maxNames) const {
+    if (!_system || _system->GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0) {
+        return 0;
+    }
+    JPH::BodyIDVector ids;
+    _system->GetActiveBodies(JPH::EBodyType::RigidBody, ids);
+    const JPH::BodyLockInterfaceNoLock& lockInterface = _system->GetBodyLockInterfaceNoLock();
+    uint32_t count = 0;
+    for (const JPH::BodyID& id : ids) {
+        JPH::BodyLockRead lock(lockInterface, id);
+        if (!lock.Succeeded() || !lock.GetBody().IsDynamic()) {
+            continue;
+        }
+        ++count;
+        if (names && (int)names->size() < maxNames) {
+            ObjectMotionState* state = motionStateOf(lock.GetBody());
+            names->append(state ? state->getName() : QString("(no motion state)"));
+        }
+    }
+    return count;
+}
+
 // private
 void PhysicsWorld::createBody(ObjectMotionState* motionState) {
     assert(motionState);
-    const JPH::Shape* shape = motionState->getShape();
+    const JPH::Shape* shape = motionState->getBodyShape();
     assert(shape);
     if (!shape) {
         return;
@@ -224,8 +265,11 @@ void PhysicsWorld::createBody(ObjectMotionState* motionState) {
             if (mass != mass || mass < MIN_DYNAMIC_MASS) {
                 mass = MIN_DYNAMIC_MASS;
             }
-            settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
-            settings.mMassPropertiesOverride.mMass = mass;
+            // the mass and inertia of the object's own shape (a frame's interior copies add collision, not mass)
+            settings.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
+            settings.mMassPropertiesOverride = motionState->getOwnMassProperties();
+            settings.mMassPropertiesOverride.ScaleToMass(mass);
+            settings.mMassPropertiesOverride.mInertia(3, 3) = 1.0f;
             // an object that is not moving starts asleep, so a world full of resting things costs nothing; but one with
             // gravity must start awake, because gravity here is a force applied to active bodies (applyGravityForces)
             // and Jolt ignores forces on a sleeping body: a ball placed in the air would hang there. Once it lands and
@@ -266,6 +310,7 @@ void PhysicsWorld::createBody(ObjectMotionState* motionState) {
         if (motionState->isLocallyOwned()) {
             _activeStaticObjects.insert(motionState);
         }
+        _interiorChanged = true;
     }
     motionState->updateBodyMaterialProperties();
 }
@@ -277,6 +322,9 @@ void PhysicsWorld::destroyBody(ObjectMotionState* motionState) {
         return;
     }
     JPH::BodyID bodyID = body->GetID();
+    if (body->IsStatic()) {
+        _interiorChanged = true;
+    }
     JPH::BodyInterface& bodies = getBodyInterface();
     bodies.RemoveBody(bodyID);
     motionState->setBody(nullptr, nullptr);
@@ -404,6 +452,23 @@ void PhysicsWorld::wakeBodiesAround(const JPH::Body* body) {
 }
 
 // private
+void PhysicsWorld::rememberSubstepStarts() {
+    JPH::BodyIDVector activeBodies;
+    _system->GetActiveBodies(JPH::EBodyType::RigidBody, activeBodies);
+    const JPH::BodyLockInterfaceNoLock& lockInterface = _system->GetBodyLockInterfaceNoLock();
+    for (const JPH::BodyID& bodyID : activeBodies) {
+        JPH::BodyLockRead lock(lockInterface, bodyID);
+        if (!lock.Succeeded()) {
+            continue;
+        }
+        ObjectMotionState* motionState = motionStateOf(lock.GetBody());
+        if (motionState) {
+            motionState->rememberSubstepStart();
+        }
+    }
+}
+
+// private
 void PhysicsWorld::applyGravityForces() {
     // Every object carries its own gravity, in world coordinates, applied as a force to the active dynamic
     // bodies. Inside a frame it is turned into the frame's coordinates, so "down" stays down when the frame tilts.
@@ -447,6 +512,8 @@ void PhysicsWorld::stepOnce(float dt, CharacterController* character) {
         character->substep(dt);
     }
 
+    // every awake body's pose before the substep, for the presentation (ObjectMotionState::getPresentedBodyTransform)
+    rememberSubstepStarts();
     applyGravityForces();
 
     JPH::EPhysicsUpdateError error = _system->Update(dt, 1, _tempAllocator, _jobSystem);
@@ -455,6 +522,49 @@ void PhysicsWorld::stepOnce(float dt, CharacterController* character) {
     }
 
     harvestContacts();
+}
+
+namespace {
+    // the non-static bodies, less the one the authority's state replaces
+    class RollbackFilter : public JPH::StateRecorderFilter {
+    public:
+        explicit RollbackFilter(const JPH::BodyID& exclude) : _exclude(exclude) {}
+        bool ShouldSaveBody(const JPH::Body& body) const override { return !body.IsStatic() && body.GetID() != _exclude; }
+        bool ShouldSaveConstraint(const JPH::Constraint&) const override { return false; }
+        bool ShouldSaveContact(const JPH::BodyID&, const JPH::BodyID&) const override { return false; }
+        bool ShouldRestoreContact(const JPH::BodyID&, const JPH::BodyID&) const override { return false; }
+    private:
+        JPH::BodyID _exclude;
+    };
+}
+
+std::string PhysicsWorld::saveBodies(const JPH::BodyID& exclude) const {
+    JPH::StateRecorderImpl recorder;
+    RollbackFilter filter(exclude);
+    _system->SaveState(recorder, JPH::EStateRecorderState::Bodies, &filter);
+    return recorder.GetData();
+}
+
+bool PhysicsWorld::restoreBodies(const std::string& saved, const JPH::BodyID& exclude) {
+    JPH::StateRecorderImpl recorder;
+    recorder.WriteBytes(saved.data(), saved.size());
+    recorder.Rewind();
+    RollbackFilter filter(exclude);
+    return _system->RestoreState(recorder, &filter);
+}
+
+void PhysicsWorld::replayStep(float dt) {
+    applyGravityForces();
+    _replaying = true;
+    _contactRecorder->setMuted(true);
+    JPH::EPhysicsUpdateError error = _system->Update(dt, 1, _tempAllocator, _jobSystem);
+    _contactRecorder->setMuted(false);
+    _replaying = false;
+    if (error != JPH::EPhysicsUpdateError::None) {
+        qCWarning(physics) << "PhysicsWorld: Jolt replay error" << (int)error;
+    }
+    std::vector<ContactRecorder::Record> dropped;
+    _contactRecorder->take(dropped);   // anything recorded between mute and unmute
 }
 
 // private

@@ -1,0 +1,421 @@
+"use strict";
+//
+//  worldLoading.js
+//  scripts/system
+//
+//  The loading screen's state and timing. It covers the way into a world: a hop (another script says one has started),
+//  the first arrival after sign-in, and a world whose owner asks for it to load whole first (in clients built with
+//  whole-world loading, Window.getWorldLoading). On a desktop the screen itself is
+//  interface/resources/qml/hifi/WorldLoadingScreen.qml, which this drives by local messages; in a headset, where that
+//  screen hides itself, this shows a card of its own: local entities that follow the camera. The desktop screen is
+//  driven by Window.setLoadingScreen({up, world, author, picture, status}) (QML cannot listen to Messages).
+//
+//  The local message channel "Darkride-Hop":
+//    in:  {"type": "start", "world": <name>, "author": <name or "">, "picture": <URL or "">} when a hop starts
+//         (Explore's Hop or Join, "new instance", the address bar, a friend's Join), and {"type": "cancel"} should it
+//         fail before the client leaves;
+//    out: {"type": "screen", "up": <bool>, "world", "author", "picture", "status"} whenever any of it changes (for
+//         scripts; the same goes to Window.setLoadingScreen), and "up": false fades it out.
+//  The screen lifts once the client has left the old world (its physics or its connection gone), the new world is
+//  connected, its physics is on and the avatar's own model has loaded
+//  (MyAvatar.isSkeletonModelLoaded; at most 10 s more after physics). A cancel, a refused connection, or 90 s without
+//  arriving lifts it anyway. While it is up, the arrival waits for what is near the avatar to be ready for physics and
+//  drawn, even where the zone would let the avatar move at once (Window.setArrivalWaitsForNearby): no pop-in under the
+//  avatar. At the first arrival, the launch screen (sign-in's navy cover) is released once this one covers the view.
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//
+
+/* global Script, Entities, MyAvatar, Window, Messages, HMD, Account, Settings, location */
+
+(function () {
+    var CHANNEL = "Darkride-Hop";
+    var STATUS_STARTING = "Starting world…";
+    var STATUS_CONNECTING = "Connecting…";
+    var STATUS_LOADING = "Loading world…";
+    var TIME_LIMIT = 90;          // s: a way in that never arrives lifts the screen anyway
+    var AVATAR_GRACE = 10;        // s after physics: an avatar that has not loaded by then no longer holds the screen
+    var LAUNCH_RELEASE_DELAY = 600;   // ms: the desktop screen's fade-in, after which it covers the launch screen
+    var TICK = 50;                // ms
+    // the headset card on a desktop as well (for testing, or a client without the desktop screen)
+    var CARD_ON_DESKTOP = Settings.getValue("worldLoading/cardOnDesktop", false) === true ||
+        Settings.getValue("worldLoading/cardOnDesktop", false) === "true";
+
+    // Darkride's colours (the website's --dr-* tokens)
+    var COLOR_NAVY = { red: 0x1c, green: 0x21, blue: 0x36 };
+    var COLOR_TRACK = { red: 0x33, green: 0x3a, blue: 0x5a };
+    var COLOR_CYAN = { red: 0x00, green: 0xaf, blue: 0xff };
+    var COLOR_TEXT = { red: 0xf4, green: 0xf6, blue: 0xf8 };
+    var COLOR_MUTED = { red: 0x9a, green: 0xa1, blue: 0xbd };
+    var SPHERE_URL = Script.resolvePath("/~/system/assets/models/black-sphere.fbx");
+    var LOGO_URL = Script.resourcesPath() + "images/darkride-logo.png";
+
+    // the headset card, in the card's units (metres at 2.2 m), drawn at CARD_DISTANCE
+    var CARD_DISTANCE = 1.1;
+    var SCALE = CARD_DISTANCE / 2.2;
+    var CARD_WIDTH = 1.6;
+    var CARD_HEIGHT = 0.9;
+    var PICTURE_WIDTH = 0.72;
+    var PICTURE_HEIGHT = 0.405;   // 16:9
+    var BAR_WIDTH = 1.36;
+    var BAR_HEIGHT = 0.012;
+    var GLIDE_WIDTH = 0.3;        // the gliding part of the bar
+    var GLIDE_PERIOD = 1600;      // ms for one pass
+    var SPHERE_SIZE = 6.0;
+
+    // whole-world loading is in clients built with it; without it, hops and first arrivals only
+    var NOT_LOADING = { active: false };
+    function loadingState() {
+        return Window.getWorldLoading ? Window.getWorldLoading() : NOT_LOADING;
+    }
+
+    function avatarLoaded() {
+        return MyAvatar.isSkeletonModelLoaded ? MyAvatar.isSkeletonModelLoaded() : true;
+    }
+
+    function placeName() {
+        return location.placename || location.hostname || "";
+    }
+
+    function placePicture() {
+        var id = location.domainID;
+        if (!id || id === "{00000000-0000-0000-0000-000000000000}" || !Account.metaverseServerURL) {
+            return "";
+        }
+        return Account.metaverseServerURL + "/api/domain/" + id.replace(/[{}]/g, "") + "/image";
+    }
+
+    // The way in under way, or null: kind "hop", "first" (the first arrival after sign-in) or "whole" (a world that
+    // loads whole, reached some other way)
+    var way = null;
+    var sent = null;          // the last screen message sent
+    var timer = null;
+    var card = {};            // the headset card's entities
+
+    function begin(kind, world, author, picture) {
+        way = {
+            kind: kind,
+            world: world,
+            author: author || "",
+            picture: picture || "",
+            started: Date.now(),
+            left: kind !== "hop",           // a hop has gone for the old world once the domain changes
+            lostOld: kind !== "hop",        // and has seen the old world's physics or connection drop (physics is
+                                            // sometimes switched on again in the very frame of a domain change)
+            physicsOnAt: 0,
+            launchReleased: false
+        };
+        setArrivalWaitsForNearby(true);
+        if (!timer) {
+            timer = Script.setInterval(tick, TICK);
+        }
+        tick();
+    }
+
+    function end() {
+        way = null;
+        if (timer) {
+            Script.clearInterval(timer);
+            timer = null;
+        }
+        hideCard();
+        setArrivalWaitsForNearby(false);
+        send(false, "");
+        releaseLaunchScreen();
+    }
+
+    function setArrivalWaitsForNearby(wait) {
+        if (Window.setArrivalWaitsForNearby) {
+            Window.setArrivalWaitsForNearby(wait);
+        }
+    }
+
+    function releaseLaunchScreen() {
+        if (Window.releaseLaunchScreen) {
+            Window.releaseLaunchScreen();
+        }
+    }
+
+    function send(up, status) {
+        var message = { type: "screen", up: up, world: way ? way.world : (sent ? sent.world : ""),
+            author: way ? way.author : (sent ? sent.author : ""), picture: way ? way.picture : (sent ? sent.picture : ""),
+            status: status };
+        if (sent && sent.up === message.up && sent.world === message.world && sent.author === message.author &&
+                sent.picture === message.picture && sent.status === message.status) {
+            return;
+        }
+        if (!sent && !up) {
+            return;   // nothing was ever up
+        }
+        sent = message;
+        if (Window.setLoadingScreen) {
+            Window.setLoadingScreen({ up: message.up, world: message.world, author: message.author,
+                picture: message.picture, status: message.status });
+        }
+        Messages.sendLocalMessage(CHANNEL, JSON.stringify(message));
+    }
+
+    function tick() {
+        if (!way) {
+            return;
+        }
+        var now = Date.now();
+        var loading = loadingState();
+        var physics = Window.isPhysicsEnabled();
+        var connected = location.isConnected;
+        if (way.left && (!physics || !connected)) {
+            way.lostOld = true;
+        }
+        var landed = way.lostOld && connected && physics;
+        if (!landed) {
+            way.physicsOnAt = 0;
+        } else if (!way.physicsOnAt) {
+            way.physicsOnAt = now;
+        }
+
+        // arrived: in the new world with its physics on, and the avatar's own model in (or waited for long enough)
+        var arrived = !loading.active && landed && (avatarLoaded() || now - way.physicsOnAt > AVATAR_GRACE * 1000);
+        if (arrived || (!loading.active && now - way.started > TIME_LIMIT * 1000)) {
+            end();
+            return;
+        }
+
+        if (!way.world && location.isConnected) {
+            way.world = placeName();
+            way.picture = way.picture || placePicture();
+        }
+        var status = !way.left ? STATUS_STARTING : (location.isConnected ? STATUS_LOADING : STATUS_CONNECTING);
+        send(true, status);
+
+        if (HMD.active || CARD_ON_DESKTOP) {
+            showCard(status, now);
+        } else {
+            hideCard();
+        }
+        if (!way.launchReleased && now - way.started > LAUNCH_RELEASE_DELAY) {
+            way.launchReleased = true;
+            releaseLaunchScreen();
+        }
+    }
+
+    // The headset card: the world's picture, its name, "by <author>", a thin gliding bar and the status line, on navy
+
+    function cardUnits(x, y, z) {
+        return { x: SCALE * x, y: SCALE * y, z: SCALE * z };
+    }
+
+    function text(name, properties) {
+        var base = {
+            type: "Text",
+            name: "World loading " + name,
+            parentID: card.panel,
+            unlit: true,
+            backgroundAlpha: 0.0,
+            textColor: COLOR_TEXT,
+            leftMargin: 0.0,
+            topMargin: 0.0,
+            ignorePickIntersection: true,
+            collisionless: true,
+            drawInFront: true
+        };
+        Object.keys(properties).forEach(function (key) { base[key] = properties[key]; });
+        return Entities.addEntity(base, "local");
+    }
+
+    function showCard(status, now) {
+        if (!card.panel) {
+            var cameraJoint = MyAvatar.getJointIndex("_CAMERA_MATRIX");
+            card.sphere = Entities.addEntity({
+                type: "Model",
+                name: "World loading sphere",
+                modelURL: SPHERE_URL,
+                parentID: MyAvatar.SELF_ID,
+                parentJointIndex: cameraJoint,
+                localPosition: { x: 0, y: 0, z: 0 },
+                dimensions: { x: SPHERE_SIZE, y: SPHERE_SIZE, z: SPHERE_SIZE },
+                ignorePickIntersection: true,
+                collisionless: true
+            }, "local");
+            card.panel = Entities.addEntity({
+                type: "Text",
+                name: "World loading card",
+                parentID: MyAvatar.SELF_ID,
+                parentJointIndex: cameraJoint,
+                localPosition: { x: 0, y: 0, z: -CARD_DISTANCE },
+                localRotation: { x: 0, y: 0, z: 0, w: 1 },
+                dimensions: cardUnits(CARD_WIDTH, CARD_HEIGHT, 0.01),
+                text: "",
+                unlit: true,
+                backgroundColor: COLOR_NAVY,
+                backgroundAlpha: 1.0,
+                ignorePickIntersection: true,
+                collisionless: true,
+                drawInFront: true
+            }, "local");
+            card.picture = Entities.addEntity({
+                type: "Image",
+                name: "World loading picture",
+                parentID: card.panel,
+                imageURL: way.picture || LOGO_URL,
+                emissive: true,
+                keepAspectRatio: false,
+                localPosition: cardUnits(-CARD_WIDTH / 2 + 0.1 + PICTURE_WIDTH / 2, 0.08, 0.006),
+                dimensions: cardUnits(way.picture ? PICTURE_WIDTH : PICTURE_HEIGHT, PICTURE_HEIGHT, 0.01),
+                ignorePickIntersection: true,
+                collisionless: true,
+                drawInFront: true
+            }, "local");
+            card.shownPicture = way.picture;
+            var right = -CARD_WIDTH / 2 + 0.1 + PICTURE_WIDTH + 0.08;   // the text column's left edge
+            var columnWidth = CARD_WIDTH / 2 - 0.1 - right;
+            card.world = text("world", {
+                text: way.world,
+                lineHeight: SCALE * 0.08,
+                localPosition: cardUnits(right + columnWidth / 2, 0.22, 0.006),
+                dimensions: cardUnits(columnWidth, 0.2, 0.01)
+            });
+            card.author = text("author", {
+                text: way.author ? "by " + way.author : "",
+                lineHeight: SCALE * 0.045,
+                textColor: COLOR_MUTED,
+                localPosition: cardUnits(right + columnWidth / 2, 0.06, 0.006),
+                dimensions: cardUnits(columnWidth, 0.07, 0.01)
+            });
+            card.status = text("status", {
+                text: status,
+                lineHeight: SCALE * 0.045,
+                textColor: COLOR_MUTED,
+                localPosition: cardUnits(0, -0.25, 0.006),
+                dimensions: cardUnits(BAR_WIDTH, 0.07, 0.01)
+            });
+            card.track = text("track", {
+                text: "",
+                backgroundColor: COLOR_TRACK,
+                backgroundAlpha: 1.0,
+                localPosition: cardUnits(0, -0.33, 0.006),
+                dimensions: cardUnits(BAR_WIDTH, BAR_HEIGHT, 0.01)
+            });
+            card.glide = text("glide", {
+                text: "",
+                backgroundColor: COLOR_CYAN,
+                backgroundAlpha: 1.0,
+                localPosition: cardUnits(-BAR_WIDTH / 2 + GLIDE_WIDTH / 2, -0.33, 0.008),
+                dimensions: cardUnits(GLIDE_WIDTH, BAR_HEIGHT, 0.01)
+            });
+            card.shown = { world: way.world, author: way.author, status: status };
+        }
+        if (way.picture !== card.shownPicture) {
+            card.shownPicture = way.picture;
+            Entities.editEntity(card.picture, {
+                imageURL: way.picture || LOGO_URL,
+                dimensions: cardUnits(way.picture ? PICTURE_WIDTH : PICTURE_HEIGHT, PICTURE_HEIGHT, 0.01)
+            });
+        }
+        if (way.world !== card.shown.world) {
+            card.shown.world = way.world;
+            Entities.editEntity(card.world, { text: way.world });
+        }
+        if (way.author !== card.shown.author) {
+            card.shown.author = way.author;
+            Entities.editEntity(card.author, { text: way.author ? "by " + way.author : "" });
+        }
+        if (status !== card.shown.status) {
+            card.shown.status = status;
+            Entities.editEntity(card.status, { text: status });
+        }
+        // the bar glides: no counts, no percentages
+        var phase = ((now - way.started) % GLIDE_PERIOD) / GLIDE_PERIOD;
+        var eased = 0.5 - 0.5 * Math.cos(Math.PI * phase);
+        Entities.editEntity(card.glide, {
+            localPosition: cardUnits(-BAR_WIDTH / 2 + GLIDE_WIDTH / 2 + eased * (BAR_WIDTH - GLIDE_WIDTH), -0.33, 0.008)
+        });
+    }
+
+    function hideCard() {
+        // the panel's children go with it
+        if (card.panel) {
+            Entities.deleteEntity(card.panel);
+        }
+        if (card.sphere) {
+            Entities.deleteEntity(card.sphere);
+        }
+        card = {};
+    }
+
+    function onMessage(channel, message, sender, localOnly) {
+        if (channel !== CHANNEL || !localOnly) {
+            return;
+        }
+        var data;
+        try {
+            data = JSON.parse(message);
+        } catch (e) {
+            return;
+        }
+        if (data.type === "start") {
+            var keepLaunch = way && way.launchReleased;
+            begin("hop", String(data.world || ""), String(data.author || ""), String(data.picture || ""));
+            way.launchReleased = keepLaunch || way.launchReleased;
+        } else if (data.type === "cancel" && way && way.kind === "hop" && !way.left) {
+            end();
+        }
+    }
+
+    function onDomainChanged() {
+        if (way && !way.left) {
+            way.left = true;
+            way.lostOld = false;
+        }
+    }
+
+    function onDomainConnectionRefused() {
+        if (way) {
+            end();
+        }
+    }
+
+    function onWorldLoadingChanged(loading) {
+        if (loading && !way) {
+            begin("whole", placeName(), "", placePicture());
+        }
+    }
+
+    Messages.subscribe(CHANNEL);
+    Messages.messageReceived.connect(onMessage);
+    Window.domainChanged.connect(onDomainChanged);
+    Window.domainConnectionRefused.connect(onDomainConnectionRefused);
+    if (Window.worldLoadingChanged) {
+        Window.worldLoadingChanged.connect(onWorldLoadingChanged);
+    }
+
+    // this starts at the end of sign-in: the first arrival is the way in, unless it is already done
+    if (loadingState().active) {
+        begin("whole", placeName(), "", placePicture());
+    } else if (!Window.isPhysicsEnabled() || !avatarLoaded()) {
+        begin("first", location.isConnected ? placeName() : "", "", location.isConnected ? placePicture() : "");
+    }
+
+    Script.scriptEnding.connect(function () {
+        if (timer) {
+            Script.clearInterval(timer);
+            timer = null;
+        }
+        hideCard();
+        setArrivalWaitsForNearby(false);
+        if (sent && sent.up) {
+            if (Window.setLoadingScreen) {
+                Window.setLoadingScreen({ up: false });
+            }
+            Messages.sendLocalMessage(CHANNEL, JSON.stringify({ type: "screen", up: false, world: sent.world,
+                author: sent.author, picture: sent.picture, status: "" }));
+        }
+        Messages.messageReceived.disconnect(onMessage);
+        Messages.unsubscribe(CHANNEL);
+        Window.domainChanged.disconnect(onDomainChanged);
+        Window.domainConnectionRefused.disconnect(onDomainConnectionRefused);
+        if (Window.worldLoadingChanged) {
+            Window.worldLoadingChanged.disconnect(onWorldLoadingChanged);
+        }
+    });
+}());

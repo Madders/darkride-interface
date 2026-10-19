@@ -27,11 +27,17 @@
 <@endif@>
 
 <@if not HIFI_USE_UNLIT@>
+    <@if HIFI_USE_FORWARD@>
+        // the forward path lights in place: the sun's shadow cascades, and the point and spot lights of the
+        // fragment's cluster with their shadows and cookies (the pass binds them for every lit pipeline)
+        <@include GlobalLight.slh@>
+        <@include Shadow.slh@>
+        <@include LightLocal.slh@>
+    <@endif@>
     <@if HIFI_USE_TRANSLUCENT@>
         <@include GlobalLight.slh@>
         <$declareEvalGlobalLightingAlphaBlended()$>
     <@elif HIFI_USE_FORWARD@>
-        <@include GlobalLight.slh@>
         <$declareEvalSkyboxGlobalColor(_SCRIBE_NULL, HIFI_USE_FORWARD)$>
     <@else@>
         <@include DeferredBufferWrite.slh@>
@@ -47,14 +53,18 @@
 <@if HIFI_USE_FADE@>
     <@include Fade.slh@>
     <$declareFadeFragmentInstanced()$>
+    <@def SIMPLE_POSITION_WS@>
 <@endif@>
 
 <@if not HIFI_USE_UNLIT@>
     <@if HIFI_USE_FORWARD or HIFI_USE_TRANSLUCENT@>
         layout(location=RENDER_UTILS_ATTR_POSITION_ES) in vec4 _positionES;
+        // the world position too, for the shadows and local lights of the forward path (simple.slv sends it when
+        // this is declared)
+        <@def SIMPLE_POSITION_WS@>
     <@endif@>
 <@endif@>
-<@if HIFI_USE_FADE@>
+<@if SIMPLE_POSITION_WS@>
     layout(location=RENDER_UTILS_ATTR_POSITION_WS) in vec4 _positionWS;
 <@endif@>
 layout(location=RENDER_UTILS_ATTR_NORMAL_WS) in vec3 _normalWS;
@@ -85,17 +95,60 @@ void main(void) {
 
         TransformCamera cam = getTransformCamera();
         vec3 fragPosition = _positionES.xyz;
+        vec3 fragNormalWS = evalSafeFrontOrBackFaceNormal(_normalWS, _positionWS.xyz);
+    <@endif@>
+    <@if HIFI_USE_FORWARD@>
+        vec3 fragPositionWS = _positionWS.xyz;
+
+        // the sun's shadow, from its cascades, when the frame has them (a count of 0 with shadows off, or none drawn)
+        float shadowAttenuation = 1.0;
+        if (getShadowCascadeCount() > 0) {
+            shadowAttenuation = evalShadowAttenuation(getLightDirection(getKeyLight()), _positionWS, -_positionES.z, fragNormalWS);
+        }
+
+        // the point and spot lights of the cluster the fragment falls in, with their shadows and cookies; the
+        // derivatives are for the cookies, taken here where control flow is uniform
+        vec3 fragPositionWSDx = dFdx(fragPositionWS);
+        vec3 fragPositionWSDy = dFdy(fragPositionWS);
+        vec3 fragToEyeDirWS = normalize(cam._viewInverse[3].xyz - fragPositionWS);
+        SurfaceData surfaceWS = initSurfaceData(DEFAULT_ROUGHNESS, fragNormalWS, fragToEyeDirWS);
+
+        vec4 localLighting = vec4(0.0);
+        <$fetchClusterInfo(_positionWS)$>;
+        if (hasLocalLights(cluster)) {
+            localLighting = evalLocalLighting(cluster, fragPositionWS, fragPositionWSDx, fragPositionWSDy, surfaceWS,
+                                              metallic, fresnel, texel.rgb, 0.0,
+                                              vec4(0), vec4(0), texel.a);
+        }
     <@endif@>
 <@endif@>
 
 <@if not HIFI_USE_UNLIT@>
     <@if HIFI_USE_TRANSLUCENT@>
+        <@if HIFI_USE_FORWARD@>
+        _fragColor0 = vec4(evalGlobalLightingAlphaBlended(
+            cam._viewInverse,
+            shadowAttenuation,
+            DEFAULT_OCCLUSION,
+            fragPosition,
+            fragNormalWS,
+            texel.rgb,
+            fresnel,
+            metallic,
+            DEFAULT_EMISSIVE
+        <@if HIFI_USE_FADE@>
+                + fadeEmissive
+        <@endif@>
+            ,
+            surfaceWS, texel.a, localLighting.rgb),
+            texel.a);
+        <@else@>
         _fragColor0 = vec4(evalGlobalLightingAlphaBlended(
             cam._viewInverse,
             1.0,
             DEFAULT_OCCLUSION,
             fragPosition,
-            evalFrontOrBackFaceNormal(normalize(_normalWS)),
+            fragNormalWS,
             texel.rgb,
             fresnel,
             metallic,
@@ -106,21 +159,27 @@ void main(void) {
             ,
             DEFAULT_ROUGHNESS, texel.a),
             texel.a);
+        <@endif@>
     <@elif HIFI_USE_FORWARD@>
         _fragColor0 = vec4(evalSkyboxGlobalColor(
             cam._viewInverse,
-            1.0,
+            shadowAttenuation,
             DEFAULT_OCCLUSION,
             fragPosition,
-            evalFrontOrBackFaceNormal(normalize(_normalWS)),
             texel.rgb,
             fresnel,
             metallic,
-            DEFAULT_ROUGHNESS),
+            DEFAULT_EMISSIVE
+        <@if HIFI_USE_FADE@>
+                + fadeEmissive
+        <@endif@>
+            ,
+            surfaceWS,
+            localLighting.rgb),
             texel.a);
     <@else@>
         packDeferredFragment(
-            evalFrontOrBackFaceNormal(normalize(_normalWS)),
+            evalSafeFrontOrBackFaceNormal(_normalWS),
             1.0,
             texel.rgb,
             DEFAULT_ROUGHNESS,
@@ -142,7 +201,7 @@ void main(void) {
             , texel.a);
     <@else@>
         packDeferredFragmentUnlit(
-            evalFrontOrBackFaceNormal(normalize(_normalWS)),
+            evalSafeFrontOrBackFaceNormal(_normalWS),
             1.0,
             texel.rgb
         <@if HIFI_USE_FADE@>

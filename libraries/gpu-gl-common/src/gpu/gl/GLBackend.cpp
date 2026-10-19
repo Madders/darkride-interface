@@ -132,6 +132,12 @@ void GLBackend::init() {
         GL_GET_INTEGER(MAX_UNIFORM_BLOCK_SIZE);
         GL_GET_INTEGER(UNIFORM_BUFFER_OFFSET_ALIGNMENT);
 
+        // Multisampling: what the forward path's framebuffer may ask for (Apple GPUs stop at 4)
+        GLint maxSamples = 0;
+        glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+        Backend::maxSamples = maxSamples;
+        Backend::maxUniformBlockSize = MAX_UNIFORM_BLOCK_SIZE;
+
         LOG_GL_CONTEXT_INFO(gpugllogging, contextInfo);
         GPUIdent* gpu = GPUIdent::getInstance(vendor, renderer); 
         // From here on, GPUIdent::getInstance()->getMumble() should efficiently give the same answers.
@@ -146,6 +152,7 @@ void GLBackend::init() {
         qCDebug(gpugllogging) << "\tmax uniform binding:" << MAX_COMBINED_UNIFORM_BLOCKS;
         qCDebug(gpugllogging) << "\tmax uniform size:" << MAX_UNIFORM_BLOCK_SIZE;
         qCDebug(gpugllogging) << "\tuniform alignment:" << UNIFORM_BUFFER_OFFSET_ALIGNMENT;
+        qCDebug(gpugllogging) << "\tmax samples:" << Backend::maxSamples;
 #if !defined(USE_GLES)
         qCDebug(gpugllogging, "V-Sync is %s\n", (::gl::getSwapInterval() > 0 ? "ON" : "OFF"));
 #endif
@@ -155,11 +162,20 @@ void GLBackend::init() {
 GLBackend::GLBackend(bool syncCache) {
     _pipeline._cameraCorrectionBuffer._buffer->flush();
     initShaderBinaryCache();
+    initPipelineStateCache();
 }
 
 GLBackend::GLBackend() {
     _pipeline._cameraCorrectionBuffer._buffer->flush();
     initShaderBinaryCache();
+    initPipelineStateCache();
+}
+
+void GLBackend::initPipelineStateCache() {
+    // The cache starts as State::DEFAULT, on the assumption that a fresh GL context is in that state; its depth
+    // function is the one place that is no longer so: GL starts at LESS, State::DEFAULT (reversed-Z, gpu/State.h) at
+    // GREATER. Recorded as GL has it, the first pipeline that tests depth sets the function instead of trusting it.
+    _pipeline._stateCache.depthTest = State::DepthTest(false, true, LESS);
 }
 
 GLBackend::~GLBackend() {}
@@ -426,6 +442,15 @@ public:
 
 void GLBackend::render(const Batch& batch) {
     GL_PROFILE_RANGE(render_gpu_gl, batch.getName().c_str());
+
+#if !defined(USE_GLES)
+    // Reversed-Z (Backend::reversedZProjection): the 0..1 clip depth is context state, and this backend draws in
+    // whichever context is current (the one it was made in, then the display plugin's present thread's), so it is
+    // set per batch; one cheap call
+    if (isDepthClipZeroToOne()) {
+        glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+    }
+#endif
 
     _transform._skybox = _stereo._skybox = batch.isSkyboxEnabled();
     // FIXME move this to between the transfer and draw passes, so that

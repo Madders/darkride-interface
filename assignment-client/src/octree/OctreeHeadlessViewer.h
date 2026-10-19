@@ -22,6 +22,15 @@ class OctreeHeadlessViewer : public OctreeProcessor {
 public:
     OctreeQuery& getOctreeQuery() { return _octreeQuery; }
 
+    // The entity server sends a viewer's entity data reliably until the viewer's query asks it to say when the first
+    // full scene is complete, and unreliably from then on (a client's query asks while its loading screen is up). A
+    // reliable stream waits in udt's congestion-controlled send queue behind every burst, and on this Mac that queue
+    // drained at about 24 packets a second: the physics server heard edits 1 to 12 s late (PHYSICS.md round 9). A
+    // headless viewer never asked, so its stream stayed reliable for ever. Now it asks from its first query of each
+    // entity server it meets; the owner routes the EntityQueryInitialResultsComplete packet here, and the asking stops.
+    void handleInitialResultsComplete(QSharedPointer<ReceivedMessage> message, SharedNodePointer senderNode);
+    bool isInitialSceneComplete() const { return _initialSceneComplete; }
+
     static int parseOctreeStats(QSharedPointer<ReceivedMessage> message, SharedNodePointer sourceNode);
     static void trackIncomingOctreePacket(const QByteArray& packet, const SharedNodePointer& sendingNode, bool wasStatsPacket);
 
@@ -140,6 +149,10 @@ public slots:
 
 private:
     OctreeQuery _octreeQuery;
+    QUuid _queriedServer;                 // the entity server the last query went to
+    bool _initialSceneComplete { false }; // it has reported its first full scene to this viewer
+    quint64 _firstQueryTime { 0 };
+
 
     bool _hasViewFrustum { false };
     ViewFrustum _viewFrustum;

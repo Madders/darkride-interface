@@ -11,6 +11,7 @@
 
 #include "Avatar.h"
 
+#include <QJsonDocument>
 #include <QtCore/QThread>
 #include <glm/gtx/transform.hpp>
 #include <glm/gtx/vector_query.hpp>
@@ -2057,6 +2058,137 @@ void Avatar::removeMaterial(graphics::MaterialPointer material, const std::strin
     if (_skeletonModel && _skeletonModel->fetchRenderItemIDs().size() > 0) {
         _skeletonModel->removeMaterial(material, parentMaterialName);
     }
+}
+
+void Avatar::collectContactSenders(std::vector<AvatarMenu::ContactSender>& senders) const {
+    if (!_skeletonModel || !_skeletonModel->isLoaded()) {
+        return;
+    }
+    struct BuiltIn {
+        QString joint;
+        QString toward;  // a hand's sits halfway to the middle finger's base, on the palm
+        float radius;    // at the default avatar height
+        QStringList tags;
+    };
+    static const std::vector<BuiltIn> BUILT_IN {
+        { "Head", "", 0.11f, { "Head" } },
+        { "Spine2", "", 0.15f, { "Torso" } },
+        { "LeftHand", "LeftHandMiddle1", 0.06f, { "Hand", "HandL" } },
+        { "RightHand", "RightHandMiddle1", 0.06f, { "Hand", "HandR" } },
+        { "LeftHandIndex3", "", 0.02f, { "Finger", "FingerL", "FingerIndex", "FingerIndexL" } },
+        { "RightHandIndex3", "", 0.02f, { "Finger", "FingerR", "FingerIndex", "FingerIndexR" } },
+        { "LeftFoot", "", 0.07f, { "Foot", "FootL" } },
+        { "RightFoot", "", 0.07f, { "Foot", "FootR" } },
+    };
+    const Rig& rig = _skeletonModel->getRig();
+    const float size = glm::clamp(getHeight() / DEFAULT_AVATAR_HEIGHT, 0.25f, 4.0f);
+    for (const BuiltIn& builtIn : BUILT_IN) {
+        glm::vec3 position, toward;
+        if (!_skeletonModel->getJointPositionInWorldFrame(rig.indexOfJoint(builtIn.joint), position)) {
+            continue;
+        }
+        if (!builtIn.toward.isEmpty() &&
+            _skeletonModel->getJointPositionInWorldFrame(rig.indexOfJoint(builtIn.toward), toward)) {
+            position = 0.5f * (position + toward);
+        }
+        AvatarMenu::ContactSender sender;
+        sender.owner = getSessionUUID();
+        sender.a = sender.b = position;
+        sender.radius = builtIn.radius * size;
+        sender.tags = builtIn.tags;
+        senders.push_back(sender);
+    }
+    auto jointWorld = [this](int joint, glm::vec3& position, glm::quat& rotation) {
+        return _skeletonModel->getJointPositionInWorldFrame(joint, position) &&
+               _skeletonModel->getJointRotationInWorldFrame(joint, rotation);
+    };
+    _avatarMenu.addContactSenders(getSessionUUID(), rig.getModelOffsetPose().scale().x, jointWorld, senders);
+}
+
+void Avatar::updateContacts(const std::vector<AvatarMenu::ContactSender>& senders) {
+    if (!_skeletonModel || !_skeletonModel->isLoaded() || !_avatarMenu.hasContactReceivers()) {
+        return;
+    }
+    auto jointWorld = [this](int joint, glm::vec3& position, glm::quat& rotation) {
+        return _skeletonModel->getJointPositionInWorldFrame(joint, position) &&
+               _skeletonModel->getJointRotationInWorldFrame(joint, rotation);
+    };
+    // the rig is in the world's size already; the avatar's own meters scale by the avatar's scale
+    _avatarMenu.updateContacts(getSessionUUID(), _skeletonModel->getRig().getModelOffsetPose().scale().x, jointWorld, senders);
+}
+
+void Avatar::updateAvatarMenu(float deltaTime) {
+    if (!_skeletonModel || !_skeletonModel->isLoaded() || !_skeletonModel->getRig().getAnimSkeleton()) {
+        return;
+    }
+    const QString url = _skeletonModel->getURL().toString();
+    bool newMenu = false;
+    if (url != _avatarMenuModelURL) {
+        // a newly loaded avatar: set its menu up, or clear the last one's
+        _avatarMenuModelURL = url;
+        if (!_avatarMenuHiddenParts.empty()) {
+            removeMaterial(_avatarMenuHideMaterial, _avatarMenuHiddenParts);
+            _avatarMenuHiddenParts.clear();
+        }
+        const HFMModel& model = _skeletonModel->getHFMModel();
+        _avatarMenu.setLocal(isMyAvatar());
+        _avatarMenu.setup(model.humanoid.avatarMenu, model, *_skeletonModel->getRig().getAnimSkeleton());
+        if (!isMyAvatar()) {
+            _avatarMenu.setParameter("IsLocal", 0.0f);
+        }
+        _skeletonModel->setOwnBlendshapeOverrides(QHash<int, float>());
+        _skeletonModel->getRig().setAvatarMenuPoses({});
+        newMenu = true;
+        emit avatarMenuChanged();
+    }
+    // Someone else's avatar follows the parameters its owner's client sends (MyAvatar sends them).
+    if (!isMyAvatar() && (takeAvatarMenuParametersChanged() || newMenu)) {
+        const QByteArray parameters = getAvatarMenuParameters();
+        if (!parameters.isEmpty()) {
+            _avatarMenu.setSyncedParameters(QJsonDocument::fromJson(parameters).object());
+        }
+    }
+    if (!_avatarMenu.isActive() || !_avatarMenu.update(deltaTime)) {
+        return;
+    }
+    QList<int> hidden = _avatarMenu.getHiddenParts().values();
+    std::sort(hidden.begin(), hidden.end());
+    std::string parts;
+    for (int part : hidden) {
+        parts += (parts.empty() ? "[" : ",") + std::to_string(part);
+    }
+    if (!parts.empty()) {
+        parts += "]";
+    }
+    if (parts != _avatarMenuHiddenParts) {
+        if (!_avatarMenuHiddenParts.empty()) {
+            removeMaterial(_avatarMenuHideMaterial, _avatarMenuHiddenParts);
+        }
+        if (!parts.empty()) {
+            if (!_avatarMenuHideMaterial) {
+                _avatarMenuHideMaterial = std::make_shared<graphics::Material>();
+                _avatarMenuHideMaterial->setOpacity(0.0f);
+                _avatarMenuHideMaterial->setOpacityMapMode(graphics::MaterialKey::OPACITY_MAP_BLEND);
+            }
+            const quint16 AVATAR_MENU_MATERIAL_PRIORITY = 1000;  // above the model's own and the usual material entities
+            addMaterial(graphics::MaterialLayer(_avatarMenuHideMaterial, AVATAR_MENU_MATERIAL_PRIORITY), parts);
+        }
+        _avatarMenuHiddenParts = parts;
+    }
+    _skeletonModel->setOwnBlendshapeOverrides(_avatarMenu.getOwnBlendshapes());
+    std::vector<std::pair<int, Rig::AvatarMenuPose>> poses;
+    const QHash<int, AvatarMenu::JointPose> joints = _avatarMenu.getJointPoses();
+    for (auto it = joints.begin(); it != joints.end(); ++it) {
+        Rig::AvatarMenuPose pose;
+        pose.hasTranslation = it.value().hasTranslation;
+        pose.hasRotation = it.value().hasRotation;
+        pose.hasScale = it.value().hasScale;
+        pose.translation = it.value().translation;
+        pose.rotation = it.value().rotation;
+        pose.scale = it.value().scale;
+        poses.emplace_back(it.key(), pose);
+    }
+    _skeletonModel->getRig().setAvatarMenuPoses(poses);
 }
 
 void Avatar::processMaterials() {

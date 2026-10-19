@@ -451,6 +451,11 @@ public:
      */
     static QScriptValue getHUDLookAtPosition3D(QScriptContext* context, QScriptEngine* engine);
 
+    // The plain-value forms of the two above, for the WebAssembly script engine (whose JavaScript guest gives them
+    // to scripts under the names above): the position, or null when the HMD is not looking at the HUD overlay.
+    Q_INVOKABLE QVariant getHUDLookAtPosition2DValue() const;
+    Q_INVOKABLE QVariant getHUDLookAtPosition3DValue() const;
+
     bool isMounted() const override;
 
     void toggleShouldShowTablet();

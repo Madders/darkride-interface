@@ -28,6 +28,8 @@
 class Model;
 class EntityTreeRenderer;
 
+class NetworkMaterial;
+
 namespace render { namespace entities {
 class ModelEntityRenderer;
 } }
@@ -81,6 +83,10 @@ public:
     virtual bool isReadyToComputeShape() const override;
     virtual void computeShapeInfo(ShapeInfo& shapeInfo) override;
     bool unableToLoadCollisionShape();
+    // the mesh is wanted now, though it waits behind its impostor card (ENTITY-STREAMING.md 3.1): physics asks for a
+    // shape made from it (isReadyToComputeShape, which physics calls in its own regions only), or the impostor baker
+    // is to draw it; any thread
+    void askForMesh() const;
 
     virtual bool contains(const glm::vec3& point) const override;
     void stopModelOverrideIfNoParent();
@@ -122,6 +128,7 @@ private:
     void fetchCollisionGeometryResource();
 
     ModelResource::Pointer _collisionGeometryResource;
+    mutable std::atomic<bool> _meshWanted { false };
     std::vector<int> _jointMap;
     QVariantMap _originalTextures;
     bool _jointMapCompleted { false };
@@ -139,6 +146,15 @@ class ModelEntityRenderer : public TypedEntityRenderer<RenderableModelEntityItem
 
 public:
     ModelEntityRenderer(const EntityItemPointer& entity);
+    // Whether a model whose file hasn't loaded yet (or failed to) shows as a magenta wire box, as High Fidelity always
+    // drew it; off by default, so a world arriving shows nothing in a model's place until the model is ready
+    // (Developer > Render > Show Models Still Loading)
+    static void setShowModelsStillLoading(bool show) { _showModelsStillLoading = show; }
+    // the model, for the impostor bake (ImpostorBaker): null until it is set
+    ModelPointer getModelForBake() const { return _model; }
+    // the mesh waits behind the impostor card (ENTITY-STREAMING.md 3.1): not fetched yet
+    bool isMeshDeferred() const { return resultWithReadLock<bool>([&] { return _meshDeferred; }); }
+    bool needsImpostorStandIn() const override;
     virtual scriptable::ScriptableModelBase getScriptableModel() override;
     virtual bool canReplaceModelMeshPart(int meshIndex, int partIndex) override;
     virtual bool replaceScriptableModelMeshPart(scriptable::ScriptableModelBasePointer model, int meshIndex, int partIndex) override;
@@ -165,6 +181,7 @@ protected:
     virtual void doRenderUpdateSynchronousTyped(const ScenePointer& scene, Transaction& transaction, const TypedEntityPointer& entity) override;
 
     void setIsVisibleInSecondaryCamera(bool value) override;
+    render::hifi::Tag tagMaskKeepingBake(const ModelPointer& model) const;
     void setRenderLayer(RenderLayer value) override;
     void setPrimitiveMode(PrimitiveMode value) override;
     void setCullWithParent(bool value) override;
@@ -200,12 +217,27 @@ private:
     bool _didLastVisualGeometryRequestSucceed { true };
     bool _prevModelLoaded { false };
 
+    // the mesh waiting behind the impostor card (ENTITY-STREAMING.md 3.1)
+    bool shouldDeferMesh(const TypedEntityPointer& entity, ImpostorStandIn& standIn);
+    void reportImpostorStandIn(const TypedEntityPointer& entity);
+    bool _meshDeferred { false };
+    int _reportedStandIn { -1 };   // what the card's owner was last told: -1 nothing yet
+    bool _meshFetched { false };   // setURL was called: the mesh never waits again
+
     void processMaterials();
     bool _allProceduralMaterialsLoaded { false };
+
+    // the lightmap the entity's userData assigns to the whole model (LIGHTMAPS.md §3.2): a material layer over all
+    // its parts, remade when the entry changes
+    void applyLightmap(const TypedEntityPointer& entity);
+    QString _userData;
+    QString _lightmapSpec;
+    std::shared_ptr<NetworkMaterial> _lightmapMaterial;
 
     static void metaBlendshapeOperator(render::ItemID renderItemID, int blendshapeNumber, const QVector<BlendshapeOffset>& blendshapeOffsets,
                                        const QVector<int>& blendedMeshSizes, const render::ItemIDs& subItemIDs);
 
+    static std::atomic<bool> _showModelsStillLoading;
 };
 
 } } // namespace 

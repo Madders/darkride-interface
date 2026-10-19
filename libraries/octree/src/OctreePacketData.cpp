@@ -343,6 +343,17 @@ bool OctreePacketData::appendValue(uint16_t value) {
     return success;
 }
 
+bool OctreePacketData::appendValue(int32_t value) {
+    const unsigned char* data = (const unsigned char*)&value;
+    int length = sizeof(value);
+    bool success = append(data, length);
+    if (success) {
+        _bytesOfValues += length;
+        _totalBytesOfValues += length;
+    }
+    return success;
+}
+
 bool OctreePacketData::appendValue(uint32_t value) {
     const unsigned char* data = (const unsigned char*)&value;
     int length = sizeof(value);

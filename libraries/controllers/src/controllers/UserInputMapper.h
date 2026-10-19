@@ -165,9 +165,12 @@ namespace controller {
         void disableMapping(const MappingPointer& mapping);
         EndpointPointer endpointFor(const QJSValue& endpoint);
         EndpointPointer endpointFor(const QScriptValue& endpoint);
+        /// From a plain value, as the WebAssembly engine hands one over: an input id, a script callback, or a list of those.
+        EndpointPointer endpointFor(const QVariant& endpoint);
         EndpointPointer compositeEndpointFor(EndpointPointer first, EndpointPointer second);
         ConditionalPointer conditionalFor(const QJSValue& endpoint);
         ConditionalPointer conditionalFor(const QScriptValue& endpoint);
+        ConditionalPointer conditionalFor(const QVariant& condition);
         ConditionalPointer conditionalFor(const Input& endpoint) const;
 
         MappingPointer parseMapping(const QJsonValue& json);

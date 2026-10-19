@@ -203,7 +203,7 @@ GLenum GLTexelFormat::evalGLTexelFormatInternal(const gpu::Element& dstFormat) {
                     break;
 
                  case gpu::DEPTH_STENCIL:
-                    result = GL_DEPTH24_STENCIL8;
+                    result = (dstFormat.getType() == gpu::FLOAT) ? GL_DEPTH32F_STENCIL8 : GL_DEPTH24_STENCIL8;
                     break;
 
                 default:
@@ -441,9 +441,14 @@ GLTexelFormat GLTexelFormat::evalGLTexelFormat(const Element& dstFormat, const E
                 break;
 
             case gpu::DEPTH_STENCIL:
-                texel.type = GL_UNSIGNED_INT_24_8;
                 texel.format = GL_DEPTH_STENCIL;
-                texel.internalFormat = GL_DEPTH24_STENCIL8;
+                if (dstFormat.getType() == gpu::FLOAT) {
+                    texel.type = GL_FLOAT_32_UNSIGNED_INT_24_8_REV;
+                    texel.internalFormat = GL_DEPTH32F_STENCIL8;
+                } else {
+                    texel.type = GL_UNSIGNED_INT_24_8;
+                    texel.internalFormat = GL_DEPTH24_STENCIL8;
+                }
                 break;
             default:
                 qCWarning(gpugllogging) << "Unknown combination of texel format";
@@ -745,9 +750,14 @@ GLTexelFormat GLTexelFormat::evalGLTexelFormat(const Element& dstFormat, const E
                 }
                 break;
             case gpu::DEPTH_STENCIL:
-                texel.type = GL_UNSIGNED_INT_24_8;
                 texel.format = GL_DEPTH_STENCIL;
-                texel.internalFormat = GL_DEPTH24_STENCIL8;
+                if (dstFormat.getType() == gpu::FLOAT) {
+                    texel.type = GL_FLOAT_32_UNSIGNED_INT_24_8_REV;
+                    texel.internalFormat = GL_DEPTH32F_STENCIL8;
+                } else {
+                    texel.type = GL_UNSIGNED_INT_24_8;
+                    texel.internalFormat = GL_DEPTH24_STENCIL8;
+                }
                 break;
             default:
                 qCWarning(gpugllogging) << "Unknown combination of texel format";

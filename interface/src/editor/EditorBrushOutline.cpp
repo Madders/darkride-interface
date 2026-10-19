@@ -71,17 +71,28 @@ namespace render {
 // --- main thread --------------------------------------------------------------------------------
 
 void EditorBrushOutline::set(const QVector<glm::vec3>& ring, const glm::vec4& color, float width, const glm::vec3& toCamera) {
-    if (ring.size() < 3) {
+    set(QVector<QVector<glm::vec3>>{ ring }, color, width, toCamera);
+}
+
+void EditorBrushOutline::set(const QVector<QVector<glm::vec3>>& rings, const glm::vec4& color, float width, const glm::vec3& toCamera) {
+    EditorGizmoLines lines(toCamera);
+    bool any = false;
+    glm::vec3 low(0.0f);
+    glm::vec3 high(0.0f);
+    for (const QVector<glm::vec3>& ring : rings) {
+        if (ring.size() < 3) {
+            continue;
+        }
+        lines.addLine(ring, true, width, color);
+        for (const glm::vec3& point : ring) {
+            low = any ? glm::min(low, point) : point;
+            high = any ? glm::max(high, point) : point;
+            any = true;
+        }
+    }
+    if (!any) {
         clear();
         return;
-    }
-    EditorGizmoLines lines(toCamera);
-    lines.addLine(ring, true, width, color);
-    glm::vec3 low = ring.first();
-    glm::vec3 high = ring.first();
-    for (const glm::vec3& point : ring) {
-        low = glm::min(low, point);
-        high = glm::max(high, point);
     }
     publish(lines, low - width, high + width);
 }

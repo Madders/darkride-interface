@@ -803,7 +803,20 @@ QUuid EntityScriptingInterface::editEntity(const QUuid& id, const EntityItemProp
                     // we don't own the simulation but think we would like to
 
                     uint8_t desiredPriority = entity->getScriptSimulationPriority();
-                    if (desiredPriority < simulationOwner.getPriority()) {
+                    if (simulationOwner.getPriority() == SERVER_SIMULATION_PRIORITY && entity->getTrackID().isNull()
+                            && (properties.positionChanged() || properties.rotationChanged()
+                                || properties.localPositionChanged() || properties.localRotationChanged())) {
+                        // the physics server holds it, off a track: an explicit move is a teleport the entity server lets
+                        // through and the physics server adopts (PHYSICS.md round 7), so the position and rotation go;
+                        // everything else restricted is cleared as for any edit that cannot win
+                        bool position = properties.positionChanged(), localPosition = properties.localPositionChanged();
+                        bool rotation = properties.rotationChanged(), localRotation = properties.localRotationChanged();
+                        properties.clearSimulationRestrictedProperties();
+                        properties.setPositionChanged(position);
+                        properties.setLocalPositionChanged(localPosition);
+                        properties.setRotationChanged(rotation);
+                        properties.setLocalRotationChanged(localRotation);
+                    } else if (desiredPriority < simulationOwner.getPriority()) {
                         // the priority at which we'd like to own it is not high enough
                         // --> assume failure and clear all restricted property changes
                         properties.clearSimulationRestrictedProperties();
@@ -1929,6 +1942,38 @@ bool EntityScriptingInterface::setLocalJointTranslation(const QUuid& entityID, i
         }
     }
     return false;
+}
+
+bool EntityScriptingInterface::setVehicleControls(const QUuid& entityID, const QVariantMap& controls) {
+    EntityItemPointer entity = checkForTreeEntityAndTypeMatch(entityID);
+    if (!entity || !entity->isVehicle()) {
+        return false;
+    }
+    EntityItem::VehicleControls values;
+    values.throttle = glm::clamp(controls.value("throttle", 0.0f).toFloat(), -1.0f, 1.0f);
+    values.steering = glm::clamp(controls.value("steering", 0.0f).toFloat(), -1.0f, 1.0f);
+    values.brake = glm::clamp(controls.value("brake", 0.0f).toFloat(), 0.0f, 1.0f);
+    values.handBrake = glm::clamp(controls.value("handBrake", 0.0f).toFloat(), 0.0f, 1.0f);
+    values.pitch = glm::clamp(controls.value("pitch", 0.0f).toFloat(), -1.0f, 1.0f);
+    values.lift = glm::clamp(controls.value("lift", 0.0f).toFloat(), -1.0f, 1.0f);
+    values.trim = glm::clamp(controls.value("trim", 0.0f).toFloat(), -1.0f, 1.0f);
+    entity->setLocalVehicleControls(values);
+    return true;
+}
+
+QVariantMap EntityScriptingInterface::getVehicleStats() {
+    if (_entityTree) {
+        if (EntitySimulationPointer simulation = _entityTree->getSimulation()) {
+            return simulation->getVehicleStats();
+        }
+    }
+    return QVariantMap();
+}
+
+void EntityScriptingInterface::clearVehicleControls(const QUuid& entityID) {
+    if (EntityItemPointer entity = checkForTreeEntityAndTypeMatch(entityID)) {
+        entity->clearLocalVehicleControls();
+    }
 }
 
 bool EntityScriptingInterface::setLocalJointRotation(const QUuid& entityID, int jointIndex, glm::quat rotation) {

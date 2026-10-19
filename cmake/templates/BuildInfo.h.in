@@ -33,6 +33,7 @@ namespace BuildInfo {
     // the git branch and short commit the tree was on when CMake configured; empty outside a git checkout
     const QString BUILD_BRANCH = "@BUILD_BRANCH@";
     const QString BUILD_COMMIT = "@BUILD_COMMIT_SHORT@";
+    const QString CLIENT_LABEL = "@CLIENT_LABEL@";   // first in the window title when set (cmake -DCLIENT_LABEL=...)
 
     enum BuildType {
         Dev,

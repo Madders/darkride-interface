@@ -2,6 +2,7 @@
 	class="world-card"
 	[class.has-people]="people > 0"
 	[class.selected]="exploreService.chooserWorldId == world.id"
+	[class.hopping-target]="exploreService.hoppingWorldId == world.id"
 >
 	<div
 		class="thumbnail"
@@ -15,6 +16,7 @@
 				')'
 		}"
 		(click)="onHop()"
+		(mouseenter)="scriptService.emitEvent('explore', 'hover')"
 	>
 		<div class="chips">
 			<span class="chip presence" *ngIf="people > 0">
@@ -61,6 +63,7 @@
 				[class.starting]="starting"
 				[disabled]="starting || !canHop"
 				(click)="onHop()"
+				(mouseenter)="scriptService.emitEvent('explore', 'hover')"
 			>
 				<mat-icon
 					svgIcon="dr-rabbit"

@@ -315,7 +315,13 @@ public:
     bool isInteger() const { return TYPE_IS_INTEGER[getType()]; }
 
     uint8 getScalarCount() const { return DIMENSION_SCALAR_COUNT[(Dimension)_dimension]; }
-    uint32 getSize() const { return (DIMENSION_SCALAR_COUNT[_dimension] * TYPE_SIZE[_type] * SEMANTIC_SIZE_FACTOR[_semantic]); }
+    uint32 getSize() const {
+        // a float depth with a stencil is stored as 32-bit float + 8-bit stencil padded to 64 bits (GL_DEPTH32F_STENCIL8)
+        if (_semantic == DEPTH_STENCIL && _type == FLOAT) {
+            return 8;
+        }
+        return (DIMENSION_SCALAR_COUNT[_dimension] * TYPE_SIZE[_type] * SEMANTIC_SIZE_FACTOR[_semantic]);
+    }
     const glm::ivec2& getTile() const { return (DIMENSION_TILE_DIM[_dimension]); }
 
     uint8 getLocationCount() const { return  DIMENSION_LOCATION_COUNT[(Dimension)_dimension]; }
@@ -340,6 +346,7 @@ public:
     static const Element COLOR_SBGRA_32;
     static const Element COLOR_RGBA_2;
     static const Element COLOR_R11G11B10;
+    static const Element COLOR_RGBA16F;      // four half floats: linear HDR colour kept at half precision (lightmaps)
     static const Element COLOR_RGB9E5;
     static const Element COLOR_COMPRESSED_BCX_RED;
     static const Element COLOR_COMPRESSED_BCX_SRGB;
@@ -359,6 +366,8 @@ public:
     static const Element COLOR_COMPRESSED_EAC_XY;
     static const Element COLOR_COMPRESSED_EAC_XY_SIGNED;
     static const Element DEPTH24_STENCIL8;
+    // The depth buffer format of every view (reversed-Z, see Backend::reversedZProjection in Context.h)
+    static const Element DEPTH32F_STENCIL8;
     static const Element VEC2NU8_XY;
     static const Element VEC4F_COLOR_RGBA;
     static const Element VEC2F_UV;

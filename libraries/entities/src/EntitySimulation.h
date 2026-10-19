@@ -16,6 +16,7 @@
 #include <unordered_set>
 
 #include <QtCore/QObject>
+#include <QtCore/QVariantMap>
 #include <QVector>
 
 #include <PerfStat.h>
@@ -70,6 +71,8 @@ public:
     void changeEntity(EntityItemPointer entity);
 
     virtual void clearEntities();
+    // the driven vehicles' statistics (PHYSICS.md round 6), for test scripts: empty without a physics simulation
+    virtual QVariantMap getVehicleStats() const { return QVariantMap(); }
 
     void moveSimpleKinematics(uint64_t now);
 

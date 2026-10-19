@@ -173,6 +173,7 @@ private:
 };
 
 // String, Url
+// String, Url. A link dropped on a URL field (from the Assets panel, or a browser) is taken as its value.
 class TextEditor : public PropertyEditor {
     Q_OBJECT
 public:
@@ -182,15 +183,19 @@ public:
     void revertTyping() override;
     QVariant currentValue() const override { return QVariant(_edit->text()); }
     bool isMixed() const override { return _mixed; }
+protected:
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 private:
     QLineEdit* _edit { nullptr };
     QString _shown;
     bool _mixed { false };
 };
 
-// Image: a picture by URL. A thumbnail, the URL, Choose… for a picture on this computer, × to clear it; a picture
-// file or a link dropped on it does the same. A file from this computer is uploaded first (uploadRequested), so
-// that everyone sees it, and the URL it gets is what is committed.
+// Image: a picture by URL. A thumbnail, the URL and × to clear it. A picture dragged onto it from the Assets panel, a
+// browser or Finder is taken; a click on the thumbnail, or the left button held down in the field, opens a menu to
+// choose a picture on this computer or clear the field. A file from this computer is uploaded first
+// (uploadRequested), so that everyone sees it, and the URL it gets is what is committed.
 class ImageEditor : public PropertyEditor {
     Q_OBJECT
 public:
@@ -207,13 +212,20 @@ signals:
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
+    // the thumbnail's click and the field's held press open the menu
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void showThumbnail(const QString& url);
     void takeFile(const QString& localPath);
+    void showMenu();
+    void chooseFile();
+    void clearPicture();
 
     QLabel* _thumbnail { nullptr };
     QLineEdit* _url { nullptr };
+    QTimer* _holdTimer { nullptr };   // the left button held in the field this long opens the menu
+    QPoint _holdPos;
     QPointer<QNetworkReply> _reply;
     QString _shown;
     bool _mixed { false };

@@ -105,6 +105,14 @@ QVariantList ScriptAvatar::getSkeleton() const {
     }
 }
 
+float ScriptAvatar::getAvatarParameter(const QString& name) const {
+    if (auto lockedAvatar = lockAvatar()) {
+        return lockedAvatar->avatarMenu().getParameter(name);
+    } else {
+        return 0.0f;
+    }
+}
+
 float ScriptAvatar::getSimulationRate(const QString& rateName) const {
     if (auto lockedAvatar = lockAvatar()) {
         return lockedAvatar->getSimulationRate(rateName);

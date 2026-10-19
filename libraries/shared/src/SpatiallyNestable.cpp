@@ -24,8 +24,10 @@ const int MAX_PARENTING_CHAIN_SIZE = 30;
 
 void SpatiallyNestable::updateFromVariant(const QVariantMap& props) {
     bool success;
-    auto parentID = props["parentID"].toUuid();
-    auto parentJointIndex = props.contains("parentJointIndex") ? props["parentJointIndex"].toInt() : -1;
+    // a property left out keeps its value: MyAvatar.parentJointIndex = n on its own must not clear the parent
+    auto parentID = props.contains("parentID") ? props["parentID"].toUuid() : getParentID();
+    auto parentJointIndex = props.contains("parentJointIndex") ? props["parentJointIndex"].toInt()
+        : (props.contains("parentID") ? -1 : (int)getParentJointIndex());
     Transform beforeWorld = getTransform(success);
     glm::vec3 beforeWorldVelocity = getWorldVelocity();
     glm::vec3 beforeWorldAngularVelocity = getWorldAngularVelocity();

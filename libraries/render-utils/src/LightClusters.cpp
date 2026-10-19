@@ -1,7 +1,7 @@
 //
 //  LightClusters.cpp
 //
-//  Created by Sam Gateau on 9/7/2016.
+//  Created by Sam Gateau on 9/7/2016 (a frustum grid); Unity URP's Forward+ layout since 10/2026.
 //  Copyright 2015 High Fidelity, Inc.
 //
 //  Distributed under the Apache License, Version 2.0.
@@ -10,12 +10,21 @@
 
 #include "LightClusters.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+
+#include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/quaternion.hpp>
+
 #include <gpu/Context.h>
 #include <shaders/Shaders.h>
 #include <graphics/ShaderConstants.h>
 
 #include "RenderUtilsLogging.h"
 #include "render-utils/ShaderConstants.h"
+#include "DeferredLightingEffect.h"
 #include "StencilMaskPass.h"
 
 
@@ -29,502 +38,430 @@ namespace gr {
     using graphics::slot::buffer::Buffer;
 }
 
-FrustumGrid::FrustumGrid(const FrustumGrid& source) :
-    frustumNear(source.frustumNear),
-    rangeNear(source.rangeNear),
-    rangeFar(source.rangeFar),
-    frustumFar(source.frustumFar),
-    dims(source.dims),
-    spare(source.spare),
-    eyeToGridProj(source.eyeToGridProj),
-    worldToEyeMat(source.worldToEyeMat),
-    eyeToWorldMat(source.eyeToWorldMat)
-{}
+static_assert(LIGHT_CLUSTER_MAX_PROBES == ReflectionProbeStage::MAX_LAYERS, "the frame's probe list holds the array's layers");
 
-void FrustumGrid::generateGridPlanes(Planes& xPlanes, Planes& yPlanes, Planes& zPlanes) {
-    xPlanes.resize(dims.x + 1);
-    yPlanes.resize(dims.y + 1);
-    zPlanes.resize(dims.z + 1);
+namespace {
+    constexpr int MAX_LIGHTS = LIGHT_CLUSTER_MAX_LIGHTS;
+    constexpr int MAX_PROBES = LIGHT_CLUSTER_MAX_PROBES;
+    constexpr int TILE_WORDS = LIGHT_CLUSTER_TILE_WORDS;
+    constexpr int BIN_WORDS = LIGHT_CLUSTER_BIN_WORDS;
+    constexpr int MIN_TILE_SIZE = 16;      // pixels; doubled until every eye's tiles fit their block
+    constexpr int MAX_TILE_SIZE = 4096;
+    constexpr int MAX_BINS = 1024;
+    constexpr int BLOCK_SIZE_FOR_256_LIGHTS = 65536;   // bytes: URP's desktop cap needs 64 KB blocks, else its OpenGL 32
+    constexpr int LIGHTS_WITH_SMALL_BLOCKS = 32;
+    constexpr uint32_t EMPTY_BIN_HEADER = 0x0000FFFFu;   // first light 0xFFFF (none), last light 0
 
-    float centerY = float(dims.y) * 0.5f;
-    float centerX = float(dims.x) * 0.5f;
-
-    for (int z = 0; z < (int) zPlanes.size(); z++) {
-        ivec3 pos(0, 0, z);
-        zPlanes[z] = glm::vec4(0.0f, 0.0f, 1.0f, -frustumGrid_clusterPosToEye(pos, vec3(0.0)).z);
+    // the ndc coordinate a direction from the eye projects to, on one axis: side is its x (or y), depth its distance
+    // forward (positive), p00 the projection's [0][0] (or [1][1]) and p20 its [2][0] (or [2][1], the asymmetry)
+    float projectDirection(float side, float depth, float p00, float p20) {
+        return p00 * (side / depth) - p20;
     }
 
-    for (int x = 0; x < (int) xPlanes.size(); x++) {
-        auto slicePos = frustumGrid_clusterPosToEye(glm::vec3((float)x, centerY, 0.0));
-        auto sliceDir = glm::normalize(slicePos);
-        xPlanes[x] = glm::vec4(sliceDir.z, 0.0, -sliceDir.x, 0.0);
+    // The screen bounds in ndc, along one axis, of a sphere seen from the eye: from the two tangents from the eye to
+    // the sphere's circle in that axis' plane (its x, or y, and its depth; depthZ is the eye-space z, negative in
+    // front). The whole screen when the eye is inside the circle, and to the screen's edge on a side whose tangent
+    // points backward (the sphere then reaches past the edge)
+    glm::vec2 sphereNdcBounds(float side, float depthZ, float radius, float p00, float p20) {
+        const float NDC_MIN = -1.0f;
+        const float NDC_MAX = 1.0f;
+        const float len2 = side * side + depthZ * depthZ;
+        if (len2 <= radius * radius) {
+            return glm::vec2(NDC_MIN, NDC_MAX);
+        }
+        const float len = std::sqrt(len2);
+        const glm::vec2 dir(side / len, depthZ / len);
+        const float cosT = std::sqrt(len2 - radius * radius) / len;
+        const float sinT = radius / len;
+        // the direction to the centre turned by the tangent angle each way: toward the lower (left) side, and the upper
+        const glm::vec2 lower(dir.x * cosT + dir.y * sinT, -dir.x * sinT + dir.y * cosT);
+        const glm::vec2 upper(dir.x * cosT - dir.y * sinT, dir.x * sinT + dir.y * cosT);
+        glm::vec2 bounds;
+        bounds.x = (lower.y >= 0.0f) ? NDC_MIN : projectDirection(lower.x, -lower.y, p00, p20);
+        bounds.y = (upper.y >= 0.0f) ? NDC_MAX : projectDirection(upper.x, -upper.y, p00, p20);
+        return bounds;
     }
 
-    for (int y = 0; y < (int) yPlanes.size(); y++) {
-        auto slicePos = frustumGrid_clusterPosToEye(glm::vec3(centerX, (float)y, 0.0));
-        auto sliceDir = glm::normalize(slicePos);
-        yPlanes[y] = glm::vec4(0.0, sliceDir.z, -sliceDir.y, 0.0);
+    // The plane through the eye along a tile boundary, at ndc x = a (columns: p00 = projection[0][0], p20 =
+    // projection[2][0]) or ndc y = b (rows: the [1][1] and [2][1]); its normal points to the greater ndc (right, or up)
+    glm::vec4 columnPlane(const glm::mat4& projection, float a) {
+        return glm::vec4(glm::normalize(glm::vec3(projection[0][0], 0.0f, projection[2][0] + a)), 0.0f);
+    }
+    glm::vec4 rowPlane(const glm::mat4& projection, float b) {
+        return glm::vec4(glm::normalize(glm::vec3(0.0f, projection[1][1], projection[2][1] + b)), 0.0f);
     }
 
+    float distanceToPlane(const glm::vec3& point, const glm::vec4& plane) {
+        return plane.x * point.x + plane.y * point.y + plane.z * point.z + plane.w;
+    }
+
+    // The circle where a plane cuts a sphere (centre xyz, radius w); false when the sphere does not reach the plane
+    bool reduceSphereToPlane(const glm::vec4& sphere, const glm::vec4& plane, glm::vec4& reducedSphere) {
+        const float distance = distanceToPlane(glm::vec3(sphere), plane);
+        if (std::abs(distance) <= sphere.w) {
+            reducedSphere = glm::vec4(sphere.x - distance * plane.x, sphere.y - distance * plane.y, sphere.z - distance * plane.z,
+                                      std::sqrt(std::max(0.0f, sphere.w * sphere.w - distance * distance)));
+            return true;
+        }
+        return false;
+    }
 }
 
-#include "DeferredLightingEffect.h"
-#ifdef Q_OS_MACOS
-const glm::uvec4 LightClusters::MAX_GRID_DIMENSIONS { 16, 16, 16, 16384 };
-#else
-const glm::uvec4 LightClusters::MAX_GRID_DIMENSIONS { 32, 32, 31, 16384 };
-#endif
-
+int LightClusters::getMaxLights() {
+    const int blockSize = gpu::Context::getMaxUniformBlockSize();
+    // before the GPU has said (no context yet), the Macs' answer
+    if (blockSize <= 0 || blockSize >= BLOCK_SIZE_FOR_256_LIGHTS) {
+        return MAX_LIGHTS;
+    }
+    return LIGHTS_WITH_SMALL_BLOCKS;
+}
 
 LightClusters::LightClusters() :
-    _lightIndicesBuffer(std::make_shared<gpu::Buffer>()),
-    _clusterGridBuffer(/*std::make_shared<gpu::Buffer>(), */gpu::Element::INDEX_INT32),
-    _clusterContentBuffer(/*std::make_shared<gpu::Buffer>(), */gpu::Element::INDEX_INT32) {
+    _tiles(TILE_WORDS, 0u),
+    _bins(BIN_WORDS, 0u) {
+    // empty: no light, so the shaders read nothing else
+    auto& params = _paramsBuffer.edit();
+    memset(&params, 0, sizeof(params));
+    _tilesBuffer = gpu::BufferView(std::make_shared<gpu::Buffer>(_tiles.size() * sizeof(uint32_t), (const gpu::Byte*)_tiles.data()));
+    _binsBuffer = gpu::BufferView(std::make_shared<gpu::Buffer>(_bins.size() * sizeof(uint32_t), (const gpu::Byte*)_bins.data()));
 }
-
-void LightClusters::setDimensions(glm::uvec3 gridDims, uint32_t listBudget) {
-    ivec3 configDimensions;
-    auto gridBudget = MAX_GRID_DIMENSIONS.w;
-    configDimensions.x = std::max(1, (int) std::min(MAX_GRID_DIMENSIONS.x, gridDims.x));
-    configDimensions.y = std::max(1, (int) std::min(MAX_GRID_DIMENSIONS.y, gridDims.y));
-    configDimensions.z = std::max(1, (int) std::min(MAX_GRID_DIMENSIONS.z, gridDims.z));
-
-    auto sliceCost = configDimensions.x * configDimensions.y;
-    auto maxNumSlices = (int)(gridBudget / sliceCost) - 1;
-    configDimensions.z = std::min(maxNumSlices, configDimensions.z);
-
-
-    // Grab the frustumGridBuffer and force it updated
-    const auto& constFrustumGrid = _frustumGridBuffer.get();
-    const auto& dims = constFrustumGrid.dims;
-    if ((dims.x != configDimensions.x) || (dims.y != configDimensions.y) || (dims.z != configDimensions.z)) {
-        auto& theFrustumGrid = _frustumGridBuffer.edit();
-        theFrustumGrid.dims = configDimensions;
-        theFrustumGrid.generateGridPlanes(_gridPlanes[0], _gridPlanes[1], _gridPlanes[2]);
-        _clusterResourcesInvalid = true;
-    }
-
-    auto configListBudget = std::min(MAX_GRID_DIMENSIONS.w, listBudget);
-    if (_clusterContentBudget != configListBudget) {
-        _clusterContentBudget = configListBudget;
-        _clusterResourcesInvalid = true;
-    }
-}
-
-uint32_t LightClusters::getNumClusters() const {
-    auto theFrustumGrid = _frustumGridBuffer.get();
-    return theFrustumGrid.frustumGrid_numClusters();
-}
-
- void LightClusters::updateClusterResource() {
-    if (!_clusterResourcesInvalid) {
-        return;
-    }
-    _clusterResourcesInvalid = false;
-    auto numClusters = getNumClusters();
-    if (numClusters != (uint32_t) _clusterGrid.size()) {
-        _clusterGrid.clear();
-        _clusterGrid.resize(numClusters, EMPTY_CLUSTER);
-        _clusterGridBuffer._size = (numClusters * sizeof(uint32_t));
-        _clusterGridBuffer._buffer = std::make_shared<gpu::Buffer>(_clusterGridBuffer._size, (gpu::Byte*) _clusterGrid.data(), _clusterGridBuffer._size);
-    }
-
-    // Since LightIndex is 2bytes, we can fit 2 in a uint32
-    auto configListBudget = _clusterContentBudget;
-    if (sizeof(LightIndex) == 2) {
-        configListBudget *= 2;
-    }
-
-    if (configListBudget != (uint32_t) _clusterContent.size()) {
-        _clusterContent.clear();
-        _clusterContent.resize(configListBudget, INVALID_LIGHT);
-        _clusterContentBuffer._size = (configListBudget * sizeof(LightIndex));
-        _clusterContentBuffer._buffer = std::make_shared<gpu::Buffer>(_clusterContentBuffer._size, (gpu::Byte*) _clusterContent.data(), _clusterContentBuffer._size);
-    }
-}
-
-void LightClusters::setRangeNearFar(float rangeNear, float rangeFar) {
-    bool changed = false;
-
-    if (_frustumGridBuffer->rangeNear != rangeNear) {
-        _frustumGridBuffer.edit().rangeNear = rangeNear;
-        changed = true;
-    }
-    if (_frustumGridBuffer->rangeFar != rangeFar) {
-        _frustumGridBuffer.edit().rangeFar = rangeFar;
-        changed = true;
-    }
-
-    if (changed) {
-        _frustumGridBuffer.edit().generateGridPlanes(_gridPlanes[0], _gridPlanes[1], _gridPlanes[2]);
-    }
-}
-
-void LightClusters::updateFrustum(const ViewFrustum& frustum) {
-    _frustum = frustum;
-
-    _frustumGridBuffer.edit().updateFrustum(frustum);
-
-    if (true) {
-        _frustumGridBuffer.edit().generateGridPlanes(_gridPlanes[0], _gridPlanes[1], _gridPlanes[2]);
-    }
-}
-
-void LightClusters::updateLightStage(const LightStagePointer& lightStage) {
-    _lightStage = lightStage;
-    
-  }
 
 void LightClusters::updateLightFrame(const LightStage::FramePointer& lightFrame, bool points, bool spots) {
-
-    // start fresh
     _visibleLightIndices.clear();
-
-    // Now gather the lights
-    // gather lights
-    auto& srcPointLights = lightFrame->_pointLights;
-    auto& srcSpotLights = lightFrame->_spotLights;
-    int numPointLights = (int)srcPointLights.size();
-    int numSpotLights = (int)srcSpotLights.size();
-
-    _visibleLightIndices.resize(numPointLights + numSpotLights + 1);
-
-    _visibleLightIndices[0] = 0;
-
-    if (points && !srcPointLights.empty()) {
-        memcpy(_visibleLightIndices.data() + (_visibleLightIndices[0] + 1), srcPointLights.data(), srcPointLights.size() * sizeof(int));
-        _visibleLightIndices[0] += (int)srcPointLights.size();
+    if (points) {
+        _visibleLightIndices.insert(_visibleLightIndices.end(), lightFrame->_pointLights.begin(), lightFrame->_pointLights.end());
     }
-    if (spots && !srcSpotLights.empty()) {
-        memcpy(_visibleLightIndices.data() + (_visibleLightIndices[0] + 1), srcSpotLights.data(), srcSpotLights.size() * sizeof(int));
-        _visibleLightIndices[0] += (int)srcSpotLights.size();
+    if (spots) {
+        _visibleLightIndices.insert(_visibleLightIndices.end(), lightFrame->_spotLights.begin(), lightFrame->_spotLights.end());
     }
-
-    _lightIndicesBuffer._buffer->setData(_visibleLightIndices.size() * sizeof(int), (const gpu::Byte*) _visibleLightIndices.data());
-    _lightIndicesBuffer._size = _visibleLightIndices.size() * sizeof(int);
 }
 
-float distanceToPlane(const glm::vec3& point, const glm::vec4& plane) {
-    return plane.x * point.x + plane.y * point.y + plane.z * point.z + plane.w;
-}
-
-bool reduceSphereToPlane(const glm::vec4& sphere, const glm::vec4& plane, glm::vec4& reducedSphere) {
-    float distance = distanceToPlane(glm::vec3(sphere), plane);
-
-    if (std::abs(distance) <= sphere.w) {
-        reducedSphere = glm::vec4(sphere.x - distance * plane.x, sphere.y - distance * plane.y, sphere.z - distance * plane.z, sqrt(sphere.w * sphere.w - distance * distance));
-        return true;
+const gpu::TexturePointer& LightClusters::getReflectionProbeArray() const {
+    if (_probeStage && _probeStage->getArray()) {
+        return _probeStage->getArray();
     }
-
-    return false;
+    return ReflectionProbeStage::getEmptyArray();
 }
 
+LightClusters::Stats LightClusters::updateClusters(const RenderArgs* args) {
+    Stats stats;
+    _numLights = 0;
+    _numProbes = 0;
 
-uint32_t scanLightVolumeBoxSlice(FrustumGrid& grid, const FrustumGrid::Planes planes[3], int zSlice, int yMin, int yMax, int xMin, int xMax, LightClusters::LightID lightId, const glm::vec4& eyePosRadius,
-    std::vector< std::vector<LightClusters::LightIndex>>& clusterGrid) {
-    glm::ivec3 gridPosToOffset(1, grid.dims.x, grid.dims.x * grid.dims.y);
-    uint32_t numClustersTouched = 0;
+    const bool stereo = args->isStereo();
+    const int numEyes = stereo ? 2 : 1;
+    const glm::ivec4 viewport = args->_viewport;
 
-    for (auto y = yMin; (y <= yMax); y++) {
-        for (auto x = xMin; (x <= xMax); x++) {
-            auto index = x + gridPosToOffset.y * y + gridPosToOffset.z * zSlice;
-            clusterGrid[index].emplace_back(lightId);
-            numClustersTouched++;
+    // the eyes' viewports in framebuffer pixels: a stereo frame draws its two eyes side by side in the one viewport
+    glm::ivec4 eyeViewports[2] = { viewport, viewport };
+    if (stereo) {
+        eyeViewports[0].z = viewport.z / 2;
+        eyeViewports[1] = glm::ivec4(viewport.x + eyeViewports[0].z, viewport.y, eyeViewports[0].z, viewport.w);
+    }
+    const glm::ivec2 eyeSize(std::max(1, eyeViewports[0].z), std::max(1, eyeViewports[0].w));
+
+    // world to the view's eye space; each eye's own space and projection in stereo
+    Transform view;
+    _frustum.evalViewTransform(view);
+    const glm::mat4 worldToEye = view.getInverseMatrix();
+    glm::mat4 eyeProjections[2];
+    glm::mat4 eyeViews[2];
+    if (stereo && args->_context) {
+        args->_context->getStereoProjections(eyeProjections);
+        args->_context->getStereoViews(eyeViews);
+    } else {
+        eyeProjections[0] = _frustum.getProjection();
+        eyeViews[0] = glm::mat4(1.0f);
+    }
+    const float nearClip = std::max(_frustum.getNearClip(), 0.001f);
+    const float farClip = std::max(_frustum.getFarClip(), nearClip * 2.0f);
+
+    // a candidate's screen bounds in each eye, from its sphere; false when off every eye's screen
+    auto projectCandidate = [&](Candidate& candidate) {
+        bool visible = false;
+        for (int eye = 0; eye < numEyes; eye++) {
+            const glm::vec3 eyeCenter = glm::vec3(eyeViews[eye] * (worldToEye * glm::vec4(candidate.center, 1.0f)));
+            const auto& projection = eyeProjections[eye];
+            const glm::vec2 xBounds = sphereNdcBounds(eyeCenter.x, eyeCenter.z, candidate.radius, projection[0][0], projection[2][0]);
+            const glm::vec2 yBounds = sphereNdcBounds(eyeCenter.y, eyeCenter.z, candidate.radius, projection[1][1], projection[2][1]);
+            candidate.eyeCenter[eye] = eyeCenter;
+            candidate.ndcBounds[eye] = glm::vec4(xBounds, yBounds);
+            candidate.visible[eye] = xBounds.x <= 1.0f && xBounds.y >= -1.0f && yBounds.x <= 1.0f && yBounds.y >= -1.0f;
+            visible = visible || candidate.visible[eye];
         }
-    }
+        return visible;
+    };
 
-    return numClustersTouched;
-}
-
-uint32_t scanLightVolumeBox(FrustumGrid& grid, const FrustumGrid::Planes planes[3], int zMin, int zMax, int yMin, int yMax, int xMin, int xMax, LightClusters::LightID lightId, const glm::vec4& eyePosRadius,
-    std::vector< std::vector<LightClusters::LightIndex>>& clusterGrid) {
-    glm::ivec3 gridPosToOffset(1, grid.dims.x, grid.dims.x * grid.dims.y);
-    uint32_t numClustersTouched = 0;
-
-    for (auto z = zMin; (z <= zMax); z++) {
-        for (auto y = yMin; (y <= yMax); y++) {
-            for (auto x = xMin; (x <= xMax); x++) {
-                auto index = x + gridPosToOffset.y * y + gridPosToOffset.z * z;
-                clusterGrid[index].emplace_back(lightId);
-                numClustersTouched++;
-            }
-        }
-    }
-
-    return numClustersTouched;
-}
-
-uint32_t scanLightVolumeSphere(FrustumGrid& grid, const FrustumGrid::Planes planes[3], int zMin, int zMax, int yMin, int yMax, int xMin, int xMax, LightClusters::LightID lightId, const glm::vec4& eyePosRadius,
-    std::vector< std::vector<LightClusters::LightIndex>>& clusterGrid) {
-    glm::ivec3 gridPosToOffset(1, grid.dims.x, grid.dims.x * grid.dims.y);
-    uint32_t numClustersTouched = 0;
-    const auto& xPlanes = planes[0];
-    const auto& yPlanes = planes[1];
-    const auto& zPlanes = planes[2];
-
-    // FInd the light origin cluster
-    auto centerCluster = grid.frustumGrid_eyeToClusterPos(glm::vec3(eyePosRadius));
-
-    int center_z = centerCluster.z;
-    int center_y = centerCluster.y;
-
-    for (auto z = zMin; (z <= zMax); z++) {
-        auto zSphere = eyePosRadius;
-        if (z != center_z) {
-            auto plane = (z < center_z) ? zPlanes[z + 1] : -zPlanes[z];
-            if (!reduceSphereToPlane(zSphere, plane, zSphere)) {
-                // pass this slice!
-                continue;
-            }
-        }
-        for (auto y = yMin; (y <= yMax); y++) {
-            auto ySphere = zSphere;
-            if (y != center_y) {
-                auto plane = (y < center_y) ? yPlanes[y + 1] : -yPlanes[y];
-                if (!reduceSphereToPlane(ySphere, plane, ySphere)) {
-                    // pass this slice!
-                    continue;
-                }
-            }
-
-            glm::vec3 spherePoint(ySphere);
-
-            auto x = xMin;
-            for (; (x < xMax); ++x) {
-                const auto& plane = xPlanes[x + 1];
-                auto testDistance = distanceToPlane(spherePoint, plane) + ySphere.w;
-                if (testDistance >= 0.0f) {
-                    break;
-                }
-            }
-            auto xs = xMax;
-            for (; (xs >= x); --xs) {
-                auto plane = -xPlanes[xs];
-                auto testDistance = distanceToPlane(spherePoint, plane) + ySphere.w;
-                if (testDistance >= 0.0f) {
-                    break;
-                }
-            }
-
-            for (; (x <= xs); x++) {
-                auto index = grid.frustumGrid_clusterToIndex(ivec3(x, y, z));
-                if (index < (int)clusterGrid.size()) {
-                    clusterGrid[index].emplace_back(lightId);
-                    numClustersTouched++;
-                } else {
-                    qCDebug(renderutils) << "WARNING: LightClusters::scanLightVolumeSphere invalid index found ? numClusters = " << clusterGrid.size() << " index = " << index << " found from cluster xyz = " << x << " " << y << " " << z;
-                }
-            }
-        }
-    }
-
-    return numClustersTouched;
-}
-
-glm::ivec3 LightClusters::updateClusters() {
-    // Make sure resource are in good shape
-    updateClusterResource();
-
-    // Clean up last info
-    uint32_t numClusters = (uint32_t)_clusterGrid.size();
-
-    std::vector< std::vector< LightIndex > > clusterGridPoint(numClusters);
-    std::vector< std::vector< LightIndex > > clusterGridSpot(numClusters);
-
-    _clusterGrid.clear();
-    _clusterGrid.resize(numClusters, EMPTY_CLUSTER);
-
-    uint32_t maxNumIndices = (uint32_t)_clusterContent.size();
-    _clusterContent.clear();
-    _clusterContent.resize(maxNumIndices, INVALID_LIGHT);
-
-
-    auto theFrustumGrid(_frustumGridBuffer.get());
-
-    glm::ivec3 gridPosToOffset(1, theFrustumGrid.dims.x, theFrustumGrid.dims.x * theFrustumGrid.dims.y);
-
-    uint32_t numClusterTouched = 0;
-    uint32_t numLightsIn = _visibleLightIndices[0];
-    uint32_t numClusteredLights = 0;
-    for (size_t lightNum = 1; lightNum < _visibleLightIndices.size(); ++lightNum) {
-        auto lightId = _visibleLightIndices[lightNum];
+    // 1. Each candidate's bounds: a sphere (a spot's cone's enclosing sphere), its depth range (a spot's cone's own)
+    // and its screen bounds in each eye; one out of the depth range, or off every eye's screen, is left out
+    _candidates.clear();
+    for (auto lightId : _visibleLightIndices) {
         auto light = _lightStage->getLight(lightId);
         if (!light) {
             continue;
         }
+        stats.numInputLights++;
 
-        auto worldOri = light->getPosition();
-        auto radius = light->getMaximumRadius();
-        bool isSpot = light->isSpot();
+        Candidate candidate;
+        candidate.id = lightId;
+        const glm::vec3 position = light->getPosition();
+        const float range = std::max(light->getMaximumRadius(), 0.0f);
+        const glm::vec3 eyePosition = glm::vec3(worldToEye * glm::vec4(position, 1.0f));
+        const float depth = -eyePosition.z;
+        candidate.center = position;
+        candidate.radius = range;
+        candidate.minZ = depth - range;
+        candidate.maxZ = depth + range;
 
-        // Bring into frustum eye space
-        auto eyeOri = theFrustumGrid.frustumGrid_worldToEye(glm::vec4(worldOri, 1.0f));
-
-        // Remove light that slipped through and is not in the z range
-        float eyeZMax = eyeOri.z - radius;
-        if (eyeZMax > -theFrustumGrid.rangeNear) {
+        if (light->isSpot()) {
+            const glm::vec3 direction = glm::normalize(light->getDirection());
+            const float cosAngle = glm::clamp(light->getSpotAngleCosSin().x, 0.0f, 1.0f);
+            // the cone's enclosing sphere: under 45 degrees the sphere through its apex and the rim of its cap, wider
+            // the sphere through the rim centred on the axis (a 90 degree cone's is the range sphere itself)
+            const float COS_45_DEGREES = 0.70710678f;
+            if (cosAngle > COS_45_DEGREES) {
+                candidate.radius = range / (2.0f * cosAngle);
+                candidate.center = position + direction * candidate.radius;
+            } else {
+                candidate.center = position + direction * (range * cosAngle);
+                candidate.radius = range * std::sqrt(std::max(0.0f, 1.0f - cosAngle * cosAngle));
+            }
+            // its depth range: the apex, and its cap by the angle between the cone's axis and the view direction
+            const glm::vec3 eyeDirection = glm::normalize(glm::vec3(worldToEye * glm::vec4(direction, 0.0f)));
+            const float axisAngle = std::acos(glm::clamp(-eyeDirection.z, -1.0f, 1.0f));
+            const float coneAngle = std::acos(cosAngle);
+            const float capMax = depth + range * std::cos(std::max(0.0f, axisAngle - coneAngle));
+            const float capMin = depth + range * std::cos(std::min(glm::pi<float>(), axisAngle + coneAngle));
+            candidate.minZ = std::min(depth, capMin);
+            candidate.maxZ = std::max(depth, capMax);
+        }
+        if (candidate.maxZ <= nearClip || candidate.minZ >= farClip) {
             continue;
         }
-        float eyeZMin = eyeOri.z + radius;
-        bool beyondFar = false;
-        if (eyeZMin < -theFrustumGrid.rangeFar) {
-            beyondFar = true;
-        }
-
-        // Get z slices
-        int zMin = theFrustumGrid.frustumGrid_eyeDepthToClusterLayer(eyeZMin);
-        int zMax = theFrustumGrid.frustumGrid_eyeDepthToClusterLayer(eyeZMax);
-        // That should never happen
-        if (zMin == -2 && zMax == -2) {
+        if (!projectCandidate(candidate)) {
             continue;
         }
-
-        // Before Range NEar just apss, range neatr == true near for now
-        if ((zMin == -1) && (zMax == -1)) {
-            continue;
-        }
-
-        // CLamp the z range 
-        zMin = std::max(0, zMin);
-
-        auto xLeftDistance = radius - distanceToPlane(eyeOri, _gridPlanes[0][0]);
-        auto xRightDistance = radius + distanceToPlane(eyeOri, _gridPlanes[0].back());
-
-        auto yBottomDistance = radius - distanceToPlane(eyeOri, _gridPlanes[1][0]);
-        auto yTopDistance = radius + distanceToPlane(eyeOri, _gridPlanes[1].back());
-
-        if ((xLeftDistance < 0.f) || (xRightDistance < 0.f) || (yBottomDistance < 0.f) || (yTopDistance < 0.f)) {
-            continue;
-        }
-
-        // find 2D corners of the sphere in grid
-        int xMin { 0 };
-        int xMax { theFrustumGrid.dims.x - 1 };
-        int yMin { 0 };
-        int yMax { theFrustumGrid.dims.y - 1 };
-
-        float radius2 = radius * radius;
-
-        auto eyeOriH = glm::vec3(eyeOri);
-        auto eyeOriV = glm::vec3(eyeOri);
-
-        eyeOriH.y = 0.0f;
-        eyeOriV.x = 0.0f;
-
-        float eyeOriLen2H = glm::length2(eyeOriH);
-        float eyeOriLen2V = glm::length2(eyeOriV);
-
-        if ((eyeOriLen2H > radius2)) {
-            float eyeOriLenH = sqrt(eyeOriLen2H);
-
-            auto eyeOriDirH = glm::vec3(eyeOriH) / eyeOriLenH;
-
-            float eyeToTangentCircleLenH = sqrt(eyeOriLen2H - radius2);
-
-            float eyeToTangentCircleCosH = eyeToTangentCircleLenH / eyeOriLenH;
-
-            float eyeToTangentCircleSinH = radius / eyeOriLenH;
-
-
-            // rotate the eyeToOriDir (H & V) in both directions
-            glm::vec3 leftDir(eyeOriDirH.x * eyeToTangentCircleCosH + eyeOriDirH.z * eyeToTangentCircleSinH, 0.0f, eyeOriDirH.x * -eyeToTangentCircleSinH + eyeOriDirH.z * eyeToTangentCircleCosH);
-            glm::vec3 rightDir(eyeOriDirH.x * eyeToTangentCircleCosH - eyeOriDirH.z * eyeToTangentCircleSinH, 0.0f, eyeOriDirH.x * eyeToTangentCircleSinH + eyeOriDirH.z * eyeToTangentCircleCosH);
-
-            auto lc = theFrustumGrid.frustumGrid_eyeToClusterDirH(leftDir);
-            if (lc > xMax) {
-                lc = xMin;
-            }
-            auto rc = theFrustumGrid.frustumGrid_eyeToClusterDirH(rightDir);
-            if (rc < 0) {
-                rc = xMax;
-            }
-            xMin = std::max(xMin, lc);
-            xMax = std::min(rc, xMax);
-            assert(xMin <= xMax);
-        }
-
-        if ((eyeOriLen2V > radius2)) {
-            float eyeOriLenV = sqrt(eyeOriLen2V);
-
-            auto eyeOriDirV = glm::vec3(eyeOriV) / eyeOriLenV;
-
-            float eyeToTangentCircleLenV = sqrt(eyeOriLen2V - radius2);
-
-            float eyeToTangentCircleCosV = eyeToTangentCircleLenV / eyeOriLenV;
-
-            float eyeToTangentCircleSinV = radius / eyeOriLenV;
-
-
-            // rotate the eyeToOriDir (H & V) in both directions
-            glm::vec3 bottomDir(0.0f, eyeOriDirV.y * eyeToTangentCircleCosV + eyeOriDirV.z * eyeToTangentCircleSinV, eyeOriDirV.y * -eyeToTangentCircleSinV + eyeOriDirV.z * eyeToTangentCircleCosV);
-            glm::vec3 topDir(0.0f, eyeOriDirV.y * eyeToTangentCircleCosV - eyeOriDirV.z * eyeToTangentCircleSinV, eyeOriDirV.y * eyeToTangentCircleSinV + eyeOriDirV.z * eyeToTangentCircleCosV);
-
-            auto bc = theFrustumGrid.frustumGrid_eyeToClusterDirV(bottomDir);
-            auto tc = theFrustumGrid.frustumGrid_eyeToClusterDirV(topDir);
-            if (bc > yMax) {
-                bc = yMin;
-            }
-            if (tc < 0) {
-                tc = yMax;
-            }
-            yMin = std::max(yMin, bc);
-            yMax =std::min(tc, yMax);
-            assert(yMin <= yMax);
-        }
-
-        // now voxelize
-        auto& clusterGrid = (isSpot ? clusterGridSpot : clusterGridPoint);
-        if (beyondFar) {
-            numClusterTouched += scanLightVolumeBoxSlice(theFrustumGrid, _gridPlanes, zMin, yMin, yMax, xMin, xMax, lightId, glm::vec4(glm::vec3(eyeOri), radius), clusterGrid);
-        } else {
-            numClusterTouched += scanLightVolumeSphere(theFrustumGrid, _gridPlanes, zMin, zMax, yMin, yMax, xMin, xMax, lightId, glm::vec4(glm::vec3(eyeOri), radius), clusterGrid);
-        }
-
-        numClusteredLights++;
+        _candidates.push_back(candidate);
     }
 
-    // Lights have been gathered now reexpress in terms of 2 sequential buffers
-    // Start filling from near to far and stops if it overflows
-    bool checkBudget = false;
-    if (numClusterTouched > maxNumIndices) {
-        checkBudget = true;
-    }
-    uint16_t indexOffset = 0;
-    for (int i = 0; i < (int) clusterGridPoint.size(); i++) {
-        auto& clusterPoint = clusterGridPoint[i];
-        auto& clusterSpot = clusterGridSpot[i];
-
-        uint8_t numLightsPoint = ((uint8_t)clusterPoint.size());
-        uint8_t numLightsSpot = ((uint8_t)clusterSpot.size());
-        uint16_t numLights = numLightsPoint + numLightsSpot;
-        uint16_t offset = indexOffset;
-
-        // Check for overflow
-        if (checkBudget) {
-            if ((indexOffset + numLights) > (uint16_t) maxNumIndices) {
-                break;
+    // 1b. The reflection probes with a layer in the array: the sphere round each one's box, the same tests
+    _probeCandidates.clear();
+    if (_probeStage && _probeStage->getArray()) {
+        const int numAllocated = _probeStage->getNumAllocatedProbes();
+        for (int i = 0; i < numAllocated; i++) {
+            if (!_probeStage->checkProbeId(i)) {
+                continue;
             }
+            auto probe = _probeStage->getProbe(i);
+            const int layer = _probeStage->getLayer(i);
+            if (!probe || layer < 0) {
+                continue;
+            }
+            stats.numInputProbes++;
+
+            Candidate candidate;
+            candidate.probe = probe;
+            candidate.layer = layer;
+            candidate.center = probe->getBoxCenter();
+            candidate.radius = probe->getBoxRadius();
+            const float depth = -(worldToEye * glm::vec4(candidate.center, 1.0f)).z;
+            candidate.minZ = depth - candidate.radius;
+            candidate.maxZ = depth + candidate.radius;
+            if (candidate.maxZ <= nearClip || candidate.minZ >= farClip) {
+                continue;
+            }
+            if (!projectCandidate(candidate)) {
+                continue;
+            }
+            _probeCandidates.push_back(candidate);
         }
-
-        // Encode the cluster grid: [ ContentOffset - 16bits, Num Point LIghts - 8bits, Num Spot Lights - 8bits] 
-        _clusterGrid[i] = (uint32_t)((0xFF000000 & (numLightsSpot << 24)) | (0x00FF0000 & (numLightsPoint << 16)) | (0x0000FFFF & offset));
-
-
-        if (numLightsPoint) {
-            memcpy(_clusterContent.data() + indexOffset, clusterPoint.data(), numLightsPoint * sizeof(LightIndex));
-            indexOffset += numLightsPoint;
+        // by importance, the most important first, then the smallest first: the order a fragment blends them in,
+        // each taking the weight the ones before left (ReflectionProbe.slh); the least important go over the cap
+        std::sort(_probeCandidates.begin(), _probeCandidates.end(), [](const Candidate& a, const Candidate& b) {
+            if (a.probe->importance != b.probe->importance) {
+                return a.probe->importance > b.probe->importance;
+            }
+            return a.probe->getBoxVolume() < b.probe->getBoxVolume();
+        });
+        if ((int)_probeCandidates.size() > MAX_PROBES) {
+            _probeCandidates.resize(MAX_PROBES);
         }
-        if (numLightsSpot) {
-            memcpy(_clusterContent.data() + indexOffset, clusterSpot.data(), numLightsSpot * sizeof(LightIndex));
-            indexOffset += numLightsSpot;
+    }
+    const int numProbes = (int)_probeCandidates.size();
+    _numProbes = numProbes;
+    stats.numProbes = numProbes;
+
+    // 2. The list: sorted by where each light's depth range starts, so a bin's lights lie in a short run of it (which
+    // its header names), and no longer than the cap: the farthest-starting lights go
+    std::sort(_candidates.begin(), _candidates.end(), [](const Candidate& a, const Candidate& b) { return a.minZ < b.minZ; });
+    const int maxLights = std::min(getMaxLights(), MAX_LIGHTS);
+    if ((int)_candidates.size() > maxLights) {
+        _candidates.resize(maxLights);
+    }
+    const int numLights = (int)_candidates.size();
+    _numLights = numLights;
+    stats.numLights = numLights;
+
+    // 3. The layout: the words a tile or bin holds (one bit a light, then from the next whole word one a probe), the
+    // tile size (doubled from 16 px until every eye's tiles fit their block), the bins (as many as fit theirs, up to
+    // 1024, logarithmic from the near clip to the far: each holds the same ratio of depths)
+    const int probeBase = (numProbes > 0) ? ((numLights + 31) / 32) * 32 : 0;
+    const int wordsPerEntry = std::max(1, (std::max(numLights, probeBase + numProbes) + 31) / 32);
+    const int blockSize = gpu::Context::getMaxUniformBlockSize();
+    const int tileWordBudget = (blockSize > 0) ? std::min(TILE_WORDS, blockSize / 4) : TILE_WORDS;
+    int tileSize = MIN_TILE_SIZE;
+    glm::ivec2 tileCount;
+    for (;; tileSize *= 2) {
+        tileCount = (eyeSize + tileSize - 1) / tileSize;
+        if (tileCount.x * tileCount.y * numEyes * wordsPerEntry <= tileWordBudget || tileSize >= MAX_TILE_SIZE) {
+            break;
+        }
+    }
+    const int tilesPerEye = tileCount.x * tileCount.y;
+    const int binStride = wordsPerEntry + 2;   // two headers: the lights' and the probes'
+    const int binCount = std::max(1, std::min(MAX_BINS, BIN_WORDS / binStride));
+    const float binScale = (float)binCount / std::log2(farClip / nearClip);
+    const float binOffset = -std::log2(nearClip) * binScale;
+    auto binOf = [&](float depth) {
+        return glm::clamp((int)std::floor(std::log2(std::max(depth, nearClip)) * binScale + binOffset), 0, binCount - 1);
+    };
+    stats.tileSize = tileSize;
+    stats.tileCountX = tileCount.x;
+    stats.tileCountY = tileCount.y;
+    stats.binCount = binCount;
+    stats.wordsPerEntry = wordsPerEntry;
+
+    // 4. The bins: a light's (or probe's) bit in every bin its depth range crosses, and the bin's header widened to it
+    const int usedBinWords = binCount * binStride;
+    std::fill(_bins.begin(), _bins.begin() + usedBinWords, 0u);
+    for (int bin = 0; bin < binCount; bin++) {
+        _bins[bin * binStride] = EMPTY_BIN_HEADER;
+        _bins[bin * binStride + 1] = EMPTY_BIN_HEADER;
+    }
+    auto binCandidate = [&](const Candidate& candidate, int entry, int headerWord) {
+        const uint32_t bit = 1u << (entry & 31);
+        const int word = 2 + (entry >> 5);
+        const int lastBin = binOf(candidate.maxZ);
+        for (int bin = binOf(candidate.minZ); bin <= lastBin; bin++) {
+            uint32_t& header = _bins[bin * binStride + headerWord];
+            header = std::min(header & 0xFFFFu, (uint32_t)entry) | (std::max(header >> 16, (uint32_t)entry) << 16);
+            _bins[bin * binStride + word] |= bit;
+        }
+    };
+    for (int i = 0; i < numLights; i++) {
+        binCandidate(_candidates[i], i, 0);
+    }
+    for (int i = 0; i < numProbes; i++) {
+        binCandidate(_probeCandidates[i], probeBase + i, 1);
+    }
+
+    // 5. The tiles, eye by eye: a light's rows and columns from its screen bounds, and within them, row by row, the
+    // columns its sphere reaches once cut down to the row's nearer boundary plane (the slice of the sphere a row sees
+    // is never wider on screen than that circle)
+    const int usedTileWords = tilesPerEye * numEyes * wordsPerEntry;
+    std::fill(_tiles.begin(), _tiles.begin() + usedTileWords, 0u);
+    for (int eye = 0; eye < numEyes; eye++) {
+        const auto& projection = eyeProjections[eye];
+        const float p11 = projection[1][1];
+        const float p21 = projection[2][1];
+
+        // the planes through the eye along the tiles' boundaries, by their ndc
+        _columnPlanes.resize(tileCount.x + 1);
+        _rowPlanes.resize(tileCount.y + 1);
+        for (int k = 0; k <= tileCount.x; k++) {
+            _columnPlanes[k] = columnPlane(projection, 2.0f * (float)(k * tileSize) / (float)eyeSize.x - 1.0f);
+        }
+        for (int j = 0; j <= tileCount.y; j++) {
+            _rowPlanes[j] = rowPlane(projection, 2.0f * (float)(j * tileSize) / (float)eyeSize.y - 1.0f);
+        }
+        auto tileOfNdc = [&](float ndc, int axis) {
+            return (int)std::floor((ndc + 1.0f) * 0.5f * (float)eyeSize[axis] / (float)tileSize);
+        };
+
+        auto scanTiles = [&](const Candidate& candidate, int entry) {
+            if (!candidate.visible[eye]) {
+                return;
+            }
+            const auto& bounds = candidate.ndcBounds[eye];
+            const int xMin = glm::clamp(tileOfNdc(bounds.x, 0), 0, tileCount.x - 1);
+            const int xMax = glm::clamp(tileOfNdc(bounds.y, 0), 0, tileCount.x - 1);
+            const int yMin = glm::clamp(tileOfNdc(bounds.z, 1), 0, tileCount.y - 1);
+            const int yMax = glm::clamp(tileOfNdc(bounds.w, 1), 0, tileCount.y - 1);
+
+            // the centre's row (a centre at or behind the eye taken as if in front, as the frustum grid did)
+            const glm::vec3 center = candidate.eyeCenter[eye];
+            const float centerDepth = std::max(std::abs(center.z), 1.0e-4f);
+            const int centerY = glm::clamp(tileOfNdc(projectDirection(center.y, centerDepth, p11, p21), 1), yMin, yMax);
+            const glm::vec4 sphere(center, candidate.radius);
+            const uint32_t bit = 1u << (entry & 31);
+            const int word = entry >> 5;
+
+            for (int y = yMin; y <= yMax; y++) {
+                glm::vec4 rowSphere = sphere;
+                if (y != centerY) {
+                    const glm::vec4 plane = (y < centerY) ? _rowPlanes[y + 1] : -_rowPlanes[y];
+                    if (!reduceSphereToPlane(sphere, plane, rowSphere)) {
+                        continue;
+                    }
+                }
+                const glm::vec3 rowCenter(rowSphere);
+                const float rowRadius = rowSphere.w;
+                // the first column the circle is not entirely right of (its right boundary), the last it is not
+                // entirely left of (its left boundary)
+                int x0 = xMin;
+                for (; x0 < xMax; x0++) {
+                    if (distanceToPlane(rowCenter, _columnPlanes[x0 + 1]) - rowRadius <= 0.0f) {
+                        break;
+                    }
+                }
+                int x1 = xMax;
+                for (; x1 > x0; x1--) {
+                    if (distanceToPlane(rowCenter, _columnPlanes[x1]) + rowRadius >= 0.0f) {
+                        break;
+                    }
+                }
+                uint32_t* row = _tiles.data() + (eye * tilesPerEye + y * tileCount.x) * wordsPerEntry + word;
+                for (int x = x0; x <= x1; x++) {
+                    row[x * wordsPerEntry] |= bit;
+                }
+                stats.numTileBits += x1 - x0 + 1;
+            }
+        };
+        for (int i = 0; i < numLights; i++) {
+            scanTiles(_candidates[i], i);
+        }
+        for (int i = 0; i < numProbes; i++) {
+            scanTiles(_probeCandidates[i], probeBase + i);
         }
     }
 
-    // update the buffers
-    _clusterGridBuffer._buffer->setData(_clusterGridBuffer._size, (gpu::Byte*) _clusterGrid.data());
-    _clusterContentBuffer._buffer->setSubData(0, indexOffset * sizeof(LightIndex), (gpu::Byte*) _clusterContent.data());
-    
-    return glm::ivec3(numLightsIn, numClusteredLights, numClusterTouched);
+    // 6. To the GPU: the parameters with the list, and the words in use of the tiles and the bins
+    auto& params = _paramsBuffer.edit();
+    params.tileInfo = glm::vec4(1.0f / (float)tileSize, 1.0f / (float)tileSize, (float)tileCount.x, (float)tileCount.y);
+    params.binInfo = glm::vec4(binScale, binOffset, (float)(binCount - 1), 0.0f);
+    params.counts = glm::ivec4(numLights, wordsPerEntry, tilesPerEye, stereo ? 1 : 0);
+    params.probeCounts = glm::ivec4(probeBase, numProbes, _probeStage ? _probeStage->getArrayNumMips() : 0, 0);
+    params.viewports[0] = glm::vec4(eyeViewports[0]);
+    params.viewports[1] = glm::vec4(eyeViewports[1]);
+    params.worldToEye = worldToEye;
+    for (int i = 0; i < numLights; i++) {
+        params.lightIndices[i >> 2][i & 3] = _candidates[i].id;
+    }
+    for (int i = 0; i < numProbes; i++) {
+        const auto& probe = *_probeCandidates[i].probe;
+        auto& entry = params.probes[i];
+        // the box in the probe's frame, the probe at the origin; world to that frame = turn back, after moving back
+        const glm::vec3 halfSize = 0.5f * glm::max(probe.boxSize, glm::vec3(0.0f));
+        entry.position = glm::vec4(probe.position, (float)_probeCandidates[i].layer);
+        entry.boxMin = glm::vec4(probe.boxOffset - halfSize, std::max(probe.blendDistance, 1.0e-4f));
+        entry.boxMax = glm::vec4(probe.boxOffset + halfSize, probe.boxProjection ? 1.0f : 0.0f);
+        entry.params = glm::vec4(probe.intensity, 0.0f, 0.0f, 0.0f);
+        entry.worldToProbe = glm::toMat4(glm::inverse(probe.orientation)) * glm::translate(glm::mat4(1.0f), -probe.position);
+    }
+    _tilesBuffer._buffer->setSubData(0, usedTileWords * sizeof(uint32_t), (const gpu::Byte*)_tiles.data());
+    _binsBuffer._buffer->setSubData(0, usedBinWords * sizeof(uint32_t), (const gpu::Byte*)_bins.data());
+
+    return stats;
 }
 
 
@@ -535,44 +472,50 @@ LightClusteringPass::LightClusteringPass() {
 
 
 void LightClusteringPass::configure(const Config& config) {
-    if (_lightClusters) {
-        _lightClusters->setRangeNearFar(config.rangeNear, config.rangeFar);
-        _lightClusters->setDimensions(glm::uvec3(config.dimX, config.dimY, config.dimZ));
-    }
-    
     _freeze = config.freeze;
 }
 
 void LightClusteringPass::run(const render::RenderContextPointer& renderContext, const Input& inputs, Output& output) {
     auto args = renderContext->args;
-    
-    auto deferredTransform = inputs.get0();
+
     auto lightingModel = inputs.get1();
     auto lightFrame = inputs.get2();
-    auto surfaceGeometryFramebuffer = inputs.get3();
 
-    // first update the Grid with the new frustum
-    if (!_freeze) {
-        _lightClusters->updateFrustum(args->getViewFrustum());
-    }
-    
-    // From the LightStage and the current frame, update the light cluster Grid
     auto lightStage = renderContext->_scene->getStage<LightStage>();
     assert(lightStage);
     _lightClusters->updateLightStage(lightStage);
-    _lightClusters->updateLightFrame(lightFrame, lightingModel->isPointLightEnabled(), lightingModel->isSpotLightEnabled());
-    
-    auto clusteringStats = _lightClusters->updateClusters();
-
-    output = _lightClusters;
 
     auto config = std::static_pointer_cast<Config>(renderContext->jobConfig);
     config->numSceneLights = lightStage->getNumLights();
     config->numFreeSceneLights = lightStage->getNumFreeLights();
     config->numAllocatedSceneLights = lightStage->getNumAllocatedLights();
-    config->setNumInputLights(clusteringStats.x);
-    config->setNumClusteredLights(clusteringStats.y);
-    config->setNumClusteredLightReferences(clusteringStats.z);
+
+    // frozen, the last build stands while the view moves on
+    if (!_freeze) {
+        // the scene's reflection probes and their cube map array, brought up to date first
+        auto probeStage = renderContext->_scene->getStage<ReflectionProbeStage>();
+        if (probeStage) {
+            probeStage->updateArray();
+        }
+        _lightClusters->updateFrustum(args->getViewFrustum());
+        _lightClusters->updateLightFrame(lightFrame, lightingModel->isPointLightEnabled(), lightingModel->isSpotLightEnabled());
+        _lightClusters->updateReflectionProbes(probeStage);
+        const auto stats = _lightClusters->updateClusters(args);
+
+        config->numInputLights = stats.numInputLights;
+        config->numClusteredLights = stats.numLights;
+        config->numClusteredLightReferences = stats.numTileBits;
+        config->numInputProbes = stats.numInputProbes;
+        config->numClusteredProbes = stats.numProbes;
+        config->maxLights = LightClusters::getMaxLights();
+        config->tileSize = stats.tileSize;
+        config->tileCountX = stats.tileCountX;
+        config->tileCountY = stats.tileCountY;
+        config->binCount = stats.binCount;
+        config->wordsPerEntry = stats.wordsPerEntry;
+    }
+
+    output = _lightClusters;
 }
 
 DebugLightClusters::DebugLightClusters() {
@@ -581,26 +524,8 @@ DebugLightClusters::DebugLightClusters() {
 
 
 void DebugLightClusters::configure(const Config& config) {
-    doDrawGrid = config.doDrawGrid;
     doDrawClusterFromDepth = config.doDrawClusterFromDepth;
     doDrawContent = config.doDrawContent;
-
-}
-
-const gpu::PipelinePointer DebugLightClusters::getDrawClusterGridPipeline() {
-    if (!_drawClusterGrid) {
-        gpu::ShaderPointer program = gpu::Shader::createProgram(shader::render_utils::program::lightClusters_drawGrid);
-        auto state = std::make_shared<gpu::State>();
-
-        state->setDepthTest(true, false, gpu::LESS_EQUAL);
-
-        // Blend on transparent
-        state->setBlendFunction(true, gpu::State::SRC_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::INV_SRC_ALPHA);
-
-        // Good to go add the brand new pipeline
-        _drawClusterGrid = gpu::Pipeline::create(program, state);
-    }
-    return _drawClusterGrid;
 }
 
 const gpu::PipelinePointer DebugLightClusters::getDrawClusterFromDepthPipeline() {
@@ -633,95 +558,46 @@ const gpu::PipelinePointer DebugLightClusters::getDrawClusterContentPipeline() {
 
 
 void DebugLightClusters::run(const render::RenderContextPointer& renderContext, const Inputs& inputs) {
-    if (!(doDrawClusterFromDepth || doDrawContent || doDrawGrid)) {
+    if (!(doDrawClusterFromDepth || doDrawContent)) {
         return;
     }
 
     auto deferredTransform = inputs.get0();
-    auto lightingModel = inputs.get1();
     auto linearDepthTarget = inputs.get2();
     auto lightClusters = inputs.get3();
+    if (!lightClusters || !lightClusters->_lightStage || !linearDepthTarget) {
+        return;
+    }
 
     auto args = renderContext->args;
 
-    
-    gpu::doInBatch(nullptr, args->_context, [&](gpu::Batch& batch) { 
+    gpu::doInBatch("DebugLightClusters::run", args->_context, [&](gpu::Batch& batch) {
         batch.enableStereo(false);
-
-        // Assign the camera transform
         batch.setViewportTransform(args->_viewport);
-        glm::mat4 projMat;
-        Transform viewMat;
-        args->getViewFrustum().evalProjectionMatrix(projMat);
-        args->getViewFrustum().evalViewTransform(viewMat);
-        batch.setProjectionTransform(projMat);
-        batch.setViewTransform(viewMat, true);
+        batch.setStateScissorRect(args->_viewport);
 
-
-        // Then the actual ClusterGrid attributes
-        batch.setModelTransform(Transform());
-
-        // Bind the Light CLuster data strucutre
-        // FIXME consolidate code with DeferredLightingEffect logic that does the same thing
+        // the light array and the culling, as the local-light pass binds them
         batch.setUniformBuffer(gr::Buffer::Light, lightClusters->_lightStage->getLightArrayBuffer());
-        batch.setUniformBuffer(ru::Buffer::LightClusterFrustumGrid, lightClusters->_frustumGridBuffer);
-        batch.setUniformBuffer(ru::Buffer::LightClusterGrid, lightClusters->_clusterGridBuffer);
-        batch.setUniformBuffer(ru::Buffer::LightClusterContent, lightClusters->_clusterContentBuffer);
-
-
+        batch.setUniformBuffer(ru::Buffer::LightClusterParams, lightClusters->_paramsBuffer);
+        batch.setUniformBuffer(ru::Buffer::LightClusterTiles, lightClusters->_tilesBuffer);
+        batch.setUniformBuffer(ru::Buffer::LightClusterBins, lightClusters->_binsBuffer);
+        batch.setUniformBuffer(ru::Buffer::DeferredFrameTransform, deferredTransform->getFrameTransformBuffer());
+        batch.setResourceTexture(ru::Texture::DeferredLinearZEye, linearDepthTarget->getLinearDepthTexture());
 
         if (doDrawClusterFromDepth) {
             batch.setPipeline(getDrawClusterFromDepthPipeline());
-            batch.setUniformBuffer(ru::Buffer::DeferredFrameTransform, deferredTransform->getFrameTransformBuffer());
-
-            if (linearDepthTarget) {
-                batch.setResourceTexture(ru::Texture::DeferredLinearZEye, linearDepthTarget->getLinearDepthTexture());
-            }
-
             batch.draw(gpu::TRIANGLE_STRIP, 4, 0);
-              
-            batch.setResourceTexture(ru::Texture::DeferredLinearZEye, nullptr);
-            batch.setUniformBuffer(ru::Buffer::DeferredFrameTransform, nullptr);
         }
-
         if (doDrawContent) {
-
-            // bind the one gpu::Pipeline we need
             batch.setPipeline(getDrawClusterContentPipeline());
-            batch.setUniformBuffer(ru::Buffer::DeferredFrameTransform, deferredTransform->getFrameTransformBuffer());
-
-            if (linearDepthTarget) {
-                batch.setResourceTexture(ru::Texture::DeferredLinearZEye, linearDepthTarget->getLinearDepthTexture());
-            }
-
             batch.draw(gpu::TRIANGLE_STRIP, 4, 0);
-              
-            batch.setResourceTexture(ru::Texture::DeferredLinearZEye, nullptr);
-            batch.setUniformBuffer(ru::Buffer::DeferredFrameTransform, nullptr);
-        }
-    });
-
-
-
-    gpu::doInBatch(nullptr, args->_context, [&](gpu::Batch& batch) { 
-        auto& drawGridAndCleanBatch = batch;
-        if (doDrawGrid) {
-            // bind the one gpu::Pipeline we need
-            drawGridAndCleanBatch.setPipeline(getDrawClusterGridPipeline());
-
-            auto dims = lightClusters->_frustumGridBuffer->dims;
-            glm::ivec3 summedDims(dims.x * dims.y * dims.z, dims.x * dims.y, dims.x);
-            drawGridAndCleanBatch.drawInstanced(summedDims.x, gpu::LINES, 24, 0);
         }
 
-        drawGridAndCleanBatch.setUniformBuffer(gr::Buffer::Light, nullptr);
-        drawGridAndCleanBatch.setUniformBuffer(ru::Buffer::LightClusterFrustumGrid, nullptr);
-        drawGridAndCleanBatch.setUniformBuffer(ru::Buffer::LightClusterGrid, nullptr);
-        drawGridAndCleanBatch.setUniformBuffer(ru::Buffer::LightClusterContent, nullptr);
-
-        drawGridAndCleanBatch.setResourceTexture(ru::Texture::DeferredColor, nullptr);
-        drawGridAndCleanBatch.setResourceTexture(ru::Texture::DeferredNormal, nullptr);
-        drawGridAndCleanBatch.setResourceTexture(ru::Texture::DeferredSpecular, nullptr);
-        drawGridAndCleanBatch.setResourceTexture(ru::Texture::DeferredLinearZEye, nullptr);
+        batch.setResourceTexture(ru::Texture::DeferredLinearZEye, nullptr);
+        batch.setUniformBuffer(ru::Buffer::DeferredFrameTransform, nullptr);
+        batch.setUniformBuffer(gr::Buffer::Light, nullptr);
+        batch.setUniformBuffer(ru::Buffer::LightClusterParams, nullptr);
+        batch.setUniformBuffer(ru::Buffer::LightClusterTiles, nullptr);
+        batch.setUniformBuffer(ru::Buffer::LightClusterBins, nullptr);
     });
 }

@@ -85,7 +85,7 @@ void EditorGridRenderData::ensurePipelines() {
     auto makeState = [] {
         auto state = std::make_shared<gpu::State>();
         // occluded by the world, never occludes it
-        state->setDepthTest(true, false, gpu::LESS_EQUAL);
+        state->setDepthTest(true, false, gpu::GREATER_EQUAL);
         state->setBlendFunction(true,
             gpu::State::SRC_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::INV_SRC_ALPHA,
             gpu::State::FACTOR_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::ONE);

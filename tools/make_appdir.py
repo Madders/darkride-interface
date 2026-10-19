@@ -232,6 +232,9 @@ elif program == "server":
 		for p in deferred_plugins:
 			run(build_dir, "rm -f server.AppDir/usr/bin/plugins/" + p)
 	run(build_dir, "cp -r domain-server/resources server.AppDir/usr/bin")
+	# the assignment client's resources: the JavaScript guest of the WebAssembly script engine (resources/wasm), when built with one
+	if os.path.isdir(os.path.join(build_dir, "assignment-client/resources")):
+		run(build_dir, "cp -r assignment-client/resources server.AppDir/usr/bin")
 
 	print("-- Creating server.AppDir")
 

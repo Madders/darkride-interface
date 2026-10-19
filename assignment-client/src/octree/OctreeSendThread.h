@@ -58,6 +58,7 @@ protected:
 
     OctreePacketData _packetData;
     QWeakPointer<Node> _node;
+    int _packetsSentSinceMark { 0 };   // diagnostics: packets sent since the subclass last reset it
     OctreeServer* _myServer { nullptr };
     QUuid _nodeUuid;
     
@@ -69,6 +70,10 @@ private:
 
     virtual bool hasSomethingToSend(OctreeQueryNode* nodeData) = 0;
     virtual bool shouldStartNewTraversal(OctreeQueryNode* nodeData, bool viewFrustumChanged) = 0;
+    virtual size_t queuedEntityCount() const { return 0; }
+    void logSendStats(const SharedNodePointer& node, OctreeQueryNode* nodeData, int packetsSent);
+    quint64 _lastStatsLogTime { 0 };
+    int _packetsSinceLog { 0 };
 
     int _truePacketsSent { 0 }; // available for debug stats
     int _trueBytesSent { 0 }; // available for debug stats

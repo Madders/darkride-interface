@@ -52,6 +52,18 @@ void Chunk::setVoxels(std::vector<Voxel> voxels) {
     compact();
 }
 
+bool Chunk::operator==(const Chunk& other) const {
+    if (isUniform() && other.isUniform()) {
+        return _uniform == other._uniform;
+    }
+    if (!isUniform() && !other.isUniform()) {
+        return _voxels == other._voxels;
+    }
+    const Voxel& value = isUniform() ? _uniform : other._uniform;
+    const std::vector<Voxel>& voxels = isUniform() ? other._voxels : _voxels;
+    return std::all_of(voxels.begin(), voxels.end(), [&](const Voxel& voxel) { return voxel == value; });
+}
+
 void Chunk::expand() {
     _voxels.assign(CHUNK_VOXEL_COUNT, _uniform);
 }

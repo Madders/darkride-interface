@@ -31,10 +31,12 @@ static void staticInit() {
 const std::string GL45Backend::GL45_VERSION { "GL45" };
 
 GL45Backend::GL45Backend(bool syncCache) : Parent(syncCache) {
+    Backend::depthClipZeroToOne = true;
     staticInit();
 }
 
 GL45Backend::GL45Backend() : Parent() {
+    Backend::depthClipZeroToOne = true;
     staticInit();
 }
 

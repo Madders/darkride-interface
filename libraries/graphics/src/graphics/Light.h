@@ -172,6 +172,16 @@ public:
 
     void setTransform(const glm::mat4& transform);
 
+    // The zone's probe volume (LIGHTMAPS.md step 4): a 3D texture of L2 spherical harmonics on a uniform grid of
+    // probes in world space, which the shaders sample by world position in place of the ambient sphere for the
+    // diffuse term (LightAmbient.slh). origin is the world position of probe (0, 0, 0), spacing the distance between
+    // probes along each axis, dims the probes per axis; the texture is dims.x by 9 * dims.y by dims.z texels, the
+    // nine coefficients' blocks stacked along y (L00, L1m1, L10, L11, L2m2, L2m1, L20, L21, L22); intensity scales
+    // what it gives, in place of the ambient intensity
+    void setProbeVolume(const gpu::TexturePointer& volume, const glm::vec3& origin, const glm::vec3& spacing, const glm::uvec3& dims, float intensity);
+    void clearProbeVolume();
+    const gpu::TexturePointer& getProbeVolume() const { return _probeVolume; }
+
     // Light Schema
     class LightSchema {
     public:
@@ -188,6 +198,12 @@ public:
 
         gpu::SphericalHarmonics ambientSphere;
         glm::mat4 transform;
+
+        // the probe volume: its origin and, in w, its intensity; 1 / spacing and, in w, 1 when there is one; the
+        // probes per axis
+        glm::vec4 volumeOrigin { 0.0f };
+        glm::vec4 volumeInvSpacing { 0.0f };
+        glm::vec4 volumeDims { 0.0f };
     };
 
     using LightSchemaBuffer = gpu::StructBuffer<LightSchema>;
@@ -206,6 +222,7 @@ protected:
     Transform _transform;
 
     gpu::TexturePointer _ambientMap;
+    gpu::TexturePointer _probeVolume;
 
     Type _type { SUN };
     float _spotCos { -1.0f }; // stored here to be able to reset the spot angle when turning the type spot on/off

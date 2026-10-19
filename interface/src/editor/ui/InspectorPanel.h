@@ -25,6 +25,7 @@ class QLabel;
 class QScrollArea;
 class QVBoxLayout;
 class QWidget;
+class EditorTerrain;
 class PropertyEditor;
 struct PropertySpec;
 
@@ -42,8 +43,15 @@ public:
     void refreshValues(const QVector<EntityItemProperties>& snapshots);
     // the world cannot be edited: fields greyed out, with a note at the top saying why
     void setReadOnly(bool readOnly, const QString& reason);
+    // the Terrain tool, which a Terrain's Layers section reads and sets the layers through (they live in the
+    // terrain file on this client, not in a property); set once, before any terrain is shown
+    void setTerrainEditor(EditorTerrain* terrain) { _terrainEditor = terrain; }
 
 signals:
+    // a Terrain's Layers section selected a layer: the one the Paint tools paint
+    void terrainLayerChosen(int slot);
+    // a Terrain's Layers section showed its list again: names or order may have changed
+    void terrainLayersShown();
     void editBegan(const QString& key);
     void liveEdit(const QString& key, const QVariant& value);
     void committed(const QString& key, const QVariant& value);
@@ -82,6 +90,7 @@ private:
     QHash<QString, Row> _rows;
     QHash<QString, QWidget*> _sections;     // each section's header and body, by id
     QHash<QString, bool> _collapsed;
+    EditorTerrain* _terrainEditor { nullptr };
 };
 
 #endif // hifi_InspectorPanel_h

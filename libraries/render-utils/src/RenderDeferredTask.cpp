@@ -101,6 +101,8 @@ void RenderDeferredTask::configure(const Config& config) {
 }
 
 void RenderDeferredTask::build(JobModel& task, const render::Varying& input, render::Varying& output) {
+    task.addJob<SetRenderMethod>("SetRenderMethodTask", render::Args::DEFERRED);
+
     auto fadeEffect = DependencyManager::get<FadeEffect>();
     // Prepare the ShapePipelines
     ShapePlumberPointer shapePlumber = std::make_shared<ShapePlumber>();
@@ -196,6 +198,11 @@ void RenderDeferredTask::build(JobModel& task, const render::Varying& input, ren
     const auto lightClusteringPassInputs = LightClusteringPass::Input(deferredFrameTransform, lightingModel, lightFrame, linearDepthTarget).asVarying();
     const auto lightClusters = task.addJob<LightClusteringPass>("LightClustering", lightClusteringPassInputs);
 
+    // The clusters and the shadows go to the forward pipelines' batch setter too: the in-front and HUD layers of this
+    // frame draw with the forward pipelines, which light with them
+    const auto frameLightingInputs = SetFrameLighting::Inputs(lightClusters, shadowFrame, lightingModel).asVarying();
+    task.addJob<SetFrameLighting>("SetFrameLighting", frameLightingInputs);
+
     // DeferredBuffer is complete, now let's shade it into the LightingBuffer
     const auto extraDeferredBuffer = RenderDeferred::ExtraDeferredBuffer(surfaceGeometryFramebuffer, ambientOcclusionFramebuffer, scatteringResource).asVarying();
     const auto deferredLightingInputs = RenderDeferred::Inputs(deferredFrameTransform, deferredFramebuffer, extraDeferredBuffer, lightingModel, lightClusters, lightFrame, shadowFrame, hazeFrame).asVarying();
@@ -213,7 +220,7 @@ void RenderDeferredTask::build(JobModel& task, const render::Varying& input, ren
     task.addJob<RenderTransparentDeferred>("DrawTransparentDeferred", transparentsInputs, shapePlumber);
 
     // Highlight 
-    const auto outlineInputs = DrawHighlightTask::Inputs(items, deferredFramebuffer, lightingFramebuffer, deferredFrameTransform, jitter).asVarying();
+    const auto outlineInputs = DrawHighlightTask::Inputs(items, lightingFramebuffer, deferredFrameTransform, jitter).asVarying();
     task.addJob<DrawHighlightTask>("DrawHighlight", outlineInputs);
 
     // Layered Over (in front)
@@ -420,7 +427,7 @@ gpu::FramebufferPointer PreparePrimaryFramebuffer::createFramebuffer(const char*
 
     framebuffer->setRenderBuffer(0, primaryColorTexture);
 
-    auto depthFormat = gpu::Element(gpu::SCALAR, gpu::UINT32, gpu::DEPTH_STENCIL); // Depth24_Stencil8 texel format
+    auto depthFormat = gpu::Element::DEPTH32F_STENCIL8; // reversed-Z float depth, see gpu::Backend::reversedZProjection
     auto primaryDepthTexture = gpu::Texture::createRenderBuffer(depthFormat, frameSize.x, frameSize.y, gpu::Texture::SINGLE_MIP, defaultSampler);
 
     framebuffer->setDepthStencilBuffer(primaryDepthTexture, depthFormat);

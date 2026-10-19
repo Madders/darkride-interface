@@ -243,7 +243,7 @@ Backend::TransformCamera Backend::TransformCamera::getEyeCamera(int eye, const S
     } else {
         // FIXME: If "skybox" the ipd is set to 0 for now, let s try to propose a better solution for this in the future
     }
-    result._projection = _stereo._eyeProjections[eye];
+    result._projection = reversedZProjection(_stereo._eyeProjections[eye]);
     normalizedJitter.x *= 2.0f;
     result._projection[2][0] += normalizedJitter.x;
     result._projection[2][1] += normalizedJitter.y;
@@ -256,15 +256,33 @@ Backend::TransformCamera Backend::TransformCamera::getEyeCamera(int eye, const S
 
 Backend::TransformCamera Backend::TransformCamera::getMonoCamera(const Transform& xformView, Vec2 normalizedJitter) const {
     TransformCamera result = *this;
+    result._projection = reversedZProjection(_projection);
     result._projection[2][0] += normalizedJitter.x;
     result._projection[2][1] += normalizedJitter.y;
     result.recomputeDerived(xformView);
     return result;
 }
 
+bool Backend::depthClipZeroToOne{ false };
+
+Mat4 Backend::reversedZProjection(const Mat4& projection) {
+    // the z row alone changes: negated for -1..1 clip depth; mapped to 0.5 - 0.5 z (near +1 -> 1, far -1 -> 0) for
+    // 0..1. In doubles: the 0..1 map subtracts two near-equal numbers for a perspective's [2][2].
+    glm::dmat4 reverse(1.0);
+    if (depthClipZeroToOne) {
+        reverse[2][2] = -0.5;
+        reverse[3][2] = 0.5;
+    } else {
+        reverse[2][2] = -1.0;
+    }
+    return Mat4(reverse * glm::dmat4(projection));
+}
+
 // Counters for Buffer and Texture usage in GPU/Context
 
 ContextMetricSize  Backend::freeGPUMemSize;
+int Backend::maxSamples{ 0 };
+int Backend::maxUniformBlockSize{ 0 };
 
 ContextMetricCount Backend::bufferCount;
 ContextMetricSize  Backend::bufferGPUMemSize;
@@ -284,6 +302,18 @@ ContextMetricSize  Backend::texturePendingGPUTransferMemSize;
 
 ContextMetricSize  Backend::textureResourcePopulatedGPUMemSize;
 ContextMetricSize  Backend::textureResourceIdealGPUMemSize;
+
+int Context::getMaxSamples() {
+    return Backend::maxSamples;
+}
+
+int Context::getMaxUniformBlockSize() {
+    return Backend::maxUniformBlockSize;
+}
+
+bool Context::isDepthClipZeroToOne() {
+    return Backend::depthClipZeroToOne;
+}
 
 Size Context::getFreeGPUMemSize() {
     return Backend::freeGPUMemSize.getValue();

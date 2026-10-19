@@ -48,7 +48,7 @@ void main(void) {
     }
 
     <$fetchClusterInfo(fragWorldPos)$>;
-    if (!hasLocalLights(numLights, clusterPos, dims)) {
+    if (!hasLocalLights(cluster)) {
         discard;
     }
 
@@ -64,7 +64,7 @@ void main(void) {
     vec3 fragEyeDir = normalize(fragEyeVector.xyz);
     SurfaceData surface = initSurfaceData(frag.roughness, frag.normal, fragEyeDir);
 
-    _fragColor = evalLocalLighting(cluster, numLights, fragWorldPos.xyz, fragWorldPosDx, fragWorldPosDy, surface, 
+    _fragColor = evalLocalLighting(cluster, fragWorldPos.xyz, fragWorldPosDx, fragWorldPosDy, surface, 
                                    frag.metallic, frag.fresnel, frag.albedo, frag.scattering, 
                                    midNormalCurvature, lowNormalCurvature, 1.0);
 

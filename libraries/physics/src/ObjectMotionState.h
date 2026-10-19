@@ -15,6 +15,7 @@
 #include <glm/glm.hpp>
 #include <QSet>
 #include <QVector>
+#include <vector>
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/Body/Body.h>
@@ -27,6 +28,8 @@
 
 #include "ContactInfo.h"
 #include "ShapeManager.h"
+
+namespace JPH { class SubShapeID; }
 
 namespace JPH {
     class BodyInterface;
@@ -113,10 +116,23 @@ public:
     static uint32_t getWorldSimulationStep();
 
     // How far the present is past the last substep (less than one substep). The simulation runs in fixed
-    // substeps and is read once per rendered frame, so the results are read this much ahead, along each
-    // body's velocity; otherwise everything that moves would step by one or two substeps per frame.
+    // substeps and is read once per rendered frame; what is presented is each body's pose blended between
+    // the start and the end of its last substep by this fraction of a substep (getPresentedBodyTransform),
+    // so motion is even at any display rate and never ahead of what was simulated. The presented pose is
+    // thus one substep behind the present (getPresentationLag). A node that presents nothing (the physics
+    // server) turns the blend off and reads the last substep itself.
     static void setLeftoverTime(float seconds);
     static float getLeftoverTime();
+    static void setInterpolatePresentation(bool interpolate);
+    static bool getInterpolatePresentation();
+    static float getPresentationLag();      // seconds the presented pose is behind the present
+    static float getPresentationAlpha();    // where between the last substep's start and end the presentation falls
+
+    // The wall-clock time (usec) of the substep being simulated, set by the engine before each substep: the paced
+    // clock's estimate of when this substep's boundary falls. A state stamped with it (a train's, PHYSICS.md 4.7)
+    // can be run on to another node's substep exactly.
+    static void setSubstepTime(uint64_t usecs);
+    static uint64_t getSubstepTime();
 
     // Moving reference frames (PHYSICS.md 4.1), for any object with a parent chain: entities and avatars.
     // The nearest ancestor that is a frame; null when there is none.
@@ -124,7 +140,7 @@ public:
     // The transform and velocities of the object's parent in the coordinates of the object's frame: the chain
     // from the parent up to (not including) the frame, composed. False when the object has no frame.
     static bool getParentTransformInFrame(const SpatiallyNestablePointer& object, Transform& transform,
-                                          glm::vec3& linearVelocity, glm::vec3& angularVelocity);
+                                          glm::vec3& linearVelocity, glm::vec3& angularVelocity, bool asSimulated = false);
     // The world transform of the object's frame, with unit scale, for taking world-space poses into the frame.
     // False when the object has no frame.
     static bool getFrameTransform(const SpatiallyNestablePointer& object, Transform& frameTransform);
@@ -168,6 +184,23 @@ public:
 
     virtual bool needsNewShape() const { return _shape == nullptr || getIncomingDirtyFlags() & Simulation::DIRTY_SHAPE; }
     const JPH::Shape* getShape() const { return _shape; }
+
+    // The interior copy (round 8). A frame's interior, the static bodies in its own world, has no collision in the
+    // parent world, where its hull body is: whoever walks in from outside passes through the walls until the frame's
+    // world receives them and shoves them out. So the hull body wears a compound shape: the frame's own shape at the
+    // origin plus a copy of each interior part at its local pose (PhysicsEngine::refreshFrameInteriors). The copies
+    // add collision, not mass: the body's mass and inertia stay those of the own shape. Null clears it.
+    void setInteriorShape(const JPH::Shape* compound, std::vector<ObjectMotionState*>&& parts);
+    const JPH::Shape* getInteriorShape() const { return _interiorShape.GetPtr(); }
+    // the interior part a contact's sub-shape lies in, or null when it is the own shape (or there is no copy)
+    ObjectMotionState* interiorPartAt(const JPH::SubShapeID& subShapeID) const;
+    // where the centre of mass is, from the shape's origin (a vehicle's spec, round 6); zero puts it back
+    void setCenterOfMassOffset(const glm::vec3& offset);
+    const glm::vec3& getCenterOfMassOffset() const { return _centerOfMassOffset; }
+    // The shape the body wears: the interior compound or the own shape, inside an offset-centre-of-mass shape when the
+    // centre is moved; and the mass properties of the own shape (centre offset included), unscaled.
+    const JPH::Shape* getBodyShape() const { return _bodyShape ? _bodyShape.GetPtr() : _shape; }
+    JPH::MassProperties getOwnMassProperties() const;
     JPH::Body* getBody() const { return _body; }
     JPH::BodyID getBodyID() const;
     bool isInPhysicsSimulation() const { return _body != nullptr; }
@@ -180,9 +213,14 @@ public:
     virtual QUuid getFrameID() const { return QUuid(); }
     // true when this object is itself a frame, whose own interior is a world of its own
     virtual bool isFrame() const { return false; }
-    // For a frame: its transform and velocities in the world it moves in (its parent's, the domain for an
-    // unnested frame), from the object's own record (the entity), which is what the renderer composes against too.
-    bool getFrameTransformInDomain(glm::vec3& position, glm::quat& rotation, glm::vec3& linearVelocity, glm::vec3& angularVelocity) const;
+    // For a frame: its transform and velocities in the domain, composed through its frame ancestors when it is nested
+    // (PHYSICS.md 4.10), from the objects' own records (the entities), which is what the renderer composes against too.
+    // asSimulated: the frame's body (where the substep left it) rather than its record (the presentation, a
+    // substep behind), for what runs inside the step
+    virtual bool getFrameTransformInDomain(glm::vec3& position, glm::quat& rotation, glm::vec3& linearVelocity, glm::vec3& angularVelocity, bool asSimulated = false) const;
+    // For a frame: how many frames it is nested in (0 in the domain itself). Membership prefers the deepest frame
+    // whose volume holds a point: a car on a ship's deck over the ship.
+    virtual int getFrameDepth() const { return 0; }
     // For a frame: the box, in the frame's coordinates, inside which something belongs to the frame.
     virtual bool getFrameVolume(glm::vec3& minCorner, glm::vec3& maxCorner) const { return false; }
 
@@ -223,6 +261,11 @@ public:
     // places the body outright; actions that hold an object use this every substep.
     void setBodyTransform(const glm::vec3& position, const glm::quat& rotation, bool activate);
     void getBodyTransform(glm::vec3& position, glm::quat& rotation) const;
+    // the body's pose before its substep, kept for the presentation (PhysicsWorld::stepOnce takes it)
+    void rememberSubstepStart();
+    void forgetSubstepStart() { _substepStartStep = 0; }
+    // the body's pose as presented this frame: between the start and the end of its last substep (getLeftoverTime)
+    void getPresentedBodyTransform(glm::vec3& position, glm::quat& rotation) const;
 
     bool hasInternalKinematicChanges() const { return _hasInternalKinematicChanges; }
 
@@ -259,16 +302,24 @@ protected:
     MotionStateType _type { MOTIONSTATE_TYPE_INVALID }; // type of MotionState
     PhysicsMotionType _motionType { MOTION_TYPE_STATIC }; // type of motion: KINEMATIC, DYNAMIC, or STATIC
 
+    // the shape the body wears when it is not _shape itself (see getBodyShape); rebuilt by refreshBodyShape
+    void refreshBodyShape(bool activate);
+
     const JPH::Shape* _shape { nullptr };
+    JPH::RefConst<JPH::Shape> _interiorShape;         // the compound of _shape and the interior copies, or null
+    std::vector<ObjectMotionState*> _interiorParts;   // the copied parts, in the compound's sub-shape user data order
+    JPH::RefConst<JPH::Shape> _bodyShape;
+    glm::vec3 _centerOfMassOffset { 0.0f };
     JPH::Body* _body { nullptr };
     PhysicsWorld* _world { nullptr };
     glm::vec3 _gravity { 0.0f };
     float _density { 1.0f };
 
     mutable uint32_t _lastKinematicStep;
-    // how far a keyframed object's own record has been read ahead of its last substep (see getLeftoverTime)
-    mutable float _extrapolatedTime { 0.0f };
     mutable bool _hasInternalKinematicChanges { false };
+    glm::vec3 _substepStartPosition { 0.0f };
+    glm::quat _substepStartRotation;
+    uint32_t _substepStartStep { 0 };   // the substep that began from that pose; 0 when none applies
 };
 
 using SetOfMotionStates = QSet<ObjectMotionState*>;

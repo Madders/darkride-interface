@@ -201,9 +201,9 @@ VRMInfo readVRM(const QByteArray& glb) {
     use(Blendshapes::EyeOut_R, "lookRight", 0.5f);
 
     // Spring bones as Flow threads. VRM moves a joint's tail each frame by (1 - drag) of its last move, plus gravity
-    // power and stiffness (towards its rest direction) times the frame's time; Flow by damping times its last move plus
-    // gravity times delta squared (0.55^2, Flow's default delta) and, towards its rest, stiffness cubed times delta
-    // squared of the way. At 60 frames a second, and taking a hair joint as about 8 cm long:
+    // power and stiffness (towards its rest direction) times the frame's time; Flow (Flow.h, per 1/60 s step) by damping
+    // times its last move, gravity times delta squared (0.55^2, Flow's default delta) per step squared, and, towards
+    // its rest, stiffness of the way there. At 60 frames a second, and taking a hair joint as about 8 cm long:
     const float FRAME = 1.0f / 60.0f;
     const float DELTA_SQUARED = 0.55f * 0.55f;
     const float JOINT_LENGTH = 0.08f;
@@ -233,12 +233,14 @@ VRMInfo readVRM(const QByteArray& glb) {
         const float pull = glm::clamp(stiffness * FRAME / JOINT_LENGTH, 0.0f, 1.0f);
         QVariantMap physics;
         physics["active"] = true;
-        physics["stiffness"] = glm::clamp(std::cbrt(glm::min(pull / DELTA_SQUARED, 1.0f)), 0.0f, 1.0f);
+        physics["stiffness"] = pull;
         // VRoid exports next to no drag, which Flow, keeping all of a move each frame, would never stop swinging from
         const float MOST_DAMPING = 0.9f;
         physics["damping"] = glm::clamp(1.0f - drag, 0.0f, MOST_DAMPING);
         physics["gravity"] = gravityPower * gravityY * FRAME / DELTA_SQUARED;
         physics["radius"] = glm::max(radius, 0.005f);
+        // a VRM collides a joint's tail, not its whole bone
+        physics["tipCollision"] = true;
         info.flowPhysics.insert(group, physics);
     };
     // a joint that branches stays as animated, and each branch is a thread of its own, as Flow follows one child

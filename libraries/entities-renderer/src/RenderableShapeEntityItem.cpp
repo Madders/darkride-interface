@@ -5,11 +5,21 @@
 
 #include "RenderableShapeEntityItem.h"
 
+#include <mutex>
+
 #include <glm/gtx/quaternion.hpp>
 
 #include <gpu/Batch.h>
 #include <DependencyManager.h>
 #include <GeometryCache.h>
+#include <Mirrors.h>
+#include <StencilMaskPass.h>
+#include <shaders/Shaders.h>
+#include "entities-renderer/ShaderConstants.h"
+#include "EntitiesRendererLogging.h"
+#include <Transform.h>
+#include <shared/Shapes.h>
+#include <graphics/TextureMap.h>
 #include <PerfStat.h>
 
 #include "RenderPipelines.h"
@@ -23,6 +33,87 @@ static const float SPHERE_ENTITY_SCALE = 0.5f;
 
 ShapeEntityRenderer::ShapeEntityRenderer(const EntityItemPointer& entity) : Parent(entity) {
     addMaterial(graphics::MaterialLayer(_material, 0), "0");
+}
+
+namespace {
+    // where a Picture mirror's glass reads its picture. A box's faces share one texture laid out as a cross
+    // (geometry::cube(), a cell a face; Quad is the same box flattened), so the +Z face's cell is stretched over the
+    // whole picture, flipped across (the picture's left is the face's right, as in a mirror) and over (the cell's
+    // rows run top-down, a rendered picture's bottom-up). Without the stretch the glass showed a quarter of the
+    // picture's width and a third of its height, magnified and off to the right.
+    Transform mirrorPictureTransform() {
+        const auto& cube = geometry::cube();
+        const size_t N = 4;   // corners a face
+        glm::vec2 topLeft(0.0f);
+        glm::vec2 bottomRight(1.0f);
+        for (size_t f = 0; f < cube.faces.size(); ++f) {
+            const auto& face = cube.faces[f];
+            bool front = true;
+            for (size_t i = 0; i < N; ++i) {
+                front = front && cube.vertices[face[i]].z > 0.0f;
+            }
+            if (!front) {
+                continue;
+            }
+            for (size_t i = 0; i < N; ++i) {
+                const glm::vec3& corner = cube.vertices[face[i]];
+                if (corner.x < 0.0f && corner.y > 0.0f) {
+                    topLeft = cube.texCoords[f * N + i];
+                } else if (corner.x > 0.0f && corner.y < 0.0f) {
+                    bottomRight = cube.texCoords[f * N + i];
+                }
+            }
+            break;
+        }
+        // the picture's (u, v) = (1 - across, 1 - down), across and down running 0 to 1 over the cell from its top left
+        glm::vec2 size = bottomRight - topLeft;
+        Transform transform;
+        transform.setScale(glm::vec3(-1.0f / size.x, -1.0f / size.y, 1.0f));
+        transform.setTranslation(glm::vec3(1.0f + topLeft.x / size.x, 1.0f + topLeft.y / size.y, 0.0f));
+        return transform;
+    }
+
+    // the glass of a screen-mode mirror: its picture by screen position, unlit, into the G-buffer or, on the forward
+    // path, straight to the colour
+    gpu::PipelinePointer screenMirrorPipeline(bool forward) {
+        static gpu::PipelinePointer pipelines[2];
+        static std::once_flag once;
+        std::call_once(once, [] {
+            namespace program = shader::entities_renderer::program;
+            for (int i = 0; i < 2; ++i) {
+                auto shaderProgram = gpu::Shader::createProgram(i ? program::mirror_screen_forward : program::mirror_screen);
+                auto state = std::make_shared<gpu::State>();
+                state->setCullMode(gpu::State::CULL_BACK);
+                state->setDepthTest(true, true, gpu::GREATER_EQUAL);
+                PrepareStencil::testMaskDrawShape(*state);
+                pipelines[i] = gpu::Pipeline::create(shaderProgram, state);
+            }
+        });
+        return pipelines[forward ? 1 : 0];
+    }
+}
+
+ShapeEntityRenderer::~ShapeEntityRenderer() {
+    if (_mirror) {
+        Mirrors::instance().removeSurface(_mirrorId);
+    }
+}
+
+void ShapeEntityRenderer::onRemoveFromSceneTyped(const TypedEntityPointer& entity) {
+    withWriteLock([&] {
+        removeReflectionProbe();
+    });
+}
+
+void ShapeEntityRenderer::removeReflectionProbe() {
+    if (_reflectionProbeStage && !ReflectionProbeStage::isIndexInvalid(_reflectionProbeIndex)) {
+        _reflectionProbeStage->removeProbe(_reflectionProbeIndex);
+    }
+    _reflectionProbeIndex = ReflectionProbeStage::INVALID_INDEX;
+    _reflectionProbe.reset();
+    _reflectionProbeTexture.reset();
+    _reflectionProbeURL.clear();
+    _reflectionProbePending = false;
 }
 
 bool ShapeEntityRenderer::needsRenderUpdate() const {
@@ -40,6 +131,11 @@ bool ShapeEntityRenderer::needsRenderUpdate() const {
             }
 
             if (mat != _materials.end() && mat->second.shouldUpdate()) {
+                return true;
+            }
+
+            // the reflection probe's cube map has loaded: hand it over
+            if (_reflectionProbePending && _reflectionProbeTexture && _reflectionProbeTexture->isLoaded()) {
                 return true;
             }
 
@@ -61,6 +157,9 @@ bool ShapeEntityRenderer::needsRenderUpdateFromTypedEntity(const TypedEntityPoin
     if (_proceduralData != entity->getUserData()) {
         return true;
     }
+    if (_mirror && !_mirrorScreen && Mirrors::instance().generation(_mirrorId) != _mirrorGeneration) {
+        return true;   // its picture has changed hands or size (Screen mode takes the frame's picture when it draws)
+    }
 
     return false;
 }
@@ -71,6 +170,9 @@ void ShapeEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& sce
     withWriteLock([&] {
         _shape = entity->getShape();
         _pulseProperties = entity->getPulseProperties();
+        if (!_reflectionProbeStage) {
+            _reflectionProbeStage = scene->getStage<ReflectionProbeStage>();
+        }
     });
 
     void* key = (void*)this;
@@ -85,6 +187,17 @@ void ShapeEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& sce
             }
 
             _renderTransform.postScale(_dimensions);
+            if (_mirror) {
+                Mirrors::instance().setSurface(entity->getID(), { _position, _orientation, entity->getScaledDimensions(),
+                                                                  _mirrorScreen ? Mirrors::Mode::Screen : Mirrors::Mode::Picture });
+            }
+            if (_reflectionProbe) {
+                // the probe moves and its box resizes with the entity
+                _reflectionProbe->position = _position;
+                _reflectionProbe->orientation = _orientation;
+                _reflectionProbe->boxSize = entity->getScaledDimensions();
+                _reflectionProbe->touch();
+            }
         });
     });
 }
@@ -106,7 +219,9 @@ void ShapeEntityRenderer::doRenderUpdateAsynchronousTyped(const TypedEntityPoint
         glm::vec3 color = toGlm(entity->getColor());
         if (_color != color) {
             _color = color;
-            _material->setAlbedo(color);
+            // a Picture mirror shows its picture as light over black, nothing lit; a Screen mirror keeps its colour
+            // for when it has no picture (a mirror's view, no slot this frame)
+            _material->setAlbedo(_mirrorShown && !_mirrorScreen ? glm::vec3(0.0f) : color);
             materialChanged = true;
         }
 
@@ -133,6 +248,115 @@ void ShapeEntityRenderer::doRenderUpdateAsynchronousTyped(const TypedEntityPoint
                 } else {
                     _billboardMode = BillboardMode::NONE;
                 }
+            }
+            // a mirror: the entry "picture" (or true, or "true", as the editor wrote it at first) or "screen"
+            QJsonValue mirrorEntry = userDataObject.value("mirror");
+            QString mirrorText = mirrorEntry.toBool() ? QStringLiteral("picture") : mirrorEntry.toString().toLower();
+            bool mirrorScreen = mirrorText == "screen";
+            bool mirror = mirrorScreen || mirrorText == "picture" || mirrorText == "true";
+            if (mirror != _mirror || mirrorScreen != _mirrorScreen) {
+                if (_mirror) {
+                    // out of the old mode: the material its own again
+                    Mirrors::instance().removeSurface(_mirrorId);
+                    _material->setTextureMap(graphics::MaterialKey::EMISSIVE_MAP, nullptr);
+                    _material->setTexCoordTransform(0, glm::mat4());
+                    _material->setEmissive(glm::vec3(0.0f), false);
+                    _material->setAlbedo(_color);
+                    _mirrorShown = false;
+                    _mirrorPicture = nullptr;
+                    materialChanged = true;
+                }
+                _mirror = mirror;
+                _mirrorScreen = mirrorScreen;
+                _mirrorId = entity->getID();
+                _mirrorGeneration = 0;
+                if (_mirror) {
+                    Mirrors::instance().setSurface(_mirrorId, { entity->getWorldPosition(), entity->getWorldOrientation(), entity->getScaledDimensions(),
+                                                               _mirrorScreen ? Mirrors::Mode::Screen : Mirrors::Mode::Picture });
+                }
+            }
+            // a reflection probe: the entry "reflectionProbe" { url, boxOffset [x, y, z], intensity, importance,
+            // blendDistance, boxProjection } (or true for one with the defaults); the entity is its box
+            QJsonValue probeEntry = userDataObject.value("reflectionProbe");
+            if (probeEntry.isObject() || probeEntry.toBool()) {
+                QJsonObject entry = probeEntry.toObject();
+                if (!_reflectionProbe) {
+                    _reflectionProbe = std::make_shared<graphics::ReflectionProbe>();
+                }
+                auto& probe = *_reflectionProbe;
+                probe.position = entity->getWorldPosition();
+                probe.orientation = entity->getWorldOrientation();
+                probe.boxSize = entity->getScaledDimensions();
+                QJsonArray offset = entry.value("boxOffset").toArray();
+                probe.boxOffset = offset.size() == 3 ? glm::vec3(offset[0].toDouble(), offset[1].toDouble(), offset[2].toDouble()) : glm::vec3(0.0f);
+                probe.intensity = (float)entry.value("intensity").toDouble(1.0);
+                probe.importance = entry.value("importance").toInt(0);
+                probe.blendDistance = (float)std::max(0.0, entry.value("blendDistance").toDouble(1.0));
+                probe.boxProjection = entry.value("boxProjection").toBool(true);
+                QString url = entry.value("url").toString();
+                if (url != _reflectionProbeURL) {
+                    _reflectionProbeURL = url;
+                    probe.cubemap.reset();
+                    _reflectionProbeTexture = url.isEmpty() ? NetworkTexturePointer() :
+                        DependencyManager::get<TextureCache>()->getTexture(QUrl(url), image::TextureUsage::AMBIENT_TEXTURE);
+                    _reflectionProbePending = (bool)_reflectionProbeTexture;
+                }
+                probe.touch();
+                if (_reflectionProbeStage && ReflectionProbeStage::isIndexInvalid(_reflectionProbeIndex)) {
+                    _reflectionProbeIndex = _reflectionProbeStage->addProbe(_reflectionProbe);
+                }
+            } else if (_reflectionProbe) {
+                removeReflectionProbe();
+            }
+        }
+
+        // the probe's cube map, once loaded
+        if (_reflectionProbePending && _reflectionProbeTexture && _reflectionProbeTexture->isLoaded()) {
+            _reflectionProbePending = false;
+            auto texture = _reflectionProbeTexture->getGPUTexture();
+            if (texture && _reflectionProbe) {
+                _reflectionProbe->cubemap = texture;
+                _reflectionProbe->touch();
+            } else {
+                qCDebug(entitiesrenderer) << "Failed to load the reflection probe's cube map:" << _reflectionProbeURL;
+            }
+        }
+
+        if (_mirror) {
+            // the picture of the moment, when it has changed: a slot's texture, or nothing while it has no slot
+            uint32_t generation = 0;
+            gpu::TexturePointer picture = Mirrors::instance().textureFor(_mirrorId, generation);
+            if (generation != _mirrorGeneration) {
+                _mirrorGeneration = generation;
+                _mirrorPicture = picture;
+                if (_mirrorScreen) {
+                    // the glass draws the picture itself, by screen position (doRender); the material stays its own
+                    _mirrorShown = (bool)picture;
+                } else if (picture) {
+                    if (!_mirrorSource) {
+                        _mirrorSource = std::make_shared<gpu::TextureSource>(QUrl("mirror://picture"));
+                    }
+                    _mirrorSource->resetTexture(picture);
+                    auto map = std::make_shared<graphics::TextureMap>();
+                    map->setTextureSource(_mirrorSource);
+                    // the +Z face's cell of the box's texture over the whole picture, across and over (see above)
+                    static const Transform flip = mirrorPictureTransform();
+                    map->setTextureTransform(flip);
+                    // the picture is the surface's light: an emissive map over a black albedo, so no lighting touches
+                    // it and it needs no unlit path
+                    _material->setTextureMap(graphics::MaterialKey::EMISSIVE_MAP, map);
+                    _material->setTexCoordTransform(0, flip.getMatrix());   // the material applies only an albedo map's own
+                    _material->setEmissive(glm::vec3(1.0f), false);
+                    _material->setAlbedo(glm::vec3(0.0f));
+                    _mirrorShown = true;
+                } else {
+                    _material->setTextureMap(graphics::MaterialKey::EMISSIVE_MAP, nullptr);
+                    _material->setTexCoordTransform(0, glm::mat4());
+                    _material->setEmissive(glm::vec3(0.0f), false);
+                    _material->setAlbedo(_color);
+                    _mirrorShown = false;
+                }
+                materialChanged = true;
             }
         }
 
@@ -249,6 +473,11 @@ Item::Bound ShapeEntityRenderer::getBound() {
 }
 
 void ShapeEntityRenderer::doRender(RenderArgs* args) {
+    if (_mirror && !_mirrorScreen && Mirrors::instance().generation(_mirrorId) != _mirrorGeneration) {
+        // its picture has changed hands or size: the update takes the new one (nothing polls for that, so it is
+        // asked for from here, where the mirror is drawn every frame it is seen)
+        emit requestRenderUpdate();
+    }
     // Shapes just aren't playing well with zone culling.  Since it's a marginal performance
     // win anyway, being so low-poly, we'll not
     // const bool hasChanged = evaluateEntityZoneCullState(_entity);
@@ -292,6 +521,33 @@ void ShapeEntityRenderer::doRender(RenderArgs* args) {
 
     if (outColor.a == 0.0f) {
         return;
+    }
+
+    // a screen-mode mirror in the main view draws its picture by screen position with a pipeline of its own, under
+    // either render method (the mirror view was rendered by the frame's); in a mirror's view, or without a slot
+    // this frame, it is a plain shape of its colour
+    if (_mirrorScreen && args->_renderMode == RenderArgs::DEFAULT_RENDER_MODE && primitiveMode != PrimitiveMode::LINES) {
+        gpu::TexturePointer picture;
+        glm::vec4 region;
+        if (Mirrors::instance().screenFor(_mirrorId, picture, region)) {
+            // the picture and the region of the screen it covers are the frame's own (the planner's, run before
+            // the mirror views), so the glass never shows a picture against last frame's region
+            if (!_mirrorRegion) {
+                _mirrorRegion = std::make_shared<gpu::Buffer>(sizeof(glm::vec4), (const gpu::Byte*)&region);
+            } else {
+                _mirrorRegion->setSubData(0, region);
+            }
+            auto previous = args->_shapePipeline;
+            batch.setPipeline(screenMirrorPipeline(args->_renderMethod == render::Args::FORWARD));
+            batch.setResourceTexture(ENTITIES_TEXTURE_MIRROR_PICTURE, picture);
+            batch.setUniformBuffer(ENTITIES_BUFFER_MIRROR, _mirrorRegion, 0, sizeof(glm::vec4));
+            geometryCache->renderShape(batch, geometryShape);
+            if (previous && previous->pipeline) {
+                batch.setPipeline(previous->pipeline);   // the items after this one expect theirs
+            }
+            args->_details._trianglesRendered += (int)geometryCache->getShapeTriangleCount(geometryShape);
+            return;
+        }
     }
 
     if (pipelineType == Pipeline::PROCEDURAL) {

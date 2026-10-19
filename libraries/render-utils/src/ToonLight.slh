@@ -15,10 +15,11 @@
 // one; the ambient light lights the lit colour, evened out towards the average of up's and down's by the GI
 // equalization, so a toon face isn't modelled by the sky; the light at most 1, and the result at most the lit colour.
 // Its rim lighting, matcap and outline aren't done.
-// Needs GlobalLight.slh's declarations, and evalLightingAmbient declared, with scattering if supportScattering.
+// Needs GlobalLight.slh's declarations, and evalLightingAmbient declared with reflection probes, and with scattering if
+// supportScattering.
 <@func declareEvalToonGlobalColor(supportScattering)@>
 
-vec3 evalToonAmbient(LightAmbient lightAmbient, vec3 normal, vec3 eyeDir, vec3 color, float obscurance) {
+vec3 evalToonAmbient(LightAmbient lightAmbient, vec3 normal, vec3 eyeDir, vec3 color, float obscurance, vec3 positionWS) {
     SurfaceData surface = initSurfaceData(1.0, normal, eyeDir);
     vec3 diffuse;
     vec3 specular;
@@ -26,7 +27,7 @@ vec3 evalToonAmbient(LightAmbient lightAmbient, vec3 normal, vec3 eyeDir, vec3 c
 <@if supportScattering@>
         , 0.0, vec4(0.0), vec4(0.0)
 <@endif@>
-        );
+        , positionWS);
     return diffuse;
 }
 
@@ -44,9 +45,9 @@ vec3 evalToonGlobalColor(mat4 invViewMat, float shadowAttenuation, float obscura
     vec3 lightColor = lightIrradiance / max(1.0, max(lightIrradiance.r, max(lightIrradiance.g, lightIrradiance.b)));
     color += mix(shadeColor, litColor, shading) * lightColor * isDirectionalEnabled() * isDiffuseEnabled();
 
-    vec3 ambient = evalToonAmbient(lightAmbient, fragNormalWS, fragEyeDirWS, litColor, obscurance);
-    vec3 ambientEven = 0.5 * (evalToonAmbient(lightAmbient, vec3(0.0, 1.0, 0.0), fragEyeDirWS, litColor, obscurance) +
-                              evalToonAmbient(lightAmbient, vec3(0.0, -1.0, 0.0), fragEyeDirWS, litColor, obscurance));
+    vec3 ambient = evalToonAmbient(lightAmbient, fragNormalWS, fragEyeDirWS, litColor, obscurance, fragPositionWS);
+    vec3 ambientEven = 0.5 * (evalToonAmbient(lightAmbient, vec3(0.0, 1.0, 0.0), fragEyeDirWS, litColor, obscurance, fragPositionWS) +
+                              evalToonAmbient(lightAmbient, vec3(0.0, -1.0, 0.0), fragEyeDirWS, litColor, obscurance, fragPositionWS));
     color += mix(ambient, ambientEven, giEqualization);
 
     // and never brighter than its lit colour, however much ambient light there is

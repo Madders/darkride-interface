@@ -29,6 +29,13 @@ void OctreeHeadlessViewer::queryOctree() {
 
     auto node = nodeList->soloNodeOfType(serverType);
     if (node && node->getActiveSocket()) {
+        if (node->getUUID() != _queriedServer) {
+            // a new entity server: ask it to report its first full scene, after which its stream turns unreliable
+            _queriedServer = node->getUUID();
+            _initialSceneComplete = false;
+            _firstQueryTime = usecTimestampNow();
+            _octreeQuery.setReportInitialCompletion(true);
+        }
         auto queryPacket = NLPacket::create(packetType);
 
         // encode the query data
@@ -41,6 +48,18 @@ void OctreeHeadlessViewer::queryOctree() {
     }
 }
 
+
+void OctreeHeadlessViewer::handleInitialResultsComplete(QSharedPointer<ReceivedMessage> message, SharedNodePointer senderNode) {
+    if (_initialSceneComplete || !senderNode || senderNode->getUUID() != _queriedServer) {
+        return;
+    }
+    _initialSceneComplete = true;
+    _octreeQuery.setReportInitialCompletion(false);
+    qCDebug(octree) << "entity server" << senderNode->getUUID() << "reported its first full scene after"
+        << (usecTimestampNow() - _firstQueryTime) / USECS_PER_MSEC << "ms:" << (_tree ? _tree->getOctreeElementsCount() : 0)
+        << "tree elements; its stream is unreliable from here";
+
+}
 
 int OctreeHeadlessViewer::parseOctreeStats(QSharedPointer<ReceivedMessage> message, SharedNodePointer sourceNode) {
 

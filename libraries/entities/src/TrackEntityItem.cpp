@@ -15,6 +15,7 @@ const float TrackEntityItem::DEFAULT_SPEED = 5.0f;
 const float TrackEntityItem::DEFAULT_ACCELERATION = 1.0f;
 const float TrackEntityItem::MAX_SPEED = 200.0f;
 const float TrackEntityItem::MAX_ACCELERATION = 100.0f;
+const quint16 TrackEntityItem::NO_STATION = 0xFFFF;
 
 EntityItemPointer TrackEntityItem::factory(const EntityItemID& entityID, const EntityItemProperties& properties) {
     Pointer entity(new TrackEntityItem(entityID), [](EntityItem* ptr) { ptr->deleteLater(); });
@@ -35,6 +36,12 @@ EntityItemProperties TrackEntityItem::getProperties(const EntityPropertyFlags& d
     COPY_ENTITY_PROPERTY_TO_PROPERTIES(trackClosed, getTrackClosed);
     COPY_ENTITY_PROPERTY_TO_PROPERTIES(trackSpeed, getTrackSpeed);
     COPY_ENTITY_PROPERTY_TO_PROPERTIES(trackAcceleration, getTrackAcceleration);
+    COPY_ENTITY_PROPERTY_TO_PROPERTIES(trainDistance, getTrainDistance);
+    COPY_ENTITY_PROPERTY_TO_PROPERTIES(trainSpeed, getTrainSpeed);
+    COPY_ENTITY_PROPERTY_TO_PROPERTIES(trainReversed, getTrainReversed);
+    COPY_ENTITY_PROPERTY_TO_PROPERTIES(trainDwell, getTrainDwell);
+    COPY_ENTITY_PROPERTY_TO_PROPERTIES(trainStation, getTrainStation);
+    COPY_ENTITY_PROPERTY_TO_PROPERTIES(trainTime, getTrainTime);
 
     return properties;
 }
@@ -48,6 +55,12 @@ bool TrackEntityItem::setSubClassProperties(const EntityItemProperties& properti
     SET_ENTITY_PROPERTY_FROM_PROPERTIES(trackClosed, setTrackClosed);
     SET_ENTITY_PROPERTY_FROM_PROPERTIES(trackSpeed, setTrackSpeed);
     SET_ENTITY_PROPERTY_FROM_PROPERTIES(trackAcceleration, setTrackAcceleration);
+    SET_ENTITY_PROPERTY_FROM_PROPERTIES(trainDistance, setTrainDistance);
+    SET_ENTITY_PROPERTY_FROM_PROPERTIES(trainSpeed, setTrainSpeed);
+    SET_ENTITY_PROPERTY_FROM_PROPERTIES(trainReversed, setTrainReversed);
+    SET_ENTITY_PROPERTY_FROM_PROPERTIES(trainDwell, setTrainDwell);
+    SET_ENTITY_PROPERTY_FROM_PROPERTIES(trainStation, setTrainStation);
+    SET_ENTITY_PROPERTY_FROM_PROPERTIES(trainTime, setTrainTime);
 
     return somethingChanged;
 }
@@ -65,6 +78,12 @@ int TrackEntityItem::readEntitySubclassDataFromBuffer(const unsigned char* data,
     READ_ENTITY_PROPERTY(PROP_TRACK_CLOSED, bool, setTrackClosed);
     READ_ENTITY_PROPERTY(PROP_TRACK_SPEED, float, setTrackSpeed);
     READ_ENTITY_PROPERTY(PROP_TRACK_ACCELERATION, float, setTrackAcceleration);
+    READ_ENTITY_PROPERTY(PROP_TRAIN_DISTANCE, float, setTrainDistance);
+    READ_ENTITY_PROPERTY(PROP_TRAIN_SPEED, float, setTrainSpeed);
+    READ_ENTITY_PROPERTY(PROP_TRAIN_REVERSED, bool, setTrainReversed);
+    READ_ENTITY_PROPERTY(PROP_TRAIN_DWELL, float, setTrainDwell);
+    READ_ENTITY_PROPERTY(PROP_TRAIN_STATION, quint16, setTrainStation);
+    READ_ENTITY_PROPERTY(PROP_TRAIN_TIME, quint64, setTrainTime);
 
     return bytesRead;
 }
@@ -78,6 +97,12 @@ EntityPropertyFlags TrackEntityItem::getEntityProperties(EncodeBitstreamParams& 
     requestedProperties += PROP_TRACK_CLOSED;
     requestedProperties += PROP_TRACK_SPEED;
     requestedProperties += PROP_TRACK_ACCELERATION;
+    requestedProperties += PROP_TRAIN_DISTANCE;
+    requestedProperties += PROP_TRAIN_SPEED;
+    requestedProperties += PROP_TRAIN_REVERSED;
+    requestedProperties += PROP_TRAIN_DWELL;
+    requestedProperties += PROP_TRAIN_STATION;
+    requestedProperties += PROP_TRAIN_TIME;
 
     return requestedProperties;
 }
@@ -97,6 +122,12 @@ void TrackEntityItem::appendSubclassData(OctreePacketData* packetData, EncodeBit
     APPEND_ENTITY_PROPERTY(PROP_TRACK_CLOSED, getTrackClosed());
     APPEND_ENTITY_PROPERTY(PROP_TRACK_SPEED, getTrackSpeed());
     APPEND_ENTITY_PROPERTY(PROP_TRACK_ACCELERATION, getTrackAcceleration());
+    APPEND_ENTITY_PROPERTY(PROP_TRAIN_DISTANCE, getTrainDistance());
+    APPEND_ENTITY_PROPERTY(PROP_TRAIN_SPEED, getTrainSpeed());
+    APPEND_ENTITY_PROPERTY(PROP_TRAIN_REVERSED, getTrainReversed());
+    APPEND_ENTITY_PROPERTY(PROP_TRAIN_DWELL, getTrainDwell());
+    APPEND_ENTITY_PROPERTY(PROP_TRAIN_STATION, getTrainStation());
+    APPEND_ENTITY_PROPERTY(PROP_TRAIN_TIME, getTrainTime());
 }
 
 void TrackEntityItem::setTrackPoints(const QVector<glm::vec3>& points) {
@@ -187,4 +218,48 @@ float TrackEntityItem::getTrackAcceleration() const {
 
 uint32_t TrackEntityItem::getTrackVersion() const {
     return resultWithReadLock<uint32_t>([&] { return _trackVersion; });
+}
+
+#define TRAIN_STATE_SETTER(Setter, Getter, Type, member) \
+    void TrackEntityItem::Setter(Type value) { \
+        withWriteLock([&] { member = value; }); \
+    } \
+    Type TrackEntityItem::Getter() const { \
+        return resultWithReadLock<Type>([&] { return member; }); \
+    }
+
+TRAIN_STATE_SETTER(setTrainDistance, getTrainDistance, float, _trainDistance)
+TRAIN_STATE_SETTER(setTrainSpeed, getTrainSpeed, float, _trainSpeed)
+TRAIN_STATE_SETTER(setTrainReversed, getTrainReversed, bool, _trainReversed)
+TRAIN_STATE_SETTER(setTrainDwell, getTrainDwell, float, _trainDwell)
+TRAIN_STATE_SETTER(setTrainStation, getTrainStation, quint16, _trainStation)
+
+// the time is written last, by the wire and by the server, so it is the one that counts a state
+void TrackEntityItem::setTrainTime(quint64 value) {
+    withWriteLock([&] {
+        _trainTime = value;
+        _trainStateVersion++;
+    });
+}
+
+quint64 TrackEntityItem::getTrainTime() const {
+    return resultWithReadLock<quint64>([&] { return _trainTime; });
+}
+
+TrackEntityItem::TrainState TrackEntityItem::getTrainState() const {
+    return resultWithReadLock<TrainState>([&] {
+        TrainState state;
+        state.distance = _trainDistance;
+        state.speed = _trainSpeed;
+        state.reversed = _trainReversed;
+        state.dwell = _trainDwell;
+        state.station = _trainStation;
+        state.time = _trainTime;
+        state.version = _trainStateVersion;
+        return state;
+    });
+}
+
+uint32_t TrackEntityItem::getTrainStateVersion() const {
+    return resultWithReadLock<uint32_t>([&] { return _trainStateVersion; });
 }

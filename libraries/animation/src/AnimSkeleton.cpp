@@ -20,10 +20,13 @@
 AnimSkeleton::AnimSkeleton(const HFMModel& hfmModel, bool humanoidRotationOffsets) {
 
     _geometryOffset = hfmModel.offset;
+    _humanoid = hfmModel.humanoid;
 
-    // not for a model its FST turns, whose joints' axes aren't the way up it's shown
+    // not for a model its FST turns, whose joints' axes aren't the way up it's shown, nor for one whose FST retargets
+    // its animations through humanoid frames ("retarget = humanoid", Humanoid.h), which takes care of the axes itself
     const float SMALLEST_TURN = 0.001f;
-    humanoidRotationOffsets = humanoidRotationOffsets && fabsf(glmExtractRotation(hfmModel.offset).w) > 1.0f - SMALLEST_TURN;
+    humanoidRotationOffsets = humanoidRotationOffsets && !_humanoid.retarget &&
+                              fabsf(glmExtractRotation(hfmModel.offset).w) > 1.0f - SMALLEST_TURN;
     buildSkeletonFromJoints(hfmModel.joints, hfmModel.jointRotationOffsets, humanoidRotationOffsets);
 
     // we make a copy of the inverseBindMatrices in order to prevent mutating the model bind pose

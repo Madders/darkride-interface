@@ -8,6 +8,8 @@
 
 #include "RenderCommonTask.h"
 
+#include "FadeEffect.h"
+
 #include <gpu/Context.h>
 #include <graphics/ShaderConstants.h>
 
@@ -27,7 +29,7 @@ namespace gr {
 
 
 using namespace render;
-extern void initForwardPipelines(ShapePlumber& plumber);
+extern void initForwardPipelines(ShapePlumber& plumber, const render::ShapePipeline::BatchSetter& batchSetter, const render::ShapePipeline::ItemSetter& itemSetter);
 
 void BeginGPURangeTimer::run(const render::RenderContextPointer& renderContext, gpu::RangeTimerPointer& timer) {
     timer = _gpuTimer;
@@ -48,7 +50,8 @@ void EndGPURangeTimer::run(const render::RenderContextPointer& renderContext, co
 DrawLayered3D::DrawLayered3D(bool opaque) :
     _shapePlumber(std::make_shared<ShapePlumber>()),
     _opaquePass(opaque) {
-    initForwardPipelines(*_shapePlumber);
+    auto fadeEffect = DependencyManager::get<FadeEffect>();
+    initForwardPipelines(*_shapePlumber, fadeEffect->getBatchSetter(), fadeEffect->getItemUniformSetter());
 }
 
 void DrawLayered3D::run(const RenderContextPointer& renderContext, const Inputs& inputs) {
@@ -80,7 +83,7 @@ void DrawLayered3D::run(const RenderContextPointer& renderContext, const Inputs&
     if (_opaquePass) {
         gpu::doInBatch("DrawLayered3D::run::clear", args->_context, [&](gpu::Batch& batch) {
             batch.enableStereo(false);
-            batch.clearFramebuffer(gpu::Framebuffer::BUFFER_DEPTH, glm::vec4(), 1.f, 0, false);
+            batch.clearFramebuffer(gpu::Framebuffer::BUFFER_DEPTH, glm::vec4(), 0.0f, 0, false); // depth 0 is the far plane (reversed-Z)
         });
     }
 

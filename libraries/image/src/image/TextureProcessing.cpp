@@ -111,6 +111,8 @@ TextureUsage::TextureLoader TextureUsage::getTextureLoaderForType(Type type) {
             return image::TextureUsage::createEmissiveTextureFromImage;
         case LIGHTMAP_TEXTURE:
             return image::TextureUsage::createLightmapTextureFromImage;
+        case LIGHTMAP_DIRECTION_TEXTURE:
+            return image::TextureUsage::createLightmapDirectionTextureFromImage;
         case SKY_TEXTURE:
             return image::TextureUsage::createCubeTextureFromImage;
         case AMBIENT_TEXTURE:
@@ -156,9 +158,43 @@ gpu::TexturePointer TextureUsage::createEmissiveTextureFromImage(Image&& srcImag
     return process2DTextureColorFromImage(std::move(srcImage), srcImageName, compress, target, false, abortProcessing);
 }
 
+Image convertToLDRFormat(Image&& srcImage, Image::Format format);
+Image processSourceImage(Image&& srcImage, bool cubemap, BackendTarget target);
+
 gpu::TexturePointer TextureUsage::createLightmapTextureFromImage(Image&& srcImage, const std::string& srcImageName,
                                                                  bool compress, BackendTarget target, const std::atomic<bool>& abortProcessing) {
+    // a lightmap from an EXR (Unity's bakes) is linear HDR light: kept at half precision where the GPU takes HDR
+    // textures (LIGHTMAPS.md §3.3); where it does not (GLES) it goes the colour way, clipped at 1 and gamma-encoded.
+    // A PNG or JPG lightmap is a colour picture, as it always was
+    if (srcImage.hasFloatFormat()) {
+        if (isHDRTextureFormatEnabledForTarget(target)) {
+            return process2DTextureHDRFromImage(std::move(srcImage), srcImageName, target, abortProcessing);
+        }
+        srcImage = convertToLDRFormat(srcImage.getConvertedToFormat(Image::Format_PACKED_FLOAT), Image::Format_ARGB32);
+    }
     return process2DTextureColorFromImage(std::move(srcImage), srcImageName, compress, target, false, abortProcessing);
+}
+
+gpu::TexturePointer TextureUsage::createLightmapDirectionTextureFromImage(Image&& srcImage, const std::string& srcImageName,
+                                                                          bool compress, BackendTarget target, const std::atomic<bool>& abortProcessing) {
+    // a lightmap's direction map (LIGHTMAPS.md §3.4): four linear 8-bit channels, the direction's three and the share;
+    // uncompressed, since the colour path's sRGB decode and the normal map's two channels would both spoil it
+    PROFILE_RANGE(resource_parse, "createLightmapDirectionTextureFromImage");
+    Image image = processSourceImage(std::move(srcImage), false, target);
+    if ((image.getWidth() <= 0) || (image.getHeight() <= 0)) {
+        return nullptr;
+    }
+    if (image.getFormat() != Image::Format_ARGB32) {
+        image = image.getConvertedToFormat(Image::Format_ARGB32);
+    }
+    auto theTexture = gpu::Texture::create2D(gpu::Element::COLOR_RGBA_32, image.getWidth(), image.getHeight(),
+                                             gpu::Texture::MAX_NUM_MIPS, gpu::Sampler(gpu::Sampler::FILTER_MIN_MAG_MIP_LINEAR));
+    theTexture->setSource(srcImageName);
+    theTexture->setUsage(gpu::Texture::Usage::Builder().withColor().withAlpha().build());
+    theTexture->setStoredMipFormat(gpu::Element::COLOR_BGRA_32);
+    theTexture->assignStoredMip(0, image.getByteCount(), image.getBits());
+    convertToTextureWithMips(theTexture.get(), std::move(image), target, abortProcessing);
+    return theTexture;
 }
 
 gpu::TexturePointer TextureUsage::createNormalTextureFromNormalImage(Image&& srcImage, const std::string& srcImageName,
@@ -501,6 +537,28 @@ struct PackedFloatOutputHandler : public OutputHandler {
     int _coordIndex{ 0 };
 };
 
+// writes NVTT's float RGBA output as half floats, for textures stored at half precision (COLOR_RGBA16F)
+struct HalfFloatOutputHandler : public OutputHandler {
+    HalfFloatOutputHandler(gpu::Texture* texture, int face) : OutputHandler(texture, face) {}
+
+    virtual void beginImage(int size, int width, int height, int depth, int face, int miplevel) override {
+        // four floats a pixel become four halves: half the bytes
+        OutputHandler::beginImage(size / 2, width, height, depth, face, miplevel);
+    }
+    virtual bool writeData(const void* data, int size) override {
+        assert((size % sizeof(float)) == 0);
+        auto floatCount = size / sizeof(float);
+        const float* floatIt = (const float*)data;
+        _halves.resize(floatCount);
+        for (size_t i = 0; i < floatCount; i++) {
+            _halves[i] = glm::packHalf1x16(floatIt[i]);
+        }
+        return OutputHandler::writeData(_halves.data(), (int)(floatCount * sizeof(uint16_t)));
+    }
+
+    std::vector<uint16_t> _halves;
+};
+
 struct MyErrorHandler : public nvtt::ErrorHandler {
     virtual void error(nvtt::Error e) override {
         qCWarning(imagelogging) << "Texture compression error:" << nvtt::errorString(e);
@@ -589,6 +647,13 @@ nvtt::OutputHandler* getNVTTCompressionOutputHandler(gpu::Texture* outputTexture
         compressionOptions.setFormat(nvtt::Format_RGB);
         compressionOptions.setPixelType(nvtt::PixelType_UnsignedNorm);
         compressionOptions.setPixelFormat(8, 8, 8, 0);
+    } else if (outputFormat == gpu::Element::COLOR_RGBA16F) {
+        // NVTT hands over floats (its own half output is not trusted, as the packed formats' above); the handler
+        // makes the halves
+        compressionOptions.setFormat(nvtt::Format_RGBA);
+        compressionOptions.setPixelType(nvtt::PixelType_Float);
+        compressionOptions.setPixelFormat(32, 32, 32, 32);
+        return new HalfFloatOutputHandler(outputTexture, face);
     } else {
         qCWarning(imagelogging) << "Unknown mip format";
         Q_UNREACHABLE();
@@ -958,6 +1023,30 @@ gpu::TexturePointer TextureUsage::process2DTextureColorFromImage(Image&& srcImag
         convertToTextureWithMips(theTexture.get(), std::move(image), target, abortProcessing);
     }
 
+    return theTexture;
+}
+
+gpu::TexturePointer TextureUsage::process2DTextureHDRFromImage(Image&& srcImage, const std::string& srcImageName,
+                                                               BackendTarget target, const std::atomic<bool>& abortProcessing) {
+    PROFILE_RANGE(resource_parse, "process2DTextureHDRFromImage");
+    Image image = processSourceImage(std::move(srcImage), false, target);
+    if ((image.getWidth() <= 0) || (image.getHeight() <= 0)) {
+        return nullptr;
+    }
+    if (image.getFormat() != Image::Format_RGBAF) {
+        image = image.getConvertedToFormat(Image::Format_RGBAF);
+    }
+
+    // uncompressed, four halves a texel: a 2048 by 2048 lightmap is 32 MB and a third more for its mips. BC6H would be
+    // four times smaller (the cubemap path has it) and is the option to take when scenes outgrow this
+    const gpu::Element format = gpu::Element::COLOR_RGBA16F;
+    auto theTexture = gpu::Texture::create2D(format, image.getWidth(), image.getHeight(), gpu::Texture::MAX_NUM_MIPS,
+                                             gpu::Sampler(gpu::Sampler::FILTER_MIN_MAG_MIP_LINEAR));
+    theTexture->setSource(srcImageName);
+    theTexture->setUsage(gpu::Texture::Usage::Builder().withColor().build());
+    theTexture->setStoredMipFormat(format);
+    // NVTT builds the mips from the float pixels, the handler writes every level as halves
+    convertImageToHDRTexture(theTexture.get(), std::move(image), target, 0, true, abortProcessing, -1);
     return theTexture;
 }
 
@@ -1523,6 +1612,10 @@ gpu::TexturePointer TextureUsage::processCubeTextureColorFromImage(Image&& srcIm
     gpu::TexturePointer theTexture = nullptr;
 
     Image image = processSourceImage(std::move(localCopy), true, target);
+    if (image.getFormat() == Image::Format_RGBAF) {
+        // an EXR comes as floats now (the lightmaps keep them); the faces below are cut from a packed picture
+        image = image.getConvertedToFormat(Image::Format_PACKED_FLOAT);
+    }
     auto hasTargetHDRFormat = isHDRTextureFormatEnabledForTarget(target);
     if (hasTargetHDRFormat && image.getFormat() != Image::Format_PACKED_FLOAT) {
         // If the target format is HDR but the image isn't, we need to convert the

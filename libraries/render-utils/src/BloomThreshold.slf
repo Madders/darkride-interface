@@ -29,6 +29,9 @@ void main(void) {
 
         for (int x=0 ; x<parameters._sampleCount ; x++) {
             vec4 color = texture(colorMap, uv);
+            // a NaN in the colour (a shading fault at one fragment) would spread through the blurs into a block of
+            // black the size of the lowest level's kernel: it contributes nothing instead
+            color = mix(color, vec4(0.0), vec4(isnan(color)));
             float luminance = (color.r+color.g+color.b) / 3.0;
             float mask = clamp((luminance-parameters._threshold)*0.25, 0.0, 1.0);
 

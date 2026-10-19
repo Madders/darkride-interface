@@ -19,6 +19,8 @@
 #include "GLBuffer.h"
 #include "GLTexture.h"
 
+#include <FrameDiag.h>
+
 using namespace gpu;
 using namespace gpu::gl;
 
@@ -31,6 +33,8 @@ void GLBackend::do_setPipeline(const Batch& batch, size_t paramOffset) {
 
     // A true new Pipeline
     _stats._PSNumSetPipelines++;
+    FrameDiag::notePipeline((pipeline && pipeline->getProgram()) ? (unsigned)pipeline->getProgram()->getID() : 0u,
+                            _stats._DSNumDrawcalls);
 
     // null pipeline == reset
     if (!pipeline) {

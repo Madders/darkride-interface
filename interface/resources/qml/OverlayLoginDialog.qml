@@ -22,7 +22,15 @@ FocusScope {
     objectName: "LoginDialog"
     visible: true
 
-    anchors.fill: parent
+    // laid out as if the window were at least 760 tall and 640 wide, then scaled down to fit it: in a small window the
+    // banner and the form shrink together instead of the form running off the bottom (clicks and typing are scaled
+    // with it)
+    readonly property real fitScale: parent && parent.width > 0 && parent.height > 0 ?
+        Math.min(1, parent.height / 760, parent.width / 640) : 1
+    width: parent ? parent.width / fitScale : 0
+    height: parent ? parent.height / fitScale : 0
+    scale: fitScale
+    transformOrigin: Item.TopLeft
 
     readonly property bool isTablet: false
     readonly property bool isOverlay: true
@@ -52,11 +60,11 @@ FocusScope {
         }
     }
 
-    Image {
+    // Darkride's navy, the website's page colour (--dr-bg): the world doesn't show until someone has signed in
+    Rectangle {
         z: -10
         id: loginDialogBackground
-        fillMode: Image.PreserveAspectCrop
-        source: "LoginDialog/images/background.jpg"
+        color: "#1c2136"
         anchors.fill: parent
     }
 
@@ -81,8 +89,23 @@ FocusScope {
         Image {
             id: banner
             anchors.centerIn: parent
-            source: "../images/tivoli-banner.svg"
+            width: 500
+            height: 150
+            source: "../images/darkride-banner.png"
             horizontalAlignment: Image.AlignHCenter
+        }
+        // the dR mark above the wordmark, in the space above the banner
+        Image {
+            id: mark
+            anchors {
+                bottom: banner.top
+                horizontalCenter: parent.horizontalCenter
+            }
+            height: Math.max(0, Math.min(140, bannerContainer.anchors.topMargin - 16))
+            width: height * 390 / 330
+            fillMode: Image.PreserveAspectFit
+            source: "../images/darkride-mark.png"
+            mipmap: true
         }
     }
 
@@ -150,6 +173,7 @@ FocusScope {
 
     Component.onCompleted: {
         keyboardTimer.start();
-        bodyLoader.setSource("LoginDialog/LinkAccountBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader, "linkSteam": false, "linkOculus": false });
+        // a remembered account (Remember me) gets "Continue as <name>", anyone else the form
+        bodyLoader.setSource("LoginDialog/" + (Account.loggedIn ? "ContinueBody.qml" : "LinkAccountBody.qml"), { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader, "linkSteam": false, "linkOculus": false });
     }
 }

@@ -1,0 +1,7 @@
+set(TARGET_NAME unity-avatar)
+setup_hifi_project(Core)
+setup_memory_debugger()
+link_hifi_libraries(shared hfm graphics fbx animation unity-import)
+include_hifi_library_headers(gpu)
+include_hifi_library_headers(image)
+include_hifi_library_headers(networking)

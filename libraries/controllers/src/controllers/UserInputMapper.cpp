@@ -31,6 +31,7 @@
 #include "impl/conditionals/NotConditional.h"
 #include "impl/conditionals/EndpointConditional.h"
 #include "impl/conditionals/ScriptConditional.h"
+#include "impl/conditionals/CallbackConditional.h"
 
 #include "impl/endpoints/ActionEndpoint.h"
 #include "impl/endpoints/AnyEndpoint.h"
@@ -39,6 +40,7 @@
 #include "impl/endpoints/InputEndpoint.h"
 #include "impl/endpoints/JSEndpoint.h"
 #include "impl/endpoints/ScriptEndpoint.h"
+#include "impl/endpoints/CallbackEndpoint.h"
 #include "impl/endpoints/StandardEndpoint.h"
 
 #include "impl/Route.h"
@@ -687,6 +689,30 @@ Endpoint::Pointer UserInputMapper::endpointFor(const QScriptValue& endpoint) {
     return Endpoint::Pointer();
 }
 
+Endpoint::Pointer UserInputMapper::endpointFor(const QVariant& endpoint) {
+    if (endpoint.userType() == qMetaTypeId<ScriptCallback>()) {
+        return std::make_shared<CallbackEndpoint>(endpoint.value<ScriptCallback>());
+    }
+    if (endpoint.type() == QVariant::List) {
+        Endpoint::List children;
+        for (const QVariant& item : endpoint.toList()) {
+            Endpoint::Pointer destination = endpointFor(item);
+            if (!destination) {
+                return Endpoint::Pointer();
+            }
+            children.push_back(destination);
+        }
+        return std::make_shared<AnyEndpoint>(children);
+    }
+    bool isNumber = false;
+    int id = endpoint.toInt(&isNumber);
+    if (isNumber) {
+        return endpointFor(Input(uint32_t(id)));
+    }
+    qWarning() << "Unsupported input type " << endpoint;
+    return Endpoint::Pointer();
+}
+
 Endpoint::Pointer UserInputMapper::endpointFor(const Input& inputId) const {
     Locker locker(_lock);
     auto iterator = _endpointsByInput.find(inputId);
@@ -880,6 +906,30 @@ Endpoint::Pointer UserInputMapper::parseEndpoint(const QJsonValue& value) {
 
 
 Conditional::Pointer UserInputMapper::conditionalFor(const QJSValue& condition) {
+    return Conditional::Pointer();
+}
+
+Conditional::Pointer UserInputMapper::conditionalFor(const QVariant& condition) {
+    if (condition.type() == QVariant::List) {
+        Conditional::List children;
+        for (const QVariant& item : condition.toList()) {
+            Conditional::Pointer child = conditionalFor(item);
+            if (!child) {
+                return Conditional::Pointer();
+            }
+            children.push_back(child);
+        }
+        return std::make_shared<AndConditional>(children);
+    }
+    if (condition.userType() == qMetaTypeId<ScriptCallback>()) {
+        return std::make_shared<CallbackConditional>(condition.value<ScriptCallback>());
+    }
+    bool isNumber = false;
+    int id = condition.toInt(&isNumber);
+    if (isNumber) {
+        return conditionalFor(Input(uint32_t(id)));
+    }
+    qWarning() << "Unsupported conditional type " << condition;
     return Conditional::Pointer();
 }
 

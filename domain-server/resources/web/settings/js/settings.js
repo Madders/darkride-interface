@@ -277,7 +277,7 @@ $(document).ready(function(){
             swal({
               title: '',
               type: 'error',
-              text: "There was a problem retrieving domain information from High Fidelity API.",
+              text: "There was a problem retrieving world information from the Darkride metaverse.",
               confirmButtonText: 'Try again',
               showCancelButton: true,
               closeOnConfirm: false
@@ -306,7 +306,7 @@ $(document).ready(function(){
 
     if (hasAccessToken) {
       el = "<p>";
-      el += "<span class='account-connected-header'>Tivoli world connected</span>";
+      el += "<span class='account-connected-header'>Darkride world connected</span>";
       el += "<button id='" + Settings.DISCONNECT_ACCOUNT_BTN_ID + "' class='btn'>Disconnect</button>";
       el += "</p>";
       el = $(el);
@@ -319,7 +319,7 @@ $(document).ready(function(){
       }
       buttonSetting.help = "";
       buttonSetting.classes = "btn-primary";
-      buttonSetting.button_label = "Connect Tivoli world";
+      buttonSetting.button_label = "Connect Darkride world";
       buttonSetting.html_id = Settings.CONNECT_ACCOUNT_BTN_ID;
 
       //buttonSetting.href = METAVERSE_URL + "/user/tokens/new?for_domain_server=true";
@@ -714,7 +714,7 @@ $(document).ready(function(){
       html_id: Settings.PLACES_TABLE_ID,
       help: "The following places currently point to this domain.</br>To point places to this domain, "
         + " go to the <a href='" + METAVERSE_URL + "/user/places'>My Places</a> "
-        + "page in your High Fidelity Metaverse account.",
+        + "page in your Darkride account.",
       read_only: true,
       can_add_new_rows: false,
       columns: [
@@ -998,7 +998,7 @@ $(document).ready(function(){
 
           if (data.data.domains.length) {
             // setup a select box for the returned domains
-            modal_body = "<p>Choose the High Fidelity domain you want this domain-server to represent.<br/>This will set your domain ID on the settings page.</p>";
+            modal_body = "<p>Choose the Darkride world you want this server to represent.<br/>This will set your world ID on the settings page.</p>";
             domain_select = $("<select id='domain-name-select' class='form-control'></select>");
             _.each(data.data.domains, function(domain){
               var domainString = "";
@@ -1027,7 +1027,7 @@ $(document).ready(function(){
                 window.open(METAVERSE_URL + "/user/domains", '_blank');
               }
             }
-            modal_body = "<p>You do not have any domains in your Tivoli account." +
+            modal_body = "<p>You do not have any worlds in your Darkride account." +
               "<br/><br/>Go to your domains page to create a new one. Once your domain is created re-open this dialog to select it.</p>"
           }
 
@@ -1039,7 +1039,7 @@ $(document).ready(function(){
           })
         },
         error: function() {
-          bootbox.alert("Failed to retrieve your worlds from the Tivoli metaverse");
+          bootbox.alert("Failed to retrieve your worlds from the Darkride metaverse");
         },
         complete: function() {
           // remove the spinner from the choose button
@@ -1050,7 +1050,7 @@ $(document).ready(function(){
 
       } else {
         bootbox.alert({
-          message: "You must have an access token to query your Tivoli worlds.<br><br>" +
+          message: "You must have an access token to query your Darkride worlds.<br><br>" +
           "Please follow the instructions on the settings page to add an access token.",
           title: "Access token required"
         })

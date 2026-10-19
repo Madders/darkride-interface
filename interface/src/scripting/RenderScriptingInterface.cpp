@@ -9,6 +9,19 @@
 
 #include "LightingModel.h"
 #include "AntialiasingEffect.h"
+#include <Mirrors.h>
+#include <gpu/Context.h>
+
+namespace {
+    // 1, 2, 4 or 8, and no more than the GPU can do (Apple GPUs stop at 4)
+    int validMsaaSamples(int samples) {
+        const int maxSamples = gpu::Context::getMaxSamples();
+        if (maxSamples > 0) {
+            samples = std::min(samples, maxSamples);
+        }
+        return samples >= 8 ? 8 : samples >= 4 ? 4 : samples >= 2 ? 2 : 1;
+    }
+}
 
 RenderScriptingInterface* RenderScriptingInterface::getInstance() {
     static RenderScriptingInterface sharedInstance;
@@ -29,23 +42,34 @@ void RenderScriptingInterface::loadSettings() {
         _shadowsEnabled = (_shadowsEnabledSetting.get());
         _ambientOcclusionEnabled = (_ambientOcclusionEnabledSetting.get());
         _antialiasingMethod = (_antialiasingMethodSetting.get());
+        _msaaSamples = (_msaaSamplesSetting.get());
         _viewportResolutionScale = (_viewportResolutionScaleSetting.get());
+        // forward became the default on 2026-10-16: a settings file from before keeps its own method until this one
+        // move; a user who goes back to deferred after it is left there
+        if (!_forwardDefaultAppliedSetting.get()) {
+            _renderMethod = render::Args::RenderMethod::FORWARD;
+            _forwardDefaultAppliedSetting.set(true);
+        }
         _nametagsEnabled = (_nametagsEnabledSetting.get());
         _nametagsShowSelf = (_nametagsShowSelfSetting.get());
         // _maximumTextureMemory = (_maximumTextureMemorySetting.get()); // handled by gpu::Texture
         _fieldOfView = (_fieldOfViewSetting.get());
         _farClip = (_farClipSetting.get());
+        _nearClip = (_nearClipSetting.get());
     });
     forceRenderMethod((RenderMethod)_renderMethod);
     forceShadowsEnabled(_shadowsEnabled);
     forceAmbientOcclusionEnabled(_ambientOcclusionEnabled);
     forceAntialiasingMethod((AntialiasingMethod)_antialiasingMethod);
+    forceMsaaSamples(_msaaSamples);
     forceViewportResolutionScale(_viewportResolutionScale);
     forceNametagsEnabled(_nametagsEnabled);
     forceNametagsShowSelf(_nametagsShowSelf);
     forceMaximumTextureMemory(_maximumTextureMemorySetting.get());
     forceFieldOfView(_fieldOfView);
     forceFarClip(_farClip);
+    forceNearClip(_nearClip);
+    emit settingsChanged();   // the menu items that show these follow, whether they were built before or after
 }
 
 RenderScriptingInterface::RenderMethod RenderScriptingInterface::getRenderMethod() const {
@@ -77,6 +101,49 @@ void RenderScriptingInterface::forceRenderMethod(RenderMethod renderMethod) {
         );
         if (secondaryConfig) secondaryConfig->setBranch((int)renderMethod);
 
+        // the mirror views render by the frame's method too: left on the switch's first branch, they drew deferred
+        // under the forward default, and their reflections lost the zone's ambient light (MIRRORS.md section 5)
+        for (int slot = 0; slot < Mirrors::SLOT_COUNT; ++slot) {
+            auto mirrorConfig = dynamic_cast<render::SwitchConfig*>(
+                qApp->getRenderEngine()->getConfiguration()->getConfig(
+                    "RenderMirrors.MirrorView" + QString::number(slot) + ".DeferredForwardSwitch"
+                )
+            );
+            if (mirrorConfig) mirrorConfig->setBranch((int)renderMethod);
+        }
+    });
+}
+
+int RenderScriptingInterface::getMsaaSamples() const {
+    return _msaaSamples;
+}
+
+void RenderScriptingInterface::setMsaaSamples(int samples) {
+    samples = validMsaaSamples(samples);
+    if (_msaaSamples != samples) {
+        forceMsaaSamples(samples);
+        emit settingsChanged();
+    }
+}
+
+void RenderScriptingInterface::forceMsaaSamples(int samples) {
+    samples = validMsaaSamples(samples);
+    _renderSettingLock.withWriteLock([&] {
+        _msaaSamples = samples;
+        _msaaSamplesSetting.set(samples);
+
+        // the forward task's primary framebuffer, in every view that has one: the main view, the second one, the
+        // mirror views (which render by the frame's method)
+        auto configuration = qApp->getRenderEngine()->getConfiguration();
+        std::vector<std::string> views = { "RenderMainView.", "RenderSecondView." };
+        for (int slot = 0; slot < Mirrors::SLOT_COUNT; ++slot) {
+            views.push_back("RenderMirrors.MirrorView" + std::to_string(slot) + ".");
+        }
+        for (const auto& view : views) {
+            if (auto config = configuration->getJobConfig(view + "PreparePrimaryBufferForward")) {
+                config->setProperty("numSamples", samples);
+            }
+        }
     });
 }
 
@@ -358,4 +425,22 @@ void RenderScriptingInterface::forceFarClip(float farClip) {
     _farClip = farClip;
     _farClipSetting.set(farClip);
     qApp->setFarClip(farClip);
+}
+
+float RenderScriptingInterface::getNearClip() const {
+    return _nearClip;
+}
+
+void RenderScriptingInterface::setNearClip(float nearClip) {
+    nearClip = glm::clamp(nearClip, 0.01f, 5.0f);
+    if (_nearClip != nearClip) {
+        forceNearClip(nearClip);
+        emit settingsChanged();
+    }
+}
+
+void RenderScriptingInterface::forceNearClip(float nearClip) {
+    _nearClip = nearClip;
+    _nearClipSetting.set(nearClip);
+    qApp->setNearClip(nearClip);
 }

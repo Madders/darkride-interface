@@ -1,0 +1,2 @@
+VERTEX gpu::vertex::DrawUnitQuadTexcoord
+FRAGMENT impostor_bake_resolve

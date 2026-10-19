@@ -60,7 +60,8 @@ void FadeEditJob::run(const render::RenderContextPointer& renderContext, const F
                     render::Transition::BUBBLE_ISECT_OWNER,
                     render::Transition::BUBBLE_ISECT_TRESPASSER,
                     render::Transition::USER_ENTER_DOMAIN,
-                    render::Transition::AVATAR_CHANGE
+                    render::Transition::AVATAR_CHANGE,
+                    render::Transition::ELEMENT_ENTER_DOMAIN   // the LOD switch is no scene transition; edited as this
                 };
 
                 auto transitionType = categoryToTransition[inputs.get1()];
@@ -157,6 +158,20 @@ FadeConfig::FadeConfig()
     events[FADE_AVATAR_CHANGE].edgeWidth = 0.05f;
     events[FADE_AVATAR_CHANGE].edgeInnerColor = glm::vec4{ 1.0f, 1.0f, 1.0f, 1.0f };
     events[FADE_AVATAR_CHANGE].edgeOuterColor = glm::vec4{ 1.0f, 1.0f, 1.0f, 1.0f };
+
+    // the impostor cross-fade: a dissolve by a fine noise alone (no base gradient, no edge glow), so that where the
+    // model's surface and its card's coincide the two clips are complementary
+    events[FADE_LOD_SWITCH].noiseSize = glm::vec3{ 0.08f, 0.08f, 0.08f };
+    events[FADE_LOD_SWITCH].noiseLevel = 1.f;
+    events[FADE_LOD_SWITCH].noiseSpeed = glm::vec3{ 0.0f, 0.0f, 0.0f };
+    events[FADE_LOD_SWITCH].timing = FadeConfig::LINEAR;
+    events[FADE_LOD_SWITCH].baseSize = glm::vec3{ 1.0f, 1.0f, 1.0f };
+    events[FADE_LOD_SWITCH].baseLevel = 0.f;
+    events[FADE_LOD_SWITCH].isInverted = false;
+    events[FADE_LOD_SWITCH].duration = 0.35f;
+    events[FADE_LOD_SWITCH].edgeWidth = 0.001f;
+    events[FADE_LOD_SWITCH].edgeInnerColor = glm::vec4{ 0.0f, 0.0f, 0.0f, 0.0f };
+    events[FADE_LOD_SWITCH].edgeOuterColor = glm::vec4{ 0.0f, 0.0f, 0.0f, 0.0f };
 }
 
 void FadeConfig::setEditedCategory(int value) {
@@ -338,6 +353,7 @@ QString FadeConfig::eventNames[FADE_CATEGORY_COUNT] = {
     "bubble_isect_trespasser",
     "user_enter_leave_domain",
     "avatar_change",
+    "lod_switch",
 };
 
 void FadeConfig::save(const QString& configFilePath) const {

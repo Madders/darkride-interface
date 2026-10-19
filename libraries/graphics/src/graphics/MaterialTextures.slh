@@ -27,10 +27,12 @@ TextureTable(0, matTex);
     ALBEDO = 0,
     NORMAL, 1
     METALLIC, 2
-    EMISSIVE_LIGHTMAP, 3
+    EMISSIVE, 3
     ROUGHNESS, 4
     OCCLUSION, 5
     SCATTERING, 6
+    LIGHTMAP, 7
+    LIGHTMAP_DIRECTION, 8
 !>
 
 <@if withAlbedo@>
@@ -123,7 +125,7 @@ float fetchMetallicMap(vec2 uv) {
 <@endif@>
 
 <@if withEmissive@>
-LAYOUT(binding=GRAPHICS_TEXTURE_MATERIAL_EMISSIVE_LIGHTMAP) uniform sampler2D emissiveMap;
+LAYOUT(binding=GRAPHICS_TEXTURE_MATERIAL_EMISSIVE) uniform sampler2D emissiveMap;
 vec3 fetchEmissiveMap(vec2 uv) {
     return texture(emissiveMap, uv, TAA_TEXTURE_LOD_BIAS).rgb;
 }
@@ -188,10 +190,21 @@ float fetchScatteringMap(vec2 uv) {
 
 <$declareMaterialTexMapArrayBuffer()$>
 
-LAYOUT(binding=GRAPHICS_TEXTURE_MATERIAL_EMISSIVE_LIGHTMAP) uniform sampler2D emissiveMap;
+// the lightmap, in its own slot (LIGHTMAPS.md): linear light, scaled and offset by the material's lightmapParams
+LAYOUT(binding=GRAPHICS_TEXTURE_MATERIAL_LIGHTMAP) uniform sampler2D lightMap;
 vec3 fetchLightMap(vec2 uv) {
     vec2 lightmapParams = getTexMapArray()._lightmapParams;
-    return (vec3(lightmapParams.x) + lightmapParams.y * texture(emissiveMap, uv).rgb);
+    return (vec3(lightmapParams.x) + lightmapParams.y * texture(lightMap, uv).rgb);
+}
+
+// the lightmap's direction map, Unity's directional lightmap decoded as URP does (LIGHTMAPS.md §3.4): xyz the dominant
+// light direction in world space, 0..1 encoded, and w the share of the light that came from it, so that a surface
+// along its own normal keeps the lightmap's value and a normal-mapped one is shaded by the baked direction
+LAYOUT(binding=GRAPHICS_TEXTURE_MATERIAL_LIGHTMAP_DIRECTION) uniform sampler2D lightMapDirection;
+vec3 applyLightMapDirection(vec3 lightmap, vec2 uv, vec3 normalWS) {
+    vec4 direction = texture(lightMapDirection, uv);
+    float halfLambert = dot(normalWS, direction.xyz - 0.5) + 0.5;
+    return lightmap * halfLambert / max(1e-4, direction.w);
 }
 <@endfunc@>
 

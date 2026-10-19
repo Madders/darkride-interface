@@ -190,11 +190,16 @@ class RenderLocalShadowSetupConfig : public render::Job::Config {
     // whether the casters that haven't changed for a while are kept in a map of their own, copied under the others
     // each time the tile is drawn, so that a moving avatar doesn't cost the whole map (the default)
     Q_PROPERTY(bool staticCaching READ isStaticCaching WRITE setStaticCaching NOTIFY dirty)
+    // whether this view draws local light shadows at all (a mirror's view does without: an atlas each would cost
+    // too much)
+    Q_PROPERTY(bool localLights READ isLocalLights WRITE setLocalLights NOTIFY dirty)
 public:
     bool isCaching() const { return _caching; }
     void setCaching(bool caching) { if (_caching != caching) { _caching = caching; emit dirty(); } }
     bool isStaticCaching() const { return _staticCaching; }
     void setStaticCaching(bool staticCaching) { if (_staticCaching != staticCaching) { _staticCaching = staticCaching; emit dirty(); } }
+    bool isLocalLights() const { return _localLights; }
+    void setLocalLights(bool localLights) { if (_localLights != localLights) { _localLights = localLights; emit dirty(); } }
 
 signals:
     void dirty();
@@ -202,6 +207,7 @@ signals:
 private:
     bool _caching { true };
     bool _staticCaching { true };
+    bool _localLights { true };
 };
 
 // Picks the lights and gives each its tiles, and takes in a view wide enough for all of them, for fetching what they
@@ -214,7 +220,11 @@ public:
     using JobModel = render::Job::ModelIO<RenderLocalShadowSetup, Input, Output, Config>;
 
     RenderLocalShadowSetup();
-    void configure(const Config& config) { _caching = config.isCaching(); _staticCaching = config.isStaticCaching(); }
+    void configure(const Config& config) {
+        _caching = config.isCaching();
+        _staticCaching = config.isStaticCaching();
+        _localLights = config.isLocalLights();
+    }
     void run(const render::RenderContextPointer& renderContext, const Input& input, Output& output);
 
 private:
@@ -222,6 +232,7 @@ private:
     LocalShadowsPointer _localShadows;
     bool _caching { true };
     bool _staticCaching { true };
+    bool _localLights { true };
 };
 
 // One tile's turn: takes the view from its light, or selects nothing when the tile has no light this frame. For a

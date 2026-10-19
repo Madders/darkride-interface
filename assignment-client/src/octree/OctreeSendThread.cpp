@@ -90,7 +90,8 @@ bool OctreeSendThread::process() {
             // then we can't send an entity data packet
             if (nodeData && nodeData->hasReceivedFirstQuery() && node->getActiveSocket() && !nodeData->isShuttingDown()) {
                 bool viewFrustumChanged = nodeData->updateCurrentViewFrustum();
-                packetDistributor(node, nodeData, viewFrustumChanged);
+                int sent = packetDistributor(node, nodeData, viewFrustumChanged);
+                logSendStats(node, nodeData, sent);
             }
         } else {
             return false; // exit early if we're shutting down
@@ -120,6 +121,41 @@ bool OctreeSendThread::process() {
     }
 
     return isStillRunning();  // keep running till they terminate us
+}
+
+// A line per node every ten seconds (PHYSICS.md round 9, a diagnostic of the stream's lag): the packets this thread
+// sent, whether the node's packet is still reliable, the send queue's depth, and udt's view of the connection (what
+// went out reliably and unreliably, retransmissions, ACKs, the round trip and the congestion window; sampling resets
+// the node list's own window).
+void OctreeSendThread::logSendStats(const SharedNodePointer& node, OctreeQueryNode* nodeData, int packetsSent) {
+    _packetsSinceLog += packetsSent;
+    quint64 now = usecTimestampNow();
+    const quint64 LOG_INTERVAL = 10 * USECS_PER_SECOND;
+    if (_lastStatsLogTime == 0) {
+        _lastStatsLogTime = now;
+        return;
+    }
+    if (now - _lastStatsLogTime < LOG_INTERVAL) {
+        return;
+    }
+    _lastStatsLogTime = now;
+    QString udt = "no connection sampled";
+    auto nodeList = DependencyManager::get<NodeList>();
+    if (nodeList && node->getActiveSocket()) {
+        for (const auto& entry : nodeList->sampleStatsForAllConnections()) {
+            if (entry.first == *node->getActiveSocket()) {
+                const udt::ConnectionStats::Stats& s = entry.second;
+                udt = QString("udt: %1 reliable + %2 unreliable out, %3 retransmitted, %4 ACKs in, rtt %5 ms, window %6, period %7 us")
+                    .arg(s.sentPackets).arg(s.sentUnreliablePackets).arg(s.retransmittedPackets)
+                    .arg(s.events[udt::ConnectionStats::Stats::ReceivedACK]).arg(s.rtt / 1000).arg(s.congestionWindowSize).arg(s.packetSendPeriod);
+                break;
+            }
+        }
+    }
+    qCDebug(octree) << "send thread for" << NodeType::getNodeTypeName(node->getType()) << uuidStringWithoutCurlyBraces(_nodeUuid)
+        << ":" << _packetsSinceLog << "packets in 10 s," << (nodeData->getPacket().isReliable() ? "reliable," : "unreliable,")
+        << "queue" << queuedEntityCount() << ";" << udt;
+    _packetsSinceLog = 0;
 }
 
 AtomicUIntStat OctreeSendThread::_usleepTime { 0 };
@@ -299,6 +335,7 @@ int OctreeSendThread::handlePacketSend(SharedNodePointer node, OctreeQueryNode* 
     }
 
     _truePacketsSent += numPackets;
+    _packetsSentSinceMark += numPackets;
     return numPackets;
 }
 
@@ -396,6 +433,7 @@ int OctreeSendThread::packetDistributor(SharedNodePointer node, OctreeQueryNode*
             DependencyManager::get<NodeList>()->sendUnreliablePacket(*packet, *node);
             int numBytes = packet->getDataSize();
             _truePacketsSent++;
+            _packetsSentSinceMark++;
             _trueBytesSent += numBytes;
             _packetsSentThisInterval++;
 

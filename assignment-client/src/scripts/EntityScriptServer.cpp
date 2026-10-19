@@ -82,7 +82,8 @@ EntityScriptServer::EntityScriptServer(ReceivedMessage& message) : ThreadedAssig
     DebugDraw::getInstance();
 
     auto& packetReceiver = DependencyManager::get<NodeList>()->getPacketReceiver();
-    packetReceiver.registerListenerForTypes({ PacketType::OctreeStats, PacketType::EntityData, PacketType::EntityErase },
+    packetReceiver.registerListenerForTypes({ PacketType::OctreeStats, PacketType::EntityData, PacketType::EntityErase,
+                                              PacketType::EntityQueryInitialResultsComplete },
                                             this, "handleOctreePacket");
     packetReceiver.registerListener(PacketType::SelectedAudioFormat, this, "handleSelectedAudioFormat");
 
@@ -629,8 +630,11 @@ void EntityScriptServer::handleOctreePacket(QSharedPointer<ReceivedMessage> mess
         _entityViewer.processDatagram(*message, senderNode);
     } else if (packetType == PacketType::EntityErase) {
         _entityViewer.processEraseMessage(*message, senderNode);
+    } else if (packetType == PacketType::EntityQueryInitialResultsComplete) {
+        _entityViewer.handleInitialResultsComplete(message, senderNode);
     }
 }
+
 
 void EntityScriptServer::aboutToFinish() {
     shutdownScriptEngine();

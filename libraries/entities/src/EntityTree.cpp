@@ -315,7 +315,7 @@ void EntityTree::postAddEntity(EntityItemPointer entity) {
     emit addingEntityPointer(entity.get());
 }
 
-bool EntityTree::updateEntity(const EntityItemID& entityID, const EntityItemProperties& properties, const SharedNodePointer& senderNode) {
+bool EntityTree::updateEntity(const EntityItemID& entityID, const EntityItemProperties& properties, const SharedNodePointer& senderNode, bool isPhysics) {
     EntityItemPointer entity;
     {
         QReadLocker locker(&_entityMapLock);
@@ -324,11 +324,11 @@ bool EntityTree::updateEntity(const EntityItemID& entityID, const EntityItemProp
     if (!entity) {
         return false;
     }
-    return updateEntity(entity, properties, senderNode);
+    return updateEntity(entity, properties, senderNode, isPhysics);
 }
 
 bool EntityTree::updateEntity(EntityItemPointer entity, const EntityItemProperties& origProperties,
-        const SharedNodePointer& senderNode) {
+        const SharedNodePointer& senderNode, bool isPhysics) {
     EntityTreeElementPointer containingElement = entity->getElement();
     if (!containingElement) {
         return false;
@@ -451,9 +451,32 @@ bool EntityTree::updateEntity(EntityItemPointer entity, const EntityItemProperti
             if (simulationBlocked) {
                 // squash ownership and physics-related changes.
                 // TODO? replace these eight calls with just one?
+                // Except a teleport (PHYSICS.md round 7): an explicit edit of position or rotation (not a physics update)
+                // of an entity the physics server holds, off a track (a car on a track stays read-only), is let through;
+                // the physics server adopts it, standing still where it was put, and its next update carries it to
+                // everyone. A script's edit of a dynamic entity carries a poke bid, which loses to the server's priority
+                // and is squashed with the velocities as ever.
+                bool teleport = !isPhysics
+                    && entity->getSimulationPriority() == SERVER_SIMULATION_PRIORITY && entity->getTrackID().isNull()
+                    && (properties.positionChanged() || properties.rotationChanged());
                 properties.setSimulationOwnerChanged(false);
-                properties.setPositionChanged(false);
-                properties.setRotationChanged(false);
+                if (!teleport) {
+                    properties.setPositionChanged(false);
+                    properties.setRotationChanged(false);
+                } else {
+                    // held against the physics server's updates already on their way, which carry the old pose, for as
+                    // long as the teleport may take to reach the physics server (seconds, at times: PHYSICS.md round 7)
+                    const quint64 TELEPORT_HOLD = 10 * USECS_PER_SECOND;
+                    EntityItem::PendingTeleport pending;
+                    pending.position = properties.positionChanged() ? properties.getPosition() : entity->getLocalPosition();
+                    pending.rotation = properties.rotationChanged() ? properties.getRotation() : entity->getLocalOrientation();
+                    pending.expiry = usecTimestampNow() + TELEPORT_HOLD;
+                    entity->setPendingTeleport(pending);
+                    if (wantTerseEditLogging()) {
+                        qCDebug(entities) << (senderNode ? senderNode->getUUID() : QUuid()) << "teleports" << entity->getName()
+                            << entity->getID() << "from" << entity->getLocalPosition() << "to" << pending.position;
+                    }
+                }
                 properties.setVelocityChanged(false);
                 properties.setAngularVelocityChanged(false);
                 properties.setAccelerationChanged(false);
@@ -462,6 +485,41 @@ bool EntityTree::updateEntity(EntityItemPointer entity, const EntityItemProperti
 
                 if (wantTerseEditLogging()) {
                     qCDebug(entities) << (senderNode ? senderNode->getUUID() : "null") << "physical edits suppressed";
+                }
+            } else if (isPhysics) {
+                EntityItem::PendingTeleport pending = entity->getPendingTeleport();
+                if (pending.expiry != 0) {
+                    // the owner's update, while a teleport waits for it to take the new pose: one sent before it heard
+                    // of the teleport carries the old pose and would undo it, so its motion is dropped (its other
+                    // properties, the vehicle's state among them, go through) until an update arrives at the teleport
+                    const float ARRIVED_DISTANCE = 0.5f;   // m
+                    const float ARRIVED_ANGLE = 0.1f;      // rad
+                    bool arrived = (!properties.positionChanged()
+                            || glm::distance(properties.getPosition(), pending.position) < ARRIVED_DISTANCE)
+                        && (!properties.rotationChanged()
+                            || glm::angle(properties.getRotation() * glm::inverse(pending.rotation)) < ARRIVED_ANGLE)
+                        && (properties.positionChanged() || properties.rotationChanged());
+                    if (arrived || usecTimestampNow() > pending.expiry) {
+                        if (!arrived) {
+                            qCDebug(entities) << "teleport of" << entity->getName() << entity->getID() << "not taken up by its owner";
+                        }
+                        entity->setPendingTeleport(EntityItem::PendingTeleport());
+                    } else {
+                        properties.setPositionChanged(false);
+                        properties.setRotationChanged(false);
+                        properties.setVelocityChanged(false);
+                        properties.setAngularVelocityChanged(false);
+                        properties.setAccelerationChanged(false);
+                        properties.setLastEditedByChanged(false);   // the teleport stays someone else's edit
+                    }
+                }
+                // the physics server (beside this one, one clock) sending an update a second old is worth a line
+                const quint64 STALE_UPDATE = USECS_PER_SECOND;
+                quint64 now = usecTimestampNow();
+                if (entity->getSimulationPriority() == SERVER_SIMULATION_PRIORITY && properties.positionChanged()
+                        && properties.getLastEdited() + STALE_UPDATE < now) {
+                    qCDebug(entities) << "an update of" << entity->getName() << entity->getID() << "from its owner"
+                        << (senderNode ? senderNode->getUUID() : QUuid()) << "is" << (int64_t)(now - properties.getLastEdited()) / 1000 << "ms old";
                 }
             }
         }
@@ -2044,7 +2102,7 @@ int EntityTree::processEditPacketData(ReceivedMessage& message, const unsigned c
                     if (!isPhysics) {
                         properties.setLastEditedBy(senderNode->getUUID());
                     }
-                    updateEntity(existingEntity, properties, senderNode);
+                    updateEntity(existingEntity, properties, senderNode, isPhysics);
                     existingEntity->markAsChangedOnServer();
                     endUpdate = usecTimestampNow();
                     _totalUpdates++;
@@ -3320,7 +3378,13 @@ AACube EntityTree::updateEntityQueryAACubeWorker(SpatiallyNestablePointer object
                 quint64 now = usecTimestampNow();
                 EntityItemProperties properties = entity->getProperties();
                 properties.setQueryAACubeDirty();
-                properties.setLocationDirty();
+                // the location too, unless another simulates it: this peer's view of it lags its owner's, the entity
+                // server squashes a non-owner's location, and one the physics server holds would take it as an
+                // explicit edit, a teleport (PHYSICS.md round 7); a crew walking a deck moves the deck's queryAACube
+                QUuid simulatorID = entity->getSimulatorID();
+                if (simulatorID.isNull() || simulatorID == DependencyManager::get<NodeList>()->getSessionUUID()) {
+                    properties.setLocationDirty();
+                }
                 properties.setLastEdited(now);
 
                 packetSender->queueEditEntityMessage(PacketType::EntityEdit, getThisPointer(), entity->getID(), properties);

@@ -83,7 +83,7 @@ float getProjectionNear() {
 
 // positive far distance of the projection
 float getPosLinearDepthFar() {
-    return -frameTransform._depthInfo.z;
+    return frameTransform._depthInfo.w;
 }
 
 mat4 getViewInverse() {
@@ -139,6 +139,7 @@ int getStereoSide(ivec4 sideInfo) {
     return sideInfo.x;
 }
 
+// eye-space z (negative ahead) from a stored depth; the depth is reversed-Z, 1 at the near plane and 0 at the far one
 float evalZeyeFromZdb(float depth) {
     return frameTransform._depthInfo.x / (depth * frameTransform._depthInfo.y + frameTransform._depthInfo.z);
 }
@@ -154,7 +155,7 @@ vec3 evalEyeNormal(vec3 C) {
 vec3 evalEyePositionFromZdb(int side, float Zdb, vec2 texcoord) {
     // compute the view space position using the depth
     vec3 clipPos;
-    clipPos.xyz = vec3(texcoord.xy, Zdb) * 2.0 - 1.0;
+    clipPos.xyz = vec3(texcoord.xy * 2.0 - 1.0, 1.0 - 2.0 * Zdb); // the standard clip depth of a reversed-Z depth
     vec4 eyePos = frameTransform._invProjection[side] * vec4(clipPos.xyz, 1.0);
     return eyePos.xyz / eyePos.w;
 }
@@ -162,7 +163,7 @@ vec3 evalEyePositionFromZdb(int side, float Zdb, vec2 texcoord) {
 vec3 evalUnjitteredEyePositionFromZdb(int side, float Zdb, vec2 texcoord) {
     // compute the view space position using the depth
     vec3 clipPos;
-    clipPos.xyz = vec3(texcoord.xy, Zdb) * 2.0 - 1.0;
+    clipPos.xyz = vec3(texcoord.xy * 2.0 - 1.0, 1.0 - 2.0 * Zdb); // the standard clip depth of a reversed-Z depth
     vec4 eyePos = frameTransform._invProjectionUnJittered[side] * vec4(clipPos.xyz, 1.0);
     return eyePos.xyz / eyePos.w;
 }

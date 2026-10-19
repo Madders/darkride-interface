@@ -17,6 +17,15 @@
 using namespace udt;
 using namespace std::chrono;
 
+// A diagnostic (PHYSICS.md round 10): TIVOLI_UDT_TRACE=1 in the environment logs this side's view of every ACK for
+// the first few hundred of each connection, and every retransmission it decides on: the round-trip sample, the
+// estimate and its variance, the retransmission timeout, the congestion window and why it moved.
+static bool udtTraceEnabled() {
+    static const bool enabled = !qgetenv("TIVOLI_UDT_TRACE").isEmpty();
+    return enabled;
+}
+static const int UDT_TRACE_ACKS = 400;
+
 TCPVegasCC::TCPVegasCC() {
     _packetSendPeriod = 0.0;
     _congestionWindowSize = 2;
@@ -24,7 +33,22 @@ TCPVegasCC::TCPVegasCC() {
     // set our minimum RTT variables to the maximum possible value
     // we can't do this as a member initializer until our VS has support for constexpr
     _currentMinRTT = std::numeric_limits<int>::max();
-    _baseRTT = std::numeric_limits<int>::max();
+    resetBaseRTT();
+}
+
+void TCPVegasCC::resetBaseRTT() {
+    _baseBucketMin[0] = std::numeric_limits<int>::max();
+    _baseBucketMin[1] = std::numeric_limits<int>::max();
+    _baseBucketStart = p_high_resolution_clock::now();
+}
+
+void TCPVegasCC::noteBaseRTT(int rtt, p_high_resolution_clock::time_point now) {
+    if (duration_cast<microseconds>(now - _baseBucketStart).count() >= BASE_RTT_BUCKET_USECS) {
+        _baseBucketMin[1] = _baseBucketMin[0];
+        _baseBucketMin[0] = std::numeric_limits<int>::max();
+        _baseBucketStart = now;
+    }
+    _baseBucketMin[0] = std::min(_baseBucketMin[0], rtt);
 }
 
 bool TCPVegasCC::calculateRTT(p_high_resolution_clock::time_point sendTime, p_high_resolution_clock::time_point receiveTime) {
@@ -67,8 +91,10 @@ bool TCPVegasCC::calculateRTT(p_high_resolution_clock::time_point sendTime, p_hi
                         + abs(lastRTT - _ewmaRTT)) / RTT_ESTIMATION_VARIANCE_ALPHA;
     }
 
-    // keep track of the lowest RTT during connection
-    _baseRTT = std::min(_baseRTT, lastRTT);
+    // keep track of the lowest RTT over the sliding window
+    noteBaseRTT(lastRTT, receiveTime);
+    _traceLastSample = lastRTT;
+    _traceBaseRTT = baseRTT();
 
     // find the min RTT during the last RTT
     _currentMinRTT = std::min(_currentMinRTT, lastRTT);
@@ -117,22 +143,39 @@ bool TCPVegasCC::onACK(SequenceNumber ack, p_high_resolution_clock::time_point r
     }
 
     auto sinceLastAdjustment = duration_cast<microseconds>(p_high_resolution_clock::now() - _lastAdjustmentTime).count();
+    int windowBefore = _congestionWindowSize;
+    bool slowStartBefore = _slowStart;
+    int rttsBefore = _numRTTs;
+    bool adjusted = false;
     if (sinceLastAdjustment >= _ewmaRTT) {
         performCongestionAvoidance(ack);
+        adjusted = true;
     }
 
     ++_numACKSinceFastRetransmit;
 
     // perform the fast re-transmit check if this is a duplicate ACK or if this is the first or second ACK
     // after a previous fast re-transmit
+    bool retransmit = false;
+    bool checked = false;
     if (wasDuplicateACK || _numACKSinceFastRetransmit < 3) {
-        return needsFastRetransmit(ack, wasDuplicateACK);
+        checked = true;
+        retransmit = needsFastRetransmit(ack, wasDuplicateACK);
     } else {
         _duplicateACKCount = 0;
     }
 
-    // ACK processed, no fast re-transmit required
-    return false;
+    if (udtTraceEnabled() && (_traceCount < UDT_TRACE_ACKS || retransmit)) {
+        ++_traceCount;
+        qDebug().nospace() << "udt ack " << (uint32_t)ack << (wasDuplicateACK ? " dup" : "") << " rtt " << _traceLastSample
+            << " ewma " << _ewmaRTT << " var " << _rttVariance << " rto " << estimatedTimeout() << " us; window " << windowBefore
+            << (adjusted ? " -> " : " (no adjustment) ") << (adjusted ? QString::number(_congestionWindowSize) : QString(""))
+            << (slowStartBefore ? " slow-start" : " avoidance") << " rtts " << rttsBefore << " base " << _traceBaseRTT
+            << " inflight " << seqlen(_lastACK, _sendCurrSeqNum) - 1 << " unacked-records " << _sentPacketDatas.size()
+            << (checked ? (retransmit ? " RETRANSMIT " : " checked ") : " ") << (checked ? QString::number((uint32_t)ack + 1) : QString(""))
+            << " since-send " << _traceSinceSend << " us";
+    }
+    return retransmit;
 }
 
 bool TCPVegasCC::needsFastRetransmit(SequenceNumber ack, bool wasDuplicateACK) {
@@ -142,9 +185,11 @@ bool TCPVegasCC::needsFastRetransmit(SequenceNumber ack, bool wasDuplicateACK) {
         return packetTime.sequenceNumber == ack + 1;
     });
 
+    _traceSinceSend = -1;
     if (nextIt != _sentPacketDatas.end()) {
         auto now = p_high_resolution_clock::now();
         auto sinceSend = duration_cast<microseconds>(now - nextIt->timePoint).count();
+        _traceSinceSend = (int)sinceSend;
 
         if (sinceSend >= estimatedTimeout()) {
             // break out of slow start, we've decided this is loss
@@ -191,9 +236,11 @@ void TCPVegasCC::performCongestionAvoidance(udt::SequenceNumber ack) {
     
     // Taking the min avoids the effects of delayed ACKs
     // (though congestion may be noticed a bit later)
-    int rtt = _currentMinRTT;
+    // (both floored: a round trip under a millisecond is scheduling noise, not a queue)
+    int rtt = std::max(_currentMinRTT, VEGAS_RTT_FLOOR_USECS);
+    int base = std::max(baseRTT(), VEGAS_RTT_FLOOR_USECS);
 
-    int64_t windowSizeDiff = (int64_t) _congestionWindowSize * (rtt - _baseRTT) / _baseRTT;
+    int64_t windowSizeDiff = (int64_t) _congestionWindowSize * (rtt - base) / base;
 
     if (_numRTTs <= 2) {
         performRenoCongestionAvoidance(ack);
@@ -203,8 +250,8 @@ void TCPVegasCC::performCongestionAvoidance(udt::SequenceNumber ack) {
                 // we're going too fast - this breaks us out of slow start and we switch to linear increase/decrease
                 _slowStart = false;
 
-                int expectedWindowSize = _congestionWindowSize * _baseRTT / rtt;
-                _baseRTT = std::numeric_limits<int>::max();
+                int expectedWindowSize = _congestionWindowSize * base / rtt;
+                resetBaseRTT();
 
                 // drop the congestion window size to the expected size, if smaller
                 _congestionWindowSize = std::min(_congestionWindowSize, expectedWindowSize + 1);
@@ -251,14 +298,16 @@ void TCPVegasCC::performCongestionAvoidance(udt::SequenceNumber ack) {
 
 
 int TCPVegasCC::estimatedTimeout() const {
-    return _ewmaRTT == -1 ? DEFAULT_SYN_INTERVAL : _ewmaRTT + _rttVariance * 4;
+    return std::max(_ewmaRTT == -1 ? DEFAULT_SYN_INTERVAL : _ewmaRTT + _rttVariance * 4, MIN_RTO_USECS);
 }
 
 bool TCPVegasCC::isCongestionWindowLimited() {
     if (_slowStart) {
         return true;
     } else {
-        return seqlen(_sendCurrSeqNum, _lastACK) < _congestionWindowSize;
+        // the window is what limits the sending when as many packets as it allows are in flight (the old test had
+        // the arguments the wrong way round and only ever held with nothing in flight)
+        return seqlen(_lastACK, _sendCurrSeqNum) - 1 >= _congestionWindowSize;
     }
 }
 

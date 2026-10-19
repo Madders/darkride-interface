@@ -11,6 +11,7 @@
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
+#include <QtCore/QVariant>
 
 #include "Mapping.h"
 #include "Endpoint.h"
@@ -165,6 +166,9 @@ public:
      *     of the route data. If a function, it must return a number or a {@link Pose} value as the route data.
      * @returns {RouteObject} A route ready for mapping to an action or function using {@link RouteObject} methods.
      */
+    /// From a plain value, for the WebAssembly engine (an input id, a script callback, or a list of those); its own
+    /// name, because QtScript finds a same-named QVariant overload ambiguous with the QScriptValue one.
+    Q_INVOKABLE QObject* fromValue(const QVariant& source);
     Q_INVOKABLE QObject* from(const QScriptValue& source);
 
     /**jsdoc
@@ -187,6 +191,7 @@ public:
      *     Controller.disableMapping(MAPPING_NAME);
      * });
      */
+    Q_INVOKABLE QObject* makeAxisFromValues(const QVariant& source1, const QVariant& source2);
     Q_INVOKABLE QObject* makeAxis(const QScriptValue& source1, const QScriptValue& source2);
 
     /**jsdoc

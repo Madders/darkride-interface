@@ -68,9 +68,7 @@ PerformanceManager::PerformancePreset PerformanceManager::getPerformancePreset()
 
 void PerformanceManager::applyPerformancePreset(PerformanceManager::PerformancePreset preset) {
 
-    // Ugly case that prevent us to run deferred everywhere...
-    bool isDeferredCapable = platform::Profiler::isRenderMethodDeferredCapable();
-    
+    // forward (Forward+) for every preset since 2026-10-16; deferred stays a choice through the settings
     // eval recommended PPI and Scale
     // float recommendedPpiScale = 1.0f;
     // const float recommended_PPI[] = { 200.0f, 120.f, 160.f, 250.f};
@@ -91,10 +89,8 @@ void PerformanceManager::applyPerformancePreset(PerformanceManager::PerformanceP
 
     switch (preset) {
         case PerformancePreset::HIGH:
-            instance->setRenderMethod(isDeferredCapable ?
-                RenderScriptingInterface::RenderMethod::DEFERRED : 
-                RenderScriptingInterface::RenderMethod::FORWARD
-            );
+            instance->setRenderMethod(RenderScriptingInterface::RenderMethod::FORWARD);
+            instance->setMsaaSamples(4);
 
             instance->setShadowsEnabled(true);
             instance->setAmbientOcclusionEnabled(true);
@@ -106,10 +102,8 @@ void PerformanceManager::applyPerformancePreset(PerformanceManager::PerformanceP
             
         break;
         case PerformancePreset::MID:
-            instance->setRenderMethod(isDeferredCapable ?
-                RenderScriptingInterface::RenderMethod::DEFERRED :
-                RenderScriptingInterface::RenderMethod::FORWARD
-            );
+            instance->setRenderMethod(RenderScriptingInterface::RenderMethod::FORWARD);
+            instance->setMsaaSamples(4);
 
             instance->setShadowsEnabled(false);
             instance->setAmbientOcclusionEnabled(false);
@@ -121,9 +115,8 @@ void PerformanceManager::applyPerformancePreset(PerformanceManager::PerformanceP
 
         break;
         case PerformancePreset::LOW:
-            instance->setRenderMethod(
-                RenderScriptingInterface::RenderMethod::FORWARD
-            );
+            instance->setRenderMethod(RenderScriptingInterface::RenderMethod::FORWARD);
+            instance->setMsaaSamples(2);
 
             instance->setShadowsEnabled(false);
             instance->setAmbientOcclusionEnabled(false);
@@ -135,9 +128,8 @@ void PerformanceManager::applyPerformancePreset(PerformanceManager::PerformanceP
 
         break;
         case PerformancePreset::POTATO:
-            instance->setRenderMethod(
-                RenderScriptingInterface::RenderMethod::FORWARD
-            );
+            instance->setRenderMethod(RenderScriptingInterface::RenderMethod::FORWARD);
+            instance->setMsaaSamples(1);
 
             instance->setShadowsEnabled(false);
             instance->setAmbientOcclusionEnabled(false);

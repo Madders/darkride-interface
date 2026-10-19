@@ -15,6 +15,7 @@
 #include "GLMHelpers.h"
 #include "AnimationLogging.h"
 #include "AnimUtil.h"
+#include "Humanoid.h"
 
 #ifdef USE_CUSTOM_ASSERT
 #undef ASSERT
@@ -89,11 +90,52 @@ void bakeAbsoluteDeltaAnim(std::vector<AnimPoseVec>& anim, const AnimPoseVec& ba
     }
 }
 
+// A humanoid muscle clip (".muscles.json") as poses of this avatar, through its humanoid frames (Humanoid.h); joints the
+// clip does not move keep their default poses.
+static std::vector<AnimPoseVec> posesFromMuscleClip(const hfm::MuscleClip& clip, const AnimSkeleton& skeleton) {
+    std::vector<AnimPoseVec> anim;
+    const AnimPoseVec& rest = skeleton.getRelativeDefaultPoses();
+    humanoid::MuscleFrames frames;
+    if (!frames.setup(skeleton, skeleton.getHumanoidMuscleFrames())) {
+        qCWarning(animation) << "a muscle clip on an avatar without humanoid frames (\"humanoid\" in its .fst) stays still";
+        anim.push_back(rest);
+        return anim;
+    }
+    std::vector<bool> animated(humanoid::MUSCLE_COUNT, false);
+    for (int muscle : clip.muscles) {
+        if (muscle >= 0 && muscle < humanoid::MUSCLE_COUNT) {
+            animated[muscle] = true;
+        }
+    }
+    std::vector<float> values(humanoid::MUSCLE_COUNT, 0.0f);
+    std::vector<glm::quat> rotations(rest.size());
+    for (const std::vector<float>& frame : clip.frames) {
+        for (size_t i = 0; i < clip.muscles.size() && i < frame.size(); i++) {
+            if (clip.muscles[i] >= 0 && clip.muscles[i] < humanoid::MUSCLE_COUNT) {
+                values[clip.muscles[i]] = frame[i];
+            }
+        }
+        for (size_t j = 0; j < rest.size(); j++) {
+            rotations[j] = rest[j].rot();
+        }
+        frames.pose(values, animated, rotations);
+        AnimPoseVec poses = rest;
+        for (size_t j = 0; j < poses.size(); j++) {
+            poses[j].rot() = rotations[j];
+        }
+        anim.push_back(poses);
+    }
+    return anim;
+}
+
 std::vector<AnimPoseVec> copyAndRetargetFromNetworkAnim(AnimationPointer networkAnim, AnimSkeleton::ConstPointer avatarSkeleton) {
     ASSERT(networkAnim && networkAnim->isLoaded() && avatarSkeleton);
     std::vector<AnimPoseVec> anim;
 
     const HFMModel& animModel = networkAnim->getHFMModel();
+    if (animModel.muscleClip.isValid()) {
+        return posesFromMuscleClip(animModel.muscleClip, *avatarSkeleton);
+    }
     AnimSkeleton animSkeleton(animModel);
     const int animJointCount = animSkeleton.getNumJoints();
     const int avatarJointCount = avatarSkeleton->getNumJoints();
@@ -144,6 +186,34 @@ std::vector<AnimPoseVec> copyAndRetargetFromNetworkAnim(AnimationPointer network
         }
     }
 
+    // Humanoid retargeting (Humanoid.h): with "retarget = humanoid" in the avatar's .fst and both skeletons humanoid,
+    // each humanoid joint takes the clip joint's turn away from its T-pose, applied to the avatar joint's own T-pose,
+    // whatever way either skeleton's bones point and whatever pose either was made in.
+    std::vector<int> avatarToAnimHumanJoint;
+    humanoid::TPose animTPose;
+    humanoid::TPose avatarTPose;
+    int avatarHipsJoint = -1;
+    int animHipsJoint = -1;
+    if (avatarSkeleton->getHumanoidRetarget()) {
+        animTPose = humanoid::computeTPose(animSkeleton);
+        avatarTPose = humanoid::computeTPose(*avatarSkeleton);
+        if (animTPose.isValid() && avatarTPose.isValid()) {
+            const std::vector<int> animBones = humanoid::mapBones(animSkeleton);
+            const std::vector<int> avatarBones = humanoid::mapBones(*avatarSkeleton);
+            avatarToAnimHumanJoint.assign(avatarJointCount, -1);
+            for (int bone = 0; bone < humanoid::BoneCount; bone++) {
+                if (animBones[bone] >= 0 && avatarBones[bone] >= 0) {
+                    avatarToAnimHumanJoint[avatarBones[bone]] = animBones[bone];
+                }
+            }
+            avatarHipsJoint = avatarBones[humanoid::Hips];
+            animHipsJoint = animBones[humanoid::Hips];
+        } else {
+            qCWarning(animation) << "humanoid retargeting was asked for, but a skeleton is not humanoid:" << networkAnim->getURL();
+        }
+    }
+    const bool humanoidRetarget = !avatarToAnimHumanJoint.empty();
+
     for (int frame = 0; frame < animFrameCount; frame++) {
         const HFMAnimationFrame& animFrame = animModel.animationFrames[frame];
         ASSERT(frame >= 0 && frame < (int)animModel.animationFrames.size());
@@ -166,7 +236,12 @@ std::vector<AnimPoseVec> copyAndRetargetFromNetworkAnim(AnimationPointer network
         for (int avatarJointIndex = 0; avatarJointIndex < avatarJointCount; avatarJointIndex++) {
             ASSERT(avatarJointIndex >= 0 && avatarJointIndex < (int)avatarToAnimJointIndexMap.size());
             int animJointIndex = avatarToAnimJointIndexMap[avatarJointIndex];
-            if (animJointIndex >= 0) {
+            const int humanJointIndex = humanoidRetarget ? avatarToAnimHumanJoint[avatarJointIndex] : -1;
+            if (humanJointIndex >= 0) {
+                // A humanoid joint: the clip joint's turn away from its T-pose, applied to the avatar joint's T-pose.
+                const glm::quat turn = animRotations[humanJointIndex] * glm::inverse(animTPose.rotations[humanJointIndex]);
+                avatarRotations.push_back(glm::normalize(turn * avatarTPose.rotations[avatarJointIndex]));
+            } else if (animJointIndex >= 0) {
                 // This joint is in both animation and avatar.
                 // Set the absolute rotation directly
                 ASSERT(animJointIndex >= 0 && animJointIndex < (int)animRotations.size());
@@ -183,6 +258,17 @@ std::vector<AnimPoseVec> copyAndRetargetFromNetworkAnim(AnimationPointer network
                 }
                 avatarRotations.push_back(avatarParentAbsoluteRot * avatarRelativeDefaultRot);
             }
+        }
+
+        // With humanoid retargeting the hips move in their own parent's frame, which need not be turned like the
+        // clip's (a Blender armature often is): the move goes through the world between the two.
+        glm::quat hipsMoveTurn;
+        if (humanoidRetarget && avatarHipsJoint >= 0 && animHipsJoint >= 0) {
+            const int animParent = animSkeleton.getParentIndex(animHipsJoint);
+            const int avatarParent = avatarSkeleton->getParentIndex(avatarHipsJoint);
+            const glm::quat animParentRot = animParent >= 0 ? animRotations[animParent] : glm::quat();
+            const glm::quat avatarParentRot = avatarParent >= 0 ? avatarRotations[avatarParent] : glm::quat();
+            hipsMoveTurn = glm::inverse(avatarParentRot) * animParentRot;
         }
 
         // convert avatar rotations into relative frame
@@ -207,7 +293,11 @@ std::vector<AnimPoseVec> copyAndRetargetFromNetworkAnim(AnimationPointer network
                 // retarget translation from animation to avatar
                 ASSERT(animJointIndex >= 0 && animJointIndex < (int)animModel.animationFrames[0].translations.size());
                 const glm::vec3& animZeroTrans = animModel.animationFrames[0].translations[animJointIndex];
-                relativeTranslation = avatarDefaultPose.trans() + boneLengthScale * (animTrans - animZeroTrans);
+                if (humanoidRetarget && avatarJointIndex == avatarHipsJoint) {
+                    relativeTranslation = avatarDefaultPose.trans() + boneLengthScale * (hipsMoveTurn * (animTrans - animZeroTrans));
+                } else {
+                    relativeTranslation = avatarDefaultPose.trans() + boneLengthScale * (animTrans - animZeroTrans);
+                }
             } else {
                 // This joint is NOT in the animation at all.
                 // preserve the default translation.

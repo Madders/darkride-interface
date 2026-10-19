@@ -25,7 +25,9 @@ void DeferredFrameTransform::update(RenderArgs* args, glm::vec2 jitter) {
     auto farZ = args->getViewFrustum().getFarClip();
 
     auto& frameTransformBuffer = _frameTransformBuffer.edit<FrameTransform>();
-    frameTransformBuffer.depthInfo = glm::vec4(nearZ*farZ, farZ - nearZ, -farZ, 0.0f);
+    // reversed-Z (gpu::Backend::reversedZProjection): a stored depth d is 1 - the standard one, so the eye-space depth
+    // n.f / (d.(f - n) - f) becomes n.f / (-d.(f - n) - n); the far distance rides in w
+    frameTransformBuffer.depthInfo = glm::vec4(nearZ*farZ, -(farZ - nearZ), -nearZ, farZ);
 
     frameTransformBuffer.pixelInfo = args->_viewport;
 
