@@ -400,6 +400,11 @@ void AssimpSerializer::processMeshes(const hifi::VariantHash& mapping) {
         if (mMesh->mNumAnimMeshes > 0) {
             bool isBlendshapeChannelNamesEmpty = hfmModel->blendshapeChannelNames.size() == 0;
 
+            QStringList morphTargetNames;
+            for (size_t i = 0; i < mMesh->mNumAnimMeshes; i++) {
+                morphTargetNames << QString(mMesh->mAnimMeshes[i]->mName.C_Str());
+            }
+
             for (size_t i = 0; i < (int)Blendshapes::BlendshapeCount; i++) {
                 const QString fromName = BLENDSHAPE_NAMES[i];
                 
@@ -420,7 +425,13 @@ void AssimpSerializer::processMeshes(const hifi::VariantHash& mapping) {
                         weight = mapping.at(1).toFloat();
                     }
                 } else {
-                    toName = fromName;
+                    // its own name, or another the model may use for it, such as ARKit's
+                    BlendshapeSource source = findBlendshapeSource((int)i, morphTargetNames);
+                    if (source.name.isEmpty()) {
+                        continue;
+                    }
+                    toName = source.name;
+                    weight = source.weight;
                 }
 
                 if (weight == 0.0f && fromName == toName) {

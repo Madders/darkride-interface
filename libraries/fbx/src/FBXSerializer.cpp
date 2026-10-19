@@ -453,6 +453,7 @@ HFMModel* FBXSerializer::extractHFMModel(const hifi::VariantHash& mapping, const
         }
     }
     QMultiHash<QString, WeightedIndex> blendshapeChannelIndices;
+    QVector<QPair<QString, QString>> blendshapeChannels; // every channel's ID and name, for the fallback below
 #if defined(DEBUG_FBXSERIALIZER)
     int unknown = 0;
 #endif
@@ -1089,6 +1090,7 @@ HFMModel* FBXSerializer::extractHFMModel(const hifi::VariantHash& mapping, const
                         }
                         QString id = getID(object.properties);
                         hfmModel.blendshapeChannelNames << name;
+                        blendshapeChannels.append({ id, QString(name) });
                         foreach (const WeightedIndex& index, blendshapeIndices.values(name)) {
                             blendshapeChannelIndices.insert(id, index);
                         }
@@ -1226,6 +1228,33 @@ HFMModel* FBXSerializer::extractHFMModel(const hifi::VariantHash& mapping, const
         if (hifiGlobalNodeID.isEmpty()) {
             auto light = lights.begin();
             _lightmapLevel = (*light).second.intensity;
+        }
+    }
+
+    // A blendshape with no FST mapping and no channel of its own name takes another name the model may use for it,
+    // such as ARKit's (see findBlendshapeSource)
+    if (!blendshapeChannels.isEmpty()) {
+        QStringList channelNames;
+        for (const auto& channel : blendshapeChannels) {
+            channelNames << channel.second;
+        }
+        QSet<int> found;
+        for (const WeightedIndex& index : blendshapeChannelIndices) {
+            found.insert(index.first);
+        }
+        for (int i = 0; i < (int)Blendshapes::BlendshapeCount; i++) {
+            if (found.contains(i) || blendshapeMappings.contains(BLENDSHAPE_NAMES[i])) {
+                continue;
+            }
+            BlendshapeSource source = findBlendshapeSource(i, channelNames);
+            if (source.name.isEmpty()) {
+                continue;
+            }
+            for (const auto& channel : blendshapeChannels) {
+                if (channel.second == source.name) {
+                    blendshapeChannelIndices.insert(channel.first, WeightedIndex(i, source.weight));
+                }
+            }
         }
     }
 
