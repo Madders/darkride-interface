@@ -36,6 +36,7 @@
 
 #include <AutoRig.h>
 #include <AvatarWriter.h>
+#include <BlendshapeConstants.h>
 #include <StandardSkeleton.h>
 
 #include "RigCheck.h"
@@ -170,6 +171,16 @@ static void inspectModel(const HFMModel& model) {
                 extents.maximum.y, extents.maximum.z);
         for (const QString& line : partsOf[(uint32_t)m]) {
             fprintf(stdout, "    %s\n", qPrintable(line));
+        }
+        // the blendshapes it has, by Darkride's names, with how many vertices each moves
+        QStringList blendshapes;
+        for (int b = 0; b < (int)mesh.blendshapes.size() && b < (int)Blendshapes::BlendshapeCount; b++) {
+            if (!mesh.blendshapes[b].indices.isEmpty()) {
+                blendshapes << QString("%1 %2").arg(BLENDSHAPE_NAMES[b]).arg(mesh.blendshapes[b].indices.size());
+            }
+        }
+        if (!blendshapes.isEmpty()) {
+            fprintf(stdout, "    %d blendshapes: %s\n", blendshapes.size(), qPrintable(blendshapes.join(", ")));
         }
         // how far each UV layer spreads: a layer collapsed to a point (an unused lightmap channel) draws one texel
         for (int layer = 0; layer < 2; layer++) {
