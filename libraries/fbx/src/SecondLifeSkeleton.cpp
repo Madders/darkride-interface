@@ -212,6 +212,44 @@ QStringList rebuildSecondLifeSkeleton(aiScene* scene) {
             attach(node, parent);
         }
     }
+    // and the others left loose under the armature, by their families: Roth2 writes its 43 face bones there, with no
+    // mFaceRoot, and they stayed behind as its head turned, which tore the head apart
+    auto first = [&](std::initializer_list<const char*> names) -> aiNode* {
+        for (const char* candidate : names) {
+            if (aiNode* node = find(candidate)) {
+                return node;
+            }
+        }
+        return nullptr;
+    };
+    auto home = [&](const QString& name) -> aiNode* {
+        const QString side = name.endsWith("Left") ? "Left" : name.endsWith("Right") ? "Right" : QString();
+        if (name.startsWith("mFace") || name.startsWith("mEye") || name == "mSkull") {
+            return first({ "mFaceRoot", "mHead" });
+        }
+        if (name.startsWith("mHand") && !side.isEmpty()) {
+            return find("mWrist" + side);
+        }
+        if (name.startsWith("mWing")) {
+            return first({ "mChest", "mTorso" });
+        }
+        if (name == "mSpine3" || name == "mSpine4") {
+            return first({ "mTorso", "mPelvis" });
+        }
+        if (name.startsWith("mTail") || name.startsWith("mHind") || name.startsWith("mGroin") || name.startsWith("mSpine")) {
+            return find("mPelvis");
+        }
+        return nullptr;
+    };
+    std::vector<aiNode*> loose(armature->mChildren, armature->mChildren + armature->mNumChildren);
+    for (aiNode* node : loose) {
+        aiNode* parent = home(node->mName.C_Str());
+        if (parent && parent != node) {
+            detach(node);
+            attach(node, parent);
+        }
+    }
+
     // then each joint at its rest, parents before children (the fingers and face too)
     std::function<void(aiNode*)> rest = [&](aiNode* node) {
         auto global = globals.find(node->mName.C_Str());
