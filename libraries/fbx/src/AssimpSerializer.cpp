@@ -448,7 +448,16 @@ void AssimpSerializer::processMeshes(const hifi::VariantHash& mapping) {
                     if (source.weight == 0.0f && fromName == source.name) {
                         continue;
                     }
-                    aiAnimMesh* animMesh = getBlendshapeByName(source.name, mMesh);
+                    aiAnimMesh* animMesh = source.name.isEmpty() ? nullptr : getBlendshapeByName(source.name, mMesh);
+                    if (animMesh == nullptr && source.index >= 0 && source.index < (int)mMesh->mNumAnimMeshes &&
+                            !source.meshName.isEmpty()) {
+                        // by its number, in the glTF mesh this one came from: Assimp names a mesh's primitives
+                        // "<mesh>-0", "<mesh>-1"...
+                        const QString name = mMesh->mName.C_Str();
+                        if (name == source.meshName || name.startsWith(source.meshName + "-")) {
+                            animMesh = mMesh->mAnimMeshes[source.index];
+                        }
+                    }
                     if (animMesh == nullptr) {
                         continue;
                     }

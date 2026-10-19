@@ -26,6 +26,10 @@ extern const QMap<QString, int> BLENDSHAPE_LOOKUP_MAP;
 struct BlendshapeSource {
     QString name;  // as the model names it; empty if the model has none for the blendshape
     float weight { 1.0f };
+    // Or, as a VRM's expressions give it, the target's number among those of the model's mesh of this name, for when
+    // the loader gets the targets without their names (three-vrm-girl keeps them only in its primitives' extras)
+    QString meshName;
+    int index { -1 };
 };
 
 // Which of a model's morph targets (modelNames) to use for blendshape `index` when the FST maps nothing for it:

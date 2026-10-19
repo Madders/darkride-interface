@@ -148,9 +148,11 @@ VRMInfo readVRM(const QByteArray& glb) {
         for (auto itr = presets.begin(); itr != presets.end(); itr++) {
             for (const QJsonValue& bind : itr.value().toObject()["morphTargetBinds"].toArray()) {
                 const int mesh = nodes.at(bind.toObject()["node"].toInt(-1)).toObject()["mesh"].toInt(-1);
-                const QString name = targetName(mesh, bind.toObject()["index"].toInt(-1));
-                if (!name.isEmpty()) {
-                    expressions[itr.key()].append({ name, (float)bind.toObject()["weight"].toDouble(1.0) });
+                const int index = bind.toObject()["index"].toInt(-1);
+                const QString name = targetName(mesh, index);
+                if (!name.isEmpty() || index >= 0) {
+                    expressions[itr.key()].append({ name, (float)bind.toObject()["weight"].toDouble(1.0),
+                                                    meshes.at(mesh).toObject()["name"].toString(), index });
                 }
             }
         }
@@ -158,9 +160,12 @@ VRMInfo readVRM(const QByteArray& glb) {
         for (const QJsonValue& group : vrm0["blendShapeMaster"].toObject()["blendShapeGroups"].toArray()) {
             const QString preset = presetName(group.toObject()["presetName"].toString());
             for (const QJsonValue& bind : group.toObject()["binds"].toArray()) {
-                const QString name = targetName(bind.toObject()["mesh"].toInt(-1), bind.toObject()["index"].toInt(-1));
-                if (!name.isEmpty()) {
-                    expressions[preset].append({ name, (float)bind.toObject()["weight"].toDouble(100.0) / 100.0f });
+                const int mesh = bind.toObject()["mesh"].toInt(-1);
+                const int index = bind.toObject()["index"].toInt(-1);
+                const QString name = targetName(mesh, index);
+                if (!name.isEmpty() || index >= 0) {
+                    expressions[preset].append({ name, (float)bind.toObject()["weight"].toDouble(100.0) / 100.0f,
+                                                 meshes.at(mesh).toObject()["name"].toString(), index });
                 }
             }
         }
