@@ -56,9 +56,9 @@ struct Finger {
 // 3ds Max's Biped numbers them: Finger0 is the thumb
 const Finger FINGERS[] = {
     { "Thumb", pattern("thumb|pollex|finger0") },
-    { "Index", pattern("index|pointer|forefinger|finger1") },
+    { "Index", pattern("index|pointer|fore|finger1") },
     { "Middle", pattern("middle|finger2") },
-    { "Ring", pattern("ring|finger3") },
+    { "Ring", pattern("ring|third|finger3") },
     { "Pinky", pattern("pinky|pinkie|little|finger4") },
 };
 
@@ -196,9 +196,14 @@ bool Mapper::mapByShape() {
     }
 
     // The hands, which aren't in the legs, and the chest the arms meet at
+    std::vector<int> legTops;
+    for (int foot : { feet.first, feet.second }) {
+        std::vector<int> leg = between(legRoot, foot);
+        legTops.push_back(leg.empty() ? foot : leg.front());
+    }
     std::vector<int> hands;
-    for (int hand : candidates(HAND, NOT_HAND, hips)) {
-        if (commonAncestor(hand, feet.first) == legRoot && commonAncestor(hand, feet.second) == legRoot) {
+    for (int hand : candidates(HAND, NOT_HAND)) {
+        if (hand != legTops[0] && hand != legTops[1] && !isAncestor(legTops[0], hand) && !isAncestor(legTops[1], hand)) {
             hands.push_back(hand);
         }
     }
@@ -207,7 +212,11 @@ bool Mapper::mapByShape() {
         return false;
     }
     const int armRoot = commonAncestor(leftAndRightHands.first, leftAndRightHands.second);
-    if (armRoot < 0 || !isAncestor(hips, armRoot)) {
+    // Rigs that split the body into lower and upper halves, as MMD's do, have their hips where the halves meet
+    if (armRoot >= 0 && !isAncestor(hips, armRoot)) {
+        hips = commonAncestor(legRoot, armRoot);
+    }
+    if (armRoot < 0 || hips < 0 || !isAncestor(hips, armRoot)) {
         return false;
     }
     // Biped hangs the arms from the neck
