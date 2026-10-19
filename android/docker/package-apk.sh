@@ -27,12 +27,10 @@ mkdir -p "$DEPLOY/libs/$ABI"
 LIBS_DIR="$BUILD/android-build/libs/$ABI"
 APP_LIB_NAME=tivoli-native-lib
 cp "$BUILD/android/apps/interface/lib${APP_LIB_NAME}_$ABI.so" "$DEPLOY/libs/$ABI/"
-# Only the libraries this checkout has: branches built in the one work volume leave theirs behind (the Quest
-# build's openxrDisplay, which needs a loader the phone build doesn't package)
-EXTRA_LIBS=$(find "$LIBS_DIR" -maxdepth 1 -name "*.so" | sort | while read -r LIB; do
-    NAME=$(basename "$LIB" | sed -n "s/^libtivoli-\(.*\)_$ABI\.so$/\1/p")
-    if [ -z "$NAME" ] || [ -d "$SRC/libraries/$NAME" ]; then echo "$LIB"; fi
-done | paste -sd, -)
+# Only the libraries this build makes (ninja's outputs): branches built in the one work volume leave theirs behind,
+# such as the Quest build's OpenXR plugin, which needs a loader the phone build doesn't package
+BUILT_LIBS=$(ninja -C "$BUILD" -t targets all | sed -n "s|^\(android-build/libs/$ABI/[^:]*\.so\):.*|\1|p")
+EXTRA_LIBS=$(for LIB in $BUILT_LIBS; do echo "$BUILD/$LIB"; done | sort | paste -sd, -)
 
 # Qt 5.15's networking (HTTPS, as to the metaverse) loads OpenSSL 1.1.1 at runtime as libcrypto_1_1.so and
 # libssl_1_1.so: link them from vcpkg's static OpenSSL, the one Darkride itself links
@@ -45,6 +43,11 @@ mkdir -p "$SSL_DIR"
 "$NDK_BIN/aarch64-linux-android$API_LEVEL-clang" -shared -o "$SSL_DIR/libssl_1_1.so" -Wl,-soname,libssl_1_1.so \
     -Wl,--whole-archive "$VCPKG_ROOT/lib/libssl.a" -Wl,--no-whole-archive -L"$SSL_DIR" -lcrypto_1_1
 EXTRA_LIBS="$EXTRA_LIBS,$SSL_DIR/libcrypto_1_1.so,$SSL_DIR/libssl_1_1.so"
+# the OpenXR loader, for standalone headsets (build-native.sh fetches it)
+OPENXR_LOADER=$(ls /work/openxr-*/lib/libopenxr_loader.so 2>/dev/null | sort | tail -1)
+if [ -n "$OPENXR_LOADER" ]; then
+    EXTRA_LIBS="$EXTRA_LIBS,$OPENXR_LOADER"
+fi
 
 # The package sources androiddeployqt starts from: the app's manifest
 PKGSRC=/work/pkgsrc
