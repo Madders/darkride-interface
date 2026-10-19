@@ -777,8 +777,9 @@ Rectangle {
                                 hoverEnabled: true
 
                                 onClicked: {
-                                    // the starter avatars, as the High Fidelity Marketplace it offered is gone
-                                    starterAvatars.open();
+                                    popup.showBuyAvatars(null, function(link) {
+                                        emitSendToScript({'method' : 'navigate', 'url' : link})
+                                    });
                                 }
                             }
                         }
@@ -846,13 +847,6 @@ Rectangle {
 
     MessageBoxes {
         id: popup
-    }
-
-    StarterAvatars {
-        id: starterAvatars
-        onWear: function(url, name) {
-            emitSendToScript({'method' : 'applyExternalAvatar', 'avatarURL' : url});
-        }
     }
 
     CreateFavoriteDialog {
