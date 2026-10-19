@@ -373,6 +373,44 @@ VRMInfo readVRM(const QByteArray& glb) {
         info.flowCollisions.insert(jointName, collision);
     }
 
+    // How far the eyes turn: each range map turns up to inputMaxValue (1.0) or xRange (0.x) degrees of gaze into up to
+    // outputScale or yRange degrees of eye; one scale for all, and the smallest range, which keeps every way inside the eye
+    {
+        QString type;
+        QVector<std::pair<float, float>> ranges;  // input, output
+        if (info.version == 1) {
+            const QJsonObject lookAt = vrm1["lookAt"].toObject();
+            type = lookAt["type"].toString("bone");
+            for (const char* key : { "rangeMapHorizontalInner", "rangeMapHorizontalOuter", "rangeMapVerticalDown", "rangeMapVerticalUp" }) {
+                if (lookAt.contains(key)) {
+                    const QJsonObject range = lookAt[key].toObject();
+                    ranges.append({ (float)range["inputMaxValue"].toDouble(90.0), (float)range["outputScale"].toDouble(10.0) });
+                }
+            }
+        } else {
+            const QJsonObject firstPerson = vrm0["firstPerson"].toObject();
+            type = firstPerson["lookAtTypeName"].toString("Bone").toLower();
+            for (const char* key : { "lookAtHorizontalInner", "lookAtHorizontalOuter", "lookAtVerticalDown", "lookAtVerticalUp" }) {
+                if (firstPerson.contains(key)) {
+                    const QJsonObject range = firstPerson[key].toObject();
+                    ranges.append({ (float)range["xRange"].toDouble(90.0), (float)range["yRange"].toDouble(10.0) });
+                }
+            }
+        }
+        if (type != "bone") {
+            info.eyeLookScale = 0.0f;  // the eyes look by expression (Seed-san)
+        } else if (!ranges.isEmpty()) {
+            float input = 0.0f, output = 0.0f, smallest = ranges.front().second;
+            for (const auto& range : ranges) {
+                input += range.first;
+                output += range.second;
+                smallest = glm::min(smallest, range.second);
+            }
+            info.eyeLookScale = input > 0.0f ? output / input : 1.0f;
+            info.eyeLookMaxAngle = smallest;
+        }
+    }
+
     // who made it, and on what terms
     if (info.version == 1) {
         const QJsonObject meta = vrm1["meta"].toObject();

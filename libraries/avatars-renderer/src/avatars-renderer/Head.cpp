@@ -274,6 +274,13 @@ void Head::applyEyelidOffset(glm::quat headOrientation) {
     glm::vec3 lookAt = glm::normalize(lookAtVector);
     glm::vec3 headUp = headOrientation * Vectors::UNIT_Y;
     float eyePitch = (PI / 2.0f) - acos(glm::dot(lookAt, headUp));
+    // the lids follow the iris, which on some models (VRMs) turns only a share of the gaze's turn
+    if (_owningAvatar) {
+        auto skeletonModel = static_cast<Avatar*>(_owningAvatar)->getSkeletonModel();
+        if (skeletonModel) {
+            eyePitch *= glm::min(skeletonModel->getRig().getEyeLookScale(), 1.0f);
+        }
+    }
     float eyelidOffset = glm::clamp(abs(eyePitch * EYE_PITCH_TO_COEFFICIENT), 0.0f, MAX_EYELID_OFFSET);
 
     float blinkUpCoefficient = -eyelidOffset;

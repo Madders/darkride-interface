@@ -398,6 +398,10 @@ public:
     std::vector<ShapeVertices> shapeVertices;
     FlowData flowData;
     std::vector<NodeConstraint> nodeConstraints;
+    // How far the eye joints turn as the gaze does: by the gaze's turn times eyeLookScale, up to eyeLookMaxAngle (radians).
+    // A VRM says how far its eyes may turn (lookAt); VRoid's flat irises leave their eye-whites past about 10 degrees.
+    float eyeLookScale { 1.0f };
+    float eyeLookMaxAngle { 25.0f * 3.14159265f / 180.0f };
 
     void debugDump() const;
 };

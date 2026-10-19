@@ -1767,6 +1767,8 @@ glm::quat Rig::modelAxesLocalRotation(const AnimPoseVec& absolutePoses, int join
 }
 
 void Rig::initNodeConstraints(const HFMModel& hfmModel) {
+    _eyeLookScale = hfmModel.eyeLookScale;
+    _eyeLookMaxAngle = hfmModel.eyeLookMaxAngle;
     _nodeConstraints.clear();
     for (const hfm::NodeConstraint& constraint : hfmModel.nodeConstraints) {
         NodeConstraint nodeConstraint;
@@ -2232,15 +2234,25 @@ void Rig::updateEyeJoint(int index, const glm::vec3& modelTranslation, const glm
 
         glm::quat deltaQuat = desiredQuat * glm::inverse(headQuat);
 
-        // limit swing rotation of the deltaQuat by a 25 degree cone.
+        // Turn the eye the gaze's way as far as the model's eyes turn: a share of the gaze's turn (all of it, unless a
+        // VRM says), within a cone (25 degrees, unless a VRM says; VRoid's flat irises roll into the head past ~10).
         // TODO: use swing twist decomposition constraint instead, for off axis rotation clamping.
-        const float MAX_ANGLE = 25.0f * RADIANS_PER_DEGREE;
-        if (fabsf(glm::angle(deltaQuat)) > MAX_ANGLE) {
-            deltaQuat = glm::angleAxis(glm::clamp(glm::angle(deltaQuat), -MAX_ANGLE, MAX_ANGLE), glm::axis(deltaQuat));
+        if (deltaQuat.w < 0.0f) {
+            deltaQuat = -deltaQuat;
+        }
+        const float gazeAngle = glm::angle(deltaQuat);
+        const float eyeAngle = glm::min(gazeAngle * _eyeLookScale, _eyeLookMaxAngle);
+        if (gazeAngle > EPSILON && eyeAngle != gazeAngle) {
+            deltaQuat = glm::angleAxis(eyeAngle, glm::axis(deltaQuat));
         }
 
-        // directly set absolutePose rotation
-        _internalPoseSet._absolutePoses[index].rot() = deltaQuat * headQuat;
+        // directly set absolutePose rotation: the eye as it rests in the head, turned. (An eye's rest needn't be the
+        // head's; the Twist Sample VRM's eyes rest pitched 10 degrees from it, which, lost, rolled them into the head.)
+        glm::quat eyeInHead;
+        if (headIndex >= 0 && index < (int)_absoluteDefaultPoses.size()) {
+            eyeInHead = glm::inverse(_absoluteDefaultPoses[headIndex].rot()) * _absoluteDefaultPoses[index].rot();
+        }
+        _internalPoseSet._absolutePoses[index].rot() = deltaQuat * headQuat * eyeInHead;
 
         // Update eye joint's children.
         auto children = index == _leftEyeJointIndex ? _leftEyeJointChildren : _rightEyeJointChildren;

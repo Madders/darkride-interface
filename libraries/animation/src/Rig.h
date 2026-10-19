@@ -139,6 +139,8 @@ public:
     void reset(const HFMModel& hfmModel);
     // An avatar's rig: joints whose axes aren't Mixamo's get offsets that make them so (AnimSkeleton). Set before the above.
     void setHumanoidRotationOffsets(bool humanoidRotationOffsets) { _humanoidRotationOffsets = humanoidRotationOffsets; }
+    // how far the model's eyes turn for the gaze's turn (hfm::Model::eyeLookScale)
+    float getEyeLookScale() const { return _eyeLookScale; }
     bool jointStatesEmpty() const;
     int getJointStateCount() const;
     int indexOfJoint(const QString& jointName) const;
@@ -487,6 +489,8 @@ protected:
         glm::quat sourceToJoint;  // the joint's rest axes in the source's
     };
     std::vector<NodeConstraint> _nodeConstraints;
+    float _eyeLookScale { 1.0f };  // the model's (hfm::Model::eyeLookScale and eyeLookMaxAngle)
+    float _eyeLookMaxAngle { 25.0f * RADIANS_PER_DEGREE };
     void initNodeConstraints(const HFMModel& hfmModel);
     void applyNodeConstraints(AnimPoseVec& relativePoses, AnimPoseVec& absolutePoses) const;
     glm::quat modelAxesRotation(const AnimPoseVec& absolutePoses, int joint) const;

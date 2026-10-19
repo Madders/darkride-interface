@@ -34,6 +34,10 @@ struct VRMInfo {
     QVariantMap flowPhysics;                  // a Flow group: its stiffness, damping, gravity and radius
     QVariantMap flowCollisions;               // a joint (by the name it ends up with): a sphere's radius and offset
     std::vector<hfm::NodeConstraint> nodeConstraints;  // 1.0's VRMC_node_constraint, by the joints' final names
+    // How far its eyes turn as the gaze does (lookAt): the gaze's turn times eyeLookScale, up to eyeLookMaxAngle
+    // (degrees); a scale of 0 where its eyes look by expression rather than by turning their bones
+    float eyeLookScale { 1.0f };
+    float eyeLookMaxAngle { 25.0f };
     QString title;
     QString authors;
     QString licence;
