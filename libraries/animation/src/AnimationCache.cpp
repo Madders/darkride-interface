@@ -11,6 +11,10 @@
 
 #include "AnimationCache.h"
 
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+
 #include <QRunnable>
 #include <QThreadPool>
 
@@ -69,7 +73,30 @@ void AnimationReader::run() {
         urlValid &= !urlname.isEmpty();
         urlValid &= !_url.path().isEmpty();
 
-        if (urlValid) {
+        if (urlValid && urlname.endsWith(".muscles.json")) {
+            // A humanoid muscle clip (hfm::MuscleClip), written by the avatar importer from a Unity clip.
+            const QJsonObject json = QJsonDocument::fromJson(_data).object();
+            HFMModel::Pointer hfmModel = std::make_shared<HFMModel>();
+            hfm::MuscleClip& clip = hfmModel->muscleClip;
+            clip.frameRate = (float)json.value("frameRate").toDouble(30.0);
+            clip.loop = json.value("loop").toBool(false);
+            for (const QJsonValue& muscle : json.value("muscles").toArray()) {
+                clip.muscles.push_back(muscle.toInt(-1));
+            }
+            for (const QJsonValue& frame : json.value("frames").toArray()) {
+                std::vector<float> values;
+                for (const QJsonValue& value : frame.toArray()) {
+                    values.push_back((float)value.toDouble());
+                }
+                clip.frames.push_back(values);
+            }
+            hfmModel->animationFrames.resize((int)clip.frames.size());
+            if (clip.isValid()) {
+                emit onSuccess(hfmModel);
+            } else {
+                emit onError(299, "an empty muscle clip " + _url.toString());
+            }
+        } else if (urlValid) {
             // Parse directly from the QNetworkReply
             HFMModel::Pointer hfmModel;
 

@@ -18,6 +18,7 @@
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPoint>
+#include <QtCore/QPointF>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QWheelEvent>
@@ -73,11 +74,11 @@ private:
     Drag _drag { Drag::None };
     Qt::MouseButton _dragButton { Qt::NoButton };
     QPoint _dragOrigin;    // global cursor position where the drag started
-    QPoint _lastCursor;
+    QPointF _lastCursor;   // in points, with the fractions the platform reports (half points on a Retina screen)
     bool _cursorHidden { false };
     std::set<int> _flyKeys;
     // telling a right click from a look: how far the hand travelled, whether it flew, how long
-    int _dragTravel { 0 };
+    float _dragTravel { 0.0f };
     bool _flew { false };
     QElapsedTimer _dragTimer;
     float _dragStartYaw { 0.0f };

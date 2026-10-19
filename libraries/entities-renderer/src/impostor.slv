@@ -1,0 +1,28 @@
+<@include gpu/Config.slh@>
+<$VERSION_HEADER$>
+//  <$_SCRIBE_FILENAME$>
+//  Generated on <$_SCRIBE_DATE$>
+//
+//  An impostor card (ImpostorCard, IMPOSTORS.md 2.3): a square of side two radii through the subject's centre, turned
+//  to face the camera by its model transform; four corners from a shared buffer, drawn as a triangle strip. The
+//  fragment shader does the rest from the world position: which of the six frames face the camera, where this pixel's
+//  ray meets the baked surface, and the depth it writes.
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//
+
+<@include gpu/Inputs.slh@>
+<@include render-utils/ShaderConstants.h@>
+
+<@include gpu/Transform.slh@>
+<$declareStandardTransform()$>
+
+layout(location=RENDER_UTILS_ATTR_POSITION_WS) out vec4 _positionWS;
+layout(location=RENDER_UTILS_ATTR_POSITION_ES) out vec4 _positionES;
+
+void main(void) {
+    TransformCamera cam = getTransformCamera();
+    TransformObject obj = getTransformObject();
+    <$transformModelToWorldAndEyeAndClipPos(cam, obj, inPosition, _positionWS, _positionES, gl_Position)$>
+}

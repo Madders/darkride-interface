@@ -1,0 +1,147 @@
+{
+    "engine": "ES5 (QtScript)",
+    "finished": "2026-10-15T09:41:15.907Z",
+    "started": "2026-10-15T09:40:56.410Z",
+    "tests": {
+        "host-Entities.editEntity-position": {
+            "check": 0,
+            "iterations": 5000,
+            "ms": 221,
+            "perSecond": 22624,
+            "usPerCall": 44.2
+        },
+        "host-Entities.getEntityProperties-all": {
+            "check": 2000,
+            "iterations": 2000,
+            "ms": 133,
+            "perSecond": 15038,
+            "usPerCall": 66.5
+        },
+        "host-Entities.getEntityProperties-position": {
+            "check": 40000,
+            "iterations": 20000,
+            "ms": 674,
+            "perSecond": 29674,
+            "usPerCall": 33.7
+        },
+        "host-JSON.stringify-entity": {
+            "check": 3262,
+            "iterations": 1000,
+            "ms": 22,
+            "perSecond": 45455,
+            "usPerCall": 22
+        },
+        "host-MyAvatar.position-get": {
+            "check": 101326,
+            "iterations": 100000,
+            "ms": 121,
+            "perSecond": 826446,
+            "usPerCall": 1.21
+        },
+        "host-MyAvatar.position-set": {
+            "check": 0,
+            "iterations": 10000,
+            "ms": 14,
+            "perSecond": 714286,
+            "usPerCall": 1.4
+        },
+        "host-Quat.multiply": {
+            "check": -940,
+            "iterations": 50000,
+            "ms": 90,
+            "perSecond": 555556,
+            "usPerCall": 1.8
+        },
+        "host-Script.resolvePath": {
+            "check": 1840000,
+            "iterations": 20000,
+            "ms": 297,
+            "perSecond": 67340,
+            "usPerCall": 14.85
+        },
+        "host-Uuid.generate": {
+            "check": 1900000,
+            "iterations": 50000,
+            "ms": 116,
+            "perSecond": 431034,
+            "usPerCall": 2.32
+        },
+        "host-Vec3.length": {
+            "check": 1300000,
+            "iterations": 100000,
+            "ms": 75,
+            "perSecond": 1333333,
+            "usPerCall": 0.75
+        },
+        "host-Vec3.sum": {
+            "check": 300067,
+            "iterations": 100000,
+            "ms": 206,
+            "perSecond": 485437,
+            "usPerCall": 2.06
+        },
+        "js-arithmetic": {
+            "check": 1,
+            "iterations": 2000000,
+            "ms": 66,
+            "perSecond": 30303030,
+            "usPerCall": 0.033
+        },
+        "js-arrays": {
+            "check": 999,
+            "iterations": 200000,
+            "ms": 14,
+            "perSecond": 14285714,
+            "usPerCall": 0.07
+        },
+        "js-function-calls": {
+            "check": 3500000,
+            "iterations": 1000000,
+            "ms": 14,
+            "perSecond": 71428571,
+            "usPerCall": 0.014
+        },
+        "js-json": {
+            "check": 296000,
+            "iterations": 2000,
+            "ms": 10,
+            "perSecond": 200000,
+            "usPerCall": 5
+        },
+        "js-objects": {
+            "check": 134999550000,
+            "iterations": 300000,
+            "ms": 10,
+            "perSecond": 30000000,
+            "usPerCall": 0.03333333333333333
+        },
+        "js-strings": {
+            "check": 1388890,
+            "iterations": 100000,
+            "ms": 6,
+            "perSecond": 16666667,
+            "usPerCall": 0.06
+        },
+        "timer-10ms-actual-ms": {
+            "max": 12,
+            "mean": 10.9,
+            "min": 10,
+            "n": 50,
+            "sd": 0.41231056256176596
+        },
+        "update-dt-ms": {
+            "max": 18.03700067102909,
+            "mean": 13.207158340374008,
+            "min": 2.495999913662672,
+            "n": 600,
+            "sd": 5.863260084211447
+        },
+        "update-wall-ms": {
+            "max": 19,
+            "mean": 13.206666666666667,
+            "min": 2,
+            "n": 600,
+            "sd": 5.872587920916028
+        }
+    }
+}

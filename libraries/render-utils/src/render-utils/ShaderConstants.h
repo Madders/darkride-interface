@@ -67,10 +67,20 @@
 #define RENDER_UTILS_RESOURCE_BUFFER_LOCAL_SHADOW_TABLE 1
 // spot lights' cookies, one picture to a layer of a texture array; the same table says which light has which
 #define RENDER_UTILS_TEXTURE_LOCAL_COOKIES 15
+// the reflection probes' cube map array (ReflectionProbe.slh): in the material and forward shaders, and in the deferred
+// directional pass, which has the material slots taken by the G-buffer and the scattering tables and this one free
+#define RENDER_UTILS_TEXTURE_REFLECTION_PROBES 9
+#define RENDER_UTILS_TEXTURE_REFLECTION_PROBES_DEFERRED 13
+// the zone's probe volume (LightAmbient.slh): in the material, forward and translucent programs the scattering map's
+// slot, which no program that lights with the ambient light declares; in the deferred directional pass the lighting
+// buffer's, which that pass does not read
+#define RENDER_UTILS_TEXTURE_PROBE_VOLUME 6
+#define RENDER_UTILS_TEXTURE_PROBE_VOLUME_DEFERRED 10
 
-#define RENDER_UTILS_BUFFER_LIGHT_CLUSTER_FRUSTUM_GRID 10
-#define RENDER_UTILS_BUFFER_LIGHT_CLUSTER_GRID 11
-#define RENDER_UTILS_BUFFER_LIGHT_CLUSTER_CONTENT 12
+// the frame's light culling (LightClusterGrid.slh): its parameters and light list, the screen tiles' bits, the depth bins'
+#define RENDER_UTILS_BUFFER_LIGHT_CLUSTER_PARAMS 10
+#define RENDER_UTILS_BUFFER_LIGHT_CLUSTER_TILES 11
+#define RENDER_UTILS_BUFFER_LIGHT_CLUSTER_BINS 12
 
 // Haze
 #define RENDER_UTILS_TEXTURE_HAZE_COLOR 0
@@ -149,9 +159,9 @@ enum Buffer {
     AmbientLight = RENDER_UTILS_BUFFER_AMBIENT_LIGHT,
     FadeParameters = RENDER_UTILS_BUFFER_FADE_PARAMS,
     FadeObjectParameters = RENDER_UTILS_BUFFER_FADE_OBJECT_PARAMS,
-    LightClusterFrustumGrid = RENDER_UTILS_BUFFER_LIGHT_CLUSTER_FRUSTUM_GRID,
-    LightClusterGrid = RENDER_UTILS_BUFFER_LIGHT_CLUSTER_GRID,
-    LightClusterContent = RENDER_UTILS_BUFFER_LIGHT_CLUSTER_CONTENT,
+    LightClusterParams = RENDER_UTILS_BUFFER_LIGHT_CLUSTER_PARAMS,
+    LightClusterTiles = RENDER_UTILS_BUFFER_LIGHT_CLUSTER_TILES,
+    LightClusterBins = RENDER_UTILS_BUFFER_LIGHT_CLUSTER_BINS,
     SsscParams = RENDER_UTILS_BUFFER_SSSC_PARAMS,
     SsaoParams = RENDER_UTILS_BUFFER_SSAO_PARAMS,
     SsaoFrameParams = RENDER_UTILS_BUFFER_SSAO_FRAME_PARAMS,
@@ -191,6 +201,10 @@ enum Texture {
     Shadow = RENDER_UTILS_TEXTURE_SHADOW,
     LocalShadow = RENDER_UTILS_TEXTURE_LOCAL_SHADOW,
     LocalCookies = RENDER_UTILS_TEXTURE_LOCAL_COOKIES,
+    ReflectionProbes = RENDER_UTILS_TEXTURE_REFLECTION_PROBES,
+    ReflectionProbesDeferred = RENDER_UTILS_TEXTURE_REFLECTION_PROBES_DEFERRED,
+    ProbeVolume = RENDER_UTILS_TEXTURE_PROBE_VOLUME,
+    ProbeVolumeDeferred = RENDER_UTILS_TEXTURE_PROBE_VOLUME_DEFERRED,
     TaaHistory = RENDER_UTILS_TEXTURE_TAA_HISTORY,
     TaaSource = RENDER_UTILS_TEXTURE_TAA_SOURCE,
     TaaVelocity = RENDER_UTILS_TEXTURE_TAA_VELOCITY,

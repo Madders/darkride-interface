@@ -108,7 +108,9 @@ public:
     QUuid addOverlay(Overlay* overlay) { return add2DOverlay(Overlay::Pointer(overlay)); }
     QUuid add2DOverlay(const Overlay::Pointer& overlay);
 
-    RayToOverlayIntersectionResult findRayIntersectionVector(const PickRay& ray, bool precisionPicking,
+    // findRayIntersection with the lists as lists: invokable for the WebAssembly script engine, which has no
+    // QScriptValue to give the other
+    Q_INVOKABLE RayToOverlayIntersectionResult findRayIntersectionVector(const PickRay& ray, bool precisionPicking,
         const QVector<EntityItemID>& include,
         const QVector<EntityItemID>& discard,
         bool visibleOnly = false, bool collidableOnly = false);

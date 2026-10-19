@@ -173,6 +173,9 @@ void HTTPResourceRequest::onRequestFinished() {
                     if (contentEncoding.compare("gzip", Qt::CaseInsensitive) == 0) {
                         if (gunzip(_data, decompressedData)) {
                             _data = decompressedData;
+                        } else if (!_data.startsWith("\x1f\x8b")) {
+                            // not gzip after all: a cached copy that a request with Qt's own decompression saved
+                            // unpacked under the gzip label, or a host that labels plain text gzip; use it as it is
                         } else {
                             qWarning(networking) << "Failed to decompress gzip for: " << _url;
                             _result = Error;

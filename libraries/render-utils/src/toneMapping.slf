@@ -36,6 +36,9 @@ float getTwoPowExposure() {
 int getToneCurve() {
     return params._toneCurve_s0_s1_s2.x;
 }
+bool getShowNaNPixels() {
+    return params._toneCurve_s0_s1_s2.y != 0;
+}
 
 LAYOUT(binding=RENDER_UTILS_TEXTURE_TM_COLOR) uniform sampler2D colorMap;
 
@@ -49,6 +52,12 @@ void main(void) {
     vec4 fragColorRaw = texture(colorMap, varTexCoord0);
 <@endif@>
     vec3 fragColor = fragColorRaw.xyz;
+    // a NaN here is a shading fault at this fragment: black, which hides it, or magenta with Developer > Render >
+    // Show NaN Pixels on, so it can be found
+    if (any(isnan(fragColor))) {
+        outFragColor = getShowNaNPixels() ? vec4(1.0, 0.0, 1.0, 1.0) : vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
 
     vec3 srcColor = fragColor * getTwoPowExposure();
 

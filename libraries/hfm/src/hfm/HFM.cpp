@@ -47,6 +47,9 @@ void HFMMaterial::getTextureNames(QSet<QString>& textureList) const {
     if (!lightmapTexture.isNull()) {
         textureList.insert(lightmapTexture.name);
     }
+    if (!lightmapDirectionTexture.isNull()) {
+        textureList.insert(lightmapDirectionTexture.name);
+    }
 }
 
 void HFMMaterial::setMaxNumPixelsPerTexture(int maxNumPixels) {
@@ -61,6 +64,7 @@ void HFMMaterial::setMaxNumPixelsPerTexture(int maxNumPixels) {
     occlusionTexture.maxNumPixels = maxNumPixels;
     scatteringTexture.maxNumPixels = maxNumPixels;
     lightmapTexture.maxNumPixels = maxNumPixels;
+    lightmapDirectionTexture.maxNumPixels = maxNumPixels;
 }
 
 bool HFMMaterial::needTangentSpace() const {

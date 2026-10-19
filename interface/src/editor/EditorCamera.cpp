@@ -22,6 +22,12 @@
 
 namespace {
     const float LOOK_RADIANS_PER_PIXEL = glm::radians(0.2f);
+    // a slow hand looks finely: a look step under this many points turns the camera less per point, down to a quarter
+    // at a quarter of it, so the view's centre can be put on something small far away; a sweep turns as before
+    const float LOOK_PRECISION_POINTS = 4.0f;
+    const float LOOK_MIN_GAIN = 0.25f;
+    // holding Shift while looking (and not flying, where Shift flies faster) turns the camera this much slower still
+    const float LOOK_PRECISION_FACTOR = 0.25f;
     const float ORBIT_RADIANS_PER_PIXEL = glm::radians(0.3f);
     const float DOLLY_PER_PIXEL = 0.01f;
     const float WHEEL_DOLLY_PER_NOTCH = 0.12f;
@@ -143,8 +149,8 @@ bool EditorCamera::mouseMove(QMouseEvent* event) {
     if (_drag == Drag::None) {
         return false;
     }
-    QPoint cursor = event->globalPos();
-    QPoint delta = cursor - _lastCursor;
+    QPointF cursor = event->screenPos();   // not globalPos(), which rounds to whole points
+    QPointF delta = cursor - _lastCursor;
     _lastCursor = cursor;
     // a jump this big is the cursor being moved by something other than the hand; skip it
     if (std::abs(delta.x()) > MAX_DELTA_PIXELS || std::abs(delta.y()) > MAX_DELTA_PIXELS) {
@@ -152,13 +158,19 @@ bool EditorCamera::mouseMove(QMouseEvent* event) {
     }
     float dx = (float)delta.x();
     float dy = (float)delta.y();
-    _dragTravel += std::abs(delta.x()) + std::abs(delta.y());
+    _dragTravel += std::abs(dx) + std::abs(dy);
 
     switch (_drag) {
         case Drag::Look: {
             // turn in place: keep the eye where it is and move the pivot
             glm::vec3 eye = position();
-            setYawPitch(_yaw - dx * LOOK_RADIANS_PER_PIXEL, _pitch - dy * LOOK_RADIANS_PER_PIXEL);
+            float step = std::sqrt(dx * dx + dy * dy);
+            float gain = glm::clamp(step / LOOK_PRECISION_POINTS, LOOK_MIN_GAIN, 1.0f);
+            if (event->modifiers().testFlag(Qt::ShiftModifier) && _flyKeys.empty()) {
+                gain *= LOOK_PRECISION_FACTOR;
+            }
+            float perPoint = LOOK_RADIANS_PER_PIXEL * gain;
+            setYawPitch(_yaw - dx * perPoint, _pitch - dy * perPoint);
             _pivot = eye + orientation() * Vectors::FRONT * _distance;
             break;
         }
@@ -235,8 +247,9 @@ bool EditorCamera::keyRelease(QKeyEvent* event) {
 void EditorCamera::beginDrag(Drag drag, QMouseEvent* event) {
     _drag = drag;
     _dragButton = event->button();
-    _dragOrigin = _lastCursor = event->globalPos();
-    _dragTravel = 0;
+    _dragOrigin = event->globalPos();
+    _lastCursor = event->screenPos();
+    _dragTravel = 0.0f;
     _flew = false;
     _rightClick = false;
     _dragTimer.start();

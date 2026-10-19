@@ -72,27 +72,29 @@ void Head::simulate(float deltaTime) {
         _longTermAverageLoudness = glm::mix(_longTermAverageLoudness, _averageLoudness, glm::min(deltaTime / AUDIO_LONG_TERM_AVERAGING_SECS, 1.0f));
     }
 
+    // The avatar's gaze style (GazeStyle.h), its owner's choice, sets its darts, its blinks and its lids.
+    const GazeStyle& gaze = GazeStyle::named(_owningAvatar ? _owningAvatar->getGazeStyle() : QString());
+
     if (getProceduralAnimationFlag(HeadData::SaccadeProceduralEyeJointAnimation) &&
         !getSuppressProceduralAnimationFlag(HeadData::SaccadeProceduralEyeJointAnimation)) {
         // Update eye saccades
         const float AVERAGE_MICROSACCADE_INTERVAL = 1.0f;
-        const float AVERAGE_SACCADE_INTERVAL = 6.0f;
         const float MICROSACCADE_MAGNITUDE = 0.002f;
-        const float SACCADE_MAGNITUDE = 0.04f;
         const float NOMINAL_FRAME_RATE = 60.0f;
 
         if (randFloat() < deltaTime / AVERAGE_MICROSACCADE_INTERVAL) {
             _saccadeTarget = MICROSACCADE_MAGNITUDE * randVector();
-        } else if (randFloat() < deltaTime / AVERAGE_SACCADE_INTERVAL) {
-            _saccadeTarget = SACCADE_MAGNITUDE * randVector();
+        } else if (gaze.saccadeInterval > 0.0f && randFloat() < deltaTime / gaze.saccadeInterval) {
+            _saccadeTarget = gaze.saccadeMagnitude * randVector();
         }
-        _saccade += (_saccadeTarget - _saccade) * pow(0.5f, NOMINAL_FRAME_RATE * deltaTime);
+        // the eyes cover saccadeSpeed of the way per 60 Hz frame, whatever the frame rate
+        _saccade += (_saccadeTarget - _saccade) * (1.0f - powf(1.0f - gaze.saccadeSpeed, NOMINAL_FRAME_RATE * deltaTime));
     } else {
         _saccade = glm::vec3();
     }
 
-    const float BLINK_SPEED = 10.0f;
-    const float BLINK_SPEED_VARIABILITY = 1.0f;
+    const float BLINK_SPEED = 10.0f * gaze.blinkSpeed;
+    const float BLINK_SPEED_VARIABILITY = 1.0f * gaze.blinkSpeed;
     const float BLINK_START_VARIABILITY = 0.25f;
     const float FULLY_OPEN = 0.0f;
     const float FULLY_CLOSED = 1.0f;
@@ -114,12 +116,12 @@ void Head::simulate(float deltaTime) {
             forceBlink = true;
         }
         if (_leftEyeBlinkVelocity == 0.0f && _rightEyeBlinkVelocity == 0.0f) {
-            // no blinking when brows are raised; blink less with increasing loudness
-            const float BASE_BLINK_RATE = 15.0f / 60.0f;
+            // no blinking when brows are raised; blink less with increasing loudness; the gaze style sets the interval
             const float ROOT_LOUDNESS_TO_BLINK_INTERVAL = 0.25f;
             if (_forceBlinkToRetarget || forceBlink ||
-                (_browAudioLift < EPSILON && shouldDo(glm::max(1.0f, sqrt(fabs(_averageLoudness - _longTermAverageLoudness)) *
-                ROOT_LOUDNESS_TO_BLINK_INTERVAL) / BASE_BLINK_RATE, deltaTime))) {
+                (gaze.blinkInterval > 0.0f && _browAudioLift < EPSILON &&
+                 shouldDo(glm::max(1.0f, sqrt(fabs(_averageLoudness - _longTermAverageLoudness)) *
+                 ROOT_LOUDNESS_TO_BLINK_INTERVAL) * gaze.blinkInterval, deltaTime))) {
                 float randSpeedVariability = randFloat();
                 float eyeBlinkVelocity = BLINK_SPEED + randSpeedVariability * BLINK_SPEED_VARIABILITY;
                 if (_forceBlinkToRetarget) {
@@ -129,6 +131,7 @@ void Head::simulate(float deltaTime) {
                 }
                 _leftEyeBlinkVelocity = eyeBlinkVelocity;
                 _rightEyeBlinkVelocity = eyeBlinkVelocity;
+                _blinkHold = gaze.blinkHold;
                 if (randFloat() < 0.5f) {
                     _leftEyeBlink = BLINK_START_VARIABILITY;
                     _rightEyeBlink = BLINK_START_VARIABILITY;
@@ -139,15 +142,19 @@ void Head::simulate(float deltaTime) {
             _leftEyeBlink = glm::clamp(_leftEyeBlink + _leftEyeBlinkVelocity * deltaTime, FULLY_OPEN, FULLY_CLOSED);
             _rightEyeBlink = glm::clamp(_rightEyeBlink + _rightEyeBlinkVelocity * deltaTime, FULLY_OPEN, FULLY_CLOSED);
 
-            if (_leftEyeBlink == FULLY_CLOSED) {
-                _leftEyeBlinkVelocity = -BLINK_SPEED;
-                updateEyeLookAt();
-            } else if (_leftEyeBlink == FULLY_OPEN) {
+            if (_leftEyeBlink == FULLY_CLOSED && _rightEyeBlink == FULLY_CLOSED) {
+                // the lids open again, once a sleepy style's hold is over
+                _blinkHold -= deltaTime;
+                if (_blinkHold <= 0.0f) {
+                    _leftEyeBlinkVelocity = -BLINK_SPEED;
+                    _rightEyeBlinkVelocity = -BLINK_SPEED;
+                    updateEyeLookAt();
+                }
+            }
+            if (_leftEyeBlink == FULLY_OPEN) {
                 _leftEyeBlinkVelocity = 0.0f;
             }
-            if (_rightEyeBlink == FULLY_CLOSED) {
-                _rightEyeBlinkVelocity = -BLINK_SPEED;
-            } else if (_rightEyeBlink == FULLY_OPEN) {
+            if (_rightEyeBlink == FULLY_OPEN) {
                 _rightEyeBlinkVelocity = 0.0f;
             }
         }
@@ -198,6 +205,19 @@ void Head::simulate(float deltaTime) {
         // This controls two things, the eye brow and the upper eye lid, it is driven by the vertical up/down angle of the
         // eyes relative to the head.  This is to try to help prevent sleepy eyes/crazy eyes.
         applyEyelidOffset(getOrientation());
+    }
+
+    if (gaze.lidsClosed != 0.0f) {
+        // the style's resting lids, half shut (sleepy) or held wide (excited), under the blinks and the adjustment:
+        // a blink still closes them the rest of the way
+        for (int i = 0; i < 2; i++) {
+            if (gaze.lidsClosed > 0.0f) {
+                float& blink = _transientBlendshapeCoefficients[(int)Blendshapes::EyeBlink_L + i];
+                blink = gaze.lidsClosed + (1.0f - gaze.lidsClosed) * blink;
+            } else {
+                _transientBlendshapeCoefficients[(int)Blendshapes::EyeOpen_L + i] -= gaze.lidsClosed;
+            }
+        }
     }
 
     _leftEyePosition = _rightEyePosition = getPosition();
@@ -387,7 +407,8 @@ void Head::setLookAtPosition(const glm::vec3& lookAtPosition) {
         glm::vec3 oldAvatarLookAtVector = _requestLookAtPosition - _owningAvatar->getWorldPosition();
         glm::vec3 newAvatarLookAtVector = lookAtPosition - _owningAvatar->getWorldPosition();
         const float MIN_BLINK_ANGLE = 0.35f; // 20 degrees
-        _forceBlinkToRetarget = angleBetween(oldAvatarLookAtVector, newAvatarLookAtVector) > MIN_BLINK_ANGLE;
+        _forceBlinkToRetarget = GazeStyle::named(_owningAvatar->getGazeStyle()).blinkOnGlance &&
+            angleBetween(oldAvatarLookAtVector, newAvatarLookAtVector) > MIN_BLINK_ANGLE;
         if (_forceBlinkToRetarget) {
             _isEyeLookAtUpdated = false;
         } else {

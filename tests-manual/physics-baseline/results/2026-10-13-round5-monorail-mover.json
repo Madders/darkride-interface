@@ -1,0 +1,906 @@
+{
+ "crossings": [
+  {
+   "mode": "boarding",
+   "parented": true,
+   "previousStepMm": 21.522939205169678,
+   "t": 10.469000101089478,
+   "worldStepMm": 41.57496243715286
+  },
+  {
+   "mode": "step-off",
+   "parented": false,
+   "previousStepMm": 31.420234590768814,
+   "t": 78.53600001335144,
+   "worldStepMm": 31.957808881998062
+  }
+ ],
+ "events": [
+  {
+   "mode": "boarding",
+   "t": 8.003999948501587
+  },
+  {
+   "owner": "{00000000-0000-0000-0000-000000000000} at priority 0",
+   "t": 8.019000053405762
+  },
+  {
+   "owner": "{04c5309b-f426-42da-a478-f0345e0fec39} at priority 255",
+   "t": 9.019000053405762
+  },
+  {
+   "mode": "riding",
+   "t": 11.085999965667725
+  },
+  {
+   "motion": "accelerating",
+   "t": 18.068000078201294
+  },
+  {
+   "motion": "cruising",
+   "t": 20.51900005340576
+  },
+  {
+   "motion": "curve",
+   "t": 22.302000045776367
+  },
+  {
+   "motion": "cruising",
+   "t": 22.335999965667725
+  },
+  {
+   "motion": "curve",
+   "t": 22.3510000705719
+  },
+  {
+   "motion": "cruising",
+   "t": 22.43400001525879
+  },
+  {
+   "motion": "curve",
+   "t": 22.450999975204468
+  },
+  {
+   "motion": "cruising",
+   "t": 22.469000101089478
+  },
+  {
+   "motion": "curve",
+   "t": 22.500999927520752
+  },
+  {
+   "motion": "cruising",
+   "t": 22.53600001335144
+  },
+  {
+   "motion": "curve",
+   "t": 22.552000045776367
+  },
+  {
+   "motion": "cruising",
+   "t": 22.568000078201294
+  },
+  {
+   "motion": "curve",
+   "t": 24.233999967575073
+  },
+  {
+   "motion": "cruising",
+   "t": 24.28500008583069
+  },
+  {
+   "motion": "curve",
+   "t": 24.302000045776367
+  },
+  {
+   "motion": "cruising",
+   "t": 25.335000038146973
+  },
+  {
+   "motion": "curve",
+   "t": 25.38599991798401
+  },
+  {
+   "motion": "cruising",
+   "t": 25.40000009536743
+  },
+  {
+   "motion": "curve",
+   "t": 25.45199990272522
+  },
+  {
+   "motion": "cruising",
+   "t": 25.469000101089478
+  },
+  {
+   "motion": "curve",
+   "t": 25.585000038146973
+  },
+  {
+   "motion": "cruising",
+   "t": 25.602999925613403
+  },
+  {
+   "motion": "curve",
+   "t": 25.618000030517578
+  },
+  {
+   "motion": "cruising",
+   "t": 25.651999950408936
+  },
+  {
+   "motion": "curve",
+   "t": 25.668999910354614
+  },
+  {
+   "motion": "cruising",
+   "t": 25.752000093460083
+  },
+  {
+   "motion": "curve",
+   "t": 25.76800012588501
+  },
+  {
+   "motion": "cruising",
+   "t": 25.85199999809265
+  },
+  {
+   "motion": "curve",
+   "t": 25.86899995803833
+  },
+  {
+   "motion": "cruising",
+   "t": 25.884999990463257
+  },
+  {
+   "motion": "curve",
+   "t": 25.901999950408936
+  },
+  {
+   "motion": "cruising",
+   "t": 34.10199999809265
+  },
+  {
+   "motion": "curve",
+   "t": 34.11899995803833
+  },
+  {
+   "motion": "cruising",
+   "t": 34.25099992752075
+  },
+  {
+   "motion": "curve",
+   "t": 34.28500008583069
+  },
+  {
+   "motion": "cruising",
+   "t": 34.301000118255615
+  },
+  {
+   "motion": "curve",
+   "t": 34.33500003814697
+  },
+  {
+   "motion": "cruising",
+   "t": 34.3529999256134
+  },
+  {
+   "motion": "curve",
+   "t": 34.50099992752075
+  },
+  {
+   "motion": "cruising",
+   "t": 34.51900005340576
+  },
+  {
+   "motion": "curve",
+   "t": 34.66799998283386
+  },
+  {
+   "motion": "cruising",
+   "t": 35.70300006866455
+  },
+  {
+   "motion": "curve",
+   "t": 35.71900010108948
+  },
+  {
+   "motion": "cruising",
+   "t": 35.76900005340576
+  },
+  {
+   "motion": "curve",
+   "t": 35.83400011062622
+  },
+  {
+   "motion": "cruising",
+   "t": 35.85199999809265
+  },
+  {
+   "motion": "curve",
+   "t": 37.486000061035156
+  },
+  {
+   "motion": "cruising",
+   "t": 37.55200004577637
+  },
+  {
+   "motion": "curve",
+   "t": 37.585999965667725
+  },
+  {
+   "motion": "cruising",
+   "t": 37.651000022888184
+  },
+  {
+   "motion": "braking",
+   "t": 39.486000061035156
+  },
+  {
+   "motion": "accelerating",
+   "t": 41.28600001335144
+  },
+  {
+   "motion": "braking",
+   "t": 41.30299997329712
+  },
+  {
+   "motion": "standing",
+   "t": 41.76800012588501
+  },
+  {
+   "motion": "accelerating",
+   "t": 51.769999980926514
+  },
+  {
+   "motion": "cruising",
+   "t": 54.21799993515015
+  },
+  {
+   "motion": "curve",
+   "t": 56.00200009346008
+  },
+  {
+   "motion": "cruising",
+   "t": 56.11899995803833
+  },
+  {
+   "motion": "curve",
+   "t": 56.13599991798401
+  },
+  {
+   "motion": "cruising",
+   "t": 56.151999950408936
+  },
+  {
+   "motion": "curve",
+   "t": 56.168999910354614
+  },
+  {
+   "motion": "cruising",
+   "t": 56.22000002861023
+  },
+  {
+   "motion": "curve",
+   "t": 56.253000020980835
+  },
+  {
+   "motion": "cruising",
+   "t": 56.269999980926514
+  },
+  {
+   "motion": "curve",
+   "t": 56.28600001335144
+  },
+  {
+   "motion": "cruising",
+   "t": 56.30200004577637
+  },
+  {
+   "motion": "curve",
+   "t": 57.80200004577637
+  },
+  {
+   "motion": "cruising",
+   "t": 57.87000012397766
+  },
+  {
+   "motion": "curve",
+   "t": 57.90400004386902
+  },
+  {
+   "motion": "cruising",
+   "t": 57.918999910354614
+  },
+  {
+   "motion": "curve",
+   "t": 57.93400001525879
+  },
+  {
+   "motion": "cruising",
+   "t": 59.01900005340576
+  },
+  {
+   "motion": "curve",
+   "t": 59.3199999332428
+  },
+  {
+   "motion": "cruising",
+   "t": 59.35199999809265
+  },
+  {
+   "motion": "curve",
+   "t": 59.38599991798401
+  },
+  {
+   "motion": "cruising",
+   "t": 59.420000076293945
+  },
+  {
+   "motion": "curve",
+   "t": 59.43400001525879
+  },
+  {
+   "motion": "cruising",
+   "t": 59.47000002861023
+  },
+  {
+   "motion": "curve",
+   "t": 59.50399994850159
+  },
+  {
+   "motion": "cruising",
+   "t": 59.53600001335144
+  },
+  {
+   "motion": "curve",
+   "t": 59.55299997329712
+  },
+  {
+   "motion": "cruising",
+   "t": 59.6029999256134
+  },
+  {
+   "motion": "curve",
+   "t": 59.62000012397766
+  },
+  {
+   "motion": "cruising",
+   "t": 67.70300006866455
+  },
+  {
+   "motion": "curve",
+   "t": 67.72000002861023
+  },
+  {
+   "motion": "cruising",
+   "t": 67.8529999256134
+  },
+  {
+   "motion": "curve",
+   "t": 67.88700008392334
+  },
+  {
+   "motion": "cruising",
+   "t": 67.9539999961853
+  },
+  {
+   "motion": "curve",
+   "t": 67.96900010108948
+  },
+  {
+   "motion": "cruising",
+   "t": 68.01999998092651
+  },
+  {
+   "motion": "curve",
+   "t": 68.03600001335144
+  },
+  {
+   "motion": "cruising",
+   "t": 68.0680000782013
+  },
+  {
+   "motion": "curve",
+   "t": 68.15300011634827
+  },
+  {
+   "motion": "cruising",
+   "t": 68.17000007629395
+  },
+  {
+   "motion": "curve",
+   "t": 68.18499994277954
+  },
+  {
+   "motion": "cruising",
+   "t": 68.20300006866455
+  },
+  {
+   "motion": "curve",
+   "t": 68.23600006103516
+  },
+  {
+   "motion": "cruising",
+   "t": 68.25200009346008
+  },
+  {
+   "motion": "curve",
+   "t": 68.35400009155273
+  },
+  {
+   "motion": "cruising",
+   "t": 69.28500008583069
+  },
+  {
+   "motion": "curve",
+   "t": 69.30399990081787
+  },
+  {
+   "motion": "cruising",
+   "t": 69.38599991798401
+  },
+  {
+   "motion": "curve",
+   "t": 69.40100002288818
+  },
+  {
+   "motion": "cruising",
+   "t": 69.43600010871887
+  },
+  {
+   "motion": "curve",
+   "t": 69.47099995613098
+  },
+  {
+   "motion": "cruising",
+   "t": 69.48600006103516
+  },
+  {
+   "motion": "curve",
+   "t": 71.08599996566772
+  },
+  {
+   "motion": "cruising",
+   "t": 71.10199999809265
+  },
+  {
+   "motion": "curve",
+   "t": 71.15400004386902
+  },
+  {
+   "motion": "cruising",
+   "t": 71.17000007629395
+  },
+  {
+   "motion": "curve",
+   "t": 71.18600010871887
+  },
+  {
+   "motion": "cruising",
+   "t": 71.37000012397766
+  },
+  {
+   "motion": "braking",
+   "t": 73.20300006866455
+  },
+  {
+   "motion": "accelerating",
+   "t": 73.98499989509583
+  },
+  {
+   "motion": "braking",
+   "t": 74.00200009346008
+  },
+  {
+   "motion": "accelerating",
+   "t": 74.95199990272522
+  },
+  {
+   "motion": "braking",
+   "t": 74.96900010108948
+  },
+  {
+   "motion": "standing",
+   "t": 75.4539999961853
+  },
+  {
+   "mode": "step-off",
+   "t": 75.4539999961853
+  },
+  {
+   "mode": "ground",
+   "t": 78.53600001335144
+  },
+  {
+   "mode": "end",
+   "t": 82.55200004577637
+  }
+ ],
+ "farStopMm": 0.647380540613085,
+ "note": "PHYSICS.md round 5's acceptance test (the seventh run of 2026-10-13): the physics server driving on the 42102 sandbox, 20 bot riders aboard and 20 bots walking below, the mover (track.js) with no packet loss and the observer (observer.js) under TIVOLI_PACKET_LOSS=0.05",
+ "samplesDropped": 4473,
+ "summary": [
+  {
+   "cabinStep": {
+    "maxMm": 0.45528277405537665,
+    "meanStepMm": 0.003518372523103608,
+    "n": 184,
+    "rmsMm": 0.0336554710948536,
+    "stepDevMm": 0.047595661022965835,
+    "stepMaxMm": 0.647380540613085,
+    "stepMeanMm": 0.003518372503331984,
+    "stepsOverTwiceMean": 1,
+    "verticalMaxMm": 0.4552758182398975,
+    "verticalRmsMm": 0.03365495690900946
+   },
+   "computedLocal": {
+    "maxMm": 26.243176521068857,
+    "meanStepMm": 15.325818210840225,
+    "n": 184,
+    "rmsMm": 12.130093034939309,
+    "stepDevMm": 12.126930197352753,
+    "stepMaxMm": 41.574861854314804,
+    "stepMeanMm": 15.331355201614434,
+    "stepsOverTwiceMean": 31,
+    "verticalMaxMm": 3.3801852259784937,
+    "verticalRmsMm": 0.30497475719807454
+   },
+   "driftHorizontalM": 2.8199506079585506,
+   "driftM": {
+    "x": -2.819950580596924,
+    "y": -8.666515350341797e-05,
+    "z": -0.00039283186197280884
+   },
+   "frames": 185,
+   "maxSpeed": 0,
+   "parentedFrames": 38,
+   "phase": "boarding",
+   "seconds": 3.066999912261963,
+   "storedLocal": {
+    "maxMm": 8.267285308288715,
+    "meanStepMm": 25.174500420689583,
+    "n": 37,
+    "rmsMm": 5.0418611566081895,
+    "stepDevMm": 5.042011131225703,
+    "stepMaxMm": 33.441781997680664,
+    "stepMeanMm": 25.174603873008007,
+    "stepsOverTwiceMean": 0,
+    "verticalMaxMm": 0.4917479818686843,
+    "verticalRmsMm": 0.08195820794184767
+   }
+  },
+  {
+   "cabinStep": {
+    "maxMm": 0.1481529325246811,
+    "meanStepMm": 0.0018777844843498315,
+    "n": 1016,
+    "rmsMm": 0.01159755431764729,
+    "stepDevMm": 0.011597523668123355,
+    "stepMaxMm": 0.15003071166574955,
+    "stepMeanMm": 0.00187797446221704,
+    "stepsOverTwiceMean": 41,
+    "verticalMaxMm": 2.974365642671728e-05,
+    "verticalRmsMm": 1.3209621572685566e-06
+   },
+   "computedLocal": {
+    "maxMm": 23.309011012333276,
+    "meanStepMm": 0.24799627135507762,
+    "n": 1016,
+    "rmsMm": 1.6451595221124184,
+    "stepDevMm": 1.6451264284082503,
+    "stepMaxMm": 23.557007312774658,
+    "stepMeanMm": 0.24821573612188527,
+    "stepsOverTwiceMean": 43,
+    "verticalMaxMm": 0,
+    "verticalRmsMm": 0
+   },
+   "driftHorizontalM": 0.25196415185945314,
+   "driftM": {
+    "x": -0.25196415185928345,
+    "y": 0,
+    "z": 2.92464392259717e-07
+   },
+   "frames": 1019,
+   "maxSpeed": 0.008409583941102028,
+   "parentedFrames": 1019,
+   "phase": "riding/standing",
+   "seconds": 64.3529999256134,
+   "storedLocal": {
+    "maxMm": 23.309011012333276,
+    "meanStepMm": 0.24799627135507762,
+    "n": 1016,
+    "rmsMm": 1.645152646508929,
+    "stepDevMm": 1.6451526505864176,
+    "stepMaxMm": 23.557007312774658,
+    "stepMeanMm": 0.2479962711259136,
+    "stepsOverTwiceMean": 43,
+    "verticalMaxMm": 0,
+    "verticalRmsMm": 0
+   }
+  },
+  {
+   "cabinStep": {
+    "maxMm": 102.73284472183934,
+    "meanStepMm": 0.002676503527254681,
+    "n": 292,
+    "rmsMm": 48.86536489861759,
+    "stepDevMm": 25.84573879370259,
+    "stepMaxMm": 102.73551940917969,
+    "stepMeanMm": 41.47073274571209,
+    "stepsOverTwiceMean": 20,
+    "verticalMaxMm": 0.003129141759927734,
+    "verticalRmsMm": 0.0014911476133164302
+   },
+   "computedLocal": {
+    "maxMm": 16.682228080292592,
+    "meanStepMm": 8.272663803987612e-08,
+    "n": 292,
+    "rmsMm": 2.071177949642994,
+    "stepDevMm": 2.0363676984600274,
+    "stepMaxMm": 16.682228073477745,
+    "stepMeanMm": 0.3781331557046984,
+    "stepsOverTwiceMean": 12,
+    "verticalMaxMm": 0.00011920928955078125,
+    "verticalRmsMm": 1.7088120552331087e-05
+   },
+   "driftHorizontalM": 5.965840151377062e-08,
+   "driftM": {
+    "x": 5.960464477539063e-08,
+    "y": 0,
+    "z": 2.5320332497358322e-09
+   },
+   "frames": 297,
+   "maxSpeed": 4.949707508087158,
+   "parentedFrames": 297,
+   "phase": "riding/accelerating",
+   "seconds": 56.883999824523926,
+   "storedLocal": {
+    "maxMm": 0,
+    "meanStepMm": 0,
+    "n": 292,
+    "rmsMm": 0,
+    "stepDevMm": 0,
+    "stepMaxMm": 0,
+    "stepMeanMm": 0,
+    "stepsOverTwiceMean": 0,
+    "verticalMaxMm": 0,
+    "verticalRmsMm": 0
+   }
+  },
+  {
+   "cabinStep": {
+    "maxMm": 119.9839804450976,
+    "meanStepMm": 1.1900929966941476,
+    "n": 878,
+    "rmsMm": 85.70184647989755,
+    "stepDevMm": 19.18025507962034,
+    "stepMaxMm": 121.13035470247269,
+    "stepMeanMm": 83.53646282331513,
+    "stepsOverTwiceMean": 0,
+    "verticalMaxMm": 0.004405923846206861,
+    "verticalRmsMm": 0.0026154924587967017
+   },
+   "computedLocal": {
+    "maxMm": 36.68183833360712,
+    "meanStepMm": 0.019490709746605717,
+    "n": 878,
+    "rmsMm": 3.897511293413463,
+    "stepDevMm": 3.858164461485783,
+    "stepMaxMm": 36.66277229785919,
+    "stepMeanMm": 0.5527578062884159,
+    "stepsOverTwiceMean": 24,
+    "verticalMaxMm": 0.00023909746005301713,
+    "verticalRmsMm": 3.7085108498150746e-05
+   },
+   "driftHorizontalM": 5.960464477539063e-08,
+   "driftM": {
+    "x": 5.960464477539063e-08,
+    "y": 0,
+    "z": 0
+   },
+   "frames": 932,
+   "maxSpeed": 5.4395527839660645,
+   "parentedFrames": 932,
+   "phase": "riding/cruising",
+   "seconds": 52.66799998283386,
+   "storedLocal": {
+    "maxMm": 0,
+    "meanStepMm": 0,
+    "n": 878,
+    "rmsMm": 0,
+    "stepDevMm": 0,
+    "stepMaxMm": 0,
+    "stepMeanMm": 0,
+    "stepsOverTwiceMean": 0,
+    "verticalMaxMm": 0,
+    "verticalRmsMm": 0
+   }
+  },
+  {
+   "cabinStep": {
+    "maxMm": 141.5447432477271,
+    "meanStepMm": 0.10167725122300908,
+    "n": 1293,
+    "rmsMm": 85.56505245776007,
+    "stepDevMm": 18.676508572781795,
+    "stepMaxMm": 141.44468307495117,
+    "stepMeanMm": 83.50195559728472,
+    "stepsOverTwiceMean": 0,
+    "verticalMaxMm": 0.004766873189510079,
+    "verticalRmsMm": 0.002610427161331726
+   },
+   "computedLocal": {
+    "maxMm": 38.46844466019815,
+    "meanStepMm": 2.5533810621425346e-06,
+    "n": 1293,
+    "rmsMm": 4.918133230194855,
+    "stepDevMm": 4.855094365921846,
+    "stepMaxMm": 38.468439131975174,
+    "stepMeanMm": 0.7852122671041605,
+    "stepsOverTwiceMean": 40,
+    "verticalMaxMm": 0.2191063977079466,
+    "verticalRmsMm": 0.02156574626163237
+   },
+   "driftHorizontalM": 1.1254080565973022e-07,
+   "driftM": {
+    "x": 5.960464477539063e-08,
+    "y": 0,
+    "z": 9.546056389808655e-08
+   },
+   "frames": 1345,
+   "maxSpeed": 5.438905239105225,
+   "parentedFrames": 1345,
+   "phase": "riding/curve",
+   "seconds": 49.050999879837036,
+   "storedLocal": {
+    "maxMm": 5.955854831540819e-05,
+    "meanStepMm": 4.6097944905731936e-08,
+    "n": 1293,
+    "rmsMm": 1.6569631377533987e-06,
+    "stepDevMm": 1.656963096473692e-06,
+    "stepMaxMm": 5.9604644775390625e-05,
+    "stepMeanMm": 4.609794646201905e-08,
+    "stepsOverTwiceMean": 1,
+    "verticalMaxMm": 0,
+    "verticalRmsMm": 0
+   }
+  },
+  {
+   "cabinStep": {
+    "maxMm": 100.10564334428123,
+    "meanStepMm": 0.6119015160948038,
+    "n": 264,
+    "rmsMm": 49.29872681250382,
+    "stepDevMm": 23.861159793274506,
+    "stepMaxMm": 100.71754455566406,
+    "stepMeanMm": 43.14375888365744,
+    "stepsOverTwiceMean": 14,
+    "verticalMaxMm": 0.0030508999770972878,
+    "verticalRmsMm": 0.0015044126196338504
+   },
+   "computedLocal": {
+    "maxMm": 16.632000027105008,
+    "meanStepMm": 7.112799793596025e-07,
+    "n": 264,
+    "rmsMm": 1.6285325949872096,
+    "stepDevMm": 1.6147383600053222,
+    "stepMaxMm": 16.631999984383583,
+    "stepMeanMm": 0.21151468613287291,
+    "stepsOverTwiceMean": 6,
+    "verticalMaxMm": 0.00011920928955078125,
+    "verticalRmsMm": 1.0375836846572033e-05
+   },
+   "driftHorizontalM": 3.59029534435064e-07,
+   "driftM": {
+    "x": 3.5762786865234375e-07,
+    "y": 0,
+    "z": 3.1694071367383e-08
+   },
+   "frames": 269,
+   "maxSpeed": 4.94590950012207,
+   "parentedFrames": 269,
+   "phase": "riding/braking",
+   "seconds": 35.950000047683716,
+   "storedLocal": {
+    "maxMm": 0,
+    "meanStepMm": 0,
+    "n": 264,
+    "rmsMm": 0,
+    "stepDevMm": 0,
+    "stepMaxMm": 0,
+    "stepMeanMm": 0,
+    "stepsOverTwiceMean": 0,
+    "verticalMaxMm": 0,
+    "verticalRmsMm": 0
+   }
+  },
+  {
+   "cabinStep": {
+    "maxMm": 0.19104245882797305,
+    "meanStepMm": 0.010113854841620196,
+    "n": 184,
+    "rmsMm": 0.027909043252021294,
+    "stepDevMm": 0.02750791583234369,
+    "stepMaxMm": 0.20115623192396015,
+    "stepMeanMm": 0.011158822234313486,
+    "stepsOverTwiceMean": 27,
+    "verticalMaxMm": 1.4577222984257787e-05,
+    "verticalRmsMm": 2.1730441016944772e-06
+   },
+   "computedLocal": {
+    "maxMm": 24.409800767926548,
+    "meanStepMm": 7.254093419760466,
+    "n": 184,
+    "rmsMm": 10.854960899154324,
+    "stepDevMm": 10.860852151644938,
+    "stepMaxMm": 31.957700848579407,
+    "stepMeanMm": 7.258075965143255,
+    "stepsOverTwiceMean": 53,
+    "verticalMaxMm": 4.3213702738285065,
+    "verticalRmsMm": 0.4309670946322594
+   },
+   "driftHorizontalM": 1.3347530364990239,
+   "driftM": {
+    "x": 1.3347530364990234,
+    "y": 0.0003886222839355469,
+    "z": -3.7136487662792206e-08
+   },
+   "frames": 185,
+   "maxSpeed": 0.009398207068443298,
+   "parentedFrames": 184,
+   "phase": "step-off",
+   "seconds": 3.065999984741211,
+   "storedLocal": {
+    "maxMm": 24.29034560918808,
+    "meanStepMm": 7.12073827162385,
+    "n": 183,
+    "rmsMm": 10.733136397939203,
+    "stepDevMm": 10.736180705400301,
+    "stepMaxMm": 31.420350074768066,
+    "stepMeanMm": 7.12205738317771,
+    "stepsOverTwiceMean": 52,
+    "verticalMaxMm": 3.9133583195507526,
+    "verticalRmsMm": 0.29007741797454856
+   }
+  },
+  {
+   "cabinStep": {
+    "maxMm": 0,
+    "meanStepMm": 0,
+    "n": 240,
+    "rmsMm": 0,
+    "stepDevMm": 0,
+    "stepMaxMm": 0,
+    "stepMeanMm": 0,
+    "stepsOverTwiceMean": 0,
+    "verticalMaxMm": 0,
+    "verticalRmsMm": 0
+   },
+   "computedLocal": {
+    "maxMm": 23.249421268732807,
+    "meanStepMm": 1.0690351482480764,
+    "n": 240,
+    "rmsMm": 3.3515622623198165,
+    "stepDevMm": 3.3515331615334514,
+    "stepMaxMm": 24.318456649780273,
+    "stepMeanMm": 1.069126526757221,
+    "stepsOverTwiceMean": 27,
+    "verticalMaxMm": 0.0001216928211533741,
+    "verticalRmsMm": 3.517501884297385e-05
+   },
+   "driftHorizontalM": 0.2565684318546157,
+   "driftM": {
+    "x": 0.25656843185424805,
+    "y": 5.960464477539062e-07,
+    "z": -4.343455657362938e-07
+   },
+   "frames": 241,
+   "maxSpeed": 0,
+   "parentedFrames": 0,
+   "phase": "ground",
+   "seconds": 3.999000072479248,
+   "storedLocal": null
+  }
+ ]
+}

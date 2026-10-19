@@ -28,6 +28,7 @@ if (BUILD_TOOLS)
         ac-client
         skeleton-dump
         auto-rig
+        unity-avatar
         atp-client
         oven
     )

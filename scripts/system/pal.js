@@ -522,6 +522,11 @@ function usernameFromIDReply(id, username, machineFingerprint, isAdmin) {
         userName: username || (Users.canKick && machineFingerprint) || '',
         admin: isAdmin
     };
+    // The domain gives everyone in it the account each visitor signed in with, so the picture comes from that
+    // account's public image, not from a metaverse list of who is in which domain.
+    if (username) {
+        data.profileUrl = METAVERSE_BASE + "/api/user/" + encodeURIComponent(username) + "/image";
+    }
     // Ship the data off to QML
     updateUser(data);
 }

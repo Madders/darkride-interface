@@ -16,11 +16,16 @@
 #include <glm/gtx/quaternion.hpp>
 #include <glm/gtx/transform.hpp>
 
+#include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 #include <QtCore/QThread>
 #include <QtCore/QUrlQuery>
+
+#include <ImpostorBake.h>
+#include <ImpostorSwitch.h>
 
 #include <AbstractViewStateInterface.h>
 #include <Model.h>
@@ -28,6 +33,7 @@
 #include <render/Scene.h>
 #include <DependencyManager.h>
 #include <AnimationCache.h>
+#include <procedural/ProceduralMaterialCache.h>
 #include <shared/QtHelpers.h>
 
 #include "EntityTreeRenderer.h"
@@ -326,6 +332,9 @@ bool RenderableModelEntityItem::isReadyToComputeShape() const {
             return false;
         }
 
+        if (!model->isLoaded()) {
+            askForMesh();   // a mesh waiting behind its impostor card loads now
+        }
         if (model->getURL().isEmpty() || !_dimensionsInitialized) {
             // we need a render geometry with a scale to proceed, so give up.
             return false;
@@ -350,9 +359,21 @@ bool RenderableModelEntityItem::isReadyToComputeShape() const {
         // the model is still being downloaded.
         return false;
     } else if (type >= SHAPE_TYPE_SIMPLE_HULL && type <= SHAPE_TYPE_STATIC_MESH) {
+        if (!isModelLoaded()) {
+            askForMesh();   // a mesh waiting behind its impostor card loads now
+        }
         return isModelLoaded();
     }
     return true;
+}
+
+void RenderableModelEntityItem::askForMesh() const {
+    if (!_meshWanted.exchange(true)) {
+        auto renderer = DependencyManager::get<EntityTreeRenderer>();
+        if (renderer) {
+            renderer->wakeDeferredModelMesh(getID());
+        }
+    }
 }
 
 void RenderableModelEntityItem::computeShapeInfo(ShapeInfo& shapeInfo) {
@@ -1015,12 +1036,13 @@ ItemKey ModelEntityRenderer::getKey() {
 }
 
 uint32_t ModelEntityRenderer::metaFetchMetaSubItems(ItemIDs& subItems) const {
+    uint32_t count = fetchImpostorCardSubItem(subItems);
     if (_model) {
         auto metaSubItems = _model->fetchRenderItemIDs();
         subItems.insert(subItems.end(), metaSubItems.begin(), metaSubItems.end());
-        return (uint32_t)metaSubItems.size();
+        count += (uint32_t)metaSubItems.size();
     }
-    return 0;
+    return count;
 }
 
 void ModelEntityRenderer::handleBlendedVertices(int blendshapeNumber, const QVector<BlendshapeOffset>& blendshapeOffsets,
@@ -1037,6 +1059,12 @@ void ModelEntityRenderer::removeFromScene(const ScenePointer& scene, Transaction
 
 void ModelEntityRenderer::onRemoveFromSceneTyped(const TypedEntityPointer& entity) {
     entity->setModel({});
+    auto entityTreeRenderer = DependencyManager::get<EntityTreeRenderer>();
+    if (entityTreeRenderer) {
+        entityTreeRenderer->undeferModelMesh(entity->getID());
+    }
+    // a group's card counts its models again
+    updateImpostorAncestor(entity);
 }
 
 void ModelEntityRenderer::animate(const TypedEntityPointer& entity) {
@@ -1197,6 +1225,11 @@ bool ModelEntityRenderer::needsRenderUpdateFromTypedEntity(const TypedEntityPoin
             return true;
         }
 
+        // userData changes raise no flag of their own: the lightmap entry may have changed with it
+        if (entity->getUserData() != _userData) {
+            return true;
+        }
+
         // No model to render, early exit
         if (!_hasModel) {
             return false;
@@ -1259,13 +1292,26 @@ void ModelEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& sce
         }
     });
 
+    applyLightmap(entity);
+
     ModelPointer model;
     withReadLock([&] { model = _model; });
+
+    // a model shown as its impostor card does not fetch its mesh until it comes close (ENTITY-STREAMING.md 3.1)
+    ImpostorStandIn standIn;
+    const bool deferMesh = _hasModel && shouldDeferMesh(entity, standIn);
 
     withWriteLock([&] {
         bool visuallyReady = true;
         if (_hasModel) {
-            if (model && _didLastVisualGeometryRequestSucceed) {
+            if (deferMesh) {
+                // what it draws now is its card: ready once the card's atlases are
+                visuallyReady = standIn.atlasesLoaded;
+            } else if (!model) {
+                // the model is made below, on this first update: nothing is drawn yet (until 2026-10-19 this read as
+                // drawn, and the arrival's landing let a cold model through before its download had begun)
+                visuallyReady = false;
+            } else if (_didLastVisualGeometryRequestSucceed) {
                 visuallyReady = (_prevModelLoaded && _texturesLoaded);
             }
         }
@@ -1283,6 +1329,12 @@ void ModelEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& sce
         }
         setKey(false);
         _didLastVisualGeometryRequestSucceed = false;
+        _meshFetched = false;
+        if (_meshDeferred) {
+            withWriteLock([&] { _meshDeferred = false; });
+            DependencyManager::get<EntityTreeRenderer>()->undeferModelMesh(entity->getID());
+        }
+        reportImpostorStandIn(entity);
         return;
     }
 
@@ -1292,7 +1344,7 @@ void ModelEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& sce
         connect(model.get(), &Model::requestRenderUpdate, this, &ModelEntityRenderer::requestRenderUpdate);
         connect(model.get(), &Model::setURLFinished, this, [&](bool didVisualGeometryRequestSucceed) {
             setKey(didVisualGeometryRequestSucceed);
-            _model->setTagMask(getTagMask());
+            _model->setTagMask(tagMaskKeepingBake(_model));
             _model->setHifiRenderLayer(getHifiRenderLayer());
             emit requestRenderUpdate();
             if(didVisualGeometryRequestSucceed) {
@@ -1307,12 +1359,27 @@ void ModelEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& sce
     }
 
     // From here on, we are guaranteed a populated model
+    if (deferMesh) {
+        // the card stands in until the camera comes close: the tree renderer wakes this update then
+        withWriteLock([&] {
+            _meshDeferred = true;
+            _prevModelLoaded = false;
+        });
+        DependencyManager::get<EntityTreeRenderer>()->deferModelMesh(entity->getID(), standIn.center, standIn.radius);
+        reportImpostorStandIn(entity);
+        return;
+    }
+    if (_meshDeferred) {
+        withWriteLock([&] { _meshDeferred = false; });
+        DependencyManager::get<EntityTreeRenderer>()->undeferModelMesh(entity->getID());
+    }
     if (_parsedModelURL != model->getURL()) {
         withWriteLock([&] {
             _texturesLoaded = false;
             _jointMappingCompleted = false;
             model->setURL(_parsedModelURL);
         });
+        _meshFetched = true;
     }
 
     // Nothing else to do unless the model is loaded
@@ -1320,6 +1387,7 @@ void ModelEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& sce
         withWriteLock([&] {
             _prevModelLoaded = false;
         });
+        reportImpostorStandIn(entity);
         emit requestRenderUpdate();
         return;
     } else if (!_prevModelLoaded) {
@@ -1373,9 +1441,15 @@ void ModelEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& sce
         model->setCauterized(_cauterized, scene);
     }
 
-    render::hifi::Tag tagMask = getTagMask();
+    render::hifi::Tag tagMask = tagMaskKeepingBake(model);
     if (model->getTagMask() != tagMask) {
         model->setTagMask(tagMask, scene);
+    }
+
+    // the impostor switch this model follows (IMPOSTORS.md 2.4): its own entity's card's, or a grouping ancestor's
+    auto impostorSwitch = findImpostorSwitch(entity);
+    if (model->getImpostorSwitch() != impostorSwitch) {
+        model->setImpostorSwitch(impostorSwitch, scene);
     }
 
     if (entity->blendshapesChanged()) {
@@ -1418,6 +1492,7 @@ void ModelEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& sce
     } else if (!_texturesLoaded) {
         emit requestRenderUpdate();
     }
+    reportImpostorStandIn(entity);
 
     if (!_allProceduralMaterialsLoaded) {
         std::lock_guard<std::mutex> lock(_materialsLock);
@@ -1478,12 +1553,86 @@ void ModelEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& sce
     }
 }
 
+// The mesh waits behind the impostor card (ENTITY-STREAMING.md 3.1) while all of this holds: this renderer has never
+// fetched it (a loaded mesh stays; a new URL loads at once), the entity has its dimensions (an entity sized from its mesh needs
+// it), nothing has asked for it (askForMesh: physics for a shape made from it, the impostor baker), a
+// card stands in for it (its own or an ancestor's, its atlases loaded or on their way, not failed) and the card's
+// sphere looks smaller than the load angle from the main camera, half the impostor angle, so that the mesh has time to
+// come before the switch needs it.
+bool ModelEntityRenderer::shouldDeferMesh(const TypedEntityPointer& entity, ImpostorStandIn& standIn) {
+    // (a new Model's URL is a placeholder, not empty: whether this renderer has fetched is its own flag)
+    if (_meshFetched) {
+        return false;
+    }
+    standIn = findImpostorStandIn(entity);
+    if (!standIn.found) {
+        return false;
+    }
+    auto entityTreeRenderer = DependencyManager::get<EntityTreeRenderer>();
+    float loadHalfTanSq = entityTreeRenderer ? entityTreeRenderer->getImpostorLoadHalfTanSq() : 0.0f;
+    glm::vec3 toCamera = (entityTreeRenderer ? entityTreeRenderer->getImpostorLoadPosition() : glm::vec3(0.0f)) - standIn.center;
+    float distance = glm::length(toCamera);
+    float radiusSq = standIn.radius * standIn.radius;
+    const char* reason = nullptr;
+    if (!entity->_dimensionsInitialized) {
+        reason = "it is sized from its mesh";
+    } else if (entity->_meshWanted) {
+        reason = "it was asked for";
+    } else if (loadHalfTanSq <= 0.0f) {
+        reason = "the cards are off";
+    } else if (standIn.atlasesFailed) {
+        reason = "the card's atlases failed";
+    } else if (standIn.radius <= 0.0f) {
+        reason = "the card has no size";
+    } else if (distance * distance <= radiusSq || radiusSq >= loadHalfTanSq * distance * distance) {
+        reason = "the camera is close";
+    }
+    // one log line when a mesh starts to wait, and one when it stops
+    if ((reason == nullptr) != _meshDeferred) {
+        float loadAngleDeg = glm::degrees(2.0f * atanf(sqrtf(std::max(loadHalfTanSq, 0.0f))));
+        float sphereDeg = distance > standIn.radius ? glm::degrees(2.0f * atanf(standIn.radius / distance)) : 180.0f;
+        if (!reason) {
+            qCDebug(entitiesrenderer).nospace() << "impostor stand-in: " << entity->getName() << " " << entity->getID()
+                << " waits behind its card (distance " << distance << " m, sphere " << sphereDeg << " deg, load angle "
+                << loadAngleDeg << " deg)";
+        } else {
+            qCDebug(entitiesrenderer).nospace() << "impostor stand-in: " << entity->getName() << " " << entity->getID()
+                << " fetches its mesh: " << reason << " (distance " << distance << " m, sphere " << sphereDeg
+                << " deg, load angle " << loadAngleDeg << " deg)";
+        }
+    }
+    return reason == nullptr;
+}
+
+bool ModelEntityRenderer::needsImpostorStandIn() const {
+    return resultWithReadLock<bool>([&] {
+        return _hasModel && (_meshDeferred || !_prevModelLoaded || !_texturesLoaded);
+    });
+}
+
+// The card this model follows learns whether it stands in for it, when that changes
+void ModelEntityRenderer::reportImpostorStandIn(const TypedEntityPointer& entity) {
+    int standIn = needsImpostorStandIn() ? 1 : 0;
+    if (standIn != _reportedStandIn) {
+        _reportedStandIn = standIn;
+        updateImpostorOwner(entity);
+    }
+}
+
 void ModelEntityRenderer::setIsVisibleInSecondaryCamera(bool value) {
     Parent::setIsVisibleInSecondaryCamera(value);
     setKey(_didLastVisualGeometryRequestSucceed);
     if (_model) {
-        _model->setTagMask(getTagMask());
+        _model->setTagMask(tagMaskKeepingBake(_model));
     }
+}
+
+// The entity's tag mask for its model, keeping the impostor bake's tag while the baker holds it (ImpostorBaker tags the
+// model's items for the frames' duration; an update of this entity in those frames, a texture still loading say,
+// would otherwise strip the tag and leave the model out of its own bake, as the chair's plastic was)
+render::hifi::Tag ModelEntityRenderer::tagMaskKeepingBake(const ModelPointer& model) const {
+    uint8_t bake = model ? ((uint8_t)model->getTagMask() & ImpostorBake::TAG) : 0;
+    return (render::hifi::Tag)((uint8_t)getTagMask() | bake);
 }
 
 void ModelEntityRenderer::setRenderLayer(RenderLayer value) {
@@ -1509,10 +1658,16 @@ void ModelEntityRenderer::setCullWithParent(bool value) {
     }
 }
 
+std::atomic<bool> ModelEntityRenderer::_showModelsStillLoading { false };
+
 // NOTE: this only renders the "meta" portion of the Model, namely it renders debugging items
 void ModelEntityRenderer::doRender(RenderArgs* args) {
     DETAILED_PROFILE_RANGE(render_detail, "MetaModelRender");
     DETAILED_PERFORMANCE_TIMER("RMEIrender");
+
+    if (!_showModelsStillLoading) {
+        return;
+    }
 
     // If the model doesn't have visual geometry, render our bounding box as a magenta wireframe
     static glm::vec4 magentaColor(0.913f, 0.117f, 0.388f, 1.0f);
@@ -1572,6 +1727,81 @@ void ModelEntityRenderer::removeMaterial(graphics::MaterialPointer material, con
     if (_model && _model->fetchRenderItemIDs().size() > 0) {
         _model->removeMaterial(material, parentMaterialName);
     }
+}
+
+// The lightmap the entity's userData assigns to the whole model, as Unity assigns one per renderer (LIGHTMAPS.md §3.2):
+//   "lightmap": { "url": "....exr", "scaleOffset": [sx, sy, ox, oy], "mode": "indirect" | "full", "params": [offset, scale],
+//                 "directionalUrl": "....png" }
+// It becomes a material layer over every mesh part carrying only the map, the second texture coordinates' scale and
+// offset (uv * scale + offset, as Unity's lightmapScaleOffset) and the map's mode and params; everything else falls
+// through to the model's own materials, or a Material entity's. The layer sits above those (priority 1) so a Material
+// entity at the default priority keeps its say on everything but the lightmap
+static const quint16 LIGHTMAP_LAYER_PRIORITY = 1;
+static const std::string LIGHTMAP_LAYER_PARTS = "all";
+
+void ModelEntityRenderer::applyLightmap(const TypedEntityPointer& entity) {
+    QString userData = entity->getUserData();
+    QString spec;
+    {
+        QJsonValue lightmap = QJsonDocument::fromJson(userData.toUtf8()).object().value("lightmap");
+        if (lightmap.isObject()) {
+            spec = QString::fromUtf8(QJsonDocument(lightmap.toObject()).toJson(QJsonDocument::Compact));
+        }
+    }
+    bool changed = false;
+    withWriteLock([&] {
+        _userData = userData;
+        changed = spec != _lightmapSpec;
+        _lightmapSpec = spec;
+    });
+    if (!changed) {
+        return;
+    }
+
+    if (_lightmapMaterial) {
+        removeMaterial(_lightmapMaterial, LIGHTMAP_LAYER_PARTS);
+        _lightmapMaterial.reset();
+    }
+    QJsonObject lightmap = QJsonDocument::fromJson(spec.toUtf8()).object();
+    QString url = lightmap.value("url").toString();
+    if (url.isEmpty()) {
+        return;
+    }
+
+    auto material = std::make_shared<NetworkMaterial>();
+    // only the lightmap's own properties are this layer's
+    for (uint flag = 0; flag < graphics::Material::NUM_TOTAL_FLAGS; flag++) {
+        if (flag != graphics::MaterialKey::LIGHT_MAP_BIT && flag != graphics::MaterialKey::LIGHTMAP_DIRECTION_MAP_BIT &&
+            flag != graphics::Material::TEXCOORDTRANSFORM1 && flag != graphics::Material::LIGHTMAP_PARAMS) {
+            material->setPropertyDoesFallthrough(flag);
+        }
+    }
+    material->setLightMap(QUrl(url));
+    QString directionUrl = lightmap.value("directionalUrl").toString();
+    if (!directionUrl.isEmpty()) {
+        material->setLightMapDirection(QUrl(directionUrl));
+    }
+    // after the map: setting it resets the transform and the params to the map's own
+    glm::vec2 scale(1.0f);
+    glm::vec2 offset(0.0f);
+    QJsonArray scaleOffset = lightmap.value("scaleOffset").toArray();
+    if (scaleOffset.size() == 4) {
+        scale = glm::vec2(scaleOffset[0].toDouble(), scaleOffset[1].toDouble());
+        offset = glm::vec2(scaleOffset[2].toDouble(), scaleOffset[3].toDouble());
+    }
+    material->setTexCoordTransform(1, glm::translate(glm::vec3(offset, 0.0f)) * glm::scale(glm::vec3(scale, 1.0f)));
+    graphics::MaterialKey::LightmapMode mode = graphics::Material::DEFAULT_LIGHTMAP_MODE;
+    graphics::MaterialKey::LightmapMode named;
+    if (graphics::MaterialKey::getLightmapModeFromName(lightmap.value("mode").toString().toStdString(), named)) {
+        mode = named;
+    }
+    material->setLightmapMode(mode);
+    QJsonArray params = lightmap.value("params").toArray();
+    if (params.size() == 2 && params[0].isDouble() && params[1].isDouble()) {
+        material->setLightmapParams(glm::vec2(params[0].toDouble(), params[1].toDouble()));
+    }
+    _lightmapMaterial = material;
+    addMaterial(graphics::MaterialLayer(material, LIGHTMAP_LAYER_PRIORITY), LIGHTMAP_LAYER_PARTS);
 }
 
 void ModelEntityRenderer::processMaterials() {

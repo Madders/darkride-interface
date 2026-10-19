@@ -11,6 +11,8 @@
 
 #include "MainWindow.h"
 
+#include <algorithm>
+
 #include <QtGui/QGuiApplication>
 #include <QtGui/QScreen>
 #include <QEvent>
@@ -59,35 +61,49 @@ QWindow* MainWindow::findMainWindow() {
     return result;
 }
 
+// a window smaller than this at the start is taken for a mistake: Qt's own 640 x 480, when nothing sized it
+static const QSize MIN_START_SIZE(800, 600);
+
 void MainWindow::restoreGeometry() {
     // Did not use setGeometry() on purpose,
     // see http://doc.qt.io/qt-5/qsettings.html#restoring-the-state-of-a-gui-application
-
-
-    const float intialWindowScale = 1.0f;
-
-    const QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
-    const QSize windowSize = screen.size() * intialWindowScale;
-
-    resize(windowSize);
-    move(
-        screen.center() - 
-        QPoint(
-            windowSize.width(),
-            windowSize.height()
-        ) / 2
-    );
+    QRect saved = _windowGeometry.get();
+    bool usable = false;
+    if (saved.width() >= MIN_START_SIZE.width() && saved.height() >= MIN_START_SIZE.height()) {
+        for (const QScreen* screen : QGuiApplication::screens()) {
+            // its title bar on a connected screen, so it can be grabbed, and most of it there
+            QRect available = screen->availableGeometry();
+            QRect shown = available.intersected(saved);
+            if (available.contains(saved.topLeft() + QPoint(std::min(100, saved.width() / 2), 10)) &&
+                2 * shown.width() * shown.height() >= saved.width() * saved.height()) {
+                usable = true;
+                break;
+            }
+        }
+    }
+    _startGeometry = usable ? saved : QGuiApplication::primaryScreen()->availableGeometry();
+    resize(_startGeometry.size());
+    move(_startGeometry.topLeft());
+    qCDebug(uiLogging) << "main window at the start:" << (usable ? "where it was left," : "the main screen,")
+                       << _startGeometry;
 
 #if !defined(Q_OS_MACOS)
     // maximising on mac is actually fullscreen
-    setWindowState(Qt::WindowMaximized);
+    if (!usable || _windowState.get(Qt::WindowNoState) == Qt::WindowMaximized) {
+        setWindowState(Qt::WindowMaximized);
+    }
 #endif
-    
-    // // Restore to maximized or full screen after restoring to windowed so that going windowed goes to good position and sizes.
-    // Qt::WindowStates state = (Qt::WindowStates)_windowState.get(Qt::WindowNoState);
-    // if (state != Qt::WindowNoState) {
-    //     setWindowState(state);
-    // }
+}
+
+void MainWindow::checkStartGeometry() {
+    QRect now(pos(), size());
+    qCDebug(uiLogging) << "main window after the start:" << now << windowState();
+    if (windowState() == Qt::WindowNoState && _startGeometry.isValid() &&
+        (now.width() < MIN_START_SIZE.width() || now.height() < MIN_START_SIZE.height())) {
+        qCWarning(uiLogging) << "main window was shrunk to" << now << "after the start; back to" << _startGeometry;
+        resize(_startGeometry.size());
+        move(_startGeometry.topLeft());
+    }
 }
 
 void MainWindow::saveGeometry() {

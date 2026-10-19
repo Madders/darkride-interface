@@ -22,6 +22,7 @@
 #include <NetworkAccessManager.h>
 #include <BaseAssetScriptingInterface.h>
 #include <BaseScriptEngine.h>
+#include <ScriptCallback.h>
 #include <QtNetwork/QNetworkDiskCache>
 
 /**jsdoc
@@ -534,6 +535,30 @@ public:
      */
     Q_INVOKABLE void saveToCache(const QUrl& url, const QByteArray& data, const QVariantMap& metadata,
                                  QScriptValue scope, QScriptValue callback = QScriptValue());
+
+    // The same methods for the WebAssembly script engine: plain values in, and the module's function (a
+    // ScriptCallback) called back with the arguments a script's callback gets above. The QtScript engine never
+    // chooses these (no script value converts to a ScriptCallback) and a module never chooses the ones above.
+    // A check that would throw in a script returns an error record, which the module's call raises. The scope
+    // forms (a scope object and a function or a method name) are the JavaScript guest's to bind.
+    Q_INVOKABLE QVariant uploadData(const QString& data, const ScriptCallback& callback);
+    Q_INVOKABLE QVariant downloadData(const QString& url, const ScriptCallback& callback);
+    Q_INVOKABLE QVariant setMapping(const QString& path, const QString& hash, const ScriptCallback& callback);
+    Q_INVOKABLE QVariant getMapping(const QString& path, const ScriptCallback& callback);
+    Q_INVOKABLE QVariant setBakingEnabled(const QString& path, bool enabled, const ScriptCallback& callback);
+    Q_INVOKABLE QVariant getAsset(const QVariant& options, const ScriptCallback& callback);
+    Q_INVOKABLE QVariant putAsset(const QVariant& options, const ScriptCallback& callback);
+    Q_INVOKABLE QVariant deleteAsset(const QVariant& options, const ScriptCallback& callback);
+    Q_INVOKABLE QVariant resolveAsset(const QVariant& options, const ScriptCallback& callback);
+    Q_INVOKABLE QVariant decompressData(const QVariant& options, const ScriptCallback& callback);
+    Q_INVOKABLE QVariant compressData(const QVariant& options, const ScriptCallback& callback);
+    Q_INVOKABLE QVariant getCacheStatus(const ScriptCallback& callback);
+    Q_INVOKABLE QVariant queryCacheMeta(const QVariant& options, const ScriptCallback& callback);
+    Q_INVOKABLE QVariant loadFromCache(const QVariant& options, const ScriptCallback& callback);
+    Q_INVOKABLE QVariant saveToCache(const QVariant& options, const ScriptCallback& callback);
+    Q_INVOKABLE QVariant saveToCache(const QUrl& url, const QByteArray& data, const QVariantMap& metadata,
+                                     const ScriptCallback& callback);
+
 protected:
     QScriptValue jsBindCallback(QScriptValue scope, QScriptValue callback = QScriptValue());
     Promise jsPromiseReady(Promise promise, QScriptValue scope, QScriptValue callback = QScriptValue());
@@ -541,6 +566,10 @@ protected:
     void jsCallback(const QScriptValue& handler, const QScriptValue& error, const QVariantMap& result);
     void jsCallback(const QScriptValue& handler, const QScriptValue& error, const QScriptValue& result);
     bool jsVerify(bool condition, const QString& error);
+
+    // the WebAssembly engine's counterparts: a promise's outcome posted to the module's function as
+    // (error or null, result)
+    Promise callbackReady(Promise promise, const ScriptCallback& callback);
 };
 
 #endif // hifi_AssetScriptingInterface_h

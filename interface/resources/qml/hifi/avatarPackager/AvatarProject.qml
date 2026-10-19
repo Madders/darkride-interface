@@ -431,7 +431,7 @@ Item {
                 anchors.left: loginWarningGlyph.right
                 anchors.right: parent.right
 
-                text: "Please login to upload your avatar to High Fidelity hosting."
+                text: "Please sign in to upload your avatar."
                 size: 18
                 wrapMode: Text.Wrap
             }

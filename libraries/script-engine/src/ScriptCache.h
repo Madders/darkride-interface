@@ -16,6 +16,8 @@
 #include <ResourceCache.h>
 
 using contentAvailableCallback = std::function<void(const QString& scriptOrURL, const QString& contents, bool isURL, bool contentAvailable, const QString& status)>;
+/// The bytes of a script as fetched (a WebAssembly module); `success` false with the status when they could not be.
+using bytesAvailableCallback = std::function<void(const QString& url, const QByteArray& bytes, bool success, const QString& status)>;
 
 class ScriptUser {
 public:
@@ -28,6 +30,7 @@ public:
     static const int MAX_RETRIES { 5 };
     static const int START_DELAY_BETWEEN_RETRIES { 200 };
     std::vector<contentAvailableCallback> scriptUsers { };
+    std::vector<bytesAvailableCallback> byteUsers { };
     int numRetries { 0 };
     int maxRetries { MAX_RETRIES };
 };
@@ -50,11 +53,14 @@ public:
     void clearCache();
     Q_INVOKABLE void clearATPScriptsFromCache();
     void getScriptContents(const QString& scriptOrURL, contentAvailableCallback contentAvailable, bool forceDownload = false, int maxRetries = ScriptRequest::MAX_RETRIES);
+    /// The same fetch and cache, delivering the bytes as they came rather than as text (a WebAssembly module).
+    void getScriptBytes(const QString& url, bytesAvailableCallback bytesAvailable, bool forceDownload = false, int maxRetries = ScriptRequest::MAX_RETRIES);
 
     void deleteScript(const QUrl& unnormalizedURL);
 
 private:
     void scriptContentAvailable(int maxRetries); // new version
+    void request(const QUrl& url, contentAvailableCallback contentAvailable, bytesAvailableCallback bytesAvailable, bool forceDownload, int maxRetries);
     ScriptCache(QObject* parent = NULL);
     
     Mutex _containerLock;

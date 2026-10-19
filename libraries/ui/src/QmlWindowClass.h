@@ -53,6 +53,11 @@ class QmlWindowClass : public QObject {
 private:
     static QScriptValue internal_constructor(QScriptContext* context, QScriptEngine* engine, bool restricted);
 public:
+    /// A window from the properties the constructor takes (title, source, width, height, visible, frameless,
+    /// enabled), initialised on the main thread; the caller owns it.
+    static QmlWindowClass* createWindow(QVariantMap properties, bool restricted);
+    /// A source that is not a known URL scheme is a local file path.
+    static QVariantMap normalizeProperties(QVariantMap properties);
     static QScriptValue constructor(QScriptContext* context, QScriptEngine* engine) {
         return internal_constructor(context, engine, false);
     }

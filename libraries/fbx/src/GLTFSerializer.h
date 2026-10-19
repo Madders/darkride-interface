@@ -16,6 +16,7 @@
 #include <QtNetwork/QNetworkReply>
 #include <hfm/ModelFormatLogging.h>
 #include <hfm/HFMSerializer.h>
+#include <Transform.h>
 
 
 struct GLTFAsset {
@@ -392,9 +393,9 @@ struct GLTFImage {
 struct GLTFpbrMetallicRoughness {
     QVector<double> baseColorFactor;
     int baseColorTexture;
-    int baseColorTexCoord;
+    int baseColorTexCoord { 0 };
     int metallicRoughnessTexture;
-    int metallicRoughnessTexCoord;
+    int metallicRoughnessTexCoord { 0 };
     double metallicFactor;
     double roughnessFactor;
     QMap<QString, bool> defined;
@@ -413,14 +414,18 @@ struct GLTFpbrMetallicRoughness {
 struct GLTFMaterial {
     QString name;
     QVector<double> emissiveFactor;
+    double emissiveStrength { 1.0 };    // KHR_materials_emissive_strength
     int emissiveTexture;
-    int emissiveTexCoord;
+    int emissiveTexCoord { 0 };
     int normalTexture;
-    int normalTexCoord;
+    int normalTexCoord { 0 };
     int occlusionTexture;
-    int occlusionTexCoord;
+    int occlusionTexCoord { 0 };
     int lightmapTexture; // proposal
-    int lightmapTexCoord; // proposal
+    int lightmapTexCoord { 1 }; // proposal
+    int lightmapDirectionTexture; // ours: the lightmap's direction map (LIGHTMAPS.md §3.4)
+    int lightmapDirectionTexCoord { 1 };
+    QMap<QString, Transform> textureTransforms;    // KHR_texture_transform, by the texture's field name
     graphics::MaterialKey::OpacityMapMode alphaMode;
     double alphaCutoff;
     bool doubleSided;
@@ -857,6 +862,7 @@ private:
     bool addBuffer(const QJsonObject& object);
     bool addCamera(const QJsonObject& object);
     bool addImage(const QJsonObject& object);
+    void readTextureTransform(const QJsonObject& object, const QString& field, GLTFMaterial& material, int& texCoord);
     bool addMaterial(const QJsonObject& object);
     bool addMesh(const QJsonObject& object);
     bool addNode(const QJsonObject& object);
@@ -892,7 +898,7 @@ private:
     bool doesResourceExist(const QString& url);
 
     void setHFMMaterial(HFMMaterial& hfmMat, const GLTFMaterial& material);
-    HFMTexture getHFMTexture(const GLTFTexture& texture, const int texCoord);
+    HFMTexture getHFMTexture(const GLTFTexture& texture, const int texCoord, const Transform& transform = Transform());
 
     void glTFDebugDump();
 };

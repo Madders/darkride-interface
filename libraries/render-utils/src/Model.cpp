@@ -968,6 +968,38 @@ void Model::setCauterized(bool cauterized, const render::ScenePointer& scene) {
     }
 }
 
+void Model::setImpostorSwitch(const std::shared_ptr<ImpostorSwitch>& impostorSwitch, const render::ScenePointer& scene) {
+    if (_impostorSwitch != impostorSwitch) {
+        _impostorSwitch = impostorSwitch;
+        if (!scene) {
+            _needsFixupInScene = true;
+            return;
+        }
+        render::Transaction transaction;
+        for (auto itemID : _modelMeshRenderItemIDs) {
+            transaction.updateItem<ModelMeshPartPayload>(itemID, [impostorSwitch](ModelMeshPartPayload& data) {
+                data.setImpostorSwitch(impostorSwitch);
+            });
+        }
+        scene->enqueueTransaction(transaction);
+    }
+}
+
+std::vector<Model::PartLods> Model::getPartLods() const {
+    std::vector<PartLods> parts;
+    for (const auto& payload : _modelMeshRenderItems) {
+        if (!payload) {
+            continue;
+        }
+        PartLods part;
+        part.full = payload->getFullTriangles();
+        part.levels = payload->getLodTriangles();
+        part.shown = payload->getShownLodLevel();
+        parts.push_back(part);
+    }
+    return parts;
+}
+
 void Model::setPrimitiveMode(PrimitiveMode primitiveMode) {
     if (_primitiveMode != primitiveMode) {
         _primitiveMode = primitiveMode;

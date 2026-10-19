@@ -35,10 +35,12 @@ macro(SET_PACKAGING_PARAMETERS)
     set(DEPLOY_PACKAGE TRUE)
     set(PRODUCTION_BUILD 1)
     set(BUILD_VERSION ${RELEASE_NUMBER})
-    set(BUILD_ORGANIZATION "Darkride")
+    # the organization names the settings and data folders of the client and the servers alike (a world's
+    # entities live under it), so it keeps its Tivoli name until both move together; people see Darkride
+    set(BUILD_ORGANIZATION "Tivoli Cloud VR")
     set(HIGH_FIDELITY_PROTOCOL "hifi")
     set(HIGH_FIDELITY_APP_PROTOCOL "hifiapp")
-    set(INTERFACE_BUNDLE_NAME "interface")
+    set(INTERFACE_BUNDLE_NAME "Darkride")
     set(INTERFACE_ICON_PREFIX "interface")
 
     # add definition for this release type
@@ -60,8 +62,8 @@ macro(SET_PACKAGING_PARAMETERS)
     set(DEPLOY_PACKAGE TRUE)
     set(PR_BUILD 1)
     set(BUILD_VERSION "PR${RELEASE_NUMBER}")
-    set(BUILD_ORGANIZATION "Darkride - PR${RELEASE_NUMBER}")
-    set(INTERFACE_BUNDLE_NAME "interface")
+    set(BUILD_ORGANIZATION "Tivoli Cloud VR - PR${RELEASE_NUMBER}")
+    set(INTERFACE_BUNDLE_NAME "Darkride")
     set(INTERFACE_ICON_PREFIX "interface-beta")
 
     # add definition for this release type
@@ -69,8 +71,8 @@ macro(SET_PACKAGING_PARAMETERS)
   else ()
     set(DEV_BUILD 1)
     set(BUILD_VERSION "dev")
-    set(BUILD_ORGANIZATION "Darkride - ${BUILD_VERSION}")
-    set(INTERFACE_BUNDLE_NAME "interface")
+    set(BUILD_ORGANIZATION "Tivoli Cloud VR - ${BUILD_VERSION}")
+    set(INTERFACE_BUNDLE_NAME "Darkride")
     set(INTERFACE_ICON_PREFIX "interface-beta")
 
     # add definition for this release type
@@ -87,6 +89,9 @@ macro(SET_PACKAGING_PARAMETERS)
   # when HEAD changes (a checkout), and after a commit the hash catches up on the next cmake run.
   set(BUILD_BRANCH "")
   set(BUILD_COMMIT_SHORT "")
+  # A name for this build's clients, first in the window title, for telling one session's clients from another's
+  # on one machine: cmake -DCLIENT_LABEL="Darkride - Editor/Renderer" . (empty: none)
+  set(CLIENT_LABEL "" CACHE STRING "A name for this build's clients, shown first in the window title")
   find_package(Git QUIET)
   if (GIT_FOUND)
     execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse --abbrev-ref HEAD
@@ -183,7 +188,7 @@ macro(SET_PACKAGING_PARAMETERS)
   endif ()
 
   if (WIN32)
-    set(INTERFACE_EXEC_PREFIX "interface")
+    set(INTERFACE_EXEC_PREFIX "Darkride")
     set(INTERFACE_ICON_FILENAME "${INTERFACE_ICON_PREFIX}.ico")
     set(NITPICK_ICON_FILENAME "${NITPICK_ICON_PREFIX}.ico")
 

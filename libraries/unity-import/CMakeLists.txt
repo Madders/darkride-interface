@@ -1,0 +1,7 @@
+set(TARGET_NAME unity-import)
+setup_hifi_library(Gui)
+link_hifi_libraries(shared hfm graphics fbx animation)
+include_hifi_library_headers(gpu)
+include_hifi_library_headers(image)
+include_hifi_library_headers(networking)
+target_zlib()

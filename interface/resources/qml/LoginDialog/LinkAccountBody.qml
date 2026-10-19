@@ -85,31 +85,27 @@ Item {
             UserActivityLogger.logAction("encourageLoginDialog", data);
         }
         bodyLoader.setSource("LoggingInBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader, "withSteam": linkAccountBody.withSteam,
-            "withOculus": linkAccountBody.withOculus, "linkSteam": linkAccountBody.linkSteam, "linkOculus": linkAccountBody.linkOculus,
-            "displayName":displayNameField.text });
+            "withOculus": linkAccountBody.withOculus, "linkSteam": linkAccountBody.linkSteam, "linkOculus": linkAccountBody.linkOculus });
     }
 
     function init() {
         // going to/from sign in/up dialog.
         loginErrorMessage.text = linkAccountBody.errorString;
         loginErrorMessage.visible = (linkAccountBody.errorString  !== "");
-        if (loginErrorMessageTextMetrics.width > displayNameField.width) {
+        if (loginErrorMessageTextMetrics.width > emailField.width) {
             loginErrorMessage.wrapMode = Text.WordWrap;
-            errorContainer.height = (loginErrorMessageTextMetrics.width / displayNameField.width) * loginErrorMessageTextMetrics.height;
+            errorContainer.height = (loginErrorMessageTextMetrics.width / emailField.width) * loginErrorMessageTextMetrics.height;
         }
         loginButton.text = (!linkAccountBody.linkSteam && !linkAccountBody.linkOculus) ? "Log In" : "Link Account";
         loginButton.color = hifi.buttons.blue;
-        displayNameField.placeholderText = "Display Name (optional)";
-        var savedDisplayName = Settings.getValue("Avatar/displayName", "");
-        displayNameField.text = savedDisplayName;
         emailField.placeholderText = "Username or Email";
         var savedUsername = Settings.getValue("keepMeLoggedIn/savedUsername", "");
         emailField.text = keepMeLoggedInCheckbox.checked ? savedUsername === "Unknown user" ? "" : savedUsername : "";
         if (linkAccountBody.linkSteam || linkAccountBody.linkOculus) {
             loginButton.width = (passwordField.width - hifi.dimensions.contentSpacing.x) / 2;
-            loginButton.anchors.right = displayNameField.right;
+            loginButton.anchors.right = emailField.right;
         } else {
-            loginButton.anchors.left = displayNameField.left;
+            loginButton.anchors.left = emailField.left;
         }
         loginContainer.visible = true;
     }
@@ -129,14 +125,14 @@ Item {
 
         Item {
             id: loginContainer
-            width: displayNameField.width
-            height: errorContainer.height + displayNameField.height + emailField.height + passwordField.height + 5.5 * hifi.dimensions.contentSpacing.y +
+            width: emailField.width
+            height: errorContainer.height + emailField.height + passwordField.height + 4 * hifi.dimensions.contentSpacing.y +
                 keepMeLoggedInCheckbox.height + loginButton.height + cantAccessTextMetrics.height + continueButton.height
             anchors {
                 top: parent.top
                 topMargin: root.bannerHeight + 0.25 * parent.height
                 left: parent.left
-                leftMargin: (parent.width - displayNameField.width) / 2
+                leftMargin: (parent.width - emailField.width) / 2
             }
 
             Item {
@@ -144,9 +140,9 @@ Item {
                 width: parent.width
                 height: loginErrorMessageTextMetrics.height
                 anchors {
-                    bottom: displayNameField.top;
+                    bottom: emailField.top;
                     bottomMargin: hifi.dimensions.contentSpacing.y;
-                    left: displayNameField.left;
+                    left: emailField.left;
                 }
                 TextMetrics {
                     id: loginErrorMessageTextMetrics
@@ -166,45 +162,8 @@ Item {
                 }
             }
 
-            HifiControlsUit.TextField {
-                id: displayNameField
-                width: root.bannerWidth
-                height: linkAccountBody.textFieldHeight
-                font.pixelSize: linkAccountBody.textFieldFontSize
-                styleRenderType: Text.QtRendering
-                anchors {
-                    top: parent.top
-                    topMargin: errorContainer.height
-                }
-                placeholderText: "Display Name (optional)"
-                activeFocusOnPress: true
-                Keys.onPressed: {
-                    switch (event.key) {
-                        case Qt.Key_Tab:
-                            event.accepted = true;
-                            emailField.focus = true;
-                            break;
-                        case Qt.Key_Backtab:
-                            event.accepted = true;
-                            passwordField.focus = true;
-                            break;
-                        case Qt.Key_Enter:
-                        case Qt.Key_Return:
-                            event.accepted = true;
-                            if (keepMeLoggedInCheckbox.checked) {
-                                Settings.setValue("keepMeLoggedIn/savedUsername", emailField.text);
-                            }
-                            linkAccountBody.login();
-                            break;
-                    }
-                }
-                onFocusChanged: {
-                    root.text = "";
-                    if (focus) {
-                        root.isPassword = false;
-                    }
-                }
-            }
+            // No display name field: a Darkride avatar is called by its account's username, which the viewer sets when
+            // the sign-in completes (Application, AccountManager::usernameChanged).
             HifiControlsUit.TextField {
                 id: emailField
                 width: root.bannerWidth
@@ -212,8 +171,8 @@ Item {
                 font.pixelSize: linkAccountBody.textFieldFontSize
                 styleRenderType: Text.QtRendering
                 anchors {
-                    top: displayNameField.bottom
-                    topMargin: 1.5 * hifi.dimensions.contentSpacing.y
+                    top: parent.top
+                    topMargin: errorContainer.height
                 }
                 placeholderText: "Username or Email"
                 activeFocusOnPress: true
@@ -225,7 +184,7 @@ Item {
                             break;
                         case Qt.Key_Backtab:
                             event.accepted = true;
-                            displayNameField.focus = true;
+                            passwordField.focus = true;
                             break;
                         case Qt.Key_Enter:
                         case Qt.Key_Return:
@@ -301,7 +260,7 @@ Item {
                     switch (event.key) {
                         case Qt.Key_Tab:
                             event.accepted = true;
-                            displayNameField.focus = true;
+                            emailField.focus = true;
                             break;
                         case Qt.Key_Backtab:
                             event.accepted = true;
@@ -321,7 +280,7 @@ Item {
             HifiControlsUit.CheckBox {
                 id: keepMeLoggedInCheckbox
                 checked: Settings.getValue("keepMeLoggedIn", true);
-                text: qsTr("Keep Me Logged In");
+                text: qsTr("Remember me");
                 boxSize: 18;
                 labelFontFamily: linkAccountBody.fontFamily
                 labelFontSize: 18;
@@ -396,13 +355,14 @@ Item {
                 anchors {
                     top: loginButton.bottom
                     topMargin: hifi.dimensions.contentSpacing.y
-                    left: displayNameField.left
+                    left: emailField.left
                 }
                 font.family: linkAccountBody.fontFamily
                 font.pixelSize: linkAccountBody.textFieldFontSize
                 font.bold: linkAccountBody.fontBold
 
-                text: "<a href='" + Account.metaverseServerURL + "/?forgotPassword'> Can't access your account?</a>"
+                // the website's account recovery, in the browser
+                text: "<a href='https://darkride.ai/?forgotPassword'> Can't access your account?</a>"
 
                 verticalAlignment: Text.AlignVCenter
                 horizontalAlignment: Text.AlignHCenter
@@ -427,13 +387,13 @@ Item {
             }
             HifiControlsUit.Button {
                 id: continueButton;
-                width: displayNameField.width;
+                width: emailField.width;
                 height: d.minHeightButton
                 color: hifi.buttons.none;
                 anchors {
                     top: cantAccessText.bottom
                     topMargin: hifi.dimensions.contentSpacing.y
-                    left: displayNameField.left
+                    left: emailField.left
                 }
                 text: qsTr("CONTINUE WITH STEAM")
                 fontFamily: linkAccountBody.fontFamily
@@ -466,23 +426,12 @@ Item {
                     }
 
                     bodyLoader.setSource("LoggingInBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader,
-                        "withSteam": linkAccountBody.withSteam, "withOculus": linkAccountBody.withOculus, "linkSteam": linkAccountBody.linkSteam, "linkOculus": linkAccountBody.linkOculus,
-                        "displayName":displayNameField.text});
+                        "withSteam": linkAccountBody.withSteam, "withOculus": linkAccountBody.withOculus, "linkSteam": linkAccountBody.linkSteam, "linkOculus": linkAccountBody.linkOculus});
                 }
                 Component.onCompleted: {
-                    if (linkAccountBody.linkSteam || linkAccountBody.linkOculus) {
-                        continueButton.visible = false;
-                        return;
-                    }
-                    if (loginDialog.isOculusRunning()) {
-                        continueButton.text = qsTr("CONTINUE WITH OCULUS");
-                        continueButton.buttonGlyph = hifi.glyphs.oculus;
-                    } else if (loginDialog.isSteamRunning()) {
-                        continueButton.text = qsTr("CONTINUE WITH STEAM");
-                        continueButton.buttonGlyph = hifi.glyphs.steamSquare;
-                    } else {
-                        continueButton.visible = false;
-                    }
+                    // Darkride's accounts have no Steam or Oculus sign-in, so this button never shows, even with
+                    // Steam running; its screens (CompleteProfileBody, UsernameCollisionBody) are High Fidelity's
+                    continueButton.visible = false;
                 }
             }
         }
@@ -527,7 +476,8 @@ Item {
                      leftMargin: hifi.dimensions.contentSpacing.x
                 }
 
-                text: "<a href='" + Account.metaverseServerURL + "/?signUp'>Sign Up</a>"
+                // signing up is on the website, in the browser (High Fidelity's form, SignUpBody.qml, isn't used)
+                text: "<a href='https://darkride.ai/?signUp'>Sign Up</a>"
 
                 linkColor: hifi.colors.blueAccent
                 onLinkActivated: {
@@ -538,43 +488,12 @@ Item {
                         };
                         UserActivityLogger.logAction("encourageLoginDialog", data);
                     }
-                    bodyLoader.setSource("SignUpBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader,
-                        "errorString": "" });
+                    Window.openUrl(link);
                 }
             }
         }
-        TextMetrics {
-            id: dismissButtonTextMetrics
-            font: loginErrorMessage.font
-            text: dismissButton.text
-        }
-        HifiControlsUit.Button {
-            id: dismissButton
-            width: dismissButtonTextMetrics.width
-            height: d.minHeightButton
-            anchors {
-                bottom: parent.bottom
-                right: parent.right
-                margins: 3 * hifi.dimensions.contentSpacing.y
-            }
-            color: hifi.buttons.noneBorderlessWhite
-            text: qsTr("No thanks, take me in-world! >")
-            fontCapitalization: Font.MixedCase
-            fontFamily: linkAccountBody.fontFamily
-            fontSize: linkAccountBody.fontSize
-            fontBold: linkAccountBody.fontBold
-            visible: loginDialog.getLoginDialogPoppedUp() && !linkAccountBody.linkSteam && !linkAccountBody.linkOculus;
-            onClicked: {
-                if (linkAccountBody.loginDialogPoppedUp) {
-                    var data = {
-                        "action": "user dismissed login screen"
-                    };
-                    UserActivityLogger.logAction("encourageLoginDialog", data);
-                    loginDialog.dismissLoginDialog();
-                }
-                root.tryDestroy();
-            }
-        }
+        // No "No thanks, take me in-world!" here: Darkride has no anonymous sign-in, so the screen stays until
+        // someone signs in (the window can still be closed).
     }
 
     Connections {
@@ -582,7 +501,7 @@ Item {
         function onFocusEnabled() {
             if (!linkAccountBody.lostFocus) {
                 Qt.callLater(function() {
-                    displayNameField.forceActiveFocus();
+                    emailField.forceActiveFocus();
                 });
             }
         }
@@ -590,7 +509,6 @@ Item {
             linkAccountBody.lostFocus = !root.isTablet && !root.isOverlay;
             if (linkAccountBody.lostFocus) {
                 Qt.callLater(function() {
-                    displayNameField.focus = false;
                     emailField.focus = false;
                     passwordField.focus = false;
                 });
@@ -606,7 +524,7 @@ Item {
         d.resize();
         init();
         Qt.callLater(function() {
-            displayNameField.forceActiveFocus();
+            emailField.forceActiveFocus();
         });
     }
 

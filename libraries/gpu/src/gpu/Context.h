@@ -73,6 +73,16 @@ public:
     // Shared header between C++ and GLSL
 #include "TransformCamera_shared.slh"
 
+    // Reversed-Z depth. A batch sets standard projections (GL's: clip depth -1 at the near plane, +1 at the far one,
+    // what glm::perspective and ViewFrustum give); the camera buffer the shaders see carries the reversed one, which
+    // puts the near plane at depth 1 and the far plane at depth 0, so a float depth buffer keeps the projection's
+    // precision at distance (the precision of a float grows toward 0 as 1/z does) instead of fighting at the far end
+    // as a 24-bit integer does. With clip control (GL 4.5: glClipControl GL_ZERO_TO_ONE) the clip-space depth runs
+    // 0..1, which is where the whole gain is: in GL's -1..1 clip space (GL 4.1, macOS) the far end sits at -1, where
+    // a float is coarse, and a reversed float depth is only about twice as fine as a 24-bit one.
+    static bool depthClipZeroToOne;
+    static Mat4 reversedZProjection(const Mat4& projection);
+
     class TransformCamera : public _TransformCamera {
     public:
         const Backend::TransformCamera& recomputeDerived(const Transform& xformView) const;
@@ -99,6 +109,11 @@ public:
     // These should only be accessed by Backend implementation to report the buffer and texture allocations,
     // they are NOT public objects
     static ContextMetricSize freeGPUMemSize;
+    // the most samples a pixel a multisampled texture may have on this GPU (GL_MAX_SAMPLES), set by the backend at
+    // its init; 0 until then
+    static int maxSamples;
+    // GL_MAX_UNIFORM_BLOCK_SIZE: what a uniform block may hold (the light culling sizes its list by it)
+    static int maxUniformBlockSize;
 
     static ContextMetricCount bufferCount;
     static ContextMetricSize bufferGPUMemSize;
@@ -233,6 +248,10 @@ public:
     double getFrameTimerBatchAverage() const;
 
     static Size getFreeGPUMemSize();
+    static int getMaxSamples();
+    static int getMaxUniformBlockSize();
+    // Clip-space depth runs 0..1 (clip control) rather than GL's -1..1; see Backend::reversedZProjection
+    static bool isDepthClipZeroToOne();
     static Size getUsedGPUMemSize();
 
     static uint32_t getBufferGPUCount();

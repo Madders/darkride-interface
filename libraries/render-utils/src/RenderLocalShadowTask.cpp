@@ -117,11 +117,12 @@ namespace {
     // what the lights may shine on is fetched once, through a view taking in all of them, at this resolution
     const int COARSE_QUERY_RESOLUTION = 2048;
 
-    // from the projection's [-1, 1] cube to [0, 1] texture coordinates and depth
+    // from the projection's [-1, 1] cube to [0, 1] texture coordinates and the reversed-Z depth the atlas stores (1 at
+    // the near plane, 0 at the far one)
     const glm::mat4 BIAS_MATRIX {
         0.5f, 0.0f, 0.0f, 0.0f,
         0.0f, 0.5f, 0.0f, 0.0f,
-        0.0f, 0.0f, 0.5f, 0.0f,
+        0.0f, 0.0f, -0.5f, 0.0f,
         0.5f, 0.5f, 0.5f, 1.0f };
 
     // from the projection's [-1, 1] square to a picture's texture coordinates; a picture's first row (t = 0) is its
@@ -171,11 +172,11 @@ namespace {
 LocalShadows::LocalShadows() {
     auto depthFormat = gpu::Element(gpu::SCALAR, gpu::FLOAT, gpu::DEPTH);
     gpu::Sampler::Desc samplerDesc;
-    samplerDesc._borderColor = glm::vec4(1.0f);
+    samplerDesc._borderColor = glm::vec4(0.0f); // reversed-Z: the far plane is depth 0, so outside the map is lit
     samplerDesc._wrapModeU = gpu::Sampler::WRAP_BORDER;
     samplerDesc._wrapModeV = gpu::Sampler::WRAP_BORDER;
     samplerDesc._filter = gpu::Sampler::FILTER_MIN_MAG_LINEAR;
-    samplerDesc._comparisonFunc = gpu::LESS;
+    samplerDesc._comparisonFunc = gpu::GREATER; // lit where the fragment is nearer the light than the map's depth
     _atlas = gpu::TexturePointer(gpu::Texture::createRenderBuffer(depthFormat, ATLAS_SIZE, ATLAS_SIZE,
         gpu::Texture::SINGLE_MIP, gpu::Sampler(samplerDesc)));
     _framebuffer = gpu::FramebufferPointer(gpu::Framebuffer::create("Local shadow atlas"));
@@ -493,7 +494,7 @@ void RenderLocalShadowTask::build(JobModel& task, const render::Varying& input, 
     {
         auto state = std::make_shared<gpu::State>();
         state->setCullMode(gpu::State::CULL_BACK);
-        state->setDepthTest(true, true, gpu::LESS_EQUAL);
+        state->setDepthTest(true, true, gpu::GREATER_EQUAL);
 
         auto fadeEffect = DependencyManager::get<FadeEffect>();
         initZPassPipelines(*shapePlumber, state, fadeEffect->getBatchSetter(), fadeEffect->getItemUniformSetter());
@@ -576,6 +577,21 @@ void RenderLocalShadowSetup::run(const render::RenderContextPointer& renderConte
     const auto& shadowFrame = input.get2();
     auto lightStage = renderContext->_scene->getStage<LightStage>();
 
+    if (!_localLights) {
+        // this view does without: no tiles, no atlas made; the fetch gets a view onto nothing
+        if (shadowFrame) {
+            shadowFrame->_localShadows = nullptr;
+        }
+        _coarseFrustum->setPosition(glm::vec3(0.0f, -1.0e6f, 0.0f));
+        _coarseFrustum->setProjection(glm::perspective(glm::radians(1.0f), 1.0f, 0.1f, 0.2f));
+        _coarseFrustum->calculate();
+        output.edit0() = args->_renderMode;
+        output.edit1() = glm::ivec2(COARSE_QUERY_RESOLUTION);
+        output.edit2() = LocalShadowsPointer();
+        args->pushViewFrustum(*_coarseFrustum);
+        args->_renderMode = RenderArgs::SHADOW_RENDER_MODE;   // the teardown pops the frustum in this mode
+        return;
+    }
     if (!_localShadows) {
         _localShadows = std::make_shared<LocalShadows>();
     }
@@ -824,7 +840,7 @@ void RenderLocalShadowMap::run(const render::RenderContextPointer& renderContext
             batch.setFramebuffer(localShadows->getStaticFramebuffer());
             batch.setViewportTransform(viewport);
             batch.setStateScissorRect(viewport);
-            batch.clearDepthFramebuffer(1.0f, true);
+            batch.clearDepthFramebuffer(0.0f, true); // depth 0 is the far plane (reversed-Z)
             batch.setProjectionTransform(projection);
             batch.setViewTransform(view, false);
             renderShadowCasters(renderContext, _shapePlumber, plan->staticCasters);
@@ -843,7 +859,7 @@ void RenderLocalShadowMap::run(const render::RenderContextPointer& renderContext
         if (plan->copyStatic) {
             localShadows->copyStaticMap(batch, viewport);
         } else {
-            batch.clearDepthFramebuffer(1.0f, true);
+            batch.clearDepthFramebuffer(0.0f, true); // depth 0 is the far plane (reversed-Z)
         }
         if (!plan->dynamicCasters.empty()) {
             batch.setProjectionTransform(projection);

@@ -49,6 +49,10 @@ public:
     // setters for lens attributes
     void setProjection(const glm::mat4 & projection);
     void setProjection(float cameraFov, float cameraAspectRatio, float cameraNearClip, float cameraFarClip);
+    // the projection to draw with, leaving the corners, planes, near, far, field of view and aspect as the last
+    // setProjection and calculate left them: for an oblique near plane (a mirror's glass), whose unprojected far
+    // corners can land behind the eye and would make nonsense of them; the frustum still culls as before
+    void setObliqueProjection(const glm::mat4& projection) { _projection = projection; }
     void setFocalLength(float focalLength) { _focalLength = focalLength; }
     void setFarClip(float farClip) { _farClip = farClip; }
     bool isPerspective() const;

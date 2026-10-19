@@ -7,6 +7,8 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or https://www.apache.org/licenses/LICENSE-2.0.html
 //
+//  The frame's light culling (screen tiles and depth bins over the lights in view, as Unity URP's Forward+): its cost,
+//  its counts and layout, and two views of what it hands the light loops
 import QtQuick 2.5
 import QtQuick.Controls 1.4
 import "configSlider"
@@ -20,7 +22,7 @@ Column {
 
         Column{
             PlotPerf {
-                title: "Light CLustering Timing"
+                title: "Light Culling Timing"
                 height: 50
                 object: Render.getConfig("RenderMainView.LightClustering")
                 valueUnit: "ms"
@@ -48,7 +50,7 @@ Column {
                     {
                        object: Render.getConfig("RenderMainView.LightClustering"),
                        prop: "numClusteredLights",
-                       label: "visible",
+                       label: "in view",
                        color: "#D959FE"
                    },
                    {
@@ -89,45 +91,15 @@ Column {
                 ]
             }
 
-            ConfigSlider {
-                label: qsTr("Range Near [m]")
-                integral: false
-                config: Render.getConfig("RenderMainView.LightClustering")
-                property: "rangeNear"
-                max: 20.0
-                min: 0.1
+            Label {
+                text: {
+                    var config = Render.getConfig("RenderMainView.LightClustering");
+                    return "Tiles: " + config["tileSize"] + " px, " + config["tileCountX"] + " x " + config["tileCountY"]
+                        + "; bins: " + config["binCount"] + "; " + config["wordsPerEntry"] + " word(s) a tile, up to " + config["maxLights"] + " lights";
+                }
             }
-            ConfigSlider {
-                label: qsTr("Range Far [m]")
-                integral: false
-                config: Render.getConfig("RenderMainView.LightClustering")
-                property: "rangeFar"
-                max: 500.0
-                min: 100.0
-            }
-            ConfigSlider {
-                label: qsTr("Grid X")
-                integral: true
-                config: Render.getConfig("RenderMainView.LightClustering")
-                property: "dimX"
-                max: 32
-                min: 1
-            }
-            ConfigSlider {
-                label: qsTr("Grid Y")
-                integral: true
-                config: Render.getConfig("RenderMainView.LightClustering")
-                property: "dimY"
-                max: 32
-                min: 1
-            }
-            ConfigSlider {
-                label: qsTr("Grid Z")
-                integral: true
-                config: Render.getConfig("RenderMainView.LightClustering")
-                property: "dimZ"
-                max: 31
-                min: 1
+            Label {
+                text:  "Tile bits set = " + Render.getConfig("RenderMainView.LightClustering")["numClusteredLightReferences"].toFixed(0)
             }
             CheckBox {
                     text: "Freeze"
@@ -135,24 +107,15 @@ Column {
                     onCheckedChanged: { Render.getConfig("RenderMainView.LightClustering")["freeze"] = checked }
             }
             CheckBox {
-                    text: "Draw Grid"
-                    checked: Render.getConfig("RenderMainView.DebugLightClusters")["doDrawGrid"]
-                    onCheckedChanged: { Render.getConfig("RenderMainView.DebugLightClusters")["doDrawGrid"] = checked }
-            }
-            CheckBox {
-                    text: "Draw Cluster From Depth"
+                    text: "Draw lights per tile and bin (deferred)"
                     checked: Render.getConfig("RenderMainView.DebugLightClusters")["doDrawClusterFromDepth"]
                     onCheckedChanged: { Render.getConfig("RenderMainView.DebugLightClusters")["doDrawClusterFromDepth"] = checked }
             }
             CheckBox {
-                    text: "Draw Content"
+                    text: "Draw lights per fragment (deferred)"
                     checked: Render.getConfig("RenderMainView.DebugLightClusters")["doDrawContent"]
                     onCheckedChanged: { Render.getConfig("RenderMainView.DebugLightClusters")["doDrawContent"] = checked }
             }
-            Label {
-                text:  "Num Cluster Items = " + Render.getConfig("RenderMainView.LightClustering")["numClusteredLightReferences"].toFixed(0)
-            }
-            
         }
     }
 }

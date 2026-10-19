@@ -114,13 +114,13 @@ std::function<void(gpu::StatePointer)> Procedural::transparentStencil = [](gpu::
 
 Procedural::Procedural() {
     _opaqueState->setCullMode(gpu::State::CULL_NONE);
-    _opaqueState->setDepthTest(true, true, gpu::LESS_EQUAL);
+    _opaqueState->setDepthTest(true, true, gpu::GREATER_EQUAL);
     _opaqueState->setBlendFunction(false, gpu::State::SRC_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::INV_SRC_ALPHA,
                                    gpu::State::FACTOR_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::ONE);
     opaqueStencil(_opaqueState);
 
     _transparentState->setCullMode(gpu::State::CULL_NONE);
-    _transparentState->setDepthTest(true, true, gpu::LESS_EQUAL);
+    _transparentState->setDepthTest(true, true, gpu::GREATER_EQUAL);
     _transparentState->setBlendFunction(true, gpu::State::SRC_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::INV_SRC_ALPHA,
                                         gpu::State::FACTOR_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::ONE);
     transparentStencil(_transparentState);

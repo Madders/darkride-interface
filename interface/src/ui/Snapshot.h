@@ -14,6 +14,7 @@
 
 #include <glm/glm.hpp>
 
+#include <QDateTime>
 #include <QString>
 #include <QStandardPaths>
 #include <QUrl>
@@ -40,7 +41,9 @@ private:
 /**jsdoc
  * The <code>Snapshot</code> API provides access to the path that snapshots are saved to. This path is that provided in 
  * Settings &gt; General &gt; Snapshots. Snapshots may be taken using <code>Window</code> API functions such as 
- * {@link Window.takeSnapshot}.
+ * {@link Window.takeSnapshot}. A snapshot taken with the default name, as Snap takes them, goes to the user's files
+ * (My Files), in their Snapshots folder, when someone is signed in; it is saved to this path when no one is signed in or
+ * the upload fails.
  *
  * @namespace Snapshot
  * 
@@ -64,6 +67,10 @@ public:
 
     Setting::Handle<QString> _snapshotsLocation{ "snapshotsLocation" };
     void uploadSnapshot(const QString& filename, const QUrl& href = QUrl(""));
+    // What happens next to a snapshot taken with the default name: one in the uploads folder (someone was signed in
+    // when it was taken) is uploaded to the user's files, and any other stays where it is; snapshotStored says which.
+    // Safe from any thread: the work is queued to this object's thread.
+    void storeSnapshot(const QString& takenPath);
 
 signals:
 
@@ -79,6 +86,27 @@ signals:
      * });
      */
     void snapshotLocationSet(const QString& value);
+
+    /**jsdoc
+     * Triggered when a snapshot taken with the default name, as Snap takes them, is where it will stay: in the user's
+     * files (My Files), in their Snapshots folder, or on this computer, when no one was signed in as it was taken or the
+     * upload failed. A snapshot uploaded to the user's files is deleted from this computer.
+     * @function Snapshot.snapshotStored
+     * @param {string} takenPath - The path the snapshot had when it was taken, as given by
+     *     {@link Window.stillSnapshotTaken|stillSnapshotTaken}, {@link Window.processingGifStarted|processingGifStarted}
+     *     or {@link Window.processingGifCompleted|processingGifCompleted}.
+     * @param {string} location - Where the snapshot is now: its URL in the user's files, or its path on this computer.
+     * @param {boolean} inUserFiles - <code>true</code> if it is in the user's files, <code>false</code> if it is on this
+     *     computer.
+     * @param {string} uploadError - Why the upload failed, when it did; empty when the snapshot was uploaded or no
+     *     upload was tried (no one was signed in).
+     * @returns {Signal}
+     * @example <caption>Report where each Snap goes.</caption>
+     * Snapshot.snapshotStored.connect(function (takenPath, location, inUserFiles, uploadError) {
+     *     print(inUserFiles ? "In My Files: " + location : "On this computer: " + location + " " + uploadError);
+     * });
+     */
+    void snapshotStored(const QString& takenPath, const QString& location, bool inUserFiles, const QString& uploadError);
 
 public slots:
 
@@ -100,10 +128,21 @@ private slots:
     void takeNextSnapshot();
 
 private:
+    // forUserFiles: the picture is saved in the uploads folder, to be uploaded, without the address it was taken at
     QFile* savedFileForSnapshot(QImage& image,
                                        bool isTemporary,
                                        const QString& userSelectedFilename = QString(),
-                                       const QString& userSelectedPathname = QString());
+                                       const QString& userSelectedPathname = QString(),
+                                       bool forUserFiles = false);
+    // the folder a picture waits in for its upload (in the application's local data); empty if it can't be made
+    static QString uploadsFolder();
+    void uploadToUserFiles(const QString& takenPath);
+    void keepOnThisComputer(const QString& takenPath, const QString& uploadError);
+    // snapshots an earlier session left in the uploads folder, closed before their uploads finished, are kept on this
+    // computer (not uploaded now: someone else may be signed in)
+    void keepLeftovers();
+    QDateTime _sessionStart { QDateTime::currentDateTime() };
+    bool _leftoversKept { false };
     QString _snapshotFilename;
     bool _notify360;
     bool _cubemapOutputFormat;

@@ -1438,6 +1438,37 @@ public slots:
     Q_INVOKABLE bool setLocalJointTranslation(const QUuid& entityID, int jointIndex, glm::vec3 translation);
 
     /**jsdoc
+     * Sets the driver's controls for a vehicle (PHYSICS.md round 6): what this client's physics applies to the vehicle every
+     * substep while this client drives it (when it holds the driver's seat, or owns the vehicle). Nothing is sent as a
+     * property: the inputs travel to the physics server in their own packets, and everyone else learns the applied input from
+     * the vehicle's state. Call it every frame while driving; call {@link Entities.clearVehicleControls} on standing up.
+     * @function Entities.setVehicleControls
+     * @param {Uuid} entityID - The vehicle.
+     * @param {object} controls - <code>throttle</code> (-1 reverse to 1 forward), <code>steering</code> (-1 left to 1 right),
+     *     <code>brake</code> (0 to 1) and <code>handBrake</code> (0 to 1); for an airship (round 7) also <code>pitch</code>
+     *     (-1 nose down to 1 nose up), <code>lift</code> (-1 down to 1 up) and <code>trim</code> (1 drops ballast, -1 vents
+     *     gas), with <code>steering</code> the rudder; a missing one is 0.
+     * @returns {boolean} <code>true</code> if the entity exists and is a vehicle.
+     */
+    Q_INVOKABLE bool setVehicleControls(const QUuid& entityID, const QVariantMap& controls);
+
+    /**jsdoc
+     * Stops driving a vehicle: this client's controls for it are forgotten.
+     * @function Entities.clearVehicleControls
+     * @param {Uuid} entityID - The vehicle.
+     */
+    Q_INVOKABLE void clearVehicleControls(const QUuid& entityID);
+
+    /**jsdoc
+     * The vehicle simulation's counts (PHYSICS.md round 6), for tests: <code>vehicles</code>, <code>corrections</code> (replays
+     * and snaps since the start), <code>replaySteps</code>, <code>lastError</code> and <code>maxError</code> (m), <code>inputsSent</code>,
+     * <code>inputsReceived</code>, <code>inputsDropped</code>, <code>inputsStarved</code>.
+     * @function Entities.getVehicleStats
+     * @returns {object} The counts; empty without a physics simulation.
+     */
+    Q_INVOKABLE QVariantMap getVehicleStats();
+
+    /**jsdoc
      * Sets the local rotation of a joint in a {@link Entities.EntityProperties-Model|Model} entity.
      * @function Entities.setLocalJointRotation
      * @param {Uuid} entityID - The ID of the entity.

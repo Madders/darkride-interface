@@ -26,6 +26,7 @@
 #include "PhysicsHelpers.h"
 #include "PhysicsLogging.h"
 #include "TrackSimulation.h"
+#include "VehicleSimulation.h"
 
 const uint8_t LOOPS_FOR_SIMULATION_ORPHAN = 50;
 const quint64 USECS_BETWEEN_OWNERSHIP_BIDS = USECS_PER_SECOND / 15;
@@ -94,12 +95,14 @@ EntityMotionState::EntityMotionState(const JPH::Shape* shape, EntityItemPointer 
 
     _type = MOTIONSTATE_TYPE_ENTITY;
     assert(_entity);
-    setMass(_entity->computeMass());
     // we need the side-effects of EntityMotionState::setShape() so we call it explicitly here
     // rather than pass the legit shape pointer to the ObjectMotionState ctor above.
     setShape(shape);
+    // after the shape: the mass is kept as a density over the shape's bounds, and without a shape it was lost (1 kg/m^3)
+    setMass(_entity->computeMass());
 
     _trackDriven = !_entity->getTrackID().isNull();
+    _vehicle = _entity->isVehicle();
 
     if (_entity->isAvatarEntity() && !_entity->isMyAvatarEntity()) {
         // avatar entities are always thus, so we cache this fact in _ownershipState
@@ -173,12 +176,12 @@ void EntityMotionState::handleEasyChanges(uint32_t& flags) {
     }
     ObjectMotionState::handleEasyChanges(flags);
 
-    if (flags & Simulation::DIRTY_TRANSFORM) {
-        // the entity was placed from outside (a script, the network): that is the present, nothing is read ahead
-        _extrapolatedTime = 0.0f;
-    }
-
     if (flags & Simulation::DIRTY_SIMULATOR_ID) {
+        if (serverTakes()) {
+            qCInfo(physics) << "physics-server: car" << _entity->getName() << _entity->getID() << "owner now"
+                << _entity->getSimulatorID() << "at priority" << (int)_entity->getSimulationPriority()
+                << (isLocallyOwned() ? "(this server)" : "");
+        }
         if (_entity->getSimulatorID().isNull()) {
             // simulation ownership has been removed
             if (glm::length2(_entity->getWorldVelocity()) == 0.0f) {
@@ -229,6 +232,7 @@ PhysicsMotionType EntityMotionState::computePhysicsMotionType() const {
     }
 
     _trackDriven = !_entity->getTrackID().isNull();
+    _vehicle = _entity->isVehicle();
     if (_trackDriven) {
         // a car on a track: moved along the curve by its owner, and by the owner's velocities everywhere else
         return MOTION_TYPE_KINEMATIC;
@@ -295,8 +299,109 @@ bool EntityMotionState::getFrameVolume(glm::vec3& minCorner, glm::vec3& maxCorne
     return true;
 }
 
-bool EntityMotionState::getParentTransformInFrame(Transform& transform, glm::vec3& linearVelocity, glm::vec3& angularVelocity) const {
-    return ObjectMotionState::getParentTransformInFrame(_entity, transform, linearVelocity, angularVelocity);
+// A nested frame's own record is in its frame ancestor's coordinates (getObject*); the domain transform composes
+// that with the ancestor's, which composes with its own, up to the domain. An ancestor without a motion state here
+// (not yet in the physics) leaves the entity's world transform as the best there is.
+bool EntityMotionState::getFrameTransformInDomain(glm::vec3& position, glm::quat& rotation, glm::vec3& linearVelocity, glm::vec3& angularVelocity, bool asSimulated) const {
+    if (!_entity || !_entity->isFrame()) {
+        return false;
+    }
+    if (asSimulated && _body && !_body->IsStatic()) {
+        // inside the step the frame is where its body is; its record presents a substep behind
+        getBodyTransform(position, rotation);
+    } else {
+        position = getObjectPosition();
+        rotation = getObjectRotation();
+    }
+    linearVelocity = getObjectLinearVelocity();
+    angularVelocity = getObjectAngularVelocity();
+    SpatiallyNestablePointer ancestor = ObjectMotionState::findFrameAncestor(_entity);
+    if (!ancestor) {
+        return true;
+    }
+    EntityMotionState* ancestorState = static_cast<EntityMotionState*>(std::static_pointer_cast<EntityItem>(ancestor)->getPhysicsInfo());
+    glm::vec3 ancestorPosition, ancestorLinear, ancestorAngular;
+    glm::quat ancestorRotation;
+    if (ancestorState && ancestorState->getFrameTransformInDomain(ancestorPosition, ancestorRotation, ancestorLinear, ancestorAngular, asSimulated)) {
+        glm::vec3 offset = ancestorRotation * position;
+        linearVelocity = ancestorLinear + glm::cross(ancestorAngular, offset) + ancestorRotation * linearVelocity;
+        angularVelocity = ancestorAngular + ancestorRotation * angularVelocity;
+        position = ancestorPosition + offset;
+        rotation = glm::normalize(ancestorRotation * rotation);
+        return true;
+    }
+    position = _entity->getWorldPosition() - ObjectMotionState::getWorldOffset();
+    rotation = _entity->getWorldOrientation();
+    linearVelocity = _entity->getWorldVelocity();
+    angularVelocity = _entity->getWorldAngularVelocity();
+    return true;
+}
+
+int EntityMotionState::getFrameDepth() const {
+    int depth = 0;
+    SpatiallyNestablePointer ancestor = ObjectMotionState::findFrameAncestor(_entity);
+    while (ancestor && depth < 16) {
+        ++depth;
+        ancestor = ObjectMotionState::findFrameAncestor(ancestor);
+    }
+    return depth;
+}
+
+bool EntityMotionState::getParentTransformInFrame(Transform& transform, glm::vec3& linearVelocity, glm::vec3& angularVelocity, bool asSimulated) const {
+    return ObjectMotionState::getParentTransformInFrame(_entity, transform, linearVelocity, angularVelocity, asSimulated);
+}
+
+void EntityMotionState::bodyPoseAsLocal(Transform& local) const {
+    glm::vec3 position;
+    glm::quat rotation;
+    getBodyTransform(position, rotation);
+    local = _entity->getLocalTransform();   // keeps the scale
+    Transform parentInFrame;
+    glm::vec3 v, w;
+    Transform body;
+    body.setTranslation(position);
+    body.setRotation(rotation);
+    if (getParentTransformInFrame(parentInFrame, v, w, true)) {
+        // the body is in its frame's coordinates
+        Transform relative;
+        Transform::inverseMult(relative, parentInFrame, body);
+        local.setTranslation(relative.getTranslation());
+        local.setRotation(relative.getRotation());
+        return;
+    }
+    // the body is in the domain, less the offset; the record is relative to the parent, if any
+    body.setTranslation(position + ObjectMotionState::getWorldOffset());
+    bool success = false;
+    Transform parent = _entity->getParentTransform(success);
+    if (success && !_entity->getParentID().isNull()) {
+        Transform relative;
+        Transform::inverseMult(relative, parent, body);
+        local.setTranslation(relative.getTranslation());
+        local.setRotation(relative.getRotation());
+    } else {
+        local.setTranslation(body.getTranslation());
+        local.setRotation(body.getRotation());
+    }
+}
+
+void EntityMotionState::localToBodyPose(const Transform& local, glm::vec3& position, glm::quat& rotation) const {
+    Transform parentInFrame;
+    glm::vec3 v, w;
+    if (getParentTransformInFrame(parentInFrame, v, w, true)) {
+        position = parentInFrame.transform(local.getTranslation());
+        rotation = glm::normalize(parentInFrame.getRotation() * local.getRotation());
+        return;
+    }
+    bool success = false;
+    Transform parent = _entity->getParentTransform(success);
+    if (success && !_entity->getParentID().isNull()) {
+        position = parent.transform(local.getTranslation());
+        rotation = glm::normalize(parent.getRotation() * local.getRotation());
+    } else {
+        position = local.getTranslation();
+        rotation = local.getRotation();
+    }
+    position -= ObjectMotionState::getWorldOffset();
 }
 
 glm::vec3 EntityMotionState::getObjectPosition() const {
@@ -352,42 +457,58 @@ void EntityMotionState::pushTransformToBody(float dt) {
         return;
     }
     bool driven = false;
-    if (_trackDriven && _tracks && (isLocallyOwned() || isServerlessMode())) {
-        // a car on a track: this client drives it along the curve (TrackSimulation, PHYSICS.md 4.8) when it owns the
-        // car, or when there is no server and so no owner (a serverless world is all ours). The record is
-        // set to the train's pose at this substep and read ahead from there as any keyframed entity's is.
+    if (_trackDriven && _tracks) {
+        // a car on a track is driven along the curve by the TrackSimulation (PHYSICS.md 4.8 and round 5): on the physics
+        // server, on every client while the track carries the server's train state, and otherwise by the client that
+        // owns the car or has the world to itself (serverless). The record is set to the train's pose at this substep
+        // and read ahead from there as any keyframed entity's is; while it is driven here the network's transform for
+        // it is not applied (EntityItem::setTransformDrivenLocally).
         glm::vec3 position, linearVelocity, angularVelocity;
         glm::quat rotation;
-        driven = _tracks->drive(_entity, thisStep, position, rotation, linearVelocity, angularVelocity);
+        driven = _tracks->drive(_entity, thisStep, isLocallyOwned() || isServerlessMode(), position, rotation,
+                                linearVelocity, angularVelocity);
+        _entity->setTransformDrivenLocally(driven);
         if (driven) {
+            // the train's pose at this substep is the body's; the record presents it after the step
             Transform local = _entity->getLocalTransform();
             local.setTranslation(position);
             local.setRotation(rotation);
             _entity->setAcceleration(Vectors::ZERO);
-            _entity->setLocalTransformAndVelocities(local, linearVelocity, angularVelocity);
+            _entity->setLocalVelocity(linearVelocity);
+            _entity->setLocalAngularVelocity(angularVelocity);
             _lastKinematicStep = thisStep;
-            _extrapolatedTime = 0.0f;
+            glm::vec3 bodyPosition;
+            glm::quat bodyRotation;
+            localToBodyPose(local, bodyPosition, bodyRotation);
+            bodyInterface()->MoveKinematic(_body->GetID(), glmToJoltR(bodyPosition), glmToJolt(bodyRotation), dt);
         }
     }
     if (!driven) {
-        // This is physical kinematic motion which steps strictly by the subframe count
-        // of the physics simulation and uses full gravity for acceleration.
+        // Physical kinematic motion, stepped strictly by the substep count, with full gravity for acceleration.
+        // The body is the simulated state: its pose (where the last substep left it) is run on with the record's
+        // velocities, and the velocities go back to the record; the record's own pose is the presentation, set
+        // after the step (pullTransformFromBody), a substep behind.
         _entity->setAcceleration(_entity->getGravity());
-
-        // (less what pullTransformFromBody already read ahead to the present after the last step)
-        float stepDt = (thisStep - _lastKinematicStep) * PHYSICS_ENGINE_FIXED_SUBSTEP - _extrapolatedTime;
+        float stepDt = (thisStep - _lastKinematicStep) * PHYSICS_ENGINE_FIXED_SUBSTEP;
         _lastKinematicStep = thisStep;
-        _extrapolatedTime = 0.0f;
+        Transform local;
+        bodyPoseAsLocal(local);
+        glm::vec3 linearVelocity = _entity->getLocalVelocity();
+        glm::vec3 angularVelocity = _entity->getLocalAngularVelocity();
         if (stepDt > 0.0f) {
-            _entity->stepKinematicMotion(stepDt);
+            _entity->integrateKinematicMotion(local, linearVelocity, angularVelocity, stepDt);
+            _entity->setLocalVelocity(linearVelocity);
+            _entity->setLocalAngularVelocity(angularVelocity);
         }
+        glm::vec3 bodyPosition;
+        glm::quat bodyRotation;
+        localToBodyPose(local, bodyPosition, bodyRotation);
+        bodyInterface()->MoveKinematic(_body->GetID(), glmToJoltR(bodyPosition), glmToJolt(bodyRotation), dt);
     }
 
     // and set the acceleration-matches-gravity count high so that if we send an update
     // it will use the correct acceleration for remote simulations
     _accelerationNearlyGravityCount = (uint8_t)(-1);
-
-    bodyInterface()->MoveKinematic(_body->GetID(), glmToJoltR(getObjectPosition()), glmToJolt(getObjectRotation()), dt);
 
     // a child that is still a static body has to become kinematic now that its parent moves (not so for a
     // frame: its children live in its own world, where it does not move)
@@ -416,34 +537,29 @@ void EntityMotionState::pullTransformFromBody() {
     }
     measureBodyAcceleration();
 
-    float leftover = ObjectMotionState::getLeftoverTime();
-    if (_body->IsKinematic() && !hasInternalKinematicChanges()) {
-        // A keyframed body went where the entity told it, up to the last substep. The entity's own record is
-        // now read ahead to the present along its own motion (the body stays at the substep; the next push
-        // integrates only what is left), so what is rendered and sent does not step by substeps. The entity's
-        // velocity stays the truth; the body's (which may include a catch-up) is never written back.
-        if (_entity->getDirtyFlags() & Simulation::DIRTY_TRANSFORM) {
-            // placed from outside since the step began: that transform is the present
-            _extrapolatedTime = 0.0f;
-        } else {
-            float ahead = leftover - _extrapolatedTime;
-            if (ahead > 0.0f) {
-                _entity->setAcceleration(_entity->getGravity());
-                _entity->stepKinematicMotion(ahead);
-            }
-            _extrapolatedTime = leftover;
-        }
-        _entity->setLastSimulated(usecTimestampNow());
-        return;
-    }
-
+    // The body is at the last substep; the record presents it blended between the start and the end of that
+    // substep (one substep behind the present), so what is rendered and sent moves evenly at any display rate.
+    // A keyframed body's velocity is the record's own and is never written back (below).
     glm::vec3 position;
     glm::quat rotation;
-    getBodyTransform(position, rotation);
-    if (leftover > 0.0f && !_body->IsKinematic()) {
-        // the body is at the last substep; it is read ahead to the present along its velocity
-        position += leftover * getBodyLinearVelocity();
-        rotation = glm::normalize(computeBulletRotationStep(getBodyAngularVelocity(), leftover) * rotation);
+    getPresentedBodyTransform(position, rotation);
+    const quint64 presentedNow = usecTimestampNow() - (quint64)(ObjectMotionState::getPresentationLag() * (float)USECS_PER_SECOND);
+    if (_correctionBlendTime > 0.0f) {
+        // a vehicle's correction (PHYSICS.md 4.6): the jump is shown as a residual that decays, never a snap
+        uint64_t now = usecTimestampNow();
+        float dt = _correctionTime ? (float)(now - _correctionTime) * 1.0e-6f : 0.0f;
+        _correctionTime = now;
+        float keep = expf(-dt / _correctionBlendTime);
+        _correctionOffset *= keep;
+        _correctionRotation = glm::normalize(glm::slerp(glm::quat(), _correctionRotation, keep));
+        const float DONE_DISTANCE = 0.001f;   // a millimetre
+        const float DONE_DOT = 0.9999999f;
+        if (glm::length2(_correctionOffset) < DONE_DISTANCE * DONE_DISTANCE && fabsf(_correctionRotation.w) > DONE_DOT) {
+            _correctionBlendTime = 0.0f;
+        } else {
+            position += _correctionOffset;
+            rotation = glm::normalize(_correctionRotation * rotation);
+        }
     }
 
     Transform parentInFrame;
@@ -476,7 +592,7 @@ void EntityMotionState::pullTransformFromBody() {
             local = _entity->getLocalTransform();
         }
         _entity->setLocalTransformAndVelocities(local, linearVelocity, angularVelocity);
-        _entity->setLastSimulated(usecTimestampNow());
+        _entity->setLastSimulated(presentedNow);
         return;
     }
     position += ObjectMotionState::getWorldOffset();
@@ -488,7 +604,7 @@ void EntityMotionState::pullTransformFromBody() {
         if (!kinematicFlags) {
             _entity->setWorldTransform(position, rotation);
         }
-        _entity->setLastSimulated(usecTimestampNow());
+        _entity->setLastSimulated(presentedNow);
         return;
     }
 
@@ -501,7 +617,7 @@ void EntityMotionState::pullTransformFromBody() {
         _entity->setWorldTransform(position, rotation);
         _entity->setWorldVelocity(getBodyLinearVelocity());
         _entity->setWorldAngularVelocity(getBodyAngularVelocity());
-        _entity->setLastSimulated(usecTimestampNow());
+        _entity->setLastSimulated(presentedNow);
     } else {
         // only set properties NOT flagged
         if (!(flags & Simulation::DIRTY_TRANSFORM)) {
@@ -514,7 +630,7 @@ void EntityMotionState::pullTransformFromBody() {
             _entity->setWorldAngularVelocity(getBodyAngularVelocity());
         }
         if (flags != (Simulation::DIRTY_TRANSFORM | Simulation::DIRTY_VELOCITIES)) {
-            _entity->setLastSimulated(usecTimestampNow());
+            _entity->setLastSimulated(presentedNow);
         }
     }
 
@@ -541,6 +657,27 @@ bool EntityMotionState::remoteSimulationOutOfSync(uint32_t simulationStep) {
     int numSteps = simulationStep - _lastStep;
     float dt = (float)(numSteps) * PHYSICS_ENGINE_FIXED_SUBSTEP;
 
+    if (_vehicle) {
+        bool handled = false;
+        bool out = vehicleOutOfSync(simulationStep, handled);
+        if (handled) {
+            return out;
+        }
+    }
+
+    if (_trackDriven) {
+        // a car on a track is never "inactive" to its owner: it stands at a station between runs and its owner (the
+        // physics server, or a client when there is none) keeps it, sending an update before the ownership would
+        // expire, and otherwise when the others' dead reckoning would be out (PHYSICS.md rounds 4 and 5)
+        // (with half the period in hand: the entity server expires an owner a second after this expiry, and one
+        // update in that second lost or late handed the physics server's car back)
+        const uint64_t KEEP_ALIVE_MARGIN = MAX_OUTGOING_SIMULATION_UPDATE_PERIOD / 2;
+        if (usecTimestampNow() + KEEP_ALIVE_MARGIN > _entity->getSimulationOwnershipExpiry()) {
+            return true;
+        }
+        return trackCarOutOfSync(simulationStep);
+    }
+
     if (_numInactiveUpdates > 0) {
         if (_numInactiveUpdates > MAX_NUM_INACTIVE_UPDATES) {
             // clear local ownership (stop sending updates) and let the server clear itself
@@ -565,9 +702,6 @@ bool EntityMotionState::remoteSimulationOutOfSync(uint32_t simulationStep) {
     }
 
     if (_body->IsStatic() || _body->IsKinematic()) {
-        if (_trackDriven) {
-            return trackCarOutOfSync(simulationStep);
-        }
         return false;
     }
 
@@ -648,9 +782,12 @@ bool EntityMotionState::remoteSimulationOutOfSync(uint32_t simulationStep) {
 // the entity server does), so an update goes out whenever that would be a centimetre or half a degree out, and at
 // most every few substeps.
 bool EntityMotionState::trackCarOutOfSync(uint32_t simulationStep) {
-    const uint32_t MIN_STEPS_BETWEEN_UPDATES = 3;   // 33 ms at 90 Hz
-    const float MAX_POSITION_ERROR_SQUARED = 0.0001f;   // a centimetre
-    const float MIN_ROTATION_DOT = 0.9999905f;   // half a degree
+    // the physics server sends far fewer: every client runs the train's state itself, and the entity server's own
+    // record of the car (for a client that has no state yet, and for scripts there) may lag a quarter of a metre
+    bool server = Physics::isServerAuthority();
+    const uint32_t MIN_STEPS_BETWEEN_UPDATES = server ? 22 : 3;   // 4 Hz on the server, 33 ms at 90 Hz on a client
+    const float MAX_POSITION_ERROR_SQUARED = server ? 0.0625f : 0.0001f;   // a quarter of a metre, or a centimetre
+    const float MIN_ROTATION_DOT = server ? 0.99905f : 0.9999905f;   // five degrees, or half a degree
     int numSteps = simulationStep - _lastStep;
     float dt = (float)numSteps * PHYSICS_ENGINE_FIXED_SUBSTEP;
     _lastStep = simulationStep;
@@ -668,6 +805,59 @@ bool EntityMotionState::trackCarOutOfSync(uint32_t simulationStep) {
         _lastTrackUpdateStep = simulationStep;
     }
     return out;
+}
+
+// A vehicle's authority publishes its state at a steady rate while the vehicle is awake (every UPDATE_STEPS substeps,
+// 10 Hz), and keeps its ownership while someone sits at the wheel; a vehicle nobody drives sleeps and is released like
+// any other body. `handled` says the generic rule need not run.
+bool EntityMotionState::vehicleOutOfSync(uint32_t simulationStep, bool& handled) {
+    handled = false;
+    bool seated = !_entity->getVehicleProperties().getDriver().isNull();
+    bool server = Physics::isServerAuthority();
+    if (!_body->IsActive()) {
+        if (seated || server) {
+            handled = true;
+            const uint64_t KEEP_ALIVE_MARGIN = MAX_OUTGOING_SIMULATION_UPDATE_PERIOD / 2;
+            if (usecTimestampNow() + KEEP_ALIVE_MARGIN > _entity->getSimulationOwnershipExpiry()) {
+                _lastVehicleUpdateStep = simulationStep;
+                return true;
+            }
+        }
+        return false;
+    }
+    handled = true;
+    if (simulationStep >= _lastVehicleUpdateStep + (uint32_t)VehicleSimulation::relayUpdateSteps()) {
+        _lastVehicleUpdateStep = simulationStep;
+        return true;
+    }
+    return false;
+}
+
+
+float EntityMotionState::getMass() const {
+    if (_entity && _entity->isVehicle()) {
+        float mass = _entity->getVehicleProperties().getMass();
+        if (mass > 0.0f) {
+            return mass;
+        }
+    }
+    return ObjectMotionState::getMass();
+}
+
+bool EntityMotionState::hasLocalVehicleControls() const {
+    EntityItem::VehicleControls controls;
+    return _vehicle && _entity->getLocalVehicleControls(controls);
+}
+
+bool EntityMotionState::serverTakes() const {
+    return (_trackDriven || _vehicle) && Physics::isServerAuthority();
+}
+
+void EntityMotionState::setCorrection(const glm::vec3& offset, const glm::quat& rotation, float blendTime) {
+    _correctionOffset = offset;
+    _correctionRotation = rotation;
+    _correctionBlendTime = blendTime;
+    _correctionTime = usecTimestampNow();
 }
 
 bool EntityMotionState::shouldSendUpdate(uint32_t simulationStep) {
@@ -699,7 +889,10 @@ void EntityMotionState::updateSendVelocities() {
         if (!_body->IsKinematic()) {
             clearObjectVelocities();
         }
-        if (_entity->getEntityHostType() == entity::HostType::AVATAR) {
+        if (_trackDriven || (_vehicle && (!_entity->getVehicleProperties().getDriver().isNull() || Physics::isServerAuthority()))) {
+            // a standing car is not released by its owner, nor a vehicle with a driver aboard (see remoteSimulationOutOfSync)
+            _numInactiveUpdates = 0;
+        } else if (_entity->getEntityHostType() == entity::HostType::AVATAR) {
             // AvatarEntities only ever need to send one update (their updates are sent over a lossless protocol)
             // so we set the count to the max to prevent resends
             _numInactiveUpdates = MAX_NUM_INACTIVE_UPDATES;
@@ -765,6 +958,10 @@ void EntityMotionState::sendBid(OctreeEditPacketSender* packetSender, uint32_t s
     EntityItemID id(_entity->getID());
     EntityEditPacketSender* entityPacketSender = static_cast<EntityEditPacketSender*>(packetSender);
     entityPacketSender->queueEditEntityMessage(PacketType::EntityPhysics, tree, id, properties);
+    if (serverTakes()) {
+        qCInfo(physics) << "physics-server: bid for car" << _entity->getName() << _entity->getID() << "at priority"
+            << (int)finalBidPriority << "(owner" << _entity->getSimulatorID() << "at" << (int)_entity->getSimulationPriority() << ")";
+    }
 
     // NOTE: we don't descend to children for ownership bid.  Instead, if we win ownership of the parent
     // then in sendUpdate() we'll walk descendents and send updates for their QueryAACubes if necessary.
@@ -802,6 +999,16 @@ void EntityMotionState::sendUpdate(OctreeEditPacketSender* packetSender, uint32_
         _entity->setDynamicDataNeedsTransmit(false);
         properties.setActionData(_serverActionData);
     }
+    if (_vehicle && _vehicles) {
+        // the applied input, its sequence, the engine and the gear travel with every update (PHYSICS.md round 6)
+        _vehicles->fillState(this, properties);
+    }
+    if (_parentChanged) {
+        // a frame crossing (round 8): the position and rotation above are already in the new parent's coordinates
+        properties.setParentID(_entity->getParentID());
+        properties.setParentJointIndex(_entity->getParentJointIndex());
+        _parentChanged = false;
+    }
 
     if (_entity->updateQueryAACube()) {
         // due to parenting, the server may not know where something is in world-space, so include the bounding cube.
@@ -825,8 +1032,11 @@ void EntityMotionState::sendUpdate(OctreeEditPacketSender* packetSender, uint32_
         // if newPriority is zero, then it must be outside of R1, which means we should really set it to YIELD
         // which we achive by just setting it to the max of the two
         newPriority = glm::max(newPriority, YIELD_SIMULATION_PRIORITY);
-        if (newPriority != _entity->getSimulationPriority() &&
-                !(newPriority == VOLUNTEER_SIMULATION_PRIORITY && _entity->getSimulationPriority() == RECRUIT_SIMULATION_PRIORITY)) {
+        // the physics server says who owns a car in every update: should the entity server have expired its ownership
+        // on a lost update, the next one takes the car back without waiting to hear of the loss
+        bool reassert = serverTakes();
+        if (reassert || (newPriority != _entity->getSimulationPriority() &&
+                !(newPriority == VOLUNTEER_SIMULATION_PRIORITY && _entity->getSimulationPriority() == RECRUIT_SIMULATION_PRIORITY))) {
             // our desired priority has changed
             if (newPriority == 0) {
                 // we should release ownership
@@ -1010,13 +1220,19 @@ void EntityMotionState::computeCollisionGroupAndMask(int32_t& group, int32_t& ma
 
 bool EntityMotionState::shouldSendBid() const {
     // NOTE: this method is only ever called when the entity's simulation is NOT locally owned
-    bool unownedTrackCar = _trackDriven && _entity->getSimulatorID().isNull();   // a train needs a driver, moving or not
-    return (_body->IsActive() || unownedTrackCar)
-        && (_region == workload::Region::R1)
+    // A train needs a driver, moving or not: the physics server takes every car from whoever has it, at SERVER
+    // priority; a client bids for an unowned car only while no server drives its track (PHYSICS.md round 5).
+    // A vehicle (round 6) likewise; and the client at its wheel bids for it, moving or not, when no server holds it.
+    bool serverTakesCar = serverTakes();
+    bool serverDriven = _trackDriven && _tracks && _tracks->isServerDriven(_entity->getTrackID());
+    bool unownedTrackCar = _trackDriven && _entity->getSimulatorID().isNull() && !serverDriven;
+    bool driverWants = hasLocalVehicleControls();
+    return (_body->IsActive() || unownedTrackCar || serverTakesCar || driverWants)
+        && (_region == workload::Region::R1 || serverTakesCar)
         && _ownershipState != EntityMotionState::OwnershipState::Unownable
-        && glm::max(glm::max(VOLUNTEER_SIMULATION_PRIORITY, _bumpedPriority), _entity->getScriptSimulationPriority()) >= _entity->getSimulationPriority()
+        && computeFinalBidPriority() >= _entity->getSimulationPriority()
         && !_entity->getLocked()
-        && (!(_body->IsStatic() || _body->IsKinematic()) || _entity->stillHasMyGrab() || unownedTrackCar);
+        && (!(_body->IsStatic() || _body->IsKinematic()) || _entity->stillHasMyGrab() || unownedTrackCar || serverTakesCar);
 }
 
 void EntityMotionState::setBody(JPH::Body* body, PhysicsWorld* world) {
@@ -1029,8 +1245,18 @@ void EntityMotionState::setBody(JPH::Body* body, PhysicsWorld* world) {
 }
 
 uint8_t EntityMotionState::computeFinalBidPriority() const {
-    return (_region == workload::Region::R1) ?
-        glm::max(glm::max(VOLUNTEER_SIMULATION_PRIORITY, _bumpedPriority), _entity->getScriptSimulationPriority()) : 0;
+    if (serverTakes()) {
+        return SERVER_SIMULATION_PRIORITY;   // the physics server's claim on a car or a vehicle outranks any client's
+    }
+    if (_region != workload::Region::R1) {
+        return 0;
+    }
+    uint8_t priority = glm::max(glm::max(VOLUNTEER_SIMULATION_PRIORITY, _bumpedPriority), _entity->getScriptSimulationPriority());
+    if (hasLocalVehicleControls()) {
+        // the driver holds the wheel as a hand holds a grabbed thing
+        priority = glm::max(priority, SCRIPT_GRAB_SIMULATION_PRIORITY);
+    }
+    return priority;
 }
 
 bool EntityMotionState::isLocallyOwned() const {

@@ -103,7 +103,7 @@ ACClientApp::ACClientApp(int argc, char* argv[]) :
 
     DependencyManager::set<AccountManager>(false, [&]{
         return QString(
-            "TivoliCloudVR/" +
+            "Darkride/" +
             (BuildInfo::BUILD_TYPE == BuildInfo::BuildType::Stable ? BuildInfo::VERSION : "dev")
         );
     });

@@ -25,6 +25,10 @@ public:
     render::ShapePipeline::ItemSetter getItemUniformSetter() const;
     render::ShapePipeline::ItemSetter getItemStoredSetter();
 
+    // the categories' parameters and the mask, for a pipeline of its own that applies the fade (the impostor card)
+    const gpu::BufferView& getConfigurationBuffer() const { return _configurations; }
+    const gpu::TexturePointer& getMaskMap() const { return _maskMap; }
+
     int getLastCategory() const { return _lastCategory; }
     float getLastThreshold() const { return _lastThreshold; }
     const glm::vec3& getLastNoiseOffset() const { return _lastNoiseOffset; }

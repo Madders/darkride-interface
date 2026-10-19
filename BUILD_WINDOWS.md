@@ -2,8 +2,6 @@
 
 This guide builds the Darkride client (`interface.exe`) and, if you want them, the servers (`domain-server.exe`, `assignment-client.exe`) on Windows 10 or 11 (64-bit).
 
-**Only want to run Darkride?** You don't need to build it: the installer is on the [Releases](https://github.com/Madders/darkride-interface/releases/latest) page.
-
 **Plan for:**
 
 -   **About 1 hour.** The first build compiles every third-party library, which takes 15–30 minutes, then compiles Darkride itself in 30–40 minutes. Later builds take a few minutes.
@@ -37,7 +35,7 @@ winget install -e --id Microsoft.VisualStudioCode
 **Then, for both:**
 
 ```cmd
-winget install -e --id Microsoft.PowerShell
+winget install -e --id Microsoft.PowerShell --source winget --installer-type wix
 winget install -e --id Python.Python.3.13
 winget install -e --id OpenJS.NodeJS.LTS
 winget install -e --id Git.Git
@@ -46,7 +44,7 @@ winget install -e --id Git.Git
 | Tool | Why |
 |---|---|
 | Visual Studio 2026 or its Build Tools | The C++ compiler, the Windows SDK and CMake. [BUILD_WINDOWS_VISUAL_STUDIO.md](BUILD_WINDOWS_VISUAL_STUDIO.md) has point-and-click instructions, and covers Visual Studio 2022 |
-| PowerShell 7 | Some build steps run `pwsh`. Not the Microsoft Store version: the build looks in `C:\Program Files\PowerShell\7` |
+| PowerShell 7 | Some build steps run `pwsh`. Not the Microsoft Store version: the build looks in `C:\Program Files\PowerShell\7`. `--installer-type wix` matters: winget's default for PowerShell 7.6 is now an MSIX package, which lands in `WindowsApps` like the Store version and is turned down the same way |
 | Python 3 | Runs the build's setup scripts. 3.13 is tested |
 | Node.js (LTS) | Builds the in-world web UI |
 | Git | Gets the code, and some dependencies |
@@ -118,10 +116,10 @@ Or open `build\hifi.sln` in Visual Studio, set the configuration to **RelWithDeb
 build\interface\RelWithDebInfo\interface.exe
 ```
 
-**Darkride's metaverse.** The worlds listed in **Explore**, and accounts, come from `https://vr.darkride.ai`, the client's default. To try another metaverse server, set `HIFI_METAVERSE_URL` for your Windows user; programs started afterwards pick it up, and `reg delete HKCU\Environment /v HIFI_METAVERSE_URL /f` goes back to the default.
+**Darkride's metaverse.** The worlds listed in **Explore**, and accounts, come from `https://vr.darkride.ai`, the client's built-in default. To use another metaverse (a local one, say), set `HIFI_METAVERSE_URL` for your Windows user; programs started afterwards pick it up, and `setx HIFI_METAVERSE_URL ""` or removing it in **Environment Variables** goes back to Darkride's.
 
 ```cmd
-setx HIFI_METAVERSE_URL https://metaverse.example.com
+setx HIFI_METAVERSE_URL http://localhost:3000
 ```
 
 **A world on your own PC.** Start the servers in two command prompts, then go to `hifi://localhost` in interface:
@@ -132,18 +130,6 @@ build\assignment-client\RelWithDebInfo\assignment-client.exe --min 6 --max 10
 ```
 
 The world's admin page is http://localhost:40100.
-
-## 7. Package (optional)
-
-To make the installer and zip that releases ship, build the interface and both servers in **Release**, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`), then from the repository folder:
-
-```cmd
-pwsh tools\installer\package-windows.ps1 -BuildDir build -Version 2026.10.1 -OutDir dist
-```
-
-It puts the interface and servers in one folder with the Visual C++ runtime beside them, and writes `dist\Darkride-2026.10.1-windows-x64.zip` and `dist\Darkride-2026.10.1-windows-x64-setup.exe`. The installer script is `tools\installer\darkride.iss`.
-
-GitHub builds these the same way: pushing a tag such as `v2026.10.1` runs `.github/workflows/release.yml`, which publishes them as a release, along with the Linux world server as a Docker image (`docker/server`).
 
 ## Building in VS Code
 
@@ -183,7 +169,7 @@ These SDKs can no longer be downloaded, so the build leaves out the plugins that
 
 | Error | Fix |
 |---|---|
-| `PowerShell 7 (pwsh) is not on the PATH`, `PowerShell 7 is the Microsoft Store version`, or `Could not find PowerShell Core` | Install PowerShell 7 with `winget install -e --id Microsoft.PowerShell` (step 1), not the Microsoft Store version, then close every terminal and open a **new** one. `where.exe pwsh` should find `C:\Program Files\PowerShell\7\pwsh.exe`; a `pwsh.exe` in `AppData\Local\Microsoft\WindowsApps` is the Store version, which vcpkg can't use: uninstall it (**Settings → Apps → Installed apps → PowerShell**) and install the regular one with `winget install -e --id Microsoft.PowerShell --source winget`. Configure again; vcpkg keeps the libraries it already built |
+| `PowerShell 7 (pwsh) is not on the PATH`, `PowerShell 7 is the Microsoft Store version`, or `Could not find PowerShell Core` | Install PowerShell 7 with `winget install -e --id Microsoft.PowerShell --source winget --installer-type wix` (step 1), not the Microsoft Store version, then close every terminal and open a **new** one. `where.exe pwsh` should find `C:\Program Files\PowerShell\7\pwsh.exe`; a `pwsh.exe` in `AppData\Local\Microsoft\WindowsApps` is the Store version or winget's MSIX package, which vcpkg can't use: uninstall it (**Settings → Apps → Installed apps → PowerShell**) and install the regular one with `winget install -e --id Microsoft.PowerShell --source winget --installer-type wix`. Configure again; vcpkg keeps the libraries it already built |
 | `Git (git) is not on the PATH` | Install Git with `winget install -e --id Git.Git` (step 1), then open a **new** terminal and configure again |
 | `No suitable Visual Studio instances were found`, then `vcpkg configuration missing` | vcpkg found no compiler it can use. In the Visual Studio Installer, check that **MSVC v143 - VS 2022 C++ x64/x86 build tools (v14.44-17.14)** is ticked (a default of the C++ workload), and that the **English** language pack is installed (**Language packs** tab), which vcpkg also needs. Then configure again |
 | `has no v143 build tools`, or `error MSB8020: The build tools for Visual Studio 2022 (Platform Toolset = 'v143') cannot be found` | The Visual Studio CMake picked lacks the v143 compiler. The message names it and gives the command to add the component; or, in the Visual Studio Installer, click **Modify** on that install and tick **MSVC v143 - VS 2022 C++ x64/x86 build tools (v14.44-17.14)**. With more than one install (say Community and Build Tools), it may be the one you didn't expect: see [More than one Visual Studio installed](BUILD_WINDOWS_VISUAL_STUDIO.md#more-than-one-visual-studio-installed). Then delete the `build` folder and configure again |
@@ -195,7 +181,7 @@ These SDKs can no longer be downloaded, so the build leaves out the plugins that
 | The same CMake error after you fixed its cause | Delete `build\CMakeCache.txt`, or the whole `build` folder, and run step 4 again |
 | `cmake` isn't recognised | Use **Developer PowerShell for VS 2026** from the Start menu (step 4), which puts Visual Studio's CMake on the PATH, or install CMake: `winget install -e --id Kitware.CMake` |
 | A dependency failed to build | vcpkg's log for it is in `%TIVOLI_VCPKG_BASE%\<id>\buildtrees\<package>\` |
-| Explore shows no worlds | If `HIFI_METAVERSE_URL` is set, check it points at `https://vr.darkride.ai`, or remove it (step 6) |
+| Explore shows no worlds | Check that `HIFI_METAVERSE_URL` isn't set to another metaverse (step 6); a build from before main's 8e6ef9aedb needs it set to `https://vr.darkride.ai` |
 
 ## Optional: Qt with H.264 and AAC
 

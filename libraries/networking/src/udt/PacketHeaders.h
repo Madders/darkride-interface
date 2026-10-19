@@ -136,7 +136,11 @@ public:
         BulkAvatarTraitsAck,
         StopInjector,
         AvatarZonePresence,
+        VehicleInput, // darkride: a driver's inputs for a vehicle, to the physics server (PHYSICS.md round 6)
+        VehicleState, // darkride: the physics server's state stream for the vehicles a client simulates (PHYSICS.md round 9)
+        VehicleStateRequest, // darkride: a client's subscription to that stream: the vehicles it simulates (round 9)
         NUM_PACKET_TYPE
+
     };
 
     const static QHash<PacketTypeEnum::Value, PacketTypeEnum::Value> getReplicatedPacketMapping() {
@@ -287,6 +291,10 @@ enum class EntityVersion : PacketVersion {
     TerrainEntities, // darkride
     TerrainLayers, // darkride
     TrackEntities, // darkride: the Track entity type, and frame, trackID and trackOffset on every entity (PHYSICS.md round 4)
+    TrainState, // darkride: the train's state on the Track entity, written by the physics server (PHYSICS.md round 5)
+    Vehicles, // darkride: the vehicle property group on every entity (PHYSICS.md round 6)
+    Airships, // darkride: the airship's properties in the vehicle group (PHYSICS.md round 7)
+    Aircraft, // darkride: the aircraft's properties in the vehicle group (PHYSICS.md round 8)
     // TO DO - reinstate with tonemapping in zones
     // ToneMappingMode, // caitlyn
     

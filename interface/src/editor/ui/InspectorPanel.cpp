@@ -20,6 +20,9 @@
 
 #include "../PropertySpec.h"
 #include "PropertyEditors.h"
+#include "ImpostorEditor.h"
+#include "TerrainCapsEditor.h"
+#include "TerrainLayersEditor.h"
 #include "UserDataEditor.h"
 
 namespace {
@@ -207,9 +210,10 @@ QWidget* InspectorPanel::buildSection(const QString& sectionId, QWidget* parent)
         auto label = editor->createLabel(body);
         label->setObjectName("EditorInspectorLabel");
         bool tall = spec->kind == PropertyKind::Json || spec->kind == PropertyKind::UserData
-            || spec->kind == PropertyKind::CollisionMask;
+            || spec->kind == PropertyKind::CollisionMask || spec->kind == PropertyKind::TerrainLayers
+            || spec->kind == PropertyKind::Impostor;
         grid->addWidget(label, rowIndex, 0, Qt::AlignLeft | (tall ? Qt::AlignTop : Qt::AlignVCenter));
-        if (spec->kind == PropertyKind::UserData) {
+        if (spec->kind == PropertyKind::UserData || spec->kind == PropertyKind::TerrainLayers || spec->kind == PropertyKind::Impostor) {
             grid->addWidget(editor, rowIndex, 0, 1, 2);   // its section's header names it: it takes the whole width
         } else {
             grid->addWidget(editor, rowIndex, 1);
@@ -225,6 +229,14 @@ QWidget* InspectorPanel::buildSection(const QString& sectionId, QWidget* parent)
             connect(image, &ImageEditor::uploadRequested, this, [this, key](const QString& path) {
                 emit uploadRequested(key, path);
             });
+        }
+        if (auto layers = qobject_cast<TerrainLayersEditor*>(editor)) {
+            layers->setTerrainEditor(_terrainEditor);
+            connect(layers, &TerrainLayersEditor::layerChosen, this, &InspectorPanel::terrainLayerChosen);
+            connect(layers, &TerrainLayersEditor::layersShown, this, &InspectorPanel::terrainLayersShown);
+        }
+        if (auto caps = qobject_cast<TerrainCapsEditor*>(editor)) {
+            caps->setTerrainEditor(_terrainEditor);
         }
         // right-click on a label: Copy and Paste the row's value, as Unity does
         label->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -242,6 +254,23 @@ void InspectorPanel::applyValues(const QVector<EntityItemProperties>& snapshots,
         Row& row = it.value();
         if (!force && row.editor->isEditing()) {
             continue;
+        }
+        if (auto layers = qobject_cast<TerrainLayersEditor*>(row.editor)) {
+            // not a property: the terrain's own, read through the Terrain tool
+            layers->showTerrain(snapshots.size() == 1 ? snapshots.first().getID() : QUuid(), snapshots.size() > 1);
+            continue;
+        }
+        if (auto caps = qobject_cast<TerrainCapsEditor*>(row.editor)) {
+            caps->showTerrain(snapshots.size() == 1 ? snapshots.first().getID() : QUuid(), snapshots.size() > 1);
+            continue;
+        }
+        if (auto impostor = qobject_cast<ImpostorEditor*>(row.editor)) {
+            // the entities its Bake button bakes, beside the entry it shows
+            QList<QUuid> ids;
+            for (const auto& snapshot : snapshots) {
+                ids << snapshot.getID();
+            }
+            impostor->setEntities(ids);
         }
         QVariant first = PropertySpecs::get(it.key(), snapshots.first());
         // a value not known yet (a model's scale before the model has loaded) shows as "—"

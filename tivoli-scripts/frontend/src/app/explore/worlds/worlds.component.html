@@ -1,4 +1,8 @@
-<div class="worlds" [class.choosing]="exploreService.chooserWorldId != null">
+<div
+	class="worlds"
+	[class.choosing]="exploreService.chooserWorldId != null"
+	[class.hopping]="exploreService.hoppingWorldId != null"
+>
 	<div class="world" *ngFor="let world of exploreService.worlds">
 		<app-world-card [world]="world"></app-world-card>
 	</div>

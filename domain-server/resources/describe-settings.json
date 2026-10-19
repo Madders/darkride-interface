@@ -1579,6 +1579,20 @@
       ]
     },
     {
+      "name": "physics_server",
+      "label": "Physics Server",
+      "assignment-types": [ 7 ],
+      "settings": [
+        {
+          "name": "enabled",
+          "type": "checkbox",
+          "label": "Enabled",
+          "help": "Runs a physics server in this domain, for worlds with vehicles: trains on Track entities, driven cars and airships are then simulated by the server, so every visitor sees the same vehicle in the same place. Off, each vehicle is simulated by a visitor's client, which works but is less steady. Off costs nothing; on, it takes up to about a tenth of one CPU core even while nothing moves. Saving restarts the domain.",
+          "default": false
+        }
+      ]
+    },
+    {
       "name": "entity_script_server",
       "label": "Entity Script Server (ESS)",
       "assignment-types": [ 5 ],

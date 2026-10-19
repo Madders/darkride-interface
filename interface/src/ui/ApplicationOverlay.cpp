@@ -74,7 +74,7 @@ void ApplicationOverlay::renderOverlay(RenderArgs* renderArgs) {
         batch.setFramebuffer(_overlayFramebuffer);
 
         glm::vec4 color { 0.0f, 0.0f, 0.0f, 0.0f };
-        float depth = 1.0f;
+        float depth = 0.0f; // the far plane (reversed-Z)
         int stencil = 0;
         batch.clearFramebuffer(gpu::Framebuffer::BUFFER_COLOR0 | gpu::Framebuffer::BUFFER_DEPTH, color, depth, stencil);
 

@@ -39,6 +39,10 @@
       "platform": "x64 & (windows | linux)"
     },
     {
+      "name": "openxr-loader",
+      "platform": "x64 & (windows | linux)"
+    },
+    {
       "name": "quazip",
       "platform": "!android"
     },

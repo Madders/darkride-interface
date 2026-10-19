@@ -7,6 +7,7 @@
 //
 
 #include "Editor.h"
+#include "ImpostorBaker.h"
 
 #include <algorithm>
 #include <cmath>
@@ -36,6 +37,7 @@
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QMenu>
+#include <QtWidgets/QMessageBox>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QStatusBar>
 #include <QtWidgets/QTextEdit>
@@ -72,6 +74,7 @@
 #include "Menu.h"
 #include "scripting/RenderScriptingInterface.h"
 #include "PropertySpec.h"
+#include "ui/AssetsPanel.h"
 #include "ui/HierarchyPanel.h"
 #include "ui/InspectorPanel.h"
 #include "ui/PropertyEditors.h"
@@ -106,6 +109,7 @@ namespace {
     const QString SCALE_KEY = QStringLiteral("scale");
     const QString LOCKED_KEY = QStringLiteral("locked");
     const QString RANGE_KEY = QStringLiteral("range");
+    const QString VOXEL_SIZE_KEY = QStringLiteral("voxelSize");
     const QString CUTOFF_KEY = QStringLiteral("cutoff");
     const float MIN_DIMENSION = 0.001f;
     // the lights round the camera, for their icons: looked for this often, this far out
@@ -343,17 +347,16 @@ void Editor::setActive(bool active) {
 }
 
 void Editor::updateRenderMethod() {
-    // Build mode outlines the selection, and only deferred rendering draws outlines: while build mode is on,
-    // the main view renders deferred whatever the graphics settings say (Low and Potato pick forward, to spare
-    // the GPU). The setting itself is left alone, so leaving build mode, or a crash, gives the user's own back.
+    // Build mode outlines the selection, and both render methods draw the outline now (the forward path since
+    // 2026-10-16, over its resolved frame), so the main view renders by the graphics settings' method in build mode
+    // too; this only re-applies it, as it used to force deferred here while deferred alone had the outline.
     auto engine = qApp->getRenderEngine();
     auto config = engine ? dynamic_cast<render::SwitchConfig*>(
         engine->getConfiguration()->getConfig("RenderMainView.DeferredForwardSwitch")) : nullptr;
     if (!config) {
         return;
     }
-    int method = _active ? (int)render::Args::DEFERRED : (int)RenderScriptingInterface::getInstance()->getRenderMethod();
-    config->setBranch((uint8_t)method);
+    config->setBranch((uint8_t)RenderScriptingInterface::getInstance()->getRenderMethod());
 }
 
 void Editor::setGridVisible(bool visible) {
@@ -524,6 +527,16 @@ void Editor::createPanels() {
     connect(_inspector, &InspectorPanel::editCancelled, this, &Editor::onInspectorEditCancelled);
     connect(_inspector, &InspectorPanel::uploadRequested, this, &Editor::onInspectorUpload);
 
+    // My Files along the bottom: its notes (a link copied, an upload's progress) go to the status bar
+    _assets = new AssetsPanel(window);
+    connect(_assets, &AssetsPanel::status, this, [this](const QString& text, int clearAfterMs) {
+        setStatus(text, clearAfterMs);
+    });
+    // the tools, the handle space, Frame and V work from the panel too
+    _assets->setKeyFallback([this](QKeyEvent* event) {
+        return event->type() == QEvent::KeyPress ? handleKeyPress(event) : handleKeyRelease(event);
+    });
+
     _toolBar = new EditorToolBar(window);
     _toolBar->setGridChecked(_gridVisible);
     _toolBar->setGizmosChecked(_gizmosVisible);
@@ -548,7 +561,20 @@ void Editor::createPanels() {
     // the Terrain tool's row, under the toolbar, shown while that tool is active
     _terrainBar = new TerrainToolBar(window);
     connect(_terrainBar, &TerrainToolBar::brushChanged, this, [this] { _terrain.setBrush(_terrainBar->brush()); });
+    connect(_terrainBar, &TerrainToolBar::resampleRequested, this, [this] {
+        if (editable()) {
+            _terrain.resample(_selection.ids());
+        }
+    });
     _terrain.setBrush(_terrainBar->brush());
+    // a Terrain's Layers section in the Inspector reads and sets the layers through the tool, and its selected
+    // layer is the one the Paint tools paint; the toolbar's Layer field names the slots after the selected
+    // terrain's layers (else the one under the pointer's)
+    _inspector->setTerrainEditor(&_terrain);
+    connect(_inspector, &InspectorPanel::terrainLayerChosen, this, [this](int slot) { _terrainBar->setLayer(slot); });
+    _terrainBar->setLayerNameSource([this] { return _terrain.layerNamesForTool(_selection.ids()); });
+    connect(_inspector, &InspectorPanel::terrainLayersShown, _terrainBar, &TerrainToolBar::refreshLayerNames);
+    connect(&_terrain, &EditorTerrain::terrainUnderPointerChanged, _terrainBar, &TerrainToolBar::refreshLayerNames);
 
     // notes ("Terrain saved", an upload's progress, a refusal) in a status bar along the bottom, where the
     // toolbars' buttons cannot crowd them out
@@ -562,11 +588,16 @@ void Editor::createPanels() {
 
     window->addDockWidget(Qt::LeftDockWidgetArea, _hierarchy);
     window->addDockWidget(Qt::RightDockWidgetArea, _inspector);
+    // the Assets panel runs under the Hierarchy and the viewport, as Unity's Project window does; the Inspector
+    // keeps the right side whole
+    window->setCorner(Qt::BottomLeftCorner, Qt::BottomDockWidgetArea);
+    window->addDockWidget(Qt::BottomDockWidgetArea, _assets);
     placeToolBars();
     _terrainBar->setVisible(false);
     window->setStatusBar(_statusBar);
     _statusBar->setVisible(false);
     window->resizeDocks({ _hierarchy, _inspector }, { 260, 430 }, Qt::Horizontal);
+    window->resizeDocks({ _assets }, { 240 }, Qt::Vertical);
     qApp->installEventFilter(this);
 
     QByteArray layout = _layoutSetting.get();
@@ -577,6 +608,7 @@ void Editor::createPanels() {
     // one row would keep them there
     _hierarchy->setFloating(false);
     _inspector->setFloating(false);
+    _assets->setFloating(false);
     placeToolBars();
     updateTerrainBar();   // the saved layout knows nothing of the tool
 }
@@ -619,6 +651,8 @@ void Editor::showPanels(bool show) {
     gl::ViewChangeGuard guard;   // panels coming and going change the window round the GL view
     _hierarchy->setVisible(show);
     _inspector->setVisible(show);
+    _assets->setVisible(show);
+    _assets->setActive(show);   // fetches the listing when shown
     _toolBar->setVisible(show);
     _statusBar->setVisible(show);
     updateTerrainBar();
@@ -631,8 +665,12 @@ void Editor::resetLayout() {
     }
     _hierarchy->setFloating(false);
     _inspector->setFloating(false);
+    _assets->setFloating(false);
     window->addDockWidget(Qt::LeftDockWidgetArea, _hierarchy);
     window->addDockWidget(Qt::RightDockWidgetArea, _inspector);
+    window->addDockWidget(Qt::BottomDockWidgetArea, _assets);
+    window->resizeDocks({ _hierarchy, _inspector }, { 260, 430 }, Qt::Horizontal);
+    window->resizeDocks({ _assets }, { 240 }, Qt::Vertical);
     placeToolBars();
     showPanels(_active);
     _layoutSetting.set(QByteArray());
@@ -1253,6 +1291,9 @@ void Editor::commitInspectorEdit(const QString& key, const QVariant& value, cons
     }
     auto spec = PropertySpecs::find(key);
     _undo.pushPropertyEdit(spec ? spec->label : key, ids, before, after, alreadyApplied);
+    if (key == VOXEL_SIZE_KEY) {
+        _terrain.resample(ids);   // a terrain's voxels follow its new size (its own undo step, after the property's)
+    }
     refreshInspector(false);
 }
 
@@ -1387,6 +1428,205 @@ void Editor::selectAll() {
     if (_active && _treeModel) {
         _selection.set(_treeModel->allIds());
     }
+}
+
+// --- stable links -------------------------------------------------------------------------------
+
+namespace {
+    // the entity properties that can hold a link to a file, read and written through the Inspector's accessors. A
+    // terrain's own file (terrainURL) is left out: its next save writes the stable link, and a changed link would
+    // have the renderer fetch the file again, over strokes not yet saved
+    const QStringList LINK_KEYS {
+        "modelURL", "compoundShapeURL", "animation.url", "textures", "imageURL", "sourceUrl", "scriptURL", "materialURL",
+        "materialData", "script", "serverScripts", "collisionSoundURL", "userData", "skybox.url", "ambientLight.ambientURL",
+        "filterURL", "font"
+    };
+    const QStringList SCRIPT_KEYS { "script", "serverScripts" };
+    const int MISSING_SHOWN = 30;   // the links the report lists by name
+    const int STABLE_LINKS_TIMEOUT_MS = 30000;
+}
+
+void Editor::useStableLinks() {
+    if (!_active || _stableLinksPending || !editable()) {
+        return;
+    }
+    UserFiles* files = _assets ? _assets->files() : nullptr;
+    if (!files || !UserFiles::isLoggedIn()) {
+        setStatus("Sign in to use stable links: they come from My Files", STATUS_CLEAR_MS);
+        return;
+    }
+    // from a fresh listing, so that a file moved a moment ago is found where it is now
+    _stableLinksPending = true;
+    setStatus("Reading My Files…");
+    auto onListed = std::make_shared<QMetaObject::Connection>();
+    auto onFailed = std::make_shared<QMetaObject::Connection>();
+    auto done = std::make_shared<bool>(false);
+    auto finish = [this, onListed, onFailed, done] {
+        QObject::disconnect(*onListed);
+        QObject::disconnect(*onFailed);
+        *done = true;
+        _stableLinksPending = false;
+    };
+    // a listing that never comes does not hold the command for ever
+    QTimer::singleShot(STABLE_LINKS_TIMEOUT_MS, this, [this, done, finish] {
+        if (!*done) {
+            finish();
+            setStatus("My Files did not answer: no links were changed", STATUS_CLEAR_MS);
+        }
+    });
+    *onListed = connect(files, &UserFiles::listed, this, [this, files, finish] {
+        finish();
+        if (!files->hasListing()) {
+            setStatus("My Files could not be read: no links were changed", STATUS_CLEAR_MS);
+            return;
+        }
+        rewriteStableLinks(*files);
+    });
+    *onFailed = connect(files, &UserFiles::listingFailed, this, [this, finish](const QString& why) {
+        finish();
+        setStatus("My Files could not be read (" + why + "): no links were changed", STATUS_CLEAR_MS);
+    });
+    files->refresh();
+}
+
+void Editor::rewriteStableLinks(const UserFiles& files) {
+    if (!_active || !_treeModel || !editable()) {
+        setStatus(QString(), 0);
+        return;   // build mode was left, or the rights went, while the listing came
+    }
+    const QString undoText = "Use Stable Links";
+    int rewritten = 0;
+    int lockedLinks = 0;
+    QStringList missing;
+    QList<QUuid> ids;
+    QVector<EntityItemProperties> before;
+    QVector<EntityItemProperties> after;
+    QVector<QPair<QUuid, terrain::LayerStack>> layerChanges;
+    QSet<QUuid> changed;
+    int scriptsRestarting = 0;
+    for (const QUuid& id : _treeModel->allIds()) {
+        EntityItemProperties properties;
+        if (!EditorUndo::snapshot(id, properties)) {
+            continue;
+        }
+        EntityItemProperties was;
+        EntityItemProperties now;
+        int count = 0;
+        bool scriptChanged = false;
+        for (const QString& key : LINK_KEYS) {
+            const QString value = PropertySpecs::get(key, properties).toString();
+            if (value.isEmpty()) {
+                continue;
+            }
+            int found = 0;
+            const QString stable = files.withStableLinks(value, found, missing);
+            if (found > 0) {
+                PropertySpecs::set(key, was, value);
+                PropertySpecs::set(key, now, stable);
+                count += found;
+                scriptChanged = scriptChanged || SCRIPT_KEYS.contains(key);
+            }
+        }
+        // a terrain's layers live in its file on this client: their textures' links
+        terrain::LayerStack layers;
+        int layerCount = 0;
+        if (const terrain::LayerStack* stack = _terrain.layersOf(id)) {
+            layers = *stack;
+            for (auto& layer : layers.layers) {
+                for (std::string* url : { &layer.materialURL, &layer.normalURL, &layer.roughnessURL, &layer.occlusionURL, &layer.heightURL }) {
+                    if (url->empty()) {
+                        continue;
+                    }
+                    int found = 0;
+                    const QString stable = files.withStableLinks(QString::fromStdString(*url), found, missing);
+                    if (found > 0) {
+                        *url = stable.toStdString();
+                        layerCount += found;
+                    }
+                }
+            }
+        }
+        if (count + layerCount == 0) {
+            continue;
+        }
+        if (EditorUndo::isLocked(id)) {
+            lockedLinks += count + layerCount;
+            continue;
+        }
+        if (count > 0) {
+            ids << id;
+            before << was;
+            after << now;
+            if (scriptChanged) {
+                ++scriptsRestarting;
+            }
+        }
+        if (layerCount > 0) {
+            layerChanges.push_back({ id, layers });
+        }
+        rewritten += count + layerCount;
+        changed.insert(id);
+    }
+
+    // one step for all of it
+    if (!changed.isEmpty()) {
+        _undo.stack()->beginMacro(undoText);
+        if (!ids.isEmpty()) {
+            _undo.pushPropertyEdit(undoText, ids, before, after, false);
+        }
+        for (const auto& change : layerChanges) {
+            _terrain.setLayers(change.first, change.second, undoText);
+        }
+        _undo.stack()->endMacro();
+    }
+    qCDebug(interfaceapp) << "Use Stable Links:" << rewritten << "links in" << changed.size() << "entities;" << missing.size()
+                          << "not in My Files;" << lockedLinks << "on locked entities";
+
+    // the report
+    QString summary;
+    if (rewritten > 0) {
+        summary = QString("%1 %2 to your files in %3 %4 now %5 the stable form, which keeps working when a file is moved or "
+                          "renamed. Undo puts them back.")
+                      .arg(rewritten).arg(rewritten == 1 ? "link" : "links").arg(changed.size())
+                      .arg(changed.size() == 1 ? "entity" : "entities").arg(rewritten == 1 ? "uses" : "use");
+    } else if (missing.isEmpty() && lockedLinks == 0) {
+        summary = "Nothing to change: no link in this world names one of your files by its path.";
+    } else {
+        summary = "No links were changed.";
+    }
+    QStringList notes;
+    if (scriptsRestarting > 0) {
+        notes << QString("%1 %2 with the new links.").arg(scriptsRestarting)
+                     .arg(scriptsRestarting == 1 ? "entity's scripts restart" : "entities' scripts restart");
+    }
+    if (!missing.isEmpty()) {
+        notes << QString("%1 %2 to a path where My Files has no file now: moved, renamed or deleted since. %3 left as "
+                         "%4 are; a moved file is still found through its former path.")
+                     .arg(missing.size()).arg(missing.size() == 1 ? "link points" : "links point")
+                     .arg(missing.size() == 1 ? "It was" : "They were").arg(missing.size() == 1 ? "it" : "they");
+    }
+    if (lockedLinks > 0) {
+        notes << QString("%1 %2 on locked entities %3 left as %4 are: unlock them first.").arg(lockedLinks)
+                     .arg(lockedLinks == 1 ? "link" : "links").arg(lockedLinks == 1 ? "was" : "were")
+                     .arg(lockedLinks == 1 ? "it" : "they");
+    }
+    setStatus(rewritten > 0 ? QString("Use Stable Links: %1 %2 changed").arg(rewritten).arg(rewritten == 1 ? "link" : "links")
+                            : QString("Use Stable Links: nothing changed"), STATUS_CLEAR_MS);
+    QMessageBox box(qApp->getWindow());
+    box.setWindowTitle(undoText);
+    box.setIcon(QMessageBox::Information);
+    box.setText(summary);
+    if (!notes.isEmpty()) {
+        box.setInformativeText(notes.join("\n\n"));
+    }
+    if (!missing.isEmpty()) {
+        QStringList shown = missing.mid(0, MISSING_SHOWN);
+        if (missing.size() > MISSING_SHOWN) {
+            shown << QString("… and %1 more").arg(missing.size() - MISSING_SHOWN);
+        }
+        box.setDetailedText(shown.join('\n'));
+    }
+    box.exec();
 }
 
 void Editor::frameSelection() {
@@ -2501,14 +2741,10 @@ bool Editor::handleMouseDoubleClick(QMouseEvent* event) {
     if (!_active) {
         return false;
     }
-    if (event->button() == Qt::LeftButton && !event->modifiers().testFlag(Qt::AltModifier)) {
-        QUuid hit = pickAt(event->pos());
-        if (!hit.isNull()) {
-            _selection.set({ hit });
-            frameSelection();
-        }
-    }
-    return true;
+    // The second click of a double-click is a click like any other in the scene: it selects what it hits, or lays
+    // another terrain stroke. It used to frame the entity hit, which flung the camera away from the ground being
+    // edited; framing is on F, and on a double-click in the Hierarchy.
+    return handleMousePress(event);
 }
 
 bool Editor::handleWheel(QWheelEvent* event) {
@@ -2632,6 +2868,23 @@ bool Editor::handleKeyRelease(QKeyEvent* event) {
 }
 
 bool Editor::eventFilter(QObject* watched, QEvent* event) {
+    // In build mode the world takes a drop only over the viewport. Qt hands a drag that a widget turns down to its
+    // parents, up to the main window, which gives every drop to the world: a model dragged onto a picture field (which
+    // refused it) was placed in the world. Over the panels, a drag nothing in them takes is turned down here.
+    const QEvent::Type type = event->type();
+    if (_active && (type == QEvent::DragEnter || type == QEvent::DragMove || type == QEvent::Drop)
+            && watched == qApp->getWindow()) {
+        QWidget* window = qApp->getWindow();
+        QWidget* viewport = qApp->getPrimaryWidget();
+        auto drop = static_cast<QDropEvent*>(event);   // the enter and move events are drop events too
+        const bool overViewport = viewport && viewport->isVisible() && viewport->window() == window
+            && QRect(viewport->mapTo(window, QPoint(0, 0)), viewport->size()).contains(drop->pos());
+        if (!overViewport) {
+            drop->ignore();
+            return true;
+        }
+        return false;
+    }
     // the camera keys (1 first person, 2 selfie, 3 look at) do nothing in build mode, which has its own camera:
     // a stray one (a number meant for a field) quietly changed the camera you came back to
     if (_active && event->type() == QEvent::ShortcutOverride) {
@@ -2763,4 +3016,61 @@ bool Editor::eventFilter(QObject* watched, QEvent* event) {
             break;
     }
     return false;
+}
+
+void Editor::bakeImpostor() {
+    QList<QUuid> ids = _selection.topLevel();
+    if (ids.isEmpty()) {
+        qCDebug(interfaceapp) << "Bake Impostor: nothing selected";
+        setStatus("Bake Impostor: nothing selected", STATUS_CLEAR_MS);
+        return;
+    }
+    auto baker = DependencyManager::get<ImpostorBaker>();
+    for (const QUuid& id : ids) {
+        baker->bake(id, 256);
+    }
+    setStatus(ids.size() == 1 ? QStringLiteral("Baking the impostor…") : QString("Baking %1 impostors…").arg(ids.size()));
+}
+
+void Editor::bakeAllImpostors() {
+    auto baker = DependencyManager::get<ImpostorBaker>();
+    if (!_impostorBakerConnected) {
+        _impostorBakerConnected = true;
+        connect(baker.data(), &ImpostorBaker::baked, this, [this](const QUuid& id, bool ok, const QString& message) {
+            if (_impostorBakesQueued == 0) {
+                setStatus(ok ? QStringLiteral("Impostor baked") : QString("Impostor bake failed: %1").arg(message), STATUS_CLEAR_MS);
+                return;
+            }
+            ++_impostorBakesDone;
+            if (_impostorBakesDone >= _impostorBakesQueued) {
+                setStatus(QString("Baked %1 impostors").arg(_impostorBakesDone), STATUS_CLEAR_MS);
+                _impostorBakesQueued = 0;
+                _impostorBakesDone = 0;
+            } else {
+                setStatus(QString("Baking impostors: %1 of %2…").arg(_impostorBakesDone).arg(_impostorBakesQueued));
+            }
+        });
+    }
+    const float MAX_RADIUS = 4.0f;   // a prop's size: a bigger group is opened and its children taken in turn
+    const float MIN_RADIUS = 0.3f;   // a die needs no card
+    int count = baker->bakeAll(256, MAX_RADIUS, MIN_RADIUS, false);
+    if (count == 0) {
+        setStatus("Bake All Impostors: nothing to bake (every prop between 0.3 and 4 m has a card, or no model has loaded)", STATUS_CLEAR_MS);
+        return;
+    }
+    _impostorBakesQueued += count;
+    setStatus(QString("Baking impostors: 0 of %1…").arg(_impostorBakesQueued));
+}
+
+void Editor::removeImpostor() {
+    QList<QUuid> ids = _selection.topLevel();
+    if (ids.isEmpty()) {
+        setStatus("Remove Impostor: nothing selected", STATUS_CLEAR_MS);
+        return;
+    }
+    auto baker = DependencyManager::get<ImpostorBaker>();
+    for (const QUuid& id : ids) {
+        baker->remove(id);
+    }
+    setStatus(ids.size() == 1 ? QStringLiteral("Impostor removed") : QString("Impostors removed from %1 entities").arg(ids.size()), STATUS_CLEAR_MS);
 }

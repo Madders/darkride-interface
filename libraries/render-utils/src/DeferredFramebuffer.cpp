@@ -63,7 +63,7 @@ void DeferredFramebuffer::allocate() {
 
     _deferredFramebufferDepthColor->setRenderBuffer(0, _deferredColorTexture);
 
-    auto depthFormat = gpu::Element(gpu::SCALAR, gpu::UINT32, gpu::DEPTH_STENCIL); // Depth24_Stencil8 texel format
+    auto depthFormat = gpu::Element::DEPTH32F_STENCIL8; // reversed-Z float depth, see gpu::Backend::reversedZProjection
     if (!_primaryDepthTexture) {
         _primaryDepthTexture = gpu::Texture::createRenderBuffer(depthFormat, width, height, gpu::Texture::SINGLE_MIP, defaultSampler);
     }

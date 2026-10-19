@@ -12,6 +12,10 @@
 <@include DeferredBufferRead.slh@>
 <@include render-utils/ShaderConstants.h@>
 
+// the reflection probes' cube map array and the probe volume in the slots the deferred pass has free
+// (ReflectionProbe.slh, LightAmbient.slh)
+<@def REFLECTION_PROBES_DEFERRED@>
+<@def PROBE_VOLUME_DEFERRED@>
 <@include GlobalLight.slh@>
 <@if HIFI_USE_AMBIENT@>
     <$declareEvalAmbientSphereGlobalColor(supportScattering)$>
@@ -53,22 +57,34 @@ void main(void) {
         midNormalCurvature = check * midNormalCurvature;
         lowNormalCurvature = check * lowNormalCurvature;
 
+        vec3 color;
+        if (frag.mode == FRAG_MODE_LIGHTMAPPED_INDIRECT) {
+            // the baked diffuse light is in the lighting buffer already (packDeferredFragmentLightmapIndirect): no
+            // ambient diffuse here, the rest as for any shaded fragment (LIGHTMAPS.md)
 <@if HIFI_USE_AMBIENT@>
-        vec3 color = evalAmbientSphereGlobalColor(
-                        getViewInverse(),
-                        shadowAttenuation,
-                        frag.obscurance,
-                        frag.position.xyz,
-                        frag.normal,
-                        frag.albedo,
-                        frag.fresnel,
-                        frag.metallic,
-                        frag.roughness,
-                        frag.scattering,
-                        midNormalCurvature,
-                        lowNormalCurvature);
+            color = evalAmbientSphereGlobalColorLightmapped(
 <@else@>
-        vec3 color = evalSkyboxGlobalColor(
+            color = evalSkyboxGlobalColorLightmapped(
+<@endif@>
+                        getViewInverse(),
+                        shadowAttenuation,
+                        frag.obscurance,
+                        frag.position.xyz,
+                        frag.normal,
+                        frag.albedo,
+                        frag.fresnel,
+                        frag.metallic,
+                        frag.roughness,
+                        frag.scattering,
+                        midNormalCurvature,
+                        lowNormalCurvature,
+                        vec3(0.0));
+        } else {
+<@if HIFI_USE_AMBIENT@>
+            color = evalAmbientSphereGlobalColor(
+<@else@>
+            color = evalSkyboxGlobalColor(
+<@endif@>
                         getViewInverse(),
                         shadowAttenuation,
                         frag.obscurance,
@@ -81,7 +97,7 @@ void main(void) {
                         frag.scattering,
                         midNormalCurvature,
                         lowNormalCurvature);
-<@endif@>
+        }
 
         _fragColor = vec4(color, 1.0);
     }

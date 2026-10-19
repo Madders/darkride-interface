@@ -90,6 +90,7 @@ protected:
     FrameTimingsScriptingInterface _frameTimingsScriptingInterface;
 
     std::shared_ptr<ProceduralSkybox> _splashScreen { std::make_shared<ProceduralSkybox>() };
+    gpu::TexturePointer _signInNavy;   // one pixel of the sign-in screen's navy, drawn as the user interface is
 #if defined(Q_OS_ANDROID) || defined(DISABLE_PROCEDURAL_DEFAULT_SKYBOX)
     std::atomic<bool> _programsCompiled { true };
 #else

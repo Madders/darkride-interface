@@ -30,6 +30,9 @@ var METAVERSE_BASE = Account.metaverseServerURL;
 var isLoggedIn;
 var mostRecentGifSnapshotFilename = "";
 var mostRecentStillSnapshotFilename = "";
+// Where each snap went after it was taken (Snapshot.snapshotStored), by the path it was taken at: its URL in My Files,
+// or its path on this computer and why it stayed there.
+var storedSnaps = {};
 
 // It's totally unnecessary to return to C++ to perform many of these requests, such as DELETEing an old story,
 // POSTING a new one, PUTTING a new audience, or GETTING story data. It's far more efficient to do all of that within JS
@@ -83,7 +86,8 @@ function onMessage(message) {
                 action: "nametagsSettings",
                 setting: Settings.getValue("shapshotNametagsEnabled", true)
             });
-            if (Snapshot.getSnapshotsLocation() !== "") {
+            // signed in, snaps go to My Files: no folder on this computer is needed
+            if (Snapshot.getSnapshotsLocation() !== "" || Account.isLoggedIn()) {
                 isDomainOpen(Settings.getValue("previousSnapshotDomainID"), function (canShare) {
                     ui.sendMessage({
                         type: "snapshot",
@@ -370,6 +374,8 @@ function fillImageDataFromPrevious() {
     if (previousStillSnapPath !== "") {
         imageData.push({
             localPath: previousStillSnapPath,
+            takenPath: previousStillSnapPath,
+            caption: snapCaption(previousStillSnapPath),
             story_id: previousStillSnapStoryID,
             blastButtonDisabled: previousStillSnapBlastingDisabled,
             hifiButtonDisabled: previousStillSnapHifiSharingDisabled,
@@ -379,6 +385,8 @@ function fillImageDataFromPrevious() {
     if (previousAnimatedSnapPath !== "") {
         imageData.push({
             localPath: previousAnimatedSnapPath,
+            takenPath: previousAnimatedSnapPath,
+            caption: snapCaption(previousAnimatedSnapPath),
             story_id: previousAnimatedSnapStoryID,
             blastButtonDisabled: previousAnimatedSnapBlastingDisabled,
             hifiButtonDisabled: previousAnimatedSnapHifiSharingDisabled,
@@ -426,6 +434,53 @@ function snapshotUploaded(isError, reply) {
     }
     isUploadingPrintableStill = false;
 }
+// Where a snap is now: in My Files, or on this computer (where it was taken, or where it went when its upload failed).
+function storedLocation(takenPath) {
+    var stored = storedSnaps[takenPath];
+    return stored ? stored.location : takenPath;
+}
+
+function snapCaption(path) {
+    var stored = storedSnaps[path];
+    if (!stored) {
+        if (/^https?:/.test(path)) {
+            return "Saved to My Files, in Snapshots";
+        }
+        // a snap in the folder snaps wait in for their upload (UPLOADS_DIRECTORY in Snapshot.cpp) is on its way
+        return path.indexOf("Snapshot uploads") !== -1 ? "Saving to My Files\u2026" : "";
+    }
+    if (stored.inUserFiles) {
+        return "Saved to My Files, in Snapshots";
+    }
+    if (stored.uploadError) {
+        return "Saved on this computer, in " + stored.location.substring(0, stored.location.lastIndexOf("/")) +
+            ". The upload to My Files failed: " + stored.uploadError;
+    }
+    return "Saved on this computer; sign in to keep Snaps in My Files";
+}
+
+function snapImageData(takenPath) {
+    return { localPath: storedLocation(takenPath), takenPath: takenPath, caption: snapCaption(takenPath), href: href };
+}
+
+function onSnapshotStored(takenPath, location, inUserFiles, uploadError) {
+    storedSnaps[takenPath] = { location: location, inUserFiles: inUserFiles, uploadError: uploadError };
+    // Snap reopens with its last snaps from where they are now
+    if (Settings.getValue("previousStillSnapPath") === takenPath) {
+        Settings.setValue("previousStillSnapPath", location);
+    }
+    if (Settings.getValue("previousAnimatedSnapPath") === takenPath) {
+        Settings.setValue("previousAnimatedSnapPath", location);
+    }
+    ui.sendMessage({
+        type: "snapshot",
+        action: "snapshotStored",
+        takenPath: takenPath,
+        location: location,
+        caption: snapCaption(takenPath)
+    });
+}
+
 var href, snapshotDomainID;
 function takeSnapshot() {
     ui.sendMessage({
@@ -549,7 +604,7 @@ function stillSnapshotTaken(pathStillSnapshot, notify) {
     // during which time the user may have moved. So stash that info in the dialog so that
     // it records the correct href. (We can also stash in .jpegs, but not .gifs.)
     // last element in data array tells dialog whether we can share or not
-    Settings.setValue("previousStillSnapPath", pathStillSnapshot);
+    Settings.setValue("previousStillSnapPath", storedLocation(pathStillSnapshot));
 
     HMD.openTablet();
 
@@ -560,7 +615,7 @@ function stillSnapshotTaken(pathStillSnapshot, notify) {
             canShare: canShare,
             isLoggedIn: isLoggedIn
         };
-        imageData = [{ localPath: pathStillSnapshot, href: href }];
+        imageData = [snapImageData(pathStillSnapshot)];
         ui.sendMessage({
             type: "snapshot",
             action: "addImages",
@@ -595,7 +650,7 @@ function processingGifStarted(pathStillSnapshot) {
     if (resetNametags) {
         Render.setNametagsEnabled(true);
     }
-    Settings.setValue("previousStillSnapPath", pathStillSnapshot);
+    Settings.setValue("previousStillSnapPath", storedLocation(pathStillSnapshot));
 
     HMD.openTablet();
     
@@ -607,7 +662,7 @@ function processingGifStarted(pathStillSnapshot) {
             canShare: canShare,
             isLoggedIn: isLoggedIn
         };
-        imageData = [{ localPath: pathStillSnapshot, href: href }];
+        imageData = [snapImageData(pathStillSnapshot)];
         ui.sendMessage({
             type: "snapshot",
             action: "addImages",
@@ -621,7 +676,7 @@ function processingGifCompleted(pathAnimatedSnapshot) {
     isLoggedIn = Account.isLoggedIn();
     Window.processingGifCompleted.disconnect(processingGifCompleted);
 
-    Settings.setValue("previousAnimatedSnapPath", pathAnimatedSnapshot);
+    Settings.setValue("previousAnimatedSnapPath", storedLocation(pathAnimatedSnapshot));
 
     isDomainOpen(snapshotDomainID, function (canShare) {
         snapshotOptions = {
@@ -631,7 +686,7 @@ function processingGifCompleted(pathAnimatedSnapshot) {
             isLoggedIn: isLoggedIn,
             canBlast: location.domainID === Settings.getValue("previousSnapshotDomainID"),
         };
-        imageData = [{ localPath: pathAnimatedSnapshot, href: href }];
+        imageData = [snapImageData(pathAnimatedSnapshot)];
         ui.sendMessage({
             type: "snapshot",
             action: "addImages",
@@ -658,15 +713,23 @@ function maybeDeleteSnapshotStories() {
 }
 function onUsernameChanged() {
     fillImageDataFromPrevious();
-    isDomainOpen(Settings.getValue("previousSnapshotDomainID"), function (canShare) {
+    if (Snapshot.getSnapshotsLocation() === "" && !Account.isLoggedIn()) {
+        // signed out with no folder chosen: a snap would have nowhere to go
         ui.sendMessage({
             type: "snapshot",
-            action: "showPreviousImages",
-            options: snapshotOptions,
-            image_data: imageData,
-            canShare: canShare
+            action: "showSetupInstructions"
         });
-    });
+    } else {
+        isDomainOpen(Settings.getValue("previousSnapshotDomainID"), function (canShare) {
+            ui.sendMessage({
+                type: "snapshot",
+                action: "showPreviousImages",
+                options: snapshotOptions,
+                image_data: imageData,
+                canShare: canShare
+            });
+        });
+    }
     if (isLoggedIn) {
         if (shareAfterLogin) {
             isDomainOpen(Settings.getValue("previousSnapshotDomainID"), function (canShare) {
@@ -743,12 +806,14 @@ function startup() {
     Entities.canRezTmpChanged.connect(updatePrintPermissions);
     GlobalServices.myUsernameChanged.connect(onUsernameChanged);
     Snapshot.snapshotLocationSet.connect(snapshotLocationSet);
+    Snapshot.snapshotStored.connect(onSnapshotStored);
     Window.snapshotShared.connect(snapshotUploaded);
 }
 startup();
 
 function shutdown() {
     Window.snapshotShared.disconnect(snapshotUploaded);
+    Snapshot.snapshotStored.disconnect(onSnapshotStored);
     Snapshot.snapshotLocationSet.disconnect(snapshotLocationSet);
     GlobalServices.myUsernameChanged.disconnect(onUsernameChanged);
     Entities.canRezChanged.disconnect(updatePrintPermissions);

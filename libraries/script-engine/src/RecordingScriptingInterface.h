@@ -16,6 +16,7 @@
 
 #include <BaseScriptEngine.h>
 #include <DependencyManager.h>
+#include <ScriptCallback.h>
 #include <recording/ClipCache.h>
 #include <recording/Forward.h>
 #include <recording/Frame.h>
@@ -346,6 +347,12 @@ public slots:
      * }, 5000);
      */
     void loadLastRecording();
+
+    // The same two for the WebAssembly script engine: the module's function (a ScriptCallback) called back with the
+    // arguments a script's function gets above. The QtScript engine never chooses these (no script value converts
+    // to a ScriptCallback) and a module never chooses the QScriptValue ones.
+    void loadRecording(const QString& url, const ScriptCallback& callback);
+    bool saveRecordingToAsset(const ScriptCallback& getClipAtpUrl);
 
 protected:
     using Mutex = std::recursive_mutex;

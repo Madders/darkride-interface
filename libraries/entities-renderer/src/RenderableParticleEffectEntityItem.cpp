@@ -28,7 +28,7 @@ static ShapePipelinePointer shapePipelineFactory(const ShapePlumber& plumber, co
     if (!texturedPipeline) {
         auto state = std::make_shared<gpu::State>();
         state->setCullMode(gpu::State::CULL_BACK);
-        state->setDepthTest(true, false, gpu::LESS_EQUAL);
+        state->setDepthTest(true, false, gpu::GREATER_EQUAL);
         state->setBlendFunction(true, gpu::State::SRC_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::ONE,
             gpu::State::FACTOR_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::ONE);
         PrepareStencil::testMask(*state);
