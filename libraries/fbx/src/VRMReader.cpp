@@ -189,12 +189,17 @@ VRMInfo readVRM(const QByteArray& glb) {
         info.authors = authors.join(", ");
         info.licence = QString("avatar use %1, commercial use %2, %3").arg(meta["avatarPermission"].toString(),
             meta["commercialUsage"].toString(), meta["licenseUrl"].toString());
+        info.onlyAuthorMayWear = meta["avatarPermission"].toString() != "everyone";
+        // 1.0 allows redistribution only when it says so
+        info.redistributionAllowed = meta["allowRedistribution"].toBool(false);
     } else {
         const QJsonObject meta = vrm0["meta"].toObject();
         info.title = meta["title"].toString();
         info.authors = meta["author"].toString();
         info.licence = QString("%1, avatar use %2, commercial use %3").arg(meta["licenseName"].toString(),
             meta["allowedUserName"].toString(), meta["commercialUssageName"].toString());
+        info.onlyAuthorMayWear = meta["allowedUserName"].toString() != "Everyone";
+        info.redistributionAllowed = meta["licenseName"].toString() != "Redistribution_Prohibited";
     }
     return info;
 }

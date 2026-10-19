@@ -28,6 +28,8 @@ struct VRMInfo {
     QString title;
     QString authors;
     QString licence;
+    bool onlyAuthorMayWear { false };    // only its author may use it as an avatar
+    bool redistributionAllowed { true };  // others may share copies of it
 
     bool isVRM() const { return version >= 0; }
 };
