@@ -90,8 +90,17 @@ QMap<int, glm::quat> computeHumanoidRotationOffsets(const std::vector<HumanoidRe
         const glm::quat parentStraightening = (parent >= 0 && parent < i) ? straightenings[parent] : glm::quat();
         glm::quat straightening = parentStraightening;
         const int standardIndex = standardIndices[i];
-        if (standardIndex >= 0) {
-            // the bone points at the next joint along it that the avatar has (Second Life's have no Spine1, say)
+        // Only the limbs are straightened, as an A-pose differs in them. A spine, neck, head or foot is left as it is:
+        // they differ between rigs in proportion more than in pose, so turning them onto the template's tips the avatar
+        // (Quaternius's feet are flatter than Mixamo's, and would stand on tiptoe)
+        static const QStringList LIMBS { "Arm", "ForeArm", "Hand", "UpLeg", "Leg" };
+        const QString& jointName = joints[i].name;
+        const bool isLimb = standardIndex >= 0 &&
+            (jointName.contains("HandThumb") || jointName.contains("HandIndex") || jointName.contains("HandMiddle") ||
+             jointName.contains("HandRing") || jointName.contains("HandPinky") ||
+             LIMBS.contains(jointName.mid(jointName.startsWith("Left") ? 4 : 5)));
+        if (standardIndex >= 0 && isLimb) {
+            // the bone points at the next joint along it that the avatar has
             int target = -1;
             glm::vec3 templateDirection;
             for (int child = standard.boneChild(standardIndex); child >= 0; child = standard.boneChild(child)) {
@@ -121,7 +130,8 @@ QMap<int, glm::quat> computeHumanoidRotationOffsets(const std::vector<HumanoidRe
                     }
                 }
             }
-
+        }
+        if (standardIndex >= 0) {
             // the ends of chains (HeadTop_End, LeftToe_End, LeftHandIndex4) carry no mesh and their axes don't matter
             const bool isEnd = standard.boneChild(standardIndex) < 0 && !joints[i].name.endsWith("Eye");
             glm::quat tPoseRotation = straightening * facing * joints[i].rotation;

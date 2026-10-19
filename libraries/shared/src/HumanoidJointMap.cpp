@@ -42,7 +42,8 @@ const QRegularExpression NOT_HAND = pattern("thumb|index|middle|ring|pinky|pinki
 const QRegularExpression NECK = pattern("neck");
 const QRegularExpression HEAD = pattern("head");
 const QRegularExpression NOT_HEAD = pattern("top|hair|jaw|eye|brow|nose|lip|mouth|ear|cheek|tongue|teeth|face|hat|neck");
-const QRegularExpression HEAD_TOP = pattern("top|end|nub");
+// named for the head too: Rocketbox's head has eyelid joints such as "Bip01 LEyeBlinkTop"
+const QRegularExpression HEAD_TOP = pattern("head.*(top|end|nub)|(top|end|nub).*head");
 const QRegularExpression EYE = pattern("eye");
 const QRegularExpression NOT_EYE = pattern("brow|lid|lash|socket|look|aim|blink");
 const QRegularExpression METACARPAL = pattern("carpal|meta|palm");

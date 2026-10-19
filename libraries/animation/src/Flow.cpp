@@ -366,6 +366,9 @@ void FlowThread::computeRecovery() {
     for (size_t i = 1; i < _joints.size(); i++) {
         auto joint = _jointsPointer->at(_joints[i]);
         _jointsPointer->at(_joints[i])._recoveryPosition = joint._recoveryPosition = parentJoint._recoveryPosition + (parentRotation * (joint._initialTranslation * 0.01f));
+        // the next joint's translation is in this one's frame: a chain whose joints turn (a Blender rig's, VRM hair)
+        // otherwise rests as a straight line along its first joint
+        parentRotation = parentRotation * joint._initialRotation;
         parentJoint = joint;
     }
 };

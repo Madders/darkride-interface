@@ -762,7 +762,7 @@ void AssimpSerializer::processScene(const hifi::VariantHash& mapping) {
         }
         hfmModel->flowData._physicsConfig = vrm.flowPhysics;
         hfmModel->flowData._collisionsConfig = vrm.flowCollisions;
-        qCInfo(modelformat) << "VRM" << (vrm.version == 0 ? "0.x" : "1.0") << url.fileName() << "-" << vrm.title << "by"
+        qCDebug(modelformat) << "VRM" << (vrm.version == 0 ? "0.x" : "1.0") << url.fileName() << "-" << vrm.title << "by"
                             << vrm.authors << "-" << vrm.licence << "-" << named << "humanoid joints,"
                             << vrm.blendshapes.size() << "blendshapes from its expressions," << springs << "spring joints in"
                             << vrm.flowPhysics.size() << "groups," << vrm.flowCollisions.size() << "colliders";

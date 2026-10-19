@@ -255,7 +255,7 @@ void AnimSkeleton::buildSkeletonFromJoints(const std::vector<HFMJoint>& joints, 
             _shapeOffsets[itr.key()] = AnimPose(glm::inverse(itr.value()), glm::vec3());
         }
         if (!_jointOffsets.isEmpty()) {
-            qCInfo(animation) << "Joint axes made Mixamo's automatically for" << _jointOffsets.size() << "joints";
+            qCDebug(animation) << "Joint axes made Mixamo's automatically for" << _jointOffsets.size() << "joints";
         }
     }
 

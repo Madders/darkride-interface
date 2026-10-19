@@ -86,7 +86,7 @@ QHash<int, QString> getHumanoidJointNames(const std::vector<hfm::Joint>& joints,
     }
     if (!added.isEmpty()) {
         added.sort();
-        qCInfo(model_baker) << "Joints named automatically:" << added.join(", ");
+        qCDebug(model_baker) << "Joints named automatically:" << added.join(", ");
     }
     return result;
 }
