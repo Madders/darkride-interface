@@ -11,6 +11,8 @@
 
 #include "AssimpSerializer.h"
 
+#include <algorithm>
+
 #include <BlendshapeConstants.h>
 #include <ResourceManager.h>
 #include <PathUtils.h>
@@ -570,13 +572,23 @@ void AssimpSerializer::processBones() {
 
         for (size_t vertexIndex = 0; vertexIndex < mMesh->mNumVertices; vertexIndex++) {
             auto cluster = clusterMap[vertexIndex];
+            // the four strongest, summing to one: some exporters' weights don't (older VRoid's give an eye highlight
+            // Head 1 and LeftEye 1, which drew it at twice its height)
+            std::sort(cluster.begin(), cluster.end(), [](const std::pair<size_t, float>& a, const std::pair<size_t, float>& b) {
+                return a.second > b.second;
+            });
             int clusterSize = cluster.size() > 4 ? 4 : cluster.size();
             int clusterEmptySize = 4 - clusterSize;
-            
+            float weightSum = 0.0f;
+            for (int i = 0; i < clusterSize; i++) {
+                weightSum += cluster[i].second;
+            }
+            const float weightScale = weightSum > 0.0f ? 1.0f / weightSum : 1.0f;
+
             for (int i = 0; i < clusterSize; i++) {
                 meshPtr->clusterIndices.push_back(cluster[i].first);
                 meshPtr->clusterWeights.push_back(
-                    std::round(cluster[i].second * 65535.0f)
+                    std::round(cluster[i].second * weightScale * 65535.0f)
                 );
             }
             for (int i = 0; i < clusterEmptySize; i++) {

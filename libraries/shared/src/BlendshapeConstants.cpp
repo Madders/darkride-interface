@@ -103,7 +103,8 @@ struct Candidate {
 // about four times as far as mouthOpen, and plain talking looked like shouting. When only the ARKit shape is
 // there, it's scaled to about the same movement (measured on a Ready Player Me avatar: jawOpen 4.65 cm against
 // mouthOpen 1.11; mouthSmileLeft 2.2 cm a side against mouthSmile 1.57 for both; mouthRollUpper 1.04 against
-// viseme_PP 0.65; mouthFunnel 1.43 against viseme_CH 0.89). Every other shape is ARKit's, at full weight.
+// viseme_PP 0.65; mouthFunnel 1.43 against viseme_CH 0.89). jawOpen alone is at twice that, as on Rocketbox's ARKit
+// face the mouth barely moved at a quarter. Every other shape is ARKit's, at full weight.
 const QHash<int, QVector<Candidate>> ALTERNATIVE_NAMES = [] {
     QHash<int, QVector<Candidate>> names;
     auto add = [&names](Blendshapes blendshape, QVector<Candidate> candidates) {
@@ -130,7 +131,7 @@ const QHash<int, QVector<Candidate>> ALTERNATIVE_NAMES = [] {
     add(Blendshapes::BrowsU_R, { { "browOuterUpRight", 1.0f } });
     add(Blendshapes::JawFwd, { { "jawForward", 1.0f } });
     add(Blendshapes::JawLeft, { { "jawLeft", 1.0f } });
-    add(Blendshapes::JawOpen, { { "mouthOpen", 1.0f }, { "jawOpen", 0.25f } });
+    add(Blendshapes::JawOpen, { { "mouthOpen", 1.0f }, { "jawOpen", 0.5f } });
     add(Blendshapes::JawRight, { { "jawRight", 1.0f } });
     add(Blendshapes::MouthLeft, { { "mouthLeft", 1.0f } });
     add(Blendshapes::MouthRight, { { "mouthRight", 1.0f } });
