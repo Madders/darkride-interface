@@ -26,7 +26,13 @@
 #include "Resource.h"
 #include "Metric.h"
 
+#if defined(__ANDROID__)
+// A phone or a standalone headset: a texture's processing (ETC2 encoding from a float copy) takes about a gigabyte for
+// 4096 x 4096, and the GPU shares the phone's memory, so bigger textures are scaled down to this as they load
+const int ABSOLUTE_MAX_TEXTURE_NUM_PIXELS = 2048 * 2048;
+#else
 const int ABSOLUTE_MAX_TEXTURE_NUM_PIXELS = 8192 * 8192;
+#endif
 
 namespace ktx {
     class KTX;

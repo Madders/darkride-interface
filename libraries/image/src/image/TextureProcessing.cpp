@@ -39,6 +39,9 @@ using namespace gpu;
 #include <Etc2/Etc.h>
 #include <Etc2/EtcFilter.h>
 
+#include <condition_variable>
+#include <mutex>
+
 static const glm::uvec2 SPARSE_PAGE_SIZE(128);
 static const glm::uvec2 MAX_TEXTURE_SIZE_GLES(2048);
 static const glm::uvec2 MAX_TEXTURE_SIZE_GL(8192);
@@ -881,6 +884,26 @@ void convertImageToLDRTexture(gpu::Texture* texture, Image&& image, BackendTarge
         const float effort = 1.0f;
         const int numEncodeThreads = 4;
         int encodingTime;
+
+        // An encode takes many times its image's size while it runs, and a world's textures load on every thread of
+        // the pool at once: on a phone, a few big ones together ran it out of memory. Each encode has its own threads
+        // anyway, so only a couple run at a time.
+        static const int MAX_CONCURRENT_ENCODES = 2;
+        static std::mutex encodesMutex;
+        static std::condition_variable encodesDone;
+        static int encodesRunning = 0;
+        {
+            std::unique_lock<std::mutex> lock(encodesMutex);
+            encodesDone.wait(lock, [] { return encodesRunning < MAX_CONCURRENT_ENCODES; });
+            encodesRunning++;
+        }
+        Finally encodeFinished([] {
+            {
+                std::lock_guard<std::mutex> lock(encodesMutex);
+                encodesRunning--;
+            }
+            encodesDone.notify_one();
+        });
 
         if (localCopy.getFormat() != Image::Format_RGBAF) {
             localCopy = localCopy.getConvertedToFormat(Image::Format_RGBAF);

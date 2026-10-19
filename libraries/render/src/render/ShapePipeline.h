@@ -344,8 +344,15 @@ public:
     const PipelinePointer pickPipeline(RenderArgs* args, const Key& key) const;
 
 protected:
-    void addPipelineHelper(const Filter& filter, Key key, int bit, const PipelinePointer& pipeline) const;
+    void addPipelineHelper(const Filter& filter, const PipelinePointer& pipeline) const;
+    // The pipeline for a key that has none yet: the first added filter it matches, or null. Kept in the map from then on.
+    PipelinePointer findFilteredPipeline(const Key& key) const;
+    // Each key's pipeline, as it is first asked for. A filter covers every key that agrees with it on its mask's bits:
+    // filling the map with all of them up front made 2^(unmasked bits) entries per filter, half a million for a
+    // z-pass filter of three bits, and hundreds of megabytes per plumber.
     mutable PipelineMap _pipelineMap;
+    // the filters in the order they were added, as the first one a key matches is its pipeline
+    mutable std::vector<std::pair<Filter, PipelinePointer>> _filteredPipelines;
 
 private:
     mutable std::unordered_set<Key, Key::Hash, Key::KeyEqual> _missingKeys;

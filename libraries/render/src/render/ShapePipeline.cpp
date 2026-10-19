@@ -59,23 +59,20 @@ ShapeKey::Filter::Builder::Builder() {
     _mask.set(INVALID);
 }
 
-void ShapePlumber::addPipelineHelper(const Filter& filter, ShapeKey key, int bit, const PipelinePointer& pipeline) const {
-    // Iterate over all keys
-    if (bit < (int)ShapeKey::FlagBit::NUM_FLAGS) {
-        addPipelineHelper(filter, key, bit + 1, pipeline);
-        if (!filter._mask[bit]) {
-            // Toggle bits set as insignificant in filter._mask 
-            key._flags.flip(bit);
-            addPipelineHelper(filter, key, bit + 1, pipeline);
+void ShapePlumber::addPipelineHelper(const Filter& filter, const PipelinePointer& pipeline) const {
+    // keys take the first filter they match, so a later one only gets the keys the earlier ones leave
+    _filteredPipelines.emplace_back(filter, pipeline);
+}
+
+ShapePlumber::PipelinePointer ShapePlumber::findFilteredPipeline(const Key& key) const {
+    for (const auto& filtered : _filteredPipelines) {
+        const Filter& filter = filtered.first;
+        if (((key._flags ^ filter._flags) & filter._mask).none()) {
+            _pipelineMap.insert(PipelineMap::value_type(key, filtered.second));
+            return filtered.second;
         }
-    } else {
-        // Add the brand new pipeline and cache its location in the lib
-        auto precedent = _pipelineMap.find(key);
-        if (precedent != _pipelineMap.end()) {
-            qCDebug(renderlogging) << "Key already assigned: " << key;
-        }
-        _pipelineMap.insert(PipelineMap::value_type(key, pipeline));
     }
+    return PipelinePointer(nullptr);
 }
 
 void ShapePlumber::addPipeline(const Key& key, const gpu::ShaderPointer& program, const gpu::StatePointer& state,
@@ -115,18 +112,21 @@ void ShapePlumber::addPipeline(const Filter& filter, const gpu::ShaderPointer& p
         PROFILE_RANGE(app, "Pipeline::create");
         auto gpuPipeline = gpu::Pipeline::create(program, state);
         auto shapePipeline = std::make_shared<Pipeline>(gpuPipeline, locations, batchSetter, itemSetter);
-        addPipelineHelper(filter, key, 0, shapePipeline);
+        addPipelineHelper(filter, shapePipeline);
     }
 }
 
 const ShapePipelinePointer ShapePlumber::pickPipeline(RenderArgs* args, const Key& key) const {
-    assert(!_pipelineMap.empty());
+    assert(!_filteredPipelines.empty());
     assert(args);
     assert(args->_batch);
 
     PerformanceTimer perfTimer("ShapePlumber::pickPipeline");
 
     auto pipelineIterator = _pipelineMap.find(key);
+    if (pipelineIterator == _pipelineMap.end() && findFilteredPipeline(key)) {
+        pipelineIterator = _pipelineMap.find(key);
+    }
     if (pipelineIterator == _pipelineMap.end()) {
         // The first time we can't find a pipeline, we should try things to solve that
         if (_missingKeys.find(key) == _missingKeys.end()) {
@@ -134,7 +134,7 @@ const ShapePipelinePointer ShapePlumber::pickPipeline(RenderArgs* args, const Ke
                 auto factoryIt = ShapePipeline::_globalCustomFactoryMap.find(key.getCustom());
                 if ((factoryIt != ShapePipeline::_globalCustomFactoryMap.end()) && (factoryIt)->second) {
                     // found a factory for the custom key, can now generate a shape pipeline for this case:
-                    addPipelineHelper(Filter(key), key, 0, (factoryIt)->second(*this, key, args));
+                    addPipelineHelper(Filter(key), (factoryIt)->second(*this, key, args));
 
                     return pickPipeline(args, key);
                 } else {
