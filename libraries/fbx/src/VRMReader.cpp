@@ -177,9 +177,9 @@ VRMInfo readVRM(const QByteArray& glb) {
         }
     };
     // What voice drives. Head.cpp opens JawOpen to 0.35 at the loudest and nearer 0.1 in talking, as High Fidelity's
-    // avatars' jaw shapes were made for, so the "aa" viseme, a mouth wide open at 1, is driven three times as hard; and
-    // the "ou" less, as with the jaw barely open it pursed the lips oddly (Seed-san)
-    use(Blendshapes::JawOpen, "aa", 3.0f);
+    // avatars' jaw shapes were made for, so the "aa" viseme, a mouth wide open at 1, is driven half as hard again (three
+    // times was too much in talking); and the "ou" less, as with the jaw barely open it pursed the lips oddly (Seed-san)
+    use(Blendshapes::JawOpen, "aa", 1.5f);
     use(Blendshapes::LipsFunnel, "ou", 0.5f);
     if (expressions.contains("blinkLeft") && expressions.contains("blinkRight")) {
         use(Blendshapes::EyeBlink_L, "blinkLeft", 1.0f);
