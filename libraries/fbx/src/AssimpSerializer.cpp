@@ -10,9 +10,6 @@
 //
 
 #include "AssimpSerializer.h"
-#include "SecondLifeSkeleton.h"
-
-#include <QRegularExpression>
 
 #include <algorithm>
 
@@ -900,18 +897,8 @@ HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi
     const bool sharesVertexBuffers = lowerExt == "gltf" || lowerExt == "glb" || lowerExt == "vrm";
     const unsigned int joinIdenticalVertices = sharesVertexBuffers ? 0 : aiProcess_JoinIdenticalVertices;
 
-    // The Assimp built here (a 2021 snapshot) reads a COLLADA number list only from its first character, so a list
-    // that starts on a new line, as Avastar writes a node's <matrix> (Ruth2, Roth2), failed the whole file ("does not
-    // start with digit"). The whitespace at the start of such elements goes.
-    hifi::ByteArray modelData = data;
-    if (lowerExt == "dae") {
-        static const QRegularExpression NUMBERS_ELEMENT_START(
-            "(<(?:matrix|bind_shape_matrix|float_array|int_array|translate|rotate|scale|lookat|skew|p|v|vcount)\\b[^>]*>)\\s+");
-        modelData = QString::fromUtf8(data).replace(NUMBERS_ELEMENT_START, "\\1").toUtf8();
-    }
-
     scene = importer.ReadFileFromMemory(
-        modelData.constData(), modelData.size(),
+        data.constData(), data.size(),
         // aiProcess_CalcTangentSpace |
         joinIdenticalVertices |
         aiProcess_Triangulate |
@@ -935,38 +922,7 @@ HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi
         return nullptr;
     }
 
-    // a Second Life body exported with only the joints it's weighted to, all under the armature
-    QStringList secondLifeBones;
-    if (lowerExt == "dae") {
-        secondLifeBones = rebuildSecondLifeSkeleton(const_cast<aiScene*>(scene));
-        if (!secondLifeBones.isEmpty()) {
-            qCDebug(modelformat) << "AssimpSerializer:" << url.fileName() << "is a Second Life body without some of its"
-                                 << "skeleton's bones; put back" << secondLifeBones.join(", ");
-        }
-    }
-
     processScene(mapping);
-
-    // the bones put back skin nothing themselves, but are the skeleton the rest hang from
-    for (auto& joint : hfmModel->joints) {
-        if (secondLifeBones.contains(joint.name)) {
-            joint.isSkeletonJoint = true;
-        }
-    }
-    // a Second Life skeleton's bones take Darkride's names straight from Second Life's
-    if (lowerExt == "dae" && hfmModel->jointIndices.contains("mPelvis") && hfmModel->jointIndices.contains("mHead")) {
-        int named = 0;
-        for (auto& joint : hfmModel->joints) {
-            const QString name = secondLifeJointNames().value(joint.name);
-            if (!name.isEmpty() && !hfmModel->jointIndices.contains(name)) {
-                hfmModel->jointIndices.insert(name, hfmModel->jointIndices.take(joint.name));
-                joint.name = name;
-                named++;
-            }
-        }
-        qCDebug(modelformat) << "AssimpSerializer:" << url.fileName() << "has Second Life's skeleton;" << named
-                             << "joints named as Darkride's";
-    }
 
 #ifdef ENABLE_ASSIMP_LOGGING
     Assimp::DefaultLogger::get()->detachStream(&tivoliLogStream, errorSeverity);
