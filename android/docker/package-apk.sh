@@ -27,7 +27,12 @@ mkdir -p "$DEPLOY/libs/$ABI"
 LIBS_DIR="$BUILD/android-build/libs/$ABI"
 APP_LIB_NAME=tivoli-native-lib
 cp "$BUILD/android/apps/interface/lib${APP_LIB_NAME}_$ABI.so" "$DEPLOY/libs/$ABI/"
-EXTRA_LIBS=$(find "$LIBS_DIR" -maxdepth 1 -name "*.so" | sort | paste -sd, -)
+# Only the libraries this checkout has: branches built in the one work volume leave theirs behind (the Quest
+# build's openxrDisplay, which needs a loader the phone build doesn't package)
+EXTRA_LIBS=$(find "$LIBS_DIR" -maxdepth 1 -name "*.so" | sort | while read -r LIB; do
+    NAME=$(basename "$LIB" | sed -n "s/^libtivoli-\(.*\)_$ABI\.so$/\1/p")
+    if [ -z "$NAME" ] || [ -d "$SRC/libraries/$NAME" ]; then echo "$LIB"; fi
+done | paste -sd, -)
 
 # Qt 5.15's networking (HTTPS, as to the metaverse) loads OpenSSL 1.1.1 at runtime as libcrypto_1_1.so and
 # libssl_1_1.so: link them from vcpkg's static OpenSSL, the one Darkride itself links
