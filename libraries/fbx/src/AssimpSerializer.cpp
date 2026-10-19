@@ -421,9 +421,12 @@ void AssimpSerializer::processMeshes(const hifi::VariantHash& mapping) {
 
                 QVector<BlendshapeSource> sources;
                 if (blendshapeMappings.contains(fromName)) {
-                    auto mapping = blendshapeMappings[fromName].toList();
-                    if (mapping.count() >= 2) {
-                        sources.append({ mapping.at(0).toString(), mapping.at(1).toFloat() });
+                    // every line for it, as a VRM expression baked into an FST may blend several
+                    for (const QVariant& value : blendshapeMappings.values(fromName)) {
+                        auto mapping = value.toList();
+                        if (mapping.count() >= 2) {
+                            sources.append({ mapping.at(0).toString(), mapping.at(1).toFloat() });
+                        }
                     }
                 } else if (vrm.blendshapes.contains((int)i)) {
                     // a VRM's expression, which may blend several morph targets

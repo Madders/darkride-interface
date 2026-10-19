@@ -27,6 +27,7 @@
 #include <AssimpSerializer.h>
 #include <AutoRig.h>
 #include <AvatarWriter.h>
+#include <FstBake.h>
 #include <FBXSerializer.h>
 #include <GLMHelpers.h>
 #include <GLTFSerializer.h>
@@ -63,6 +64,9 @@ struct Import {
     RigKind rig { RigKind::None };
     QString why;  // for RigKind::Other: what keeps the animations from driving it
     VRMInfo vrm;
+    // For keeping its own rig: what Darkride works out when it wears the model, for its .fst
+    QStringList fstLines;
+    QStringList found;  // what they say, for the question
 };
 using ImportPointer = std::shared_ptr<Import>;
 
@@ -404,9 +408,11 @@ void decide(const ImportPointer& import) {
     }
     switch (import->rig) {
         case RigKind::Standard: {
+            const QString found = import->found.isEmpty() ? QString()
+                : "\n\nKeeping it, Darkride saves what it worked out in the avatar's settings: " + import->found.join(", ") + ".";
             const int answer = ask(import->name + " already has a skeleton Darkride's animations can drive.",
                                    "Keep its own rig, which keeps its face movements too, or replace it with an automatic "
-                                   "one. The file itself is not changed." + credit(import->vrm, import->name),
+                                   "one. The file itself is not changed." + found + credit(import->vrm, import->name),
                                    { { "Keep existing rig", QMessageBox::AcceptRole },
                                      { "Replace rig", QMessageBox::ActionRole },
                                      { "Cancel", QMessageBox::RejectRole } });
@@ -414,7 +420,15 @@ void decide(const ImportPointer& import) {
                 const QString folder = avatarFolder(import->name);
                 QDir().mkpath(folder);
                 const QString fstPath = QDir(folder).filePath(import->name + ".fst");
-                if (autorig::writeFst(fstPath, import->name, QUrl::fromLocalFile(import->path).toString())) {
+                bool written = autorig::writeFst(fstPath, import->name, QUrl::fromLocalFile(import->path).toString());
+                if (written && !import->fstLines.isEmpty()) {
+                    QFile fst(fstPath);
+                    written = fst.open(QIODevice::Append | QIODevice::Text) &&
+                              fst.write((import->fstLines.join("\n") + "\n").toUtf8()) > 0;
+                    qCDebug(interfaceapp) << "Import Avatar:" << import->name << "fst written with" << import->fstLines.size()
+                                          << "lines of what Darkride worked out:" << import->found;
+                }
+                if (written) {
                     wear(fstPath, import->name);
                 } else {
                     warn("Could not write " + fstPath + ".");
@@ -455,20 +469,35 @@ void AvatarImporter::importFile(const QString& path) {
     import->name = name;
     QtConcurrent::run([import]() {
         const QString suffix = QFileInfo(import->path).suffix().toLower();
-        if (suffix == "vrm" || suffix == "glb") {
+        const bool isGltf = suffix == "vrm" || suffix == "glb" || suffix == "gltf";
+        QByteArray data;
+        if (isGltf) {
             QFile file(import->path);
             if (file.open(QIODevice::ReadOnly)) {
-                import->vrm = readVRM(file.readAll());
+                data = file.readAll();
+                import->vrm = readVRM(data);
             }
         }
         import->model = readModel(import->path);
+        // as the client reads it when it's worn: glTF by the Assimp loader, which knows a VRM's bones, face and springs
+        HFMModel::Pointer wornModel = import->model;
+        if (isGltf && suffix != "vrm" && !data.isEmpty()) {
+            HFMModel::Pointer assimpModel = AssimpSerializer().read(data, QVariantHash(), QUrl::fromLocalFile(import->path));
+            if (assimpModel) {
+                wornModel = assimpModel;
+            }
+        }
+        if (wornModel) {
+            const QStringList morphTargetNames = isGltf ? autorig::gltfMorphTargetNames(data) : QStringList(wornModel->blendshapeChannelNames);
+            autorig::bakeFst(*wornModel, import->vrm, morphTargetNames, import->fstLines, import->found);
+        }
         if (import->model) {
             import->body = autorig::gatherBody(*import->model);
             const QString eyelids = autorig::openEyelids(import->body, *import->model);
             if (!eyelids.isEmpty()) {
                 qCDebug(interfaceapp) << "Import Avatar:" << eyelids;
             }
-            import->rig = classify(*import->model, import->vrm, import->why);
+            import->rig = classify(wornModel ? *wornModel : *import->model, import->vrm, import->why);
         }
         qCDebug(interfaceapp) << "Import Avatar: read" << import->path << (import->model ? "" : "(not readable)");
         QMetaObject::invokeMethod(qApp, [import]() {
