@@ -49,6 +49,20 @@ void RouteBuilderProxy::to(const QScriptValue& destination) {
     return to(destinationEndpoint);
 }
 
+void RouteBuilderProxy::toValue(const QVariant& destination) {
+    to(_parent.endpointFor(destination));
+}
+
+QObject* RouteBuilderProxy::whenValue(const QVariant& expression) {
+    auto newConditional = _parent.conditionalFor(expression);
+    if (_route->conditional) {
+        _route->conditional = ConditionalPointer(new AndConditional(_route->conditional, newConditional));
+    } else {
+        _route->conditional = newConditional;
+    }
+    return this;
+}
+
 void RouteBuilderProxy::to(const Endpoint::Pointer& destination) {
     _route->destination = destination;
     _mapping->routes.push_back(_route);

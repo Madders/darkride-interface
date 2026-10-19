@@ -11,6 +11,12 @@
 
 #include "PrepareJointsTask.h"
 
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+
+#include <glm/gtx/transform.hpp>
+
 #include "ModelBakerLogging.h"
 
 QMap<QString, QString> getJointNameMapping(const hifi::VariantHash& mapping) {
@@ -56,6 +62,66 @@ QMap<QString, glm::quat> getJointRotationOffsets(const hifi::VariantHash& mappin
     return jointRotationOffsets;
 }
 
+// "jointDefaultPose = <joint> = {"translation": [x, y, z], "rotation": [x, y, z, w], "scale": [x, y, z]}" sets a joint's
+// default pose in its parent's frame, in the model file's frame and units, each part optional; the joint is named as
+// the model file names it or as jointMap renames it. An avatar can rest a bone differently from its model file this way: avatars from Unity packages set
+// bones in their prefab and in the animations that run before anyone touches the menu (a hidden hair tuft is a bone
+// scaled to 0.01). The joint's local transform becomes translation * rotation * scale.
+void applyJointDefaultPoses(const hifi::VariantHash& mapping, const std::vector<hfm::Joint>& jointsIn,
+                            std::vector<hfm::Joint>& jointsOut) {
+    static const QString JOINT_DEFAULT_POSE_FIELD = "jointDefaultPose";
+    const QVariantHash poses = mapping.value(JOINT_DEFAULT_POSE_FIELD).toHash();
+    for (auto itr = poses.begin(); itr != poses.end(); itr++) {
+        int index = -1;
+        for (int i = 0; i < (int)jointsIn.size(); i++) {
+            const bool named = jointsIn[i].name == itr.key() || jointsOut[i].name == itr.key();
+            if (named && (index < 0 || (jointsIn[i].isSkeletonJoint && !jointsIn[index].isSkeletonJoint))) {
+                index = i;
+            }
+        }
+        const QJsonObject pose = QJsonDocument::fromJson(itr.value().toByteArray()).object();
+        if (index < 0 || pose.isEmpty()) {
+            qCWarning(model_baker) << "jointDefaultPose: no joint" << itr.key() << "or no pose" << itr.value();
+            continue;
+        }
+        auto vector = [&](const char* key, int size, float* out) {
+            const QJsonArray values = pose.value(key).toArray();
+            if (values.size() != size) {
+                return false;
+            }
+            for (int k = 0; k < size; k++) {
+                out[k] = (float)values[k].toDouble();
+            }
+            return true;
+        };
+        hfm::Joint& joint = jointsOut[index];
+        const glm::mat4 local = glm::translate(joint.translation) * joint.preTransform * glm::mat4_cast(joint.preRotation) *
+            glm::mat4_cast(joint.rotation) * glm::mat4_cast(joint.postRotation) * joint.postTransform;
+        glm::vec3 translation(local[3]);
+        glm::vec3 scale(glm::length(glm::vec3(local[0])), glm::length(glm::vec3(local[1])), glm::length(glm::vec3(local[2])));
+        glm::quat rotation = glm::normalize(glm::quat_cast(glm::mat3(glm::vec3(local[0]) / scale.x,
+                                                                     glm::vec3(local[1]) / scale.y,
+                                                                     glm::vec3(local[2]) / scale.z)));
+        float t[3], r[4], s[3];
+        if (vector("translation", 3, t)) {
+            translation = glm::vec3(t[0], t[1], t[2]);
+        }
+        if (vector("rotation", 4, r)) {
+            rotation = glm::normalize(glm::quat(r[3], r[0], r[1], r[2]));
+        }
+        if (vector("scale", 3, s)) {
+            scale = glm::vec3(s[0], s[1], s[2]);
+        }
+        joint.translation = translation;
+        joint.preTransform = glm::mat4();
+        joint.preRotation = glm::quat();
+        joint.rotation = rotation;
+        joint.postRotation = glm::quat();
+        joint.postTransform = glm::scale(scale);
+        qCDebug(model_baker) << "jointDefaultPose" << joint.name << translation << rotation << scale;
+    }
+}
+
 void PrepareJointsTask::configure(const Config& config) {
     _passthrough = config.passthrough;
 }
@@ -92,6 +158,7 @@ void PrepareJointsTask::run(const baker::BakeContextPointer& context, const Inpu
             }
             jointNames.push_back(jointOut.name);
         }
+        applyJointDefaultPoses(mapping, jointsIn, jointsOut);
 
         // Get joint rotation offsets from FST file mappings
         QMap<QString, glm::quat> offsets = getJointRotationOffsets(mapping);

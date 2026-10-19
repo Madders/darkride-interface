@@ -31,6 +31,14 @@ void PointerScriptingInterface::setIncludeItems(unsigned int uid, const QScriptV
     DependencyManager::get<PointerManager>()->setIncludeItems(uid, qVectorQUuidFromScriptValue(includeItems));
 }
 
+void PointerScriptingInterface::setIgnoreItemsVector(unsigned int uid, const QVector<QUuid>& ignoreItems) const {
+    DependencyManager::get<PointerManager>()->setIgnoreItems(uid, ignoreItems);
+}
+
+void PointerScriptingInterface::setIncludeItemsVector(unsigned int uid, const QVector<QUuid>& includeItems) const {
+    DependencyManager::get<PointerManager>()->setIncludeItems(uid, includeItems);
+}
+
 unsigned int PointerScriptingInterface::createPointer(const PickQuery::PickType& type, const QVariant& properties) {
     // Interaction with managers should always happen on the main thread
     if (QThread::currentThread() != qApp->thread()) {

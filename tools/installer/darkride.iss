@@ -10,7 +10,7 @@
   #define AppVersion "0.0.0-dev"
 #endif
 #ifndef SourceDir
-  #error Pass /DSourceDir=<folder with interface.exe and everything beside it>
+  #error Pass /DSourceDir=<folder with Darkride.exe and everything beside it>
 #endif
 #ifndef OutputDir
   #define OutputDir "."
@@ -44,7 +44,7 @@ SetupIconFile={#RepoDir}\interface\icon\interface.ico
 ; made from the logo by the same script as interface\icon\interface.ico
 WizardImageFile=wizard.bmp
 WizardSmallImageFile=wizard-small.bmp
-UninstallDisplayIcon={app}\interface.exe
+UninstallDisplayIcon={app}\Darkride.exe
 UninstallDisplayName=Darkride
 LicenseFile={#RepoDir}\LICENSE
 Compression=lzma2
@@ -63,17 +63,19 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 ; An upgrade replaces the scripts and resources wholesale, so files removed from Darkride don't linger
 Type: filesandordirs; Name: "{app}\scripts"
 Type: filesandordirs; Name: "{app}\resources"
+; the client was interface.exe until Caitlyn's main of 10-19 named it Darkride.exe
+Type: files; Name: "{app}\interface.exe"
 
 [Icons]
-Name: "{autoprograms}\Darkride"; Filename: "{app}\interface.exe"
-Name: "{autodesktop}\Darkride"; Filename: "{app}\interface.exe"; Tasks: desktopicon
+Name: "{autoprograms}\Darkride"; Filename: "{app}\Darkride.exe"
+Name: "{autodesktop}\Darkride"; Filename: "{app}\Darkride.exe"; Tasks: desktopicon
 
 [Registry]
 ; hifi:// links open a place in Darkride, as High Fidelity's installer set them up
 Root: HKA; Subkey: "Software\Classes\hifi"; ValueType: string; ValueData: "URL:Darkride Protocol"; Flags: uninsdeletekey; Tasks: hifiurls
 Root: HKA; Subkey: "Software\Classes\hifi"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Tasks: hifiurls
-Root: HKA; Subkey: "Software\Classes\hifi\DefaultIcon"; ValueType: string; ValueData: """{app}\interface.exe"",0"; Tasks: hifiurls
-Root: HKA; Subkey: "Software\Classes\hifi\shell\open\command"; ValueType: string; ValueData: """{app}\interface.exe"" --url ""%1"""; Tasks: hifiurls
+Root: HKA; Subkey: "Software\Classes\hifi\DefaultIcon"; ValueType: string; ValueData: """{app}\Darkride.exe"",0"; Tasks: hifiurls
+Root: HKA; Subkey: "Software\Classes\hifi\shell\open\command"; ValueType: string; ValueData: """{app}\Darkride.exe"" --url ""%1"""; Tasks: hifiurls
 
 [Run]
-Filename: "{app}\interface.exe"; Description: "{cm:LaunchProgram,Darkride}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Darkride.exe"; Description: "{cm:LaunchProgram,Darkride}"; Flags: nowait postinstall skipifsilent

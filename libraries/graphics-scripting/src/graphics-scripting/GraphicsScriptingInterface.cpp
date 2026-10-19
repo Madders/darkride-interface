@@ -560,6 +560,13 @@ namespace scriptable {
                 obj.setProperty("lightMap", FALLTHROUGH);
             } else if (!material.lightMap.isEmpty()) {
                 obj.setProperty("lightMap", material.lightMap);
+                obj.setProperty("lightmapMode", material.lightmapMode);
+            }
+
+            if (hasPropertyFallthroughs && material.propertyFallthroughs.at(graphics::MaterialKey::LIGHTMAP_DIRECTION_MAP_BIT)) {
+                obj.setProperty("lightMapDirection", FALLTHROUGH);
+            } else if (!material.lightMapDirection.isEmpty()) {
+                obj.setProperty("lightMapDirection", material.lightMapDirection);
             }
 
             if (hasPropertyFallthroughs && material.propertyFallthroughs.at(graphics::MaterialKey::SCATTERING_MAP_BIT)) {
@@ -604,10 +611,15 @@ namespace scriptable {
                 obj.setProperty("texCoordTransform1", mat4toScriptValue(engine, material.texCoordTransforms[1]));
             }
 
-            // These need to be implemented, but set the fallthrough for now
             if (hasPropertyFallthroughs && material.propertyFallthroughs.at(graphics::Material::LIGHTMAP_PARAMS)) {
                 obj.setProperty("lightmapParams", FALLTHROUGH);
+            } else if (!material.lightMap.isEmpty()) {
+                QScriptValue params = engine->newArray(2);
+                params.setProperty(0, material.lightmapParams.x);
+                params.setProperty(1, material.lightmapParams.y);
+                obj.setProperty("lightmapParams", params);
             }
+            // This needs to be implemented, but set the fallthrough for now
             if (hasPropertyFallthroughs && material.propertyFallthroughs.at(graphics::Material::MATERIAL_PARAMS)) {
                 obj.setProperty("materialParams", FALLTHROUGH);
             }

@@ -16,6 +16,7 @@
 #include <QtCore/QThread>
 
 #include <NumericalConstants.h>
+#include <SharedUtil.h>
 
 #include "../HifiSockAddr.h"
 #include "../NetworkLogging.h"
@@ -29,6 +30,14 @@
 
 using namespace udt;
 using namespace std::chrono;
+
+// The trace of PHYSICS.md round 10 (TIVOLI_UDT_TRACE=1): the first few hundred reliable packets received and ACKs
+// processed on each connection, stamped with usecTimestampNow() so two processes on one machine can be lined up.
+static bool udtTraceEnabled() {
+    static const bool enabled = !qgetenv("TIVOLI_UDT_TRACE").isEmpty();
+    return enabled;
+}
+static const int UDT_TRACE_EVENTS = 600;
 
 Connection::Connection(Socket* parentSocket, HifiSockAddr destination, std::unique_ptr<CongestionControl> congestionControl) :
     _parentSocket(parentSocket),
@@ -278,6 +287,12 @@ bool Connection::processReceivedSequenceNumber(SequenceNumber sequenceNumber, in
 
     // using a congestion control that ACKs every packet (like TCP Vegas)
     sendACK();
+
+    if (udtTraceEnabled() && _traceReceived < UDT_TRACE_EVENTS) {
+        ++_traceReceived;
+        qDebug().nospace() << "udt recv " << (uint32_t)sequenceNumber << (wasDuplicate ? " dup" : "") << " at " << usecTimestampNow()
+            << " acked " << (uint32_t)nextACK() << " from " << _destination.getPort();
+    }
     
     if (wasDuplicate) {
         _stats.recordDuplicatePackets(payloadSize, packetSize);
@@ -327,6 +342,13 @@ void Connection::processACK(ControlPacketPointer controlPacket) {
     
     // update the total count of received ACKs
     _stats.recordReceivedACK(controlPacket->getWireSize());
+
+    if (udtTraceEnabled() && _traceAcks < UDT_TRACE_EVENTS) {
+        ++_traceAcks;
+        qDebug().nospace() << "udt ackin " << (uint32_t)ack << " at " << usecTimestampNow() << " read "
+            << duration_cast<microseconds>(p_high_resolution_clock::now() - controlPacket->getReceiveTime()).count()
+            << " us ago, to " << _destination.getPort();
+    }
     
     // validate that this isn't a BS ACK
     if (ack > getSendQueue().getCurrentSequenceNumber()) {

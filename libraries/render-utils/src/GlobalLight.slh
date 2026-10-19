@@ -53,7 +53,7 @@ vec3 evalAmbientGlobalColor(mat4 invViewMat, float shadowAttenuation, float obsc
 
 <@func declareEvalAmbientSphereGlobalColor(supportScattering)@>
 
-<$declareLightingAmbient(1, _SCRIBE_NULL, _SCRIBE_NULL, $supportScattering$)$>
+<$declareLightingAmbient(1, _SCRIBE_NULL, _SCRIBE_NULL, $supportScattering$, 1)$>
 <$declareLightingDirectional($supportScattering$)$>
 
 <@if supportScattering@>
@@ -78,8 +78,47 @@ vec3 evalAmbientSphereGlobalColor(mat4 invViewMat, float shadowAttenuation, floa
 <@if supportScattering@>
         , scattering, midNormalCurvature, lowNormalCurvature
 <@endif@>
-        );
+        , fragPositionWS);
     color += ambientDiffuse;
+    color += ambientSpecular;
+
+    // Directional
+    vec3 directionalDiffuse;
+    vec3 directionalSpecular;
+    evalLightingDirectional(directionalDiffuse, directionalSpecular, lightDirection, lightIrradiance, surfaceWS, metallic, fresnel, albedo, shadowAttenuation
+<@if supportScattering@>
+        , scattering, midNormalCurvature, lowNormalCurvature
+<@endif@>
+        );
+    color += directionalDiffuse;
+    color += directionalSpecular;
+
+    return color;
+}
+
+// The same for a lightmapped surface in the indirect mode (LIGHTMAPS.md): lightmapDiffuse, the baked diffuse light
+// (evalLightmapDiffuse; none when it is in the lighting buffer already, as in deferred), takes the place of the
+// ambient diffuse term, the ambient specular and the sun as above; with lightmaps toggled off the ambient is back
+vec3 evalAmbientSphereGlobalColorLightmapped(mat4 invViewMat, float shadowAttenuation, float obscurance, vec3 position, vec3 normal,
+    vec3 albedo, vec3 fresnel, float metallic, float roughness
+<@if supportScattering@>
+    , float scattering, vec4 midNormalCurvature, vec4 lowNormalCurvature
+<@endif@>
+    , vec3 lightmapDiffuse) {
+
+    <$prepareGlobalLight(position, normal)$>
+
+    SurfaceData surfaceWS = initSurfaceData(roughness, fragNormalWS, fragEyeDirWS);
+
+    // Ambient
+    vec3 ambientDiffuse;
+    vec3 ambientSpecular;
+    evalLightingAmbient(ambientDiffuse, ambientSpecular, lightAmbient, surfaceWS, metallic, fresnel, albedo, obscurance
+<@if supportScattering@>
+        , scattering, midNormalCurvature, lowNormalCurvature
+<@endif@>
+        , fragPositionWS);
+    color += mix(ambientDiffuse, lightmapDiffuse, isLightmapEnabled());
     color += ambientSpecular;
 
     // Directional
@@ -102,7 +141,7 @@ vec3 evalAmbientSphereGlobalColor(mat4 invViewMat, float shadowAttenuation, floa
 
 <@func declareEvalSkyboxGlobalColor(supportScattering, computeHaze)@>
 
-<$declareLightingAmbient(_SCRIBE_NULL, 1, _SCRIBE_NULL, $supportScattering$)$>
+<$declareLightingAmbient(_SCRIBE_NULL, 1, _SCRIBE_NULL, $supportScattering$, 1)$>
 <$declareLightingDirectional($supportScattering$)$>
 
 <@if supportScattering@>
@@ -126,7 +165,7 @@ vec3 evalSkyboxGlobalColor(mat4 invViewMat, float shadowAttenuation, float obscu
 <@if supportScattering@>
     , scattering, midNormalCurvature, lowNormalCurvature
 <@endif@>
-    );
+    , fragPositionWS);
     color += ambientDiffuse;
     color += ambientSpecular;
 
@@ -164,9 +203,169 @@ vec3 evalSkyboxGlobalColor(mat4 invViewMat, float shadowAttenuation, float obscu
     return color;
 }
 
+// The same for a lightmapped surface in the indirect mode (LIGHTMAPS.md): lightmapDiffuse, the baked diffuse light
+// (evalLightmapDiffuse; none when it is in the lighting buffer already, as in deferred), takes the place of the
+// ambient diffuse term; the ambient specular, the sun and the haze as above; with lightmaps toggled off the ambient
+// is back
+vec3 evalSkyboxGlobalColorLightmapped(mat4 invViewMat, float shadowAttenuation, float obscurance, vec3 positionES, vec3 normalWS,
+    vec3 albedo, vec3 fresnel, float metallic, float roughness
+<@if supportScattering@>
+    , float scattering, vec4 midNormalCurvature, vec4 lowNormalCurvature
+<@endif@>
+    , vec3 lightmapDiffuse) {
+    <$prepareGlobalLight(positionES, normalWS)$>
+
+    SurfaceData surfaceWS = initSurfaceData(roughness, fragNormalWS, fragEyeDirWS);
+
+    // Ambient
+    vec3 ambientDiffuse;
+    vec3 ambientSpecular;
+    evalLightingAmbient(ambientDiffuse, ambientSpecular, lightAmbient, surfaceWS, metallic, fresnel, albedo, obscurance
+<@if supportScattering@>
+    , scattering, midNormalCurvature, lowNormalCurvature
+<@endif@>
+    , fragPositionWS);
+    color += mix(ambientDiffuse, lightmapDiffuse, isLightmapEnabled());
+    color += ambientSpecular;
+
+    // Directional
+    vec3 directionalDiffuse;
+    vec3 directionalSpecular;
+    evalLightingDirectional(directionalDiffuse, directionalSpecular, lightDirection, lightIrradiance, surfaceWS, metallic, fresnel, albedo, shadowAttenuation
+<@if supportScattering@>
+    , scattering, midNormalCurvature, lowNormalCurvature
+<@endif@>
+    );
+    color += directionalDiffuse;
+    color += directionalSpecular;
+
+    // Haze
+    if (isHazeEnabled() > 0.0) {
+        if ((hazeParams.hazeMode & HAZE_MODE_IS_KEYLIGHT_ATTENUATED) == HAZE_MODE_IS_KEYLIGHT_ATTENUATED) {
+            color = computeHazeColorKeyLightAttenuation(color, lightDirection, fragPositionWS);
+        }
+
+<@if computeHaze@>
+        if ((hazeParams.hazeMode & HAZE_MODE_IS_ACTIVE) == HAZE_MODE_IS_ACTIVE) {
+            vec4 hazeColor = computeHazeColor(
+                positionES,                     // fragment position in eye   coordinates
+                fragPositionWS,                 // fragment position in world coordinates
+                invViewMat[3].xyz,              // eye      position in world coordinates
+                lightDirection                  // keylight direction vector in world coordinates
+            );
+
+            color = mix(color.rgb, hazeColor.rgb, hazeColor.a);
+        }
+<@endif@>
+    }
+
+    return color;
+}
+
+<@if not supportScattering@>
+// The forward path's: the sun (with its shadow attenuation) and the ambient light added to what the point and spot
+// lights gave already (prevLighting, from evalLocalLighting), with the emissive, and the haze over all of it; the
+// surface data comes made, since the local lights needed it first
+vec3 evalSkyboxGlobalColor(mat4 invViewMat, float shadowAttenuation, float obscurance, vec3 positionES,
+    vec3 albedo, vec3 fresnel, float metallic, vec3 emissive, SurfaceData surface, vec3 prevLighting) {
+    <$fetchGlobalLight()$>
+    vec3 fragPositionWS = vec3(invViewMat * vec4(positionES, 1.0));
+
+    color = prevLighting;
+    color += emissive * isEmissiveEnabled();
+
+    // Ambient
+    vec3 ambientDiffuse;
+    vec3 ambientSpecular;
+    evalLightingAmbient(ambientDiffuse, ambientSpecular, lightAmbient, surface, metallic, fresnel, albedo, obscurance, fragPositionWS);
+    color += ambientDiffuse;
+    color += ambientSpecular;
+
+    // Directional
+    vec3 directionalDiffuse;
+    vec3 directionalSpecular;
+    evalLightingDirectional(directionalDiffuse, directionalSpecular, lightDirection, lightIrradiance, surface, metallic, fresnel, albedo, shadowAttenuation);
+    color += directionalDiffuse;
+    color += directionalSpecular;
+
+    // Haze
+    if (isHazeEnabled() > 0.0) {
+        if ((hazeParams.hazeMode & HAZE_MODE_IS_KEYLIGHT_ATTENUATED) == HAZE_MODE_IS_KEYLIGHT_ATTENUATED) {
+            color = computeHazeColorKeyLightAttenuation(color, lightDirection, fragPositionWS);
+        }
+
+<@if computeHaze@>
+        if ((hazeParams.hazeMode & HAZE_MODE_IS_ACTIVE) == HAZE_MODE_IS_ACTIVE) {
+            vec4 hazeColor = computeHazeColor(
+                positionES,                     // fragment position in eye   coordinates
+                fragPositionWS,                 // fragment position in world coordinates
+                invViewMat[3].xyz,              // eye      position in world coordinates
+                lightDirection                  // keylight direction vector in world coordinates
+            );
+
+            color = mix(color.rgb, hazeColor.rgb, hazeColor.a);
+        }
+<@endif@>
+    }
+
+    return color;
+}
+
+// The forward path's for a lightmapped surface in the indirect mode (LIGHTMAPS.md): lightmapDiffuse (evalLightmapDiffuse)
+// takes the place of the ambient diffuse term; the ambient specular, the sun, the local lights' prevLighting, the
+// emissive and the haze as above; with lightmaps toggled off the ambient is back
+vec3 evalSkyboxGlobalColorLightmapped(mat4 invViewMat, float shadowAttenuation, float obscurance, vec3 positionES,
+    vec3 albedo, vec3 fresnel, float metallic, vec3 emissive, SurfaceData surface, vec3 prevLighting, vec3 lightmapDiffuse) {
+    <$fetchGlobalLight()$>
+    vec3 fragPositionWS = vec3(invViewMat * vec4(positionES, 1.0));
+
+    color = prevLighting;
+    color += emissive * isEmissiveEnabled();
+
+    // Ambient
+    vec3 ambientDiffuse;
+    vec3 ambientSpecular;
+    evalLightingAmbient(ambientDiffuse, ambientSpecular, lightAmbient, surface, metallic, fresnel, albedo, obscurance, fragPositionWS);
+    color += mix(ambientDiffuse, lightmapDiffuse, isLightmapEnabled());
+    color += ambientSpecular;
+
+    // Directional
+    vec3 directionalDiffuse;
+    vec3 directionalSpecular;
+    evalLightingDirectional(directionalDiffuse, directionalSpecular, lightDirection, lightIrradiance, surface, metallic, fresnel, albedo, shadowAttenuation);
+    color += directionalDiffuse;
+    color += directionalSpecular;
+
+    // Haze
+    if (isHazeEnabled() > 0.0) {
+        if ((hazeParams.hazeMode & HAZE_MODE_IS_KEYLIGHT_ATTENUATED) == HAZE_MODE_IS_KEYLIGHT_ATTENUATED) {
+            color = computeHazeColorKeyLightAttenuation(color, lightDirection, fragPositionWS);
+        }
+
+<@if computeHaze@>
+        if ((hazeParams.hazeMode & HAZE_MODE_IS_ACTIVE) == HAZE_MODE_IS_ACTIVE) {
+            vec4 hazeColor = computeHazeColor(
+                positionES,                     // fragment position in eye   coordinates
+                fragPositionWS,                 // fragment position in world coordinates
+                invViewMat[3].xyz,              // eye      position in world coordinates
+                lightDirection                  // keylight direction vector in world coordinates
+            );
+
+            color = mix(color.rgb, hazeColor.rgb, hazeColor.a);
+        }
+<@endif@>
+    }
+
+    return color;
+}
+<@endif@>
+
 <@endfunc@>
 
 <@func declareEvalLightmappedColor()@>
+// The full-bake lightmap (High Fidelity's, the "full" mode of LIGHTMAPS.md): the lightmap is the whole diffuse
+// lighting, dimmed by the sun's shadow where the surface faces the sun. The normal is in world space, as the callers
+// have it (it used to be taken through the inverse view, which only made sense for an eye-space one)
 vec3 evalLightmappedColor(mat4 invViewMat, float shadowAttenuation, float obscurance, vec3 normal, vec3 albedo, vec3 lightmap) {
     Light light = getKeyLight();
     LightAmbient ambient = getLightAmbient();
@@ -174,7 +373,7 @@ vec3 evalLightmappedColor(mat4 invViewMat, float shadowAttenuation, float obscur
     // Catch normals perpendicular to the projection plane, hence the magic number for the threshold
     // It should be just 0, but we have inaccuracy so we overshoot
     const float PERPENDICULAR_THRESHOLD = -0.005;
-    vec3 fragNormal = vec3(invViewMat * vec4(normal, 0.0)); // transform to worldspace
+    vec3 fragNormal = normal;
     float diffuseDot = dot(fragNormal, -getLightDirection(light));
     float facingLight = step(PERPENDICULAR_THRESHOLD, diffuseDot); 
 
@@ -193,7 +392,7 @@ vec3 evalLightmappedColor(mat4 invViewMat, float shadowAttenuation, float obscur
 
 <@func declareEvalGlobalLightingAlphaBlended()@>
 
-<$declareLightingAmbient(1, 1, 1)$>
+<$declareLightingAmbient(1, 1, 1, _SCRIBE_NULL, 1)$>
 <$declareLightingDirectional()$>
 
 vec3 evalGlobalLightingAlphaBlended(
@@ -209,7 +408,7 @@ vec3 evalGlobalLightingAlphaBlended(
     // Ambient
     vec3 ambientDiffuse;
     vec3 ambientSpecular;
-    evalLightingAmbient(ambientDiffuse, ambientSpecular, lightAmbient, surfaceWS, metallic, fresnel, albedo, obscurance);
+    evalLightingAmbient(ambientDiffuse, ambientSpecular, lightAmbient, surfaceWS, metallic, fresnel, albedo, obscurance, fragPositionWS);
     color += ambientDiffuse;
 
     // Directional
@@ -245,14 +444,15 @@ vec3 evalGlobalLightingAlphaBlended(
     vec3 albedo, vec3 fresnel, float metallic, vec3 emissive, SurfaceData surface, float opacity, vec3 prevLighting)
 {
     <$fetchGlobalLight()$>
-    
+    vec3 fragPositionWS = vec3(invViewMat * vec4(positionES, 1.0));
+
     color = prevLighting;
     color += emissive * isEmissiveEnabled();
 
     // Ambient
     vec3 ambientDiffuse;
     vec3 ambientSpecular;
-    evalLightingAmbient(ambientDiffuse, ambientSpecular, lightAmbient, surface, metallic, fresnel, albedo, obscurance);
+    evalLightingAmbient(ambientDiffuse, ambientSpecular, lightAmbient, surface, metallic, fresnel, albedo, obscurance, fragPositionWS);
 
     // Directional
     vec3 directionalDiffuse;
@@ -264,8 +464,54 @@ vec3 evalGlobalLightingAlphaBlended(
 
     // Haze
     if (isHazeEnabled() > 0.0) {
-        vec3 fragPositionWS = vec3(invViewMat * vec4(positionES, 1.0));
+        if ((hazeParams.hazeMode & HAZE_MODE_IS_KEYLIGHT_ATTENUATED) == HAZE_MODE_IS_KEYLIGHT_ATTENUATED) {
+            color = computeHazeColorKeyLightAttenuation(color, lightDirection, fragPositionWS);
+        }
 
+        if ((hazeParams.hazeMode & HAZE_MODE_IS_ACTIVE) == HAZE_MODE_IS_ACTIVE) {
+            vec4 hazeColor = computeHazeColor(
+                positionES,                     // fragment position in eye   coordinates
+                fragPositionWS,                 // fragment position in world coordinates
+                invViewMat[3].xyz,              // eye      position in world coordinates
+                lightDirection                  // keylight direction vector in world coordinates
+            );
+
+            color = mix(color.rgb, hazeColor.rgb, hazeColor.a);
+        }
+    }
+
+    return color;
+}
+
+// The same for a translucent lightmapped surface in the indirect mode (LIGHTMAPS.md): lightmapDiffuse
+// (evalLightmapDiffuse) in place of the ambient diffuse term, the rest as above
+vec3 evalGlobalLightingAlphaBlendedLightmapped(
+    mat4 invViewMat, float shadowAttenuation, float obscurance, vec3 positionES, vec3 normalWS,
+    vec3 albedo, vec3 fresnel, float metallic, vec3 emissive, SurfaceData surface, float opacity, vec3 prevLighting,
+    vec3 lightmapDiffuse)
+{
+    <$fetchGlobalLight()$>
+    vec3 fragPositionWS = vec3(invViewMat * vec4(positionES, 1.0));
+
+    color = prevLighting;
+    color += emissive * isEmissiveEnabled();
+
+    // Ambient
+    vec3 ambientDiffuse;
+    vec3 ambientSpecular;
+    evalLightingAmbient(ambientDiffuse, ambientSpecular, lightAmbient, surface, metallic, fresnel, albedo, obscurance, fragPositionWS);
+    ambientDiffuse = mix(ambientDiffuse, lightmapDiffuse, isLightmapEnabled());
+
+    // Directional
+    vec3 directionalDiffuse;
+    vec3 directionalSpecular;
+    evalLightingDirectional(directionalDiffuse, directionalSpecular, lightDirection, lightIrradiance, surface, metallic, fresnel, albedo, shadowAttenuation);
+
+    color += ambientDiffuse + directionalDiffuse;
+    color += evalSpecularWithOpacity(ambientSpecular + directionalSpecular, opacity);
+
+    // Haze
+    if (isHazeEnabled() > 0.0) {
         if ((hazeParams.hazeMode & HAZE_MODE_IS_KEYLIGHT_ATTENUATED) == HAZE_MODE_IS_KEYLIGHT_ATTENUATED) {
             color = computeHazeColorKeyLightAttenuation(color, lightDirection, fragPositionWS);
         }

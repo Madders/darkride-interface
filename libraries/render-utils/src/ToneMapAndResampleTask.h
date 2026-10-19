@@ -12,6 +12,8 @@
 #ifndef hifi_ToneMapAndResample_h
 #define hifi_ToneMapAndResample_h
 
+#include <atomic>
+
 #include <DependencyManager.h>
 #include <NumericalConstants.h>
 
@@ -64,6 +66,10 @@ public:
     void setToneCurve(ToneCurve curve);
     ToneCurve getToneCurve() const { return (ToneCurve)_parametersBuffer.get<Parameters>()._toneCurve; }
 
+    // a NaN fragment (a shading fault) comes out magenta instead of black, in every view (Developer > Render > Show
+    // NaN Pixels)
+    static void setShowNaNPixels(bool show) { _showNaNPixels = show; }
+
     // Inputs: lightingFramebuffer, destinationFramebuffer
     using Input = render::VaryingSet2<gpu::FramebufferPointer, gpu::FramebufferPointer>;
     using Output = gpu::FramebufferPointer;
@@ -76,6 +82,7 @@ public:
 protected:
     static gpu::PipelinePointer _pipeline;
     static gpu::PipelinePointer _mirrorPipeline;
+    static std::atomic<bool> _showNaNPixels;
 
     gpu::FramebufferPointer _destinationFrameBuffer;
 
@@ -93,7 +100,8 @@ private:
         float _twoPowExposure = 1.0f;
         glm::vec2 spareA;
         int _toneCurve = (int)ToneCurve::Gamma22;
-        glm::vec3 spareB;
+        int _showNaNPixels = 0;
+        glm::ivec2 spareB;
 
         Parameters() {}
     };

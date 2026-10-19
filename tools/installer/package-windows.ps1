@@ -5,7 +5,7 @@ Packages a Windows build of Darkride as a zip and an installer.
 .DESCRIPTION
 Collects the interface, domain-server and assignment-client from a build folder into one folder, as Tivoli's
 releases did, adds the Visual C++ runtime beside them so nothing else needs installing, and makes:
-  Darkride-<version>-windows-x64.zip        unzip and run interface.exe
+  Darkride-<version>-windows-x64.zip        unzip and run Darkride.exe
   Darkride-<version>-windows-x64-setup.exe  the installer (tools/installer/darkride.iss, Inno Setup 6)
 
 Build the interface, domain-server and assignment-client targets first (BUILD_WINDOWS.md).
@@ -34,7 +34,9 @@ if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force $stage | Out-Null
 foreach ($target in "interface", "domain-server", "assignment-client") {
     $from = Join-Path $BuildDir "$target\$Config"
-    if (-not (Test-Path (Join-Path $from "$target.exe"))) { throw "$from\$target.exe not found: build the $target target in $Config first" }
+    # the interface target builds Darkride.exe (INTERFACE_BUNDLE_NAME)
+    $exe = if ($target -eq "interface") { "Darkride.exe" } else { "$target.exe" }
+    if (-not (Test-Path (Join-Path $from $exe))) { throw "$from\$exe not found: build the $target target in $Config first" }
     Write-Host "Copying $from"
     Copy-Item -Recurse -Force "$from\*" $stage
 }

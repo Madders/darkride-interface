@@ -1203,7 +1203,8 @@ void OctreeServer::beginRunning() {
     auto nodeList = DependencyManager::get<NodeList>();
 
     // we need to ask the DS about agents so we can ping/reply with them
-    nodeList->addSetOfNodeTypesToNodeInterestSet({ NodeType::Agent, NodeType::EntityScriptServer,
+    // the physics server is a viewer and an editor of the tree like a script server (PHYSICS.md round 5)
+    nodeList->addSetOfNodeTypesToNodeInterestSet({ NodeType::Agent, NodeType::EntityScriptServer, NodeType::PhysicsServer,
         NodeType::AvatarMixer });
 
     beforeRun(); // after payload has been processed

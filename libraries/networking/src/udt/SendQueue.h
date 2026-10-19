@@ -114,6 +114,7 @@ private:
     
     Socket* _socket { nullptr }; // Socket to send packet on
     HifiSockAddr _destination; // Destination addr
+    int _traceSent { 0 };      // the trace (TIVOLI_UDT_TRACE)
     
     std::atomic<uint32_t> _lastACKSequenceNumber { 0 }; // Last ACKed sequence number
     

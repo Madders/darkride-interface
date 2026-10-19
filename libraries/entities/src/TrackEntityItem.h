@@ -7,6 +7,8 @@
 //  Catmull-Rom by arc length) is libraries/vehicles' TrackCurve, built from these properties by the physics on each
 //  client and by the physics server; the editor's gizmo draws and edits the points. An entity with trackID set
 //  rides this track at trackOffset metres along the train; the physics moves it. The track has no body of its own.
+//  The train's state (round 5) lives here too: the physics server writes it as it drives, and every client runs the
+//  same follower on from the last state it received, so the train is a function of the domain's clock everywhere.
 //
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
@@ -52,6 +54,7 @@ public:
     static const float DEFAULT_ACCELERATION;   // m/s^2
     static const float MAX_SPEED;
     static const float MAX_ACCELERATION;
+    static const quint16 NO_STATION;   // trainStation when the train stands at or heads for no station
 
     void setTrackPoints(const QVector<glm::vec3>& points);
     QVector<glm::vec3> getTrackPoints() const;
@@ -74,6 +77,35 @@ public:
     // counts every change to the properties above, so a curve built from them knows when to rebuild
     uint32_t getTrackVersion() const;
 
+    // the train's state, as the physics server last published it (TrackFollower::State plus the domain time it is
+    // for; trainTime 0 means no server has driven this track)
+    void setTrainDistance(float value);
+    float getTrainDistance() const;
+    void setTrainSpeed(float value);
+    float getTrainSpeed() const;
+    void setTrainReversed(bool value);
+    bool getTrainReversed() const;
+    void setTrainDwell(float value);
+    float getTrainDwell() const;
+    void setTrainStation(quint16 value);
+    quint16 getTrainStation() const;
+    void setTrainTime(quint64 value);
+    quint64 getTrainTime() const;
+    // The six as one, read under one lock, with the version that counts the states received: the version moves only
+    // when trainTime lands, the last of the six on the wire, so a reader never takes half of one state and half of the
+    // next.
+    struct TrainState {
+        float distance { 0.0f };
+        float speed { 0.0f };
+        bool reversed { false };
+        float dwell { 0.0f };
+        quint16 station { 0xFFFF };
+        quint64 time { 0 };
+        uint32_t version { 0 };
+    };
+    TrainState getTrainState() const;
+    uint32_t getTrainStateVersion() const;
+
 protected:
     QVector<glm::vec3> _trackPoints;
     QVector<float> _trackBank;
@@ -82,6 +114,14 @@ protected:
     float _trackSpeed { DEFAULT_SPEED };
     float _trackAcceleration { DEFAULT_ACCELERATION };
     uint32_t _trackVersion { 1 };
+
+    float _trainDistance { 0.0f };
+    float _trainSpeed { 0.0f };
+    bool _trainReversed { false };
+    float _trainDwell { 0.0f };
+    quint16 _trainStation { NO_STATION };
+    quint64 _trainTime { 0 };
+    uint32_t _trainStateVersion { 0 };
 };
 
 #endif // hifi_TrackEntityItem_h

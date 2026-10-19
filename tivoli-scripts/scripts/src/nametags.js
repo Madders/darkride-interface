@@ -52,6 +52,13 @@ export function initNametags(showSelf) {
 	function updateNametagEntity(nametag) {
 		if (nametag.entity==undefined) return;
 
+		// no name (not signed in, signing in or out, or a newcomer's details not here yet): there is no picture to
+		// ask for, so the tag stays hidden; a name arriving is a change, and this runs again then
+		if (!nametag.username) {
+			Entities.editEntity(nametag.entity, { alpha: 0, imageURL: "" });
+			return;
+		}
+
 		nametag.stamp = Date.now(); // a new picture when the details change; its glyph frames share the stamp
 		Entities.editEntity(nametag.entity, {
 			alpha: 1,
@@ -128,6 +135,12 @@ export function initNametags(showSelf) {
 		delete nametags[id];
 	}
 
+	// the account the world checked when this avatar connected (usersCache), else the name it shows
+	function nameOf(id, localUser) {
+		var known = usersCache.get(id);
+		return known ? known.username : localUser.displayName;
+	}
+
 	function updateUserLocal(id) {
 		var localUser = AvatarList.getAvatar(id);
 		var nametag = nametags[id];
@@ -142,7 +155,7 @@ export function initNametags(showSelf) {
 		if (nametag==undefined) {
 			// add nametag
 			addNametag(id, {
-				username: localUser.displayName,
+				username: nameOf(id, localUser),
 				avatarURL: AccountServices.metaverseServerURL+"/api/user/-/image",
 				connection: null,
 				admin: false,
@@ -150,7 +163,7 @@ export function initNametags(showSelf) {
 		} else {
 			// update nametag
 			updateNametag(nametag, {
-				username: localUser.displayName
+				username: nameOf(id, localUser)
 			});
 		}
 
@@ -178,6 +191,7 @@ export function initNametags(showSelf) {
 			var apiUser = users[id];
 
 			updateNametag(nametag, {
+				username: apiUser.username,
 				avatarURL: apiUser.thumbnail,
 				connection: apiUser.connection,
 			});
@@ -263,7 +277,7 @@ export function initNametags(showSelf) {
 	function onAIResidentMessage(channel, message, senderID) {
 		if (channel != AI_CHANNEL) return;
 		var nametag = nametags[senderID];
-		if (nametag==undefined || nametag.entity==undefined || !isAIResident(nametag)) return;
+		if (nametag==undefined || nametag.entity==undefined || !nametag.username || !isAIResident(nametag)) return;
 		var data;
 		try { data = JSON.parse(message); } catch (e) { return; }
 		if (data && data.busy) {
@@ -281,7 +295,7 @@ export function initNametags(showSelf) {
 		var now = Date.now();
 		Object.keys(nametags).forEach(function(id) {
 			var nametag = nametags[id];
-			if (!nametag.busyUntil || nametag.entity==undefined) return;
+			if (!nametag.busyUntil || nametag.entity==undefined || !nametag.username) return;
 			if (now > nametag.busyUntil) {                // no word for a while: back to the mark
 				nametag.busyUntil = 0;
 				Entities.editEntity(nametag.entity, { imageURL: nametagURL(nametag, 0) });

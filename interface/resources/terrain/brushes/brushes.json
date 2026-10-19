@@ -1,0 +1,30 @@
+[
+    {
+        "name": "Soft",
+        "file": "soft.png"
+    },
+    {
+        "name": "Airbrush",
+        "file": "airbrush.png"
+    },
+    {
+        "name": "Square",
+        "file": "square.png"
+    },
+    {
+        "name": "Star",
+        "file": "star.png"
+    },
+    {
+        "name": "Splotchy",
+        "file": "splotchy.png"
+    },
+    {
+        "name": "Scatter",
+        "file": "scatter.png"
+    },
+    {
+        "name": "Ring",
+        "file": "ring.png"
+    }
+]

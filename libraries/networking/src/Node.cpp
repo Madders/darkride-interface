@@ -38,6 +38,7 @@ static const QHash<NodeType_t, QString> TYPE_NAME_HASH {
     { NodeType::MessagesMixer, "Messages Mixer" },
     { NodeType::AssetServer, "Asset Server" },
     { NodeType::EntityScriptServer, "Entity Script Server" },
+    { NodeType::PhysicsServer, "Physics Server" },
     { NodeType::UpstreamAudioMixer, "Upstream Audio Mixer" },
     { NodeType::UpstreamAvatarMixer, "Upstream Avatar Mixer" },
     { NodeType::DownstreamAudioMixer, "Downstream Audio Mixer" },

@@ -92,6 +92,10 @@ public:
 
     void onInvalidate() override;
 
+    // Weights for the model's own blend shapes (HFM.h ownBlendshapeNames, by index) that replace their starting
+    // weights, as an avatar's menu sets them.
+    void setOwnBlendshapeOverrides(const QHash<int, float>& weights) { _ownBlendshapeOverrides = weights; }
+
 signals:
 
     void skeletonLoaded();
@@ -114,6 +118,7 @@ protected:
 
 private:
     bool _texturesLoaded { false };
+    QHash<int, float> _ownBlendshapeOverrides;
 };
 
 #endif // hifi_SkeletonModel_h

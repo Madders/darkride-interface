@@ -48,6 +48,14 @@ class PhysicsDebugDraw;
 // merges what the worlds report, and keeps the actions and constraints.
 class PhysicsEngine {
 public:
+    // Something stepped with the worlds, before and after every substep (the vehicles, PHYSICS.md round 6).
+    class SubstepListener {
+    public:
+        virtual ~SubstepListener() = default;
+        virtual void preSubstep(uint32_t step, float dt) = 0;
+        virtual void postSubstep(uint32_t step, float dt) = 0;
+    };
+
     class Transaction {
     public:
         void clear() {
@@ -64,7 +72,25 @@ public:
 
     PhysicsEngine(const glm::vec3& offset);
     ~PhysicsEngine();
-    void init();
+    // maxWorkers caps Jolt's job system (0: the hardware's threads less one). The physics server passes a few: on a
+    // 32-core Mac 31 workers were woken 91 times a second for nothing (PHYSICS.md round 9, the idle cost).
+    void init(int maxWorkers = 0);
+    // When set, a step with no active body in any world and no frame is skipped (the clock still runs): the physics
+    // server's world with no vehicle moving costs nothing then. The caller (the server) says when it is allowed, since
+    // the engine does not know whether a train or a vehicle is about to need a step. Never on a client: the character
+    // is stepped every frame.
+    void setIdleWhenStill(bool allowed) { _idleWhenStill = allowed; }
+    bool isStill() const;
+    QString describeActiveBodies(int maxNames) const;   // for a log: how many are awake, how many dynamic, a few names
+    uint64_t getNumIdleSteps() const { return _numIdleSteps; }
+
+    // Time dilation (PHYSICS.md round 10): a driver's client shifts its simulation clock by this much, a few percent
+    // fast (positive: more substeps than the wall clock calls for, to get its inputs further ahead of the physics
+    // server) or slow, until the shift is in; the step count is what moves, the substeps' stamped times stay on the
+    // wall clock. The physics server never shifts.
+    static constexpr float TIME_DILATION = 0.05f;
+    void requestTimeShift(float seconds) { _timeShiftPending += seconds; }
+    float getTimeShiftPending() const { return _timeShiftPending; }
 
     uint32_t getNumSubsteps() const { return _numSubsteps; }
     int32_t getNumCollisionObjects() const;
@@ -136,6 +162,7 @@ public:
     // Worlds. The root is the domain; a frame's world is made the first time something asks for it and
     // dropped when it is empty.
     PhysicsWorld* getRootWorld() const { return _rootWorld.get(); }
+    void setSubstepListener(SubstepListener* listener) { _substepListener = listener; }
     size_t getNumFrames() const { return _frameStates.size(); }
     PhysicsWorld* getWorld(const QUuid& frameID);
     PhysicsWorld* findWorld(const QUuid& frameID) const;
@@ -148,7 +175,7 @@ public:
     // leaves at once, before it falls in a world where the platform does not exist
     QUuid frameContaining(const glm::vec3& position, const QUuid& currentFrame, bool supported = true) const;
     // the transform of a frame in the domain (its body's, or its entity's when it has no body yet)
-    bool getFrameTransform(const QUuid& frameID, glm::vec3& position, glm::quat& rotation, glm::vec3& linearVelocity, glm::vec3& angularVelocity) const;
+    bool getFrameTransform(const QUuid& frameID, glm::vec3& position, glm::quat& rotation, glm::vec3& linearVelocity, glm::vec3& angularVelocity, bool asSimulated = false) const;
 
     JPH::TempAllocator* getTempAllocator() const;
     static ObjectMotionState* motionStateOf(const JPH::Body& body) { return PhysicsWorld::motionStateOf(body); }
@@ -163,8 +190,12 @@ private:
     void rehomeObjects();
     void registerFrame(ObjectMotionState* frameState);
     void unregisterFrame(const QUuid& frameID);
+    void refreshFrameInteriors();
     PhysicsWorld* characterWorld() const;
 
+    SubstepListener* _substepListener { nullptr };
+    bool _idleWhenStill { false };
+    uint64_t _numIdleSteps { 0 };
     std::unique_ptr<JPH::TempAllocatorImpl> _tempAllocator;
     std::unique_ptr<JPH::JobSystemThreadPool> _jobSystem;
     std::unique_ptr<PhysicsWorld> _rootWorld;
@@ -186,6 +217,7 @@ private:
     CharacterController* _myAvatarController { nullptr };
     uint64_t _lastStepTime { 0 };
     float _accumulatedTime { 0.0f };
+    float _timeShiftPending { 0.0f };   // s of simulation still to add (or, negative, to leave out) by time dilation
     float _smoothedFrameDuration { 0.0f }; // the paced clock's frame (see stepSimulation)
     float _pacedClockLead { 0.0f }; // how far the paced clock is ahead of the wall clock
     float _lastStepDuration { 0.0f };

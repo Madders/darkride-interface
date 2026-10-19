@@ -33,6 +33,11 @@
 #include "TextureCache.h"
 #include "RenderCommonTask.h"
 #include "RenderHUDLayerTask.h"
+#include "DeferredLightingEffect.h"
+#include "HighlightEffect.h"
+#include "BloomEffect.h"
+#include <gpu/Context.h>
+#include <FrameDiag.h>
 
 namespace ru {
     using render_utils::slot::texture::Texture;
@@ -46,7 +51,7 @@ namespace gr {
 
 using namespace render;
 
-extern void initForwardPipelines(ShapePlumber& plumber);
+extern void initForwardPipelines(ShapePlumber& plumber, const render::ShapePipeline::BatchSetter& batchSetter, const render::ShapePipeline::ItemSetter& itemSetter);
 
 void PreparePrimaryFramebufferMSAAConfig::setResolutionScale(float scale) {
     const float SCALE_RANGE_MIN = 0.1f;
@@ -72,7 +77,7 @@ void RenderForwardTask::build(JobModel& task, const render::Varying& input, rend
     // Prepare the ShapePipelines
     auto fadeEffect = DependencyManager::get<FadeEffect>();
     ShapePlumberPointer shapePlumber = std::make_shared<ShapePlumber>();
-    initForwardPipelines(*shapePlumber);
+    initForwardPipelines(*shapePlumber, fadeEffect->getBatchSetter(), fadeEffect->getItemUniformSetter());
 
     // Unpack inputs
     const auto& inputs = input.get<Input>();
@@ -101,8 +106,15 @@ void RenderForwardTask::build(JobModel& task, const render::Varying& input, rend
             const auto lightFrame = currentStageFrames[0];
             const auto backgroundFrame = currentStageFrames[1];
             const auto hazeFrame = currentStageFrames[2];
+            const auto bloomFrame = currentStageFrames[3];
  
         const auto& zones = lightingStageInputs[1];
+
+    // Shadow Task Outputs: the frame's shadows, drawn before the deferred/forward choice
+    const auto& shadowTaskOutputs = inputs.get3();
+
+        // Shadow Stage Frame: the sun's cascades, and the lights' shadow maps and cookies with them
+        const auto shadowFrame = shadowTaskOutputs[1];
 
     // First job, alter faded
     fadeEffect->build(task, opaques);
@@ -113,6 +125,15 @@ void RenderForwardTask::build(JobModel& task, const render::Varying& input, rend
 
     // Prepare deferred, generate the shared Deferred Frame Transform. Only valid with the scaled frame buffer
     const auto deferredFrameTransform = task.addJob<GenerateDeferredFrameTransform>("DeferredFrameTransform");
+
+    // Light Clustering: the grid of the lights in view, as the deferred path builds it (on the CPU, from the lights'
+    // bounds against the view: it needs no depth buffer, so the pass takes none)
+    const auto lightClusteringPassInputs = LightClusteringPass::Input(deferredFrameTransform, lightingModel, lightFrame, render::Varying(LinearDepthFramebufferPointer())).asVarying();
+    const auto lightClusters = task.addJob<LightClusteringPass>("LightClustering", lightClusteringPassInputs);
+
+    // The clusters and the shadows go to the forward pipelines' batch setter, which binds them at every pipeline change
+    const auto frameLightingInputs = SetFrameLighting::Inputs(lightClusters, shadowFrame, lightingModel).asVarying();
+    task.addJob<SetFrameLighting>("SetFrameLighting", frameLightingInputs);
 
     // Prepare Forward Framebuffer pass 
     const auto prepareForwardInputs = PrepareForward::Inputs(scaledPrimaryFramebuffer, lightFrame).asVarying();
@@ -132,6 +153,11 @@ void RenderForwardTask::build(JobModel& task, const render::Varying& input, rend
     // Draw transparent objects forward
     const auto transparentInputs = DrawForward::Inputs(transparents, lightingModel, hazeFrame).asVarying();
     task.addJob<DrawForward>("DrawTransparents", transparentInputs, shapePlumber, false);
+
+    // the scene's depth, resolved to one sample now, before the in-front layers clear the primary's depth for
+    // themselves: the selection outline tests its occlusion against it, as the deferred path's outline tests against
+    // its scene depth before those layers are drawn
+    const auto resolvedDepth = task.addJob<ResolveDepth>("ResolveDepth", scaledPrimaryFramebuffer);
 
      // Layered
     const auto nullJitter = Varying(glm::vec2(0.0f, 0.0f));
@@ -154,7 +180,21 @@ void RenderForwardTask::build(JobModel& task, const render::Varying& input, rend
     const auto newResolvedFramebuffer = task.addJob<NewFramebuffer>("MakeResolvingFramebuffer", gpu::Element(gpu::SCALAR, gpu::FLOAT, gpu::R11G11B10));
 
     const auto resolveInputs = ResolveFramebuffer::Inputs(scaledPrimaryFramebuffer, newResolvedFramebuffer).asVarying();
-    const auto resolvedFramebuffer = task.addJob<ResolveFramebuffer>("Resolve", resolveInputs);
+    const auto resolvedColorFramebuffer = task.addJob<ResolveFramebuffer>("Resolve", resolveInputs);
+
+    // with the scene's depth attached, for the selection outline, which is drawn over the resolved colour as the
+    // deferred path draws it over its lighting (the in-front layers are already in, multisampled, so an outline runs
+    // over them where they cross it; deferred draws them after)
+    const auto attachInputs = AttachResolvedDepth::Inputs(resolvedColorFramebuffer, resolvedDepth).asVarying();
+    const auto resolvedFramebuffer = task.addJob<AttachResolvedDepth>("AttachResolvedDepth", attachInputs);
+
+    const auto outlineInputs = DrawHighlightTask::Inputs(items, resolvedFramebuffer, deferredFrameTransform, nullJitter).asVarying();
+    task.addJob<DrawHighlightTask>("DrawHighlightForward", outlineInputs);
+
+    // Bloom over the resolved colour, as the deferred path has it over its lighting before tone mapping (the zone's
+    // bloom settings and the lighting model's switch apply to both)
+    const auto bloomInputs = BloomEffect::Inputs(deferredFrameTransform, resolvedFramebuffer, bloomFrame, lightingModel).asVarying();
+    task.addJob<BloomEffect>("BloomForward", bloomInputs);
 
     const auto destFramebuffer = static_cast<gpu::FramebufferPointer>(nullptr);
 
@@ -163,6 +203,46 @@ void RenderForwardTask::build(JobModel& task, const render::Varying& input, rend
     // HUD Layer
     const auto renderHUDLayerInputs = RenderHUDLayerTask::Input(toneMappedBuffer, lightingModel, hudOpaque, hudTransparent, hazeFrame).asVarying();
     task.addJob<RenderHUDLayerTask>("RenderHUDLayer", renderHUDLayerInputs);
+}
+
+void ResolveDepth::run(const render::RenderContextPointer& renderContext, const Inputs& inputs, Outputs& outputs) {
+    RenderArgs* args = renderContext->args;
+    const auto primary = inputs;
+    outputs = nullptr;
+    if (!primary || !primary->getDepthStencilBuffer()) {
+        return;
+    }
+    const auto depthFormat = primary->getDepthStencilBufferFormat();
+    const auto frameSize = primary->getSize();
+    // the resolved depth is of the primary's format, since a depth blit copies only between equal formats
+    if (!_depth || glm::uvec2(_depth->getDimensions()) != frameSize || _depth->getTexelFormat() != depthFormat) {
+        _depth = gpu::TexturePointer(gpu::Texture::createRenderBuffer(depthFormat, frameSize.x, frameSize.y));
+        _depth->setSource("forward resolved depth");
+        _target = gpu::FramebufferPointer(gpu::Framebuffer::create("forward resolved depth"));
+        _target->setDepthStencilBuffer(_depth, depthFormat);
+    }
+    if (!_source || _source->getDepthStencilBuffer() != primary->getDepthStencilBuffer()) {
+        _source = gpu::FramebufferPointer(gpu::Framebuffer::create("forward depth"));
+        _source->setDepthStencilBuffer(primary->getDepthStencilBuffer(), depthFormat);
+    }
+    gpu::Vec4i rect(0, 0, frameSize.x, frameSize.y);
+    gpu::doInBatch("ResolveDepth", args->_context, [&](gpu::Batch& batch) {
+        batch.blit(_source, rect, _target, rect);
+    });
+    outputs = _depth;
+}
+
+void AttachResolvedDepth::run(const render::RenderContextPointer& renderContext, const Inputs& inputs, Outputs& outputs) {
+    const auto resolved = inputs.get0();
+    const auto depth = inputs.get1();
+    outputs = resolved;
+    if (!resolved || !depth || glm::uvec2(depth->getDimensions()) != resolved->getSize()) {
+        return;
+    }
+    // the resolved framebuffer is remade on a size change, without depth
+    if (resolved->getDepthStencilBuffer() != depth) {
+        resolved->setDepthStencilBuffer(depth, depth->getTexelFormat());
+    }
 }
 
 gpu::FramebufferPointer PreparePrimaryFramebufferMSAA::createFramebuffer(const char* name, const glm::uvec2& frameSize, int numSamples) {
@@ -175,7 +255,7 @@ gpu::FramebufferPointer PreparePrimaryFramebufferMSAA::createFramebuffer(const c
         gpu::Texture::createRenderBufferMultisample(colorFormat, frameSize.x, frameSize.y, numSamples, defaultSampler);
     framebuffer->setRenderBuffer(0, colorTexture);
 
-    auto depthFormat = gpu::Element(gpu::SCALAR, gpu::UINT32, gpu::DEPTH_STENCIL);  // Depth24_Stencil8 texel format
+    auto depthFormat = gpu::Element::DEPTH32F_STENCIL8;  // reversed-Z float depth, see gpu::Backend::reversedZProjection
     auto depthTexture =
         gpu::Texture::createRenderBufferMultisample(depthFormat, frameSize.x, frameSize.y, numSamples, defaultSampler);
     framebuffer->setDepthStencilBuffer(depthTexture, depthFormat);
@@ -192,9 +272,16 @@ void PreparePrimaryFramebufferMSAA::run(const RenderContextPointer& renderContex
     glm::uvec2 frameSize(renderContext->args->_viewport.z, renderContext->args->_viewport.w);
     glm::uvec2 scaledFrameSize(glm::vec2(frameSize) * _resolutionScale);
 
+    // no more samples than the GPU has (a multisampled texture beyond GL_MAX_SAMPLES gets no storage, and the
+    // framebuffer is incomplete: nothing draws, and the frame before stays on screen)
+    int numSamples = std::max(1, _numSamples);
+    const int maxSamples = gpu::Context::getMaxSamples();
+    if (maxSamples > 0) {
+        numSamples = std::min(numSamples, maxSamples);
+    }
     // Resizing framebuffers instead of re-building them seems to cause issues with threaded rendering
-    if (!_framebuffer || (_framebuffer->getSize() != scaledFrameSize) || (_framebuffer->getNumSamples() != _numSamples)) {
-        _framebuffer = createFramebuffer("forward", scaledFrameSize, _numSamples);
+    if (!_framebuffer || (_framebuffer->getSize() != scaledFrameSize) || (_framebuffer->getNumSamples() != numSamples)) {
+        _framebuffer = createFramebuffer("forward", scaledFrameSize, numSamples);
     }
 
     framebuffer = _framebuffer;
@@ -220,7 +307,7 @@ void PrepareForward::run(const RenderContextPointer& renderContext, const Inputs
         batch.setFramebuffer(primaryFramebuffer);
         batch.clearFramebuffer(gpu::Framebuffer::BUFFER_COLOR0 | gpu::Framebuffer::BUFFER_DEPTH |
             gpu::Framebuffer::BUFFER_STENCIL,
-            vec4(vec3(0), 0), 1.0, 0, true);
+            vec4(vec3(0), 0), 0.0, 0, true); // depth 0 is the far plane (reversed-Z)
 
         graphics::LightPointer keySunLight;
         auto lightStage = args->_scene->getStage<LightStage>();
@@ -243,6 +330,8 @@ void PrepareForward::run(const RenderContextPointer& renderContext, const Inputs
             if (keyAmbiLight->getAmbientMap()) {
                 batch.setResourceTexture(ru::Texture::Skybox, keyAmbiLight->getAmbientMap());
             }
+            // the zone's probe volume (LightAmbient.slh), or an empty one
+            batch.setResourceTexture(ru::Texture::ProbeVolume, keyAmbiLight->getProbeVolume() ? keyAmbiLight->getProbeVolume() : DeferredLightingEffect::getEmptyProbeVolume());
         }
     });
 }
@@ -253,6 +342,10 @@ void DrawForward::run(const RenderContextPointer& renderContext, const Inputs& i
     const auto& inItems = inputs.get0();
     const auto& lightingModel = inputs.get1();
     const auto& hazeFrame = inputs.get2();
+
+    if (_opaquePass && args->_renderMode == RenderArgs::RenderMode::DEFAULT_RENDER_MODE) {
+        FrameDiag::mainOpaques() = (int)inItems.size();
+    }
 
     graphics::HazePointer haze;
     const auto& hazeStage = renderContext->args->_scene->getStage<HazeStage>();
@@ -275,6 +368,9 @@ void DrawForward::run(const RenderContextPointer& renderContext, const Inputs& i
         // Setup lighting model for all items;
         batch.setUniformBuffer(ru::Buffer::LightModel, lightingModel->getParametersBuffer());
         batch.setResourceTexture(ru::Texture::AmbientFresnel, lightingModel->getAmbientFresnelLUT());
+
+        // the frame's local lights and shadows (bound again by each pipeline's batch setter as the pipelines change)
+        DependencyManager::get<DeferredLightingEffect>()->setupFrameLightingBatch(batch, args);
 
         if (haze) {
             batch.setUniformBuffer(graphics::slot::buffer::Buffer::HazeParams, haze->getHazeParametersBuffer());

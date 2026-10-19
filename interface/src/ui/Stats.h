@@ -249,6 +249,11 @@ private: \
  *     that haven't changed for a while) were drawn again too; the rest copied their static map and drew only the
  *     dynamic casters over it.
  *     <em>Read-only.</em>
+ * @property {number} mirrorsDrawn - The number of mirrors drawn this frame, a view each (up to four).
+ *     <em>Read-only.</em>
+ * @property {number} mirrorPixels - The pixels those mirrors' pictures add up to this frame: a Screen mirror's
+ *     picture covers its glass's rectangle on screen, a Picture mirror's its size on screen.
+ *     <em>Read-only.</em>
  * @property {string} sendingMode - Description of the octree sending mode.
  *     <em>Read-only.</em>
  * @property {string} packetStats - Description of the octree packet processing state.
@@ -557,6 +562,8 @@ class Stats : public QQuickItem {
     STATS_PROPERTY(int, localShadowMaps, 0)
     STATS_PROPERTY(int, localShadowMapsDrawn, 0)
     STATS_PROPERTY(int, localShadowStaticMapsDrawn, 0)
+    STATS_PROPERTY(int, mirrorsDrawn, 0)
+    STATS_PROPERTY(int, mirrorPixels, 0)
     STATS_PROPERTY(QString, sendingMode, QString())
     STATS_PROPERTY(QString, packetStats, QString())
     STATS_PROPERTY(int, lodAngle, 0)
@@ -1224,6 +1231,20 @@ signals:
      * @returns {Signal}
      */
     void localShadowStaticMapsDrawnChanged();
+
+    /**jsdoc
+     * Triggered when the value of the <code>mirrorsDrawn</code> property changes.
+     * @function Stats.mirrorsDrawnChanged
+     * @returns {Signal}
+     */
+    void mirrorsDrawnChanged();
+
+    /**jsdoc
+     * Triggered when the value of the <code>mirrorPixels</code> property changes.
+     * @function Stats.mirrorPixelsChanged
+     * @returns {Signal}
+     */
+    void mirrorPixelsChanged();
 
     /**jsdoc
      * Triggered when the value of the <code>sendingMode</code> property changes.

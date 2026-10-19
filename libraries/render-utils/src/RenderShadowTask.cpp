@@ -50,7 +50,7 @@ void RenderShadowTask::build(JobModel& task, const render::Varying& input, rende
     {
         auto state = std::make_shared<gpu::State>();
         state->setCullMode(gpu::State::CULL_BACK);
-        state->setDepthTest(true, true, gpu::LESS_EQUAL);
+        state->setDepthTest(true, true, gpu::GREATER_EQUAL);
 
         auto fadeEffect = DependencyManager::get<FadeEffect>();
         initZPassPipelines(*shapePlumber, state, fadeEffect->getBatchSetter(), fadeEffect->getItemUniformSetter());
@@ -244,7 +244,7 @@ void RenderShadowMap::run(const render::RenderContextPointer& renderContext, con
         batch.setStateScissorRect(viewport);
 
         batch.setFramebuffer(fbo);
-        batch.clearDepthFramebuffer(1.0, false);
+        batch.clearDepthFramebuffer(0.0f, false); // depth 0 is the far plane (reversed-Z)
 
         if (!inShapeBounds.isNull()) {
             glm::mat4 projMat;

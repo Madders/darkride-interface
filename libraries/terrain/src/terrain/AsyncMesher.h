@@ -30,8 +30,9 @@ namespace terrain {
 class AsyncMesher {
 public:
     struct Result {
-        glm::ivec3 chunk { 0 };
-        ChunkMesh mesh;   // empty when no surface crosses the chunk
+        ChunkKey key;
+        ChunkMesh mesh;      // empty when no surface crosses the chunk
+        uint64_t tag { 0 };  // submitSamples()' tag; 0 for the grid's chunks
     };
 
     // The pool to run on; by default one of this library's own, so meshing neither waits behind nor holds up the
@@ -45,14 +46,20 @@ public:
 
     // Samples every dirty chunk that has no job out and starts one for it, taking the chunk off the grid's dirty
     // set; returns how many went out. A chunk whose samples hold no surface is answered at once with an empty
-    // mesh. Chunks with a job out stay dirty until collect() has taken their mesh.
+    // mesh. Chunks with a job out stay dirty until collect() has taken their mesh. A dirty key with no chunk at it
+    // any more (split, or merged) is only taken off the set.
     int submit(VoxelGrid& grid);
+    // Meshes samples made elsewhere (a node of the level of detail's, LevelOfDetail.h) on the pool, ahead of the
+    // grid's chunks when the priority is higher; the mesh comes back from collect() with the samples' key and this
+    // tag. Nothing is counted as in flight for it: the caller keeps track, with a mesher of its own.
+    void submitSamples(std::shared_ptr<const ChunkSamples> samples, uint64_t tag, int priority = 0);
     // The meshes finished since the last call, in no particular order; their chunks have no job out afterwards.
     std::vector<Result> collect();
     // Forgets every job out: their meshes are dropped when they finish. For a grid that was replaced.
     void reset();
 
     size_t getInFlightCount() const { return _inFlight.size(); }
+    bool isInFlight(const ChunkKey& key) const { return _inFlight.count(key) > 0; }
     bool hasResults() const;
     // No job out and no mesh waiting.
     bool isIdle() const { return _inFlight.empty() && !hasResults(); }
@@ -62,7 +69,7 @@ public:
 private:
     struct Shared;   // the queue the jobs write to; it outlives the mesher while a job still holds it
     std::shared_ptr<Shared> _shared;
-    ChunkSet _inFlight;
+    ChunkKeySet _inFlight;
     uint32_t _generation { 0 };
     QThreadPool* _pool;
 };

@@ -25,9 +25,9 @@
  * @hifi-client-entity
  * @hifi-avatar
  *
- * @property {string} buildDate - The build date of Darkride that is currently running. <em>Read-only.</em>
- * @property {string} buildVersion - The build version of Darkride that is currently running. <em>Read-only.</em>
- * @property {string} qtVersion - The Qt version used in Darkride that is currently running. <em>Read-only.</em>
+ * @property {string} buildDate - The build date of Tivoli Interface that is currently running. <em>Read-only.</em>
+ * @property {string} buildVersion - The build version of Tivoli Interface that is currently running. <em>Read-only.</em>
+ * @property {string} qtVersion - The Qt version used in Tivoli Interface that is currently running. <em>Read-only.</em>
  * @property {string} platform - The name of the platform that is currently running, usually "Darkride". <em>Read-only.</em>
  *
  * @example <caption>Report build information for the version of Interface currently running.</caption>

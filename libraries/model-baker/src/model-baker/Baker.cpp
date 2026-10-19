@@ -11,6 +11,8 @@
 
 #include "Baker.h"
 
+#include <QJsonDocument>
+
 #include "BakerTypes.h"
 #include "ModelMath.h"
 #include "CollectShapeVerticesTask.h"
@@ -22,6 +24,7 @@
 #include "PrepareJointsTask.h"
 #include "CalculateTransformedExtentsTask.h"
 #include "BuildDracoMeshTask.h"
+#include "BuildMeshLodsTask.h"
 #include "ParseFlowDataTask.h"
 #include <hfm/HFMModelMath.h>
 
@@ -156,9 +159,33 @@ namespace baker {
         }
     };
 
+    // "retarget = humanoid" and "humanoid = {...}" in the .fst (hfm::HumanoidSettings, animation/src/Humanoid.h).
+    class ParseHumanoidTask {
+    public:
+        using Input = hifi::VariantHash;
+        using Output = hfm::HumanoidSettings;
+        using JobModel = Job::ModelIO<ParseHumanoidTask, Input, Output>;
+
+        void run(const BakeContextPointer& context, const Input& input, Output& output) {
+            output.retarget = input.value("retarget").toString().trimmed().compare("humanoid", Qt::CaseInsensitive) == 0;
+            const QByteArray frames = input.value("humanoid").toByteArray();
+            output.muscleFrames = frames.isEmpty() ? QVariantMap() : QJsonDocument::fromJson(frames).toVariant().toMap();
+            const QByteArray menu = input.value("avatarMenu").toByteArray();
+            output.avatarMenu = menu.isEmpty() ? QJsonObject() : QJsonDocument::fromJson(menu).object();
+            const QVariantHash constraints = input.value("rotationConstraint").toHash();
+            for (auto it = constraints.begin(); it != constraints.end(); ++it) {
+                QVariantMap constraint = QJsonDocument::fromJson(it.value().toByteArray()).toVariant().toMap();
+                if (!constraint.isEmpty()) {
+                    constraint["joint"] = it.key();
+                    output.rotationConstraints.append(constraint);
+                }
+            }
+        }
+    };
+
     class BuildModelTask {
     public:
-        using Input = VaryingSet9<hfm::Model::Pointer, std::vector<hfm::Mesh>, std::vector<hfm::Joint>, QMap<int, glm::quat>, QHash<QString, int>, FlowData, std::vector<ShapeVertices>, std::vector<hfm::Shape>, Extents>;
+        using Input = VaryingSet10<hfm::Model::Pointer, std::vector<hfm::Mesh>, std::vector<hfm::Joint>, QMap<int, glm::quat>, QHash<QString, int>, FlowData, std::vector<ShapeVertices>, std::vector<hfm::Shape>, Extents, hfm::HumanoidSettings>;
         using Output = hfm::Model::Pointer;
         using JobModel = Job::ModelIO<BuildModelTask, Input, Output>;
 
@@ -172,6 +199,7 @@ namespace baker {
             hfmModelOut->shapeVertices = input.get6();
             hfmModelOut->shapes = input.get7();
             hfmModelOut->meshExtents = input.get8();
+            hfmModelOut->humanoid = input.get9();
             // These depend on the ShapeVertices
             // TODO: Create a task for this rather than calculating it here
             hfmModelOut->computeKdops();
@@ -222,6 +250,11 @@ namespace baker {
             const auto buildGraphicsMeshInputs = BuildGraphicsMeshTask::Input(meshesIn, url, meshIndicesToModelNames, normalsPerMesh, tangentsPerMesh, shapesIn, skinDeformersIn).asVarying();
             const auto graphicsMeshes = model.addJob<BuildGraphicsMeshTask>("BuildGraphicsMesh", buildGraphicsMeshInputs);
 
+            // Add the automatic LODs to those meshes, in place, before any later job reads them
+            // NOTE: This task is disabled by default; the client's model cache enables it (AUTOMATIC-LODS.md)
+            const auto buildMeshLodsInputs = BuildMeshLodsTask::Input(meshesIn, graphicsMeshes, url, normalsPerMesh).asVarying();
+            model.addJob<BuildMeshLodsTask>("BuildMeshLods", buildMeshLodsInputs);
+
             // Prepare joint information
             const auto prepareJointsInputs = PrepareJointsTask::Input(jointsIn, mapping).asVarying();
             const auto jointInfoOut = model.addJob<PrepareJointsTask>("PrepareJoints", prepareJointsInputs);
@@ -253,12 +286,15 @@ namespace baker {
             // Parse flow data
             const auto flowData = model.addJob<ParseFlowDataTask>("ParseFlowData", mapping);
 
+            // Parse how animations reach the skeleton
+            const auto humanoidSettings = model.addJob<ParseHumanoidTask>("ParseHumanoid", mapping);
+
             // Combine the outputs into a new hfm::Model
             const auto buildBlendshapesInputs = BuildBlendshapesTask::Input(blendshapesPerMeshIn, normalsPerBlendshapePerMesh, tangentsPerBlendshapePerMesh).asVarying();
             const auto blendshapesPerMeshOut = model.addJob<BuildBlendshapesTask>("BuildBlendshapes", buildBlendshapesInputs);
             const auto buildMeshesInputs = BuildMeshesTask::Input(meshesIn, triangleListMeshes, graphicsMeshes, normalsPerMesh, tangentsPerMesh, blendshapesPerMeshOut).asVarying();
             const auto meshesOut = model.addJob<BuildMeshesTask>("BuildMeshes", buildMeshesInputs);
-            const auto buildModelInputs = BuildModelTask::Input(hfmModelIn, meshesOut, jointsOut, jointRotationOffsets, jointIndices, flowData, shapeVerticesPerJoint, shapesOut, modelExtentsOut).asVarying();
+            const auto buildModelInputs = BuildModelTask::Input(hfmModelIn, meshesOut, jointsOut, jointRotationOffsets, jointIndices, flowData, shapeVerticesPerJoint, shapesOut, modelExtentsOut, humanoidSettings).asVarying();
             const auto hfmModelOut = model.addJob<BuildModelTask>("BuildModel", buildModelInputs);
 
             output = Output(hfmModelOut, materialMapping, dracoMeshes, dracoErrors, materialList);

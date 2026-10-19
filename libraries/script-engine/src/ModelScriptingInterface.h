@@ -52,7 +52,7 @@ public:
      * @param {MeshProxy[]} meshes - The meshes to combine.
      * @returns {MeshProxy} The combined mesh.
      */
-    Q_INVOKABLE QScriptValue appendMeshes(MeshProxyList in);
+    Q_INVOKABLE QVariant appendMeshes(MeshProxyList in);
 
     /**jsdoc
      * Transforms the vertices in a mesh.
@@ -61,7 +61,7 @@ public:
      * @param {MeshProxy} mesh - The mesh to apply the transform to.
      * @returns {MeshProxy|boolean} The transformed mesh, if valid. <code>false</code> if an error.
      */
-    Q_INVOKABLE QScriptValue transformMesh(glm::mat4 transform, MeshProxy* meshProxy);
+    Q_INVOKABLE QVariant transformMesh(glm::mat4 transform, MeshProxy* meshProxy);
 
     /**jsdoc
      * Creates a new mesh.
@@ -71,9 +71,9 @@ public:
      * @param {MeshFace[]} faces - The faces in the mesh.
      * @returns {MeshProxy} A new mesh.
      */
-    Q_INVOKABLE QScriptValue newMesh(const QVector<glm::vec3>& vertices,
-                                     const QVector<glm::vec3>& normals,
-                                     const QVector<MeshFace>& faces);
+    Q_INVOKABLE QVariant newMesh(const QVector<glm::vec3>& vertices,
+                                 const QVector<glm::vec3>& normals,
+                                 const QVector<MeshFace>& faces);
 
     /**jsdoc
      * Gets the number of vertices in a mesh.
@@ -81,7 +81,7 @@ public:
      * @param {MeshProxy} mesh - The mesh to count the vertices in.
      * @returns {number|boolean} The number of vertices in the mesh, if valid. <code>false</code> if an error.
      */
-    Q_INVOKABLE QScriptValue getVertexCount(MeshProxy* meshProxy);
+    Q_INVOKABLE QVariant getVertexCount(MeshProxy* meshProxy);
 
     /**jsdoc
      * Gets the position of a vertex in a mesh.
@@ -90,7 +90,11 @@ public:
      * @param {number} index - The index of the vertex to get.
      * @returns {Vec3|boolean} The local position of the vertex relative to the mesh, if valid. <code>false</code> if an error.
      */
-    Q_INVOKABLE QScriptValue getVertex(MeshProxy* meshProxy, int vertexIndex);
+    Q_INVOKABLE QVariant getVertex(MeshProxy* meshProxy, int vertexIndex);
+
+    // The results are plain values (a MeshProxy*, false, a number, a vec3), which the QtScript engine converts with
+    // the conversions registered for their types, as it did when these methods returned QScriptValues, and which
+    // the WebAssembly engine's codec converts too.
 
 private:
     QScriptEngine* _modelScriptEngine { nullptr };

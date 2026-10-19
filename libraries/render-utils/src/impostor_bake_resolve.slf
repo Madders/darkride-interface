@@ -1,0 +1,52 @@
+<@include gpu/Config.slh@>
+<$VERSION_HEADER$>
+//  Generated on <$_SCRIBE_DATE$>
+//
+//  impostor_bake_resolve.slf
+//
+//  One frame of an impostor bake (IMPOSTORS.md 2.2): the subject's G-buffer, drawn alone from an orthographic view,
+//  unpacked into one of the atlas's three layers. Layer 0: the albedo, sRGB, with the coverage in alpha. Layer 1: the
+//  object-space normal (0.5 + 0.5 n) with the depth through the bounding sphere in alpha (0 at the near face, 1 at the
+//  far face). Layer 2 (step 4): the roughness in red and the metallic in green, as the G-buffer holds them, so the
+//  card tells a chrome tube from a plastic plate. The G-buffer clears its depth to 0, the far plane in reversed-Z, so
+//  a depth above 0 is a covered texel.
+//
+//  Created by the editor session on 2026-10-18.
+//
+
+<@include DeferredBufferRead.slh@>
+<@include gpu/Color.slh@>
+
+LAYOUT_STD140(binding=RENDER_UTILS_BUFFER_DEBUG_DEFERRED_PARAMS) uniform bakeParamsBuffer {
+    mat4 invProjection;
+    mat4 worldToObject;
+    vec4 nearFarZeroToOneLayer;
+} bake;
+
+layout(location=0) in vec2 varTexCoord0;
+layout(location=0) out vec4 outFragColor;
+
+void main(void) {
+    vec2 uv = varTexCoord0;
+    float zdb = texture(depthMap, uv).x;
+    float covered = float(zdb > 0.0);
+
+    if (bake.nearFarZeroToOneLayer.w < 0.5) {
+        vec3 albedo = texture(albedoMap, uv).rgb;
+        outFragColor = vec4(color_LinearTosRGB(albedo) * covered, covered);
+    } else if (bake.nearFarZeroToOneLayer.w > 1.5) {
+        float roughness = texture(normalMap, uv).a;
+        int mode;
+        float metallic;
+        unpackModeMetallic(texture(albedoMap, uv).w, mode, metallic);
+        outFragColor = vec4(mix(1.0, roughness, covered), metallic * covered, 0.0, 1.0);
+    } else {
+        vec3 normalWS = unpackNormal(texture(normalMap, uv).xyz);
+        vec3 normalOS = normalize(mat3(bake.worldToObject) * normalWS);
+        float ndcZ = mix(zdb * 2.0 - 1.0, zdb, bake.nearFarZeroToOneLayer.z);
+        vec4 eye = bake.invProjection * vec4(uv * 2.0 - 1.0, ndcZ, 1.0);
+        float distance = -eye.z / eye.w;
+        float depth = clamp((distance - bake.nearFarZeroToOneLayer.x) / (bake.nearFarZeroToOneLayer.y - bake.nearFarZeroToOneLayer.x), 0.0, 1.0);
+        outFragColor = vec4(mix(vec3(0.5, 0.5, 1.0), normalOS * 0.5 + 0.5, covered), mix(1.0, depth, covered));
+    }
+}

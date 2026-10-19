@@ -8,6 +8,7 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+#include <algorithm>
 #include "GLESBackend.h"
 
 #include <unordered_set>
@@ -198,6 +199,17 @@ Size GLESTexture::copyMipFaceLinesFromTexture(uint16_t mip, uint8_t face, const 
         } else {
             glTexSubImage2D(target, mip, 0, yOffset, size.x, size.y, format, type, sourcePointer);
         }
+    } else if (GL_TEXTURE_CUBE_MAP_ARRAY == _target) {
+        // face is the layer-face (layer * 6 + face), the array's depth coordinate
+        if (isCompressedFormat(internalFormat)) {
+            glCompressedTexSubImage3D(_target, mip, 0, yOffset, face, size.x, size.y, 1, internalFormat,
+                                      static_cast<GLsizei>(sourceSize), sourcePointer);
+        } else {
+            glTexSubImage3D(_target, mip, 0, yOffset, face, size.x, size.y, 1, format, type, sourcePointer);
+        }
+    } else if (GL_TEXTURE_3D == _target) {
+        // a volume: the whole depth of the mip at once (size.z slices, x fastest), uncompressed
+        glTexSubImage3D(_target, mip, 0, yOffset, 0, size.x, size.y, size.z, format, type, sourcePointer);
     } else {
         assert(false);
         amountCopied = 0;
@@ -271,7 +283,8 @@ GLsizei getCompressedImageSize(int width, int height, GLenum internalFormat) {
 void GLESFixedAllocationTexture::allocateStorage() const {
     const GLTexelFormat texelFormat = GLTexelFormat::evalGLTexelFormat(_gpuObject.getTexelFormat());
     const auto numMips = _gpuObject.getNumMips();
-    const auto numSlices = _gpuObject.getNumSlices();
+    // an array's depth: its slices, and for a cube map array its layers' faces
+    const auto numSlices = _gpuObject.getNumSlices() * getFaceCount(_target);
     const auto numSamples = _gpuObject.getNumSamples();
 
     // glTextureStorage2D(_id, mips, texelFormat.internalFormat, dimensions.x, dimensions.y);
@@ -287,7 +300,11 @@ void GLESFixedAllocationTexture::allocateStorage() const {
                         glCompressedTexImage3D(target, level, texelFormat.internalFormat, dimensions.x, dimensions.y, numSlices, 0, size * numSlices, nullptr);
                     }
                 } else {
-                    if (!_gpuObject.isArray()) {
+                    if (GL_TEXTURE_3D == _target) {
+                        // a volume: the mip's depth is its third dimension
+                        glTexImage3D(target, level, texelFormat.internalFormat, dimensions.x, dimensions.y, dimensions.z, 0,
+                                     texelFormat.format, texelFormat.type, nullptr);
+                    } else if (!_gpuObject.isArray()) {
                         glTexImage2D(target, level, texelFormat.internalFormat, dimensions.x, dimensions.y, 0, texelFormat.format,
                                     texelFormat.type, nullptr);
                     } else {
@@ -345,7 +362,8 @@ GLESStrictResourceTexture::GLESStrictResourceTexture(const std::weak_ptr<GLBacke
         auto mipLevels = _gpuObject.getNumMips();
         for (uint16_t sourceMip = 0; sourceMip < mipLevels; sourceMip++) {
             uint16_t targetMip = sourceMip;
-            size_t maxFace = GLTexture::getFaceCount(_target);
+            // the stored faces: a cube map array's are its layers' faces, in layer order
+            size_t maxFace = _gpuObject.getNumStoredFaces();
             for (uint8_t face = 0; face < maxFace; face++) {
                 copyMipFaceFromTexture(sourceMip, targetMip, face);
             }
@@ -551,7 +569,14 @@ void GLESVariableAllocationTexture::populateTransferQueue(TransferJob::Queue& qu
             }
 
             // If the mip is less than the max transfer size, then just do it in one transfer
-            if (glm::all(glm::lessThanEqual(mipDimensions, MAX_TRANSFER_DIMENSIONS))) {
+            // One transfer when the mip fits the transfer buffer, by bytes and not only by dimensions: a half-float
+            // texture has 8 bytes a texel, so its 1024-wide mip is twice the buffer, and one job that never fits
+            // stalls the whole queue (the lightmaps' walls stayed at their first low mips, LIGHTMAPS.md step 3)
+            // and no job takes more than half the buffer: a job the size of the whole buffer only runs when nothing
+            // else is in flight, which with many textures streaming can take minutes (the walls' lightmaps stayed
+            // at their first mips while the floor's finished)
+            if (glm::all(glm::lessThanEqual(mipDimensions, MAX_TRANSFER_DIMENSIONS)) &&
+                _gpuObject.getStoredMipFaceSize(sourceMip, face) <= MAX_TRANSFER_SIZE / 2) {
                 // Can the mip be transferred in one go
                 queue.emplace(new TransferJob(_gpuObject, sourceMip, targetMip, face));
                 continue;
@@ -566,7 +591,7 @@ void GLESVariableAllocationTexture::populateTransferQueue(TransferJob::Queue& qu
             const auto numBlocks = (lines + (BLOCK_NUM_LINES - 1)) / BLOCK_NUM_LINES;
             auto bytesPerBlock = mipSize / numBlocks;
             Q_ASSERT(0 == (mipSize % lines));
-            uint32_t linesPerTransfer = BLOCK_NUM_LINES * (uint32_t)(MAX_TRANSFER_SIZE / bytesPerBlock);
+            uint32_t linesPerTransfer = BLOCK_NUM_LINES * std::max<uint32_t>(1, (uint32_t)((MAX_TRANSFER_SIZE / 2) / bytesPerBlock));
             uint32_t lineOffset = 0;
             while (lineOffset < lines) {
                 uint32_t linesToCopy = std::min<uint32_t>(lines - lineOffset, linesPerTransfer);

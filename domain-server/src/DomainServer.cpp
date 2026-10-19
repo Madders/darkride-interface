@@ -1067,6 +1067,10 @@ void DomainServer::populateDefaultStaticAssignmentsExcludingTypes(const QSet<Ass
                 // skip to the next iteraion if asset-server isn't enabled
                 continue;
             }
+            if (defaultedType == Assignment::PhysicsServerType && !isPhysicsServerEnabled()) {
+                // the physics server (PHYSICS.md 4.5) can be turned off for a domain with no vehicles
+                continue;
+            }
 
             // type has not been set from a command line or config file config, use the default
             // by clearing whatever exists and writing a single default assignment with no payload
@@ -3108,6 +3112,11 @@ bool DomainServer::isAssetServerEnabled() {
     return _settingsManager.valueOrDefaultValueForKeyPath(ASSET_SERVER_ENABLED_KEYPATH).toBool();
 }
 
+bool DomainServer::isPhysicsServerEnabled() {
+    static const QString PHYSICS_SERVER_ENABLED_KEYPATH = "physics_server.enabled";
+    return _settingsManager.valueOrDefaultValueForKeyPath(PHYSICS_SERVER_ENABLED_KEYPATH).toBool();
+}
+
 void DomainServer::nodeAdded(SharedNodePointer node) {
     // we don't use updateNodeWithData, so add the DomainServerNodeData to the node here
     node->setLinkedData(std::unique_ptr<DomainServerNodeData> { new DomainServerNodeData() });
@@ -3209,10 +3218,12 @@ void DomainServer::addStaticAssignmentsToQueue() {
     // check if there are static assignments that we need to throw into the assignment queue
     auto sharedAssignments = _allAssignments.values();
 
-    // sort the assignments to put the server/mixer assignments first
-    std::sort(sharedAssignments.begin(), sharedAssignments.end(), [](SharedAssignmentPointer a, SharedAssignmentPointer b){
+    // sort the assignments to put the server/mixer assignments first. The comparator must say "false" for two of
+    // the same type: std::sort needs a strict weak ordering, and with more than sixteen static assignments (the
+    // servers plus a few scripted agents) the old "true" ran it off the end of the list (WORLD-INSTANCES.md).
+    std::stable_sort(sharedAssignments.begin(), sharedAssignments.end(), [](SharedAssignmentPointer a, SharedAssignmentPointer b){
         if (a->getType() == b->getType()) {
-            return true;
+            return false;
         } else if (a->getType() != Assignment::AgentType && b->getType() != Assignment::AgentType) {
             return a->getType() < b->getType();
         } else {

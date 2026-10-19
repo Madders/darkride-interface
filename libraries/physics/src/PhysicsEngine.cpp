@@ -22,6 +22,7 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Physics/Constraints/Constraint.h>
+#include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 
 #include <EntityItem.h>
 #include <PerfStat.h>
@@ -30,6 +31,7 @@
 #include <SharedUtil.h>
 
 #include "CharacterController.h"
+#include "JoltLayers.h"
 #include "JoltSupport.h"
 #include "JoltUtil.h"
 #include "PhysicsHelpers.h"
@@ -65,11 +67,14 @@ PhysicsEngine::~PhysicsEngine() {
     _tempAllocator.reset();
 }
 
-void PhysicsEngine::init() {
+void PhysicsEngine::init(int maxWorkers) {
     JoltSupport::initialize();
     if (!_rootWorld) {
         _tempAllocator.reset(new JPH::TempAllocatorImpl(TEMP_ALLOCATOR_BYTES));
         int numThreads = glm::max(1, (int)std::thread::hardware_concurrency() - 1);
+        if (maxWorkers > 0) {
+            numThreads = glm::min(numThreads, maxWorkers);
+        }
         _jobSystem.reset(new JPH::JobSystemThreadPool(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, numThreads));
         _rootWorld.reset(new PhysicsWorld(QUuid(), _tempAllocator.get(), _jobSystem.get()));
 
@@ -124,12 +129,12 @@ PhysicsWorld* PhysicsEngine::worldFor(ObjectMotionState* motionState) {
     return getWorld(motionState->getFrameID());
 }
 
-bool PhysicsEngine::getFrameTransform(const QUuid& frameID, glm::vec3& position, glm::quat& rotation, glm::vec3& linearVelocity, glm::vec3& angularVelocity) const {
+bool PhysicsEngine::getFrameTransform(const QUuid& frameID, glm::vec3& position, glm::quat& rotation, glm::vec3& linearVelocity, glm::vec3& angularVelocity, bool asSimulated) const {
     auto itr = _frameStates.find(frameID);
     if (itr == _frameStates.end()) {
         return false;
     }
-    return itr->second->getFrameTransformInDomain(position, rotation, linearVelocity, angularVelocity);
+    return itr->second->getFrameTransformInDomain(position, rotation, linearVelocity, angularVelocity, asSimulated);
 }
 
 QUuid PhysicsEngine::frameContaining(const glm::vec3& position, const QUuid& currentFrame, bool supported) const {
@@ -149,18 +154,27 @@ QUuid PhysicsEngine::frameContaining(const glm::vec3& position, const QUuid& cur
     // staying is easier than entering: a rider in a doorway does not flap between worlds. But only while standing
     // on the frame: a rider who has stepped past the floor's edge, with nothing of the frame under them, is out as
     // soon as they are outside the volume itself, so they meet the platform in the world instead of falling here.
+    // Frames nest (4.10): of the frames holding the point the deepest wins, so a car on a deck takes a rider from the
+    // ship, and stepping off the car gives them back to the ship; at equal depth the current frame keeps them.
+    QUuid best;
+    int bestDepth = -1;
     if (!currentFrame.isNull()) {
         auto itr = _frameStates.find(currentFrame);
         if (itr != _frameStates.end() && inside(itr->second, LEAVE_MARGIN) && (supported || inside(itr->second, 0.0f))) {
-            return currentFrame;
+            best = currentFrame;
+            bestDepth = itr->second->getFrameDepth();
         }
     }
     for (const auto& entry : _frameStates) {
         if (entry.first != currentFrame && inside(entry.second, -ENTER_MARGIN)) {
-            return entry.first;
+            int depth = entry.second->getFrameDepth();
+            if (depth > bestDepth) {
+                best = entry.first;
+                bestDepth = depth;
+            }
         }
     }
-    return QUuid();
+    return best;
 }
 
 // private
@@ -217,7 +231,73 @@ void PhysicsEngine::registerFrame(ObjectMotionState* frameState) {
     }
     _frameStates[frameID] = frameState;
     _framesChanged = true;
-    getWorld(frameID)->setFrameHull(frameState);
+    PhysicsWorld* world = getWorld(frameID);
+    world->setFrameHull(frameState);
+    world->markInteriorChanged();   // a new hull body, or a new own shape: the interior copy is rebuilt on it
+}
+
+// The interior copy (round 8, PHYSICS.md 4.1). A frame's walls are static bodies in its own world and nothing of them
+// is in the parent world, where the frame's hull body is; so whoever walks in from outside stood in a wall until the
+// frame's world received them and shoved them out. Now the hull body wears a compound shape: the frame's own shape at
+// the origin and a copy of each static body of its world at its local pose, which is the pose the hull twin at the
+// origin gives it. The copies collide as the frame does (its layer, its material) and move with it for free, being one
+// body; a contact with one is reported against the part it copies (ObjectMotionState::interiorPartAt). Mass and
+// inertia stay the own shape's. Rebuilt when a static body comes, goes or moves in the frame's world, or the frame's
+// own shape changes; a mesh part (Jolt: static only) and a collisionless one are left out, and the parts are taken in
+// ID order so every process builds the same compound.
+void PhysicsEngine::refreshFrameInteriors() {
+    for (auto& entry : _frameWorlds) {
+        PhysicsWorld* world = entry.second.get();
+        if (!world->takeInteriorChanged()) {
+            continue;
+        }
+        auto stateItr = _frameStates.find(entry.first);
+        if (stateItr == _frameStates.end()) {
+            continue;
+        }
+        ObjectMotionState* frameState = stateItr->second;
+        const JPH::Shape* ownShape = frameState->getShape();
+        if (!ownShape) {
+            continue;
+        }
+        bool hadCopy = frameState->getInteriorShape() != nullptr;
+        std::vector<ObjectMotionState*> parts;
+        for (ObjectMotionState* part : world->getMotionStates()) {
+            const JPH::Body* body = part->getBody();
+            if (!body || !body->IsStatic() || part->getType() != MOTIONSTATE_TYPE_ENTITY) {
+                continue;
+            }
+            const JPH::Shape* shape = body->GetShape();
+            if (!shape || shape->MustBeStatic() || JoltLayers::maskOf(body->GetObjectLayer()) == 0) {
+                continue;
+            }
+            parts.push_back(part);
+        }
+        if (parts.empty()) {
+            frameState->setInteriorShape(nullptr, {});
+            continue;
+        }
+        std::sort(parts.begin(), parts.end(), [](ObjectMotionState* a, ObjectMotionState* b) {
+            return a->getObjectID() < b->getObjectID();
+        });
+        JPH::StaticCompoundShapeSettings settings;
+        settings.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), ownShape, 0);
+        for (size_t i = 0; i < parts.size(); ++i) {
+            const JPH::Body* body = parts[i]->getBody();
+            settings.AddShape(JPH::Vec3(body->GetPosition()), body->GetRotation(), body->GetShape(), (JPH::uint32)(i + 1));
+        }
+        JPH::ShapeSettings::ShapeResult result = settings.Create();
+        if (result.HasError()) {
+            qCWarning(physics) << "PhysicsEngine: no interior copy for frame" << entry.first << ":" << result.GetError().c_str();
+            frameState->setInteriorShape(nullptr, {});
+            continue;
+        }
+        size_t numParts = parts.size();
+        frameState->setInteriorShape(result.Get(), std::move(parts));
+        if (!hadCopy) {
+            qCDebug(physics) << "PhysicsEngine: frame" << entry.first << "wears copies of" << (int)numParts << "interior parts";
+        }
+    }
 }
 
 // private
@@ -240,6 +320,7 @@ void PhysicsEngine::removeObjects(const VectorOfMotionStates& objects) {
         }
         unregisterFrame(object->getObjectID());
     }
+    refreshFrameInteriors();
     dropEmptyWorlds();
 }
 
@@ -337,6 +418,7 @@ void PhysicsEngine::processTransaction(PhysicsEngine::Transaction& transaction) 
     if (_framesChanged) {
         rehomeObjects();
     }
+    refreshFrameInteriors();
     dropEmptyWorlds();
 }
 
@@ -395,7 +477,7 @@ void PhysicsEngine::feedFrameTransforms() {
     for (auto& entry : _frameWorlds) {
         glm::vec3 position, linearVelocity, angularVelocity;
         glm::quat rotation;
-        if (getFrameTransform(entry.first, position, rotation, linearVelocity, angularVelocity)) {
+        if (getFrameTransform(entry.first, position, rotation, linearVelocity, angularVelocity, true)) {
             entry.second->setFrameTransform(position, rotation, linearVelocity, angularVelocity);
         }
     }
@@ -413,6 +495,10 @@ void PhysicsEngine::stepOnce(float dt) {
         }
     }
 
+    if (_substepListener) {
+        _substepListener->preSubstep(_numSubsteps, dt);
+    }
+
     PhysicsWorld* avatarWorld = characterWorld();
     _rootWorld->stepOnce(dt, avatarWorld == _rootWorld.get() ? _myAvatarController : nullptr);
 
@@ -423,6 +509,10 @@ void PhysicsEngine::stepOnce(float dt) {
     }
 
     doOwnershipInfectionForConstraints();
+
+    if (_substepListener) {
+        _substepListener->postSubstep(_numSubsteps, dt);
+    }
 }
 
 void PhysicsEngine::stepSimulation() {
@@ -459,6 +549,15 @@ void PhysicsEngine::stepSimulation() {
         paced -= correction;
         _pacedClockLead -= correction;
     }
+    if (_timeShiftPending != 0.0f) {
+        // time dilation (round 10): a few percent of each frame's time added or left out until the shift is in
+        float extra = paced * TIME_DILATION * (_timeShiftPending > 0.0f ? 1.0f : -1.0f);
+        if (fabsf(extra) > fabsf(_timeShiftPending)) {
+            extra = _timeShiftPending;
+        }
+        paced += extra;
+        _timeShiftPending -= extra;
+    }
     _accumulatedTime = glm::max(_accumulatedTime + paced, 0.0f);
 
     int numSubsteps = (int)(_accumulatedTime / PHYSICS_ENGINE_FIXED_SUBSTEP);
@@ -470,15 +569,27 @@ void PhysicsEngine::stepSimulation() {
         _accumulatedTime -= (float)numSubsteps * PHYSICS_ENGINE_FIXED_SUBSTEP;
     }
 
+    if (numSubsteps > 0 && _idleWhenStill && isStill()) {
+        // nothing to simulate: the substeps are skipped, their time dropped (a body that wakes is stepped from now),
+        // and Jolt's workers stay asleep
+        _numIdleSteps += numSubsteps;
+        numSubsteps = 0;
+        _accumulatedTime = 0.0f;
+    }
+
     uint64_t start = usecTimestampNow();
     for (int i = 0; i < numSubsteps; ++i) {
+        // this substep's boundary on the wall clock: the present less the leftover and the substeps still to run
+        float behind = _accumulatedTime + (float)(numSubsteps - 1 - i) * PHYSICS_ENGINE_FIXED_SUBSTEP;
+        ObjectMotionState::setSubstepTime(now - (uint64_t)(behind * (float)USECS_PER_SECOND));
         stepOnce(PHYSICS_ENGINE_FIXED_SUBSTEP);
     }
     _lastStepDuration = 1.0e-3f * (float)(usecTimestampNow() - start);
 
-    // The results are read once per rendered frame, this much past the last substep, and every object reads
-    // itself that far ahead along its velocity (ObjectMotionState::pullTransformFromBody); so a frame with no
-    // substep of its own (a display faster than the simulation) still reads fresh positions.
+    // The results are read once per rendered frame, this much past the last substep: every object presents
+    // itself blended that far between the start and the end of its last substep (ObjectMotionState::
+    // getPresentedBodyTransform), so a frame with no substep of its own (a display faster than the simulation)
+    // still reads fresh positions, and nothing is ever shown ahead of what was simulated.
     ObjectMotionState::setLeftoverTime(_accumulatedTime);
     _hasOutgoingChanges = true;
 
@@ -491,6 +602,23 @@ void PhysicsEngine::stepSimulation() {
             }
         }
     }
+}
+
+// No body awake in any world and no frame: a step would move nothing.
+bool PhysicsEngine::isStill() const {
+    // a frame's world is stepped whatever is in it; a moving kinematic body (a keyframed entity the network moves)
+    // does not need a step here: nothing simulated meets it while no dynamic body is awake
+    return _frameWorlds.empty() && _rootWorld && _rootWorld->getNumActiveDynamicBodies() == 0;
+}
+
+QString PhysicsEngine::describeActiveBodies(int maxNames) const {
+    if (!_rootWorld) {
+        return "no world";
+    }
+    QStringList names;
+    uint32_t dynamic = _rootWorld->getNumActiveDynamicBodies(&names, maxNames);
+    return QString("%1 active bodies, %2 dynamic%3").arg(_rootWorld->getNumActiveBodies()).arg(dynamic)
+        .arg(names.isEmpty() ? QString() : " (" + names.join(", ") + ")");
 }
 
 void PhysicsEngine::harvestPerformanceStats() {

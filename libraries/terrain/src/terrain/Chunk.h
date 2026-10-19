@@ -33,6 +33,8 @@ public:
     static int indexOf(int x, int y, int z) { return (z * CHUNK_SIZE + y) * CHUNK_SIZE + x; }
 
     const Voxel& get(int x, int y, int z) const { return isUniform() ? _uniform : _voxels[indexOf(x, y, z)]; }
+    // Some voxel of the chunk: the one value while it is uniform, the first otherwise.
+    const Voxel& getFirstVoxel() const { return isUniform() ? _uniform : _voxels[0]; }
     // Returns true when the voxel changed.
     bool set(int x, int y, int z, const Voxel& voxel);
 
@@ -44,6 +46,10 @@ public:
     const std::vector<Voxel>& getVoxels() const { return _voxels; }
     // Replaces every voxel; the vector must hold CHUNK_VOXEL_COUNT entries. Compacts when they are all equal.
     void setVoxels(std::vector<Voxel> voxels);
+
+    // The same voxels, whether kept as one value or spelled out.
+    bool operator==(const Chunk& other) const;
+    bool operator!=(const Chunk& other) const { return !(*this == other); }
 
 private:
     void expand();

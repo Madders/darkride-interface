@@ -515,15 +515,55 @@ bool GLTFSerializer::getIndexFromObject(const QJsonObject& object,
     return false;
 }
 
+// KHR_texture_transform on a texture reference: uv' = offset + rotate(rotation) * (scale * uv), and a texCoord of its
+// own when given. UnityGLTF writes it for Unity's material tiling and offset
+void GLTFSerializer::readTextureTransform(const QJsonObject& object, const QString& field, GLTFMaterial& material, int& texCoord) {
+    QJsonObject transform = object.value(field).toObject().value("extensions").toObject().value("KHR_texture_transform").toObject();
+    if (transform.isEmpty()) {
+        return;
+    }
+    Transform result;
+    QJsonArray offset = transform.value("offset").toArray();
+    if (offset.size() == 2) {
+        result.setTranslation(glm::vec3(offset[0].toDouble(), offset[1].toDouble(), 0.0f));
+    }
+    if (transform.contains("rotation")) {
+        result.setRotation(glm::angleAxis((float)transform.value("rotation").toDouble(), glm::vec3(0.0f, 0.0f, 1.0f)));
+    }
+    QJsonArray scale = transform.value("scale").toArray();
+    if (scale.size() == 2) {
+        result.setScale(glm::vec3(scale[0].toDouble(), scale[1].toDouble(), 1.0f));
+    }
+    if (transform.contains("texCoord")) {
+        texCoord = transform.value("texCoord").toInt();
+    }
+    material.textureTransforms[field] = result;
+}
+
 bool GLTFSerializer::addMaterial(const QJsonObject& object) {
     GLTFMaterial material;
 
     getStringVal(object, "name", material.name, material.defined);
     getDoubleArrayVal(object, "emissiveFactor", material.emissiveFactor, material.defined);
+    // KHR_materials_emissive_strength: the brightness of an HDR emission beyond the factor's 0..1 (the Unity
+    // exporter writes it for URP's HDR emission colours)
+    {
+        QJsonObject strength = object.value("extensions").toObject().value("KHR_materials_emissive_strength").toObject();
+        if (strength.contains("emissiveStrength")) {
+            material.emissiveStrength = strength.value("emissiveStrength").toDouble(1.0);
+            material.defined.insert("emissiveStrength", true);
+        }
+    }
     getIndexFromObject(object, "emissiveTexture", material.emissiveTexture, material.emissiveTexCoord, material.defined);
+    readTextureTransform(object, "emissiveTexture", material, material.emissiveTexCoord);
     getIndexFromObject(object, "normalTexture", material.normalTexture, material.normalTexCoord, material.defined);
+    readTextureTransform(object, "normalTexture", material, material.normalTexCoord);
     getIndexFromObject(object, "occlusionTexture", material.occlusionTexture, material.occlusionTexCoord, material.defined);
+    readTextureTransform(object, "occlusionTexture", material, material.occlusionTexCoord);
     getIndexFromObject(object, "lightmapTexture", material.lightmapTexture, material.lightmapTexCoord, material.defined); // proposal
+    readTextureTransform(object, "lightmapTexture", material, material.lightmapTexCoord);
+    getIndexFromObject(object, "lightmapDirectionTexture", material.lightmapDirectionTexture, material.lightmapDirectionTexCoord, material.defined);
+    readTextureTransform(object, "lightmapDirectionTexture", material, material.lightmapDirectionTexCoord);
     getBoolVal(object, "doubleSided", material.doubleSided, material.defined);
     QString alphaMode;
     if (getStringVal(object, "alphaMode", alphaMode, material.defined)) {
@@ -540,6 +580,7 @@ bool GLTFSerializer::addMaterial(const QJsonObject& object) {
             jsMetallicRoughness, "baseColorTexture", material.pbrMetallicRoughness.baseColorTexture,
             material.pbrMetallicRoughness.baseColorTexCoord, material.pbrMetallicRoughness.defined
         );
+        readTextureTransform(jsMetallicRoughness, "baseColorTexture", material, material.pbrMetallicRoughness.baseColorTexCoord);
         getDoubleVal(
             jsMetallicRoughness, "metallicFactor", material.pbrMetallicRoughness.metallicFactor,
             material.pbrMetallicRoughness.defined
@@ -552,6 +593,7 @@ bool GLTFSerializer::addMaterial(const QJsonObject& object) {
             jsMetallicRoughness, "metallicRoughnessTexture", material.pbrMetallicRoughness.metallicRoughnessTexture,
             material.pbrMetallicRoughness.metallicRoughnessTexCoord, material.pbrMetallicRoughness.defined
         );
+        readTextureTransform(jsMetallicRoughness, "metallicRoughnessTexture", material, material.pbrMetallicRoughness.metallicRoughnessTexCoord);
     }
     _file.materials.push_back(material);
     return true;
@@ -1713,10 +1755,11 @@ QNetworkReply* GLTFSerializer::request(hifi::URL& url, bool isTest) {
     return netReply;  // trying to sync later on.
 }
 
-HFMTexture GLTFSerializer::getHFMTexture(const GLTFTexture& texture, const int texCoord) {
+HFMTexture GLTFSerializer::getHFMTexture(const GLTFTexture& texture, const int texCoord, const Transform& transform) {
     HFMTexture fbxtex = HFMTexture();
     fbxtex.texcoordSet = texCoord;
-    fbxtex.texcoordSetName = "TEXCOORD_" + texCoord;
+    fbxtex.texcoordSetName = QString("TEXCOORD_%1").arg(texCoord);
+    fbxtex.transform = transform;
 
     if (texture.defined["source"]) {
         QString url = _file.images[texture.source].uri;
@@ -1761,36 +1804,53 @@ void GLTFSerializer::setHFMMaterial(HFMMaterial& hfmMat, const GLTFMaterial& mat
 
     if (material.defined["emissiveFactor"] && material.emissiveFactor.size() == 3) {
         glm::vec3 emissive = glm::vec3(material.emissiveFactor[0], material.emissiveFactor[1], material.emissiveFactor[2]);
+        if (material.defined["emissiveStrength"]) {
+            emissive *= (float)material.emissiveStrength;
+        }
         hfmMat._material->setEmissive(emissive);
     }
 
     if (material.defined["emissiveTexture"]) {
-        hfmMat.emissiveTexture = getHFMTexture(_file.textures[material.emissiveTexture], material.emissiveTexCoord);
+        hfmMat.emissiveTexture = getHFMTexture(_file.textures[material.emissiveTexture], material.emissiveTexCoord,
+                                               material.textureTransforms.value("emissiveTexture"));
         hfmMat.useEmissiveMap = true;
     }
 
     if (material.defined["normalTexture"]) {
-        hfmMat.normalTexture = getHFMTexture(_file.textures[material.normalTexture], material.normalTexCoord);
+        hfmMat.normalTexture = getHFMTexture(_file.textures[material.normalTexture], material.normalTexCoord,
+                                             material.textureTransforms.value("normalTexture"));
         hfmMat.useNormalMap = true;
     }
 
     if (material.defined["occlusionTexture"]) {
-        hfmMat.occlusionTexture = getHFMTexture(_file.textures[material.occlusionTexture], material.occlusionTexCoord);
+        hfmMat.occlusionTexture = getHFMTexture(_file.textures[material.occlusionTexture], material.occlusionTexCoord,
+                                                material.textureTransforms.value("occlusionTexture"));
         hfmMat.useOcclusionMap = true;
+        // glTF's occlusion map reads the texture coordinates it names (the first, mostly, as Unity's and UnityGLTF's
+        // do); the model shader reads the second ones unless told so
+        if (material.occlusionTexCoord == 0) {
+            hfmMat._material->setOcclusionTexcoord0(true);
+        }
     }
 
-    // https://github.com/KhronosGroup/glTF/pull/1658
+    // https://github.com/KhronosGroup/glTF/pull/1658 ; the lightmap holds Unity's Baked Indirect light (LIGHTMAPS.md)
     if (material.defined["lightmapTexture"]) {
-        hfmMat.lightmapTexture = getHFMTexture(_file.textures[material.lightmapTexture], material.lightmapTexCoord);
-        // hfmMat.lightmapParams
+        hfmMat.lightmapTexture = getHFMTexture(_file.textures[material.lightmapTexture], material.lightmapTexCoord,
+                                               material.textureTransforms.value("lightmapTexture"));
+        hfmMat.lightmapMode = graphics::MaterialKey::LIGHTMAP_INDIRECT;
+    }
+    if (material.defined["lightmapDirectionTexture"]) {
+        hfmMat.lightmapDirectionTexture = getHFMTexture(_file.textures[material.lightmapDirectionTexture], material.lightmapDirectionTexCoord,
+                                                        material.textureTransforms.value("lightmapDirectionTexture"));
     }
 
     if (material.defined["pbrMetallicRoughness"]) {
         hfmMat.isPBSMaterial = true;
 
         if (material.pbrMetallicRoughness.defined["baseColorTexture"]) {
-            hfmMat.opacityTexture = getHFMTexture(_file.textures[material.pbrMetallicRoughness.baseColorTexture], material.pbrMetallicRoughness.baseColorTexCoord);
-            hfmMat.albedoTexture = getHFMTexture(_file.textures[material.pbrMetallicRoughness.baseColorTexture], material.pbrMetallicRoughness.baseColorTexCoord);
+            const Transform& baseColorTransform = material.textureTransforms.value("baseColorTexture");
+            hfmMat.opacityTexture = getHFMTexture(_file.textures[material.pbrMetallicRoughness.baseColorTexture], material.pbrMetallicRoughness.baseColorTexCoord, baseColorTransform);
+            hfmMat.albedoTexture = getHFMTexture(_file.textures[material.pbrMetallicRoughness.baseColorTexture], material.pbrMetallicRoughness.baseColorTexCoord, baseColorTransform);
             hfmMat.useAlbedoMap = true;
         }
         if (material.pbrMetallicRoughness.defined["baseColorFactor"] &&
@@ -1809,11 +1869,11 @@ void GLTFSerializer::setHFMMaterial(HFMMaterial& hfmMat, const GLTFMaterial& mat
             // hfmMat.occlusionTexture.sourceChannel = image::ColorChannel::RED;
             // hfmMat.useOcclusionMap = true;
 
-            hfmMat.roughnessTexture = getHFMTexture(_file.textures[material.pbrMetallicRoughness.metallicRoughnessTexture], material.pbrMetallicRoughness.metallicRoughnessTexCoord);
+            hfmMat.roughnessTexture = getHFMTexture(_file.textures[material.pbrMetallicRoughness.metallicRoughnessTexture], material.pbrMetallicRoughness.metallicRoughnessTexCoord, material.textureTransforms.value("metallicRoughnessTexture"));
             hfmMat.roughnessTexture.sourceChannel = image::ColorChannel::GREEN;
             hfmMat.useRoughnessMap = true;
 
-            hfmMat.metallicTexture = getHFMTexture(_file.textures[material.pbrMetallicRoughness.metallicRoughnessTexture], material.pbrMetallicRoughness.metallicRoughnessTexCoord);
+            hfmMat.metallicTexture = getHFMTexture(_file.textures[material.pbrMetallicRoughness.metallicRoughnessTexture], material.pbrMetallicRoughness.metallicRoughnessTexCoord, material.textureTransforms.value("metallicRoughnessTexture"));
             hfmMat.metallicTexture.sourceChannel = image::ColorChannel::BLUE;
             hfmMat.useMetallicMap = true;
         }

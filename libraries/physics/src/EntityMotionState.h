@@ -20,6 +20,7 @@
 #include "ObjectMotionState.h"
 
 class TrackSimulation;
+class VehicleSimulation;
 
 
 // From the MotionState's perspective:
@@ -44,7 +45,10 @@ public:
 
     // The chain of transforms between the entity's parent and its frame, composed: the transform of the parent
     // in the frame's coordinates. Returns false when the entity has no frame.
-    bool getParentTransformInFrame(Transform& transform, glm::vec3& linearVelocity, glm::vec3& angularVelocity) const;
+    bool getParentTransformInFrame(Transform& transform, glm::vec3& linearVelocity, glm::vec3& angularVelocity, bool asSimulated = false) const;
+    // the body's pose as the entity's local transform, and back (the body is the simulated state of a keyframed entity)
+    void bodyPoseAsLocal(Transform& local) const;
+    void localToBodyPose(const Transform& local, glm::vec3& position, glm::quat& rotation) const;
 
     /// \return PhysicsMotionType based on params set in EntityItem
     virtual PhysicsMotionType computePhysicsMotionType() const override;
@@ -61,7 +65,13 @@ public:
     bool shouldSendUpdate(uint32_t simulationStep);
     // a car on a track (PHYSICS.md 4.8): driven along the curve by the client that owns it, through the TrackSimulation
     bool isTrackDriven() const { return _trackDriven; }
+    bool serverTakes() const; // the physics server owns this (a car on a track, a vehicle) at SERVER priority
     void setTrackSimulation(TrackSimulation* tracks) { _tracks = tracks; }
+    // a vehicle (PHYSICS.md round 6): simulated here by the VehicleSimulation, whoever the authority is
+    bool isVehicle() const { return _vehicle; }
+    void setVehicleSimulation(VehicleSimulation* vehicles) { _vehicles = vehicles; }
+    // a correction's leftover, taken out of the shown pose and decayed with the time constant (0 clears it)
+    void setCorrection(const glm::vec3& offset, const glm::quat& rotation, float blendTime);
     void sendBid(OctreeEditPacketSender* packetSender, uint32_t step);
     void sendUpdate(OctreeEditPacketSender* packetSender, uint32_t step);
 
@@ -83,6 +93,8 @@ public:
     QUuid getFrameID() const override;
     bool isFrame() const override;
     bool getFrameVolume(glm::vec3& minCorner, glm::vec3& maxCorner) const override;
+    bool getFrameTransformInDomain(glm::vec3& position, glm::quat& rotation, glm::vec3& linearVelocity, glm::vec3& angularVelocity, bool asSimulated = false) const override;
+    int getFrameDepth() const override;
     virtual glm::vec3 getObjectLinearVelocityChange() const override;
 
     virtual const QUuid getObjectID() const override { return _entity->getID(); }
@@ -114,6 +126,9 @@ public:
 
     void setRegion(uint8_t region);
 
+
+    // a vehicle's mass is the number on its spec sheet (vehicle.mass), not a density times a volume
+    float getMass() const override;
 protected:
     void setBody(JPH::Body* body, PhysicsWorld* world) override;
 
@@ -168,6 +183,7 @@ protected:
     uint8_t _loopsWithoutOwner;
     mutable uint8_t _accelerationNearlyGravityCount;
     uint8_t _numInactiveUpdates { 1 };
+    bool _parentChanged { false };   // the physics moved the entity to another frame: the next update says so
     uint8_t _bumpedPriority { 0 }; // the target simulation priority according to collision history
     uint8_t _region { workload::Region::INVALID };
 
@@ -175,8 +191,19 @@ protected:
     TrackSimulation* _tracks { nullptr };
     uint32_t _lastTrackUpdateStep { 0 }; // the substep an owned car last sent an update at
     bool trackCarOutOfSync(uint32_t simulationStep);
+    mutable bool _vehicle { false }; // the entity has a wheeled vehicle group (refreshed with its motion type)
+    VehicleSimulation* _vehicles { nullptr };
+    uint32_t _lastVehicleUpdateStep { 0 };
+    glm::vec3 _correctionOffset { 0.0f };
+    glm::quat _correctionRotation;
+    float _correctionBlendTime { 0.0f };
+    uint64_t _correctionTime { 0 };
+    bool vehicleOutOfSync(uint32_t simulationStep, bool& handled);
+    bool hasLocalVehicleControls() const;
 
     bool isServerlessMode();
+    // the simulation changed the entity's parent (a frame crossing, round 8): the next update carries the parent too
+    void setParentChanged() { _parentChanged = true; }
 };
 
 #endif // hifi_EntityMotionState_h

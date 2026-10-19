@@ -45,10 +45,14 @@ int AsyncMesher::submit(VoxelGrid& grid) {
     if (grid.getDirtyChunks().empty()) {
         return 0;
     }
-    const ChunkSet dirty = grid.getDirtyChunks();   // a copy: the chunks come off the set as they go out
+    const ChunkKeySet dirty = grid.getDirtyChunks();   // a copy: the chunks come off the set as they go out
     int started = 0;
-    for (const glm::ivec3& chunk : dirty) {
+    for (const ChunkKey& chunk : dirty) {
         if (_inFlight.count(chunk)) {
+            continue;
+        }
+        if (!grid.hasChunk(chunk)) {
+            grid.clearDirtyChunk(chunk);
             continue;
         }
         auto samples = std::make_shared<ChunkSamples>();
@@ -59,7 +63,7 @@ int AsyncMesher::submit(VoxelGrid& grid) {
         if (samples->isOneSided()) {
             // all air or all ground: no surface, no mesh, and no need of a thread to say so
             Result result;
-            result.chunk = chunk;
+            result.key = chunk;
             std::lock_guard<std::mutex> lock(_shared->mutex);
             _shared->results.push_back(std::move(result));
             continue;
@@ -68,7 +72,7 @@ int AsyncMesher::submit(VoxelGrid& grid) {
         const uint32_t generation = _generation;
         _pool->start([shared, samples, generation] {
             Result result;
-            result.chunk = samples->getChunk();
+            result.key = samples->getKey();
             result.mesh = meshChunk(*samples);
             std::lock_guard<std::mutex> lock(shared->mutex);
             if (shared->generation == generation) {
@@ -79,6 +83,21 @@ int AsyncMesher::submit(VoxelGrid& grid) {
     return started;
 }
 
+void AsyncMesher::submitSamples(std::shared_ptr<const ChunkSamples> samples, uint64_t tag, int priority) {
+    std::shared_ptr<Shared> shared = _shared;
+    const uint32_t generation = _generation;
+    _pool->start([shared, samples, generation, tag] {
+        Result result;
+        result.key = samples->getKey();
+        result.tag = tag;
+        result.mesh = meshChunk(*samples);
+        std::lock_guard<std::mutex> lock(shared->mutex);
+        if (shared->generation == generation) {
+            shared->results.push_back(std::move(result));
+        }
+    }, priority);
+}
+
 std::vector<AsyncMesher::Result> AsyncMesher::collect() {
     std::vector<Result> results;
     {
@@ -86,7 +105,9 @@ std::vector<AsyncMesher::Result> AsyncMesher::collect() {
         results.swap(_shared->results);
     }
     for (const Result& result : results) {
-        _inFlight.erase(result.chunk);
+        if (result.tag == 0) {
+            _inFlight.erase(result.key);
+        }
     }
     return results;
 }

@@ -281,9 +281,9 @@ public:
         bool fadeParameterBufferUnit{ false };
         bool fadeObjectParameterBufferUnit{ false };
         bool hazeParameterBufferUnit{ false };
-        bool lightClusterGridBufferUnit{ false };
-        bool lightClusterContentBufferUnit{ false };
-        bool lightClusterFrustumBufferUnit{ false };
+        bool lightClusterParamsBufferUnit{ false };
+        bool lightClusterTilesBufferUnit{ false };
+        bool lightClusterBinsBufferUnit{ false };
     };
     using LocationsPointer = std::shared_ptr<Locations>;
 

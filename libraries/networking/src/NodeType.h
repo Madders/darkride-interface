@@ -25,6 +25,7 @@ namespace NodeType {
     const NodeType_t AssetServer = 'A';
     const NodeType_t MessagesMixer = 'm';
     const NodeType_t EntityScriptServer = 'S';
+    const NodeType_t PhysicsServer = 'P'; // the server-authoritative simulation (PHYSICS.md 4.5)
     const NodeType_t UpstreamAudioMixer = 'B';
     const NodeType_t UpstreamAvatarMixer = 'C';
     const NodeType_t DownstreamAudioMixer = 'a';

@@ -16,27 +16,19 @@
 #include <render/RenderFetchCullSortTask.h>
 
 #include "AssembleLightingStageTask.h"
+#include "RenderShadowTask.h"
 
-class RenderShadowsAndDeferredTask {
-public:
-    using Input = render::VaryingSet3<RenderFetchCullSortTask::Output, LightingModelPointer, AssembleLightingStageTask::Output>;
-    using JobModel = render::Task::ModelI<RenderShadowsAndDeferredTask, Input>;
-
-    RenderShadowsAndDeferredTask() {}
-
-    void build(JobModel& task, const render::Varying& inputs, render::Varying& outputs, render::CullFunctor cullFunctor, uint8_t tagBits, uint8_t tagMask);
-
-};
-
+// Deferred or forward rendering of the view, the frame's shadows (RenderShadowTask's output: the sun's cascades, and
+// the lights' maps and cookies with them) having been drawn before the choice, so that both methods light with them
 class DeferredForwardSwitchJob {
 public:
-    using Input = render::VaryingSet3<RenderFetchCullSortTask::Output, LightingModelPointer, AssembleLightingStageTask::Output>;
+    using Input = render::VaryingSet4<RenderFetchCullSortTask::Output, LightingModelPointer, AssembleLightingStageTask::Output, RenderShadowTask::Output>;
     using JobModel = render::Switch::ModelI<DeferredForwardSwitchJob, Input>;
 
     DeferredForwardSwitchJob() {}
 
     void configure(const render::SwitchConfig& config) {}
-    void build(JobModel& task, const render::Varying& inputs, render::Varying& outputs, render::CullFunctor cullFunctor, uint8_t tagBits, uint8_t tagMask);
+    void build(JobModel& task, const render::Varying& inputs, render::Varying& outputs);
 
 };
 

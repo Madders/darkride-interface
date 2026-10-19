@@ -119,7 +119,7 @@ export class WorldCardComponent {
 
 	// Hop: where the people are; else somewhere already running; else a new public instance
 	onHop() {
-		if (this.starting) return;
+		if (this.starting || this.exploreService.hoppingWorldId != null) return;
 		const places = this.places;
 		const open =
 			places.find(place => place.people > 0) ??
@@ -134,6 +134,8 @@ export class WorldCardComponent {
 	}
 
 	onJoin(place: Place) {
+		this.starting = true; // "Hopping..." until the Explore closes behind the client
+		this.exploreService.hopStart(this.world.label, this.world.username, this.world.id);
 		if (place.instance != null) {
 			this.exploreService.joinInstance(place.instance);
 		} else {
@@ -142,15 +144,18 @@ export class WorldCardComponent {
 	}
 
 	onNewInstance(visibility: InstanceVisibility) {
-		if (this.starting) return;
+		if (this.starting || this.exploreService.hoppingWorldId != null) return;
 		this.starting = true;
+		this.exploreService.setHopping(this.world.id);
+		this.exploreService.hopStart(this.world.label, this.world.username, this.world.id);
 		this.exploreService.startInstance(this.world.id, visibility).subscribe(
 			instance => {
-				this.starting = false;
 				this.exploreService.joinInstance(instance);
 			},
 			err => {
 				this.starting = false;
+				this.exploreService.setHopping(null);
+				this.exploreService.hopFailed();
 				this.snackBar.open(
 					"Could not start an instance: " +
 						(err?.error?.message ??
@@ -164,6 +169,7 @@ export class WorldCardComponent {
 	}
 
 	onJoinWorld() {
+		this.exploreService.setHopping(this.world.id);
 		this.scriptService.emitEvent(
 			"explore",
 			"joinDomain",

@@ -39,7 +39,7 @@ protected:
         // Pixel info is { viewport width height}
         glm::vec4 pixelInfo;
         glm::vec4 invpixelInfo;
-        // Depth info is { n.f, f - n, -f}
+        // Depth info is { n.f, -(f - n), -n, f }: the coefficients of the reversed-Z depth (near 1, far 0) to eye-space depth
         glm::vec4 depthInfo;
         // Stereo info is { isStereoFrame, halfWidth }
         glm::vec4 stereoInfo{ 0.0 };

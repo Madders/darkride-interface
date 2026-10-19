@@ -109,6 +109,16 @@ float cam_getStereoSide() {
 #endif
 }
 
+// the depth the rasterizer stores for a clip-space position (reversed-Z: 1 at the near plane, 0 at the far one);
+// with clip control (GL 4.5) the clip depth runs 0..1, else GL's -1..1
+float transformClipToDepth(vec4 clipPos) {
+#ifdef GPU_CLIP_DEPTH_ZERO_TO_ONE
+    return clipPos.z / clipPos.w;
+#else
+    return 0.5 * (clipPos.z / clipPos.w + 1.0);
+#endif
+}
+
 <@endfunc@>
 
 <@func declareStandardObjectTransform()@>

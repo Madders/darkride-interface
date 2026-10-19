@@ -31,6 +31,7 @@
 #include <ThreadSafeValueCache.h>
 
 #include "Head.h"
+#include "AvatarMenu.h"
 #include "SkeletonModel.h"
 #include "Rig.h"
 
@@ -569,7 +570,25 @@ public:
 
     uint32_t appendSubMetaItems(render::ItemIDs& subItems);
 
+    // The avatar's menu and parameters (AvatarMenu.h), when its .fst has them.
+    AvatarMenu& avatarMenu() { return _avatarMenu; }
+    const AvatarMenu& avatarMenu() const { return _avatarMenu; }
+
+    // Touches (AvatarMenu): this avatar's contact senders in the world, the built-in ones on its head, chest, hands, index
+    // fingers and feet and any its menu data gives, and its receivers run against everyone's.
+    bool hasContactReceivers() const { return _avatarMenu.hasContactReceivers(); }
+    void collectContactSenders(std::vector<AvatarMenu::ContactSender>& senders) const;
+    void updateContacts(const std::vector<AvatarMenu::ContactSender>& senders);
+
 signals:
+    /**jsdoc
+     * Triggered when the avatar's menu (an imported avatar's menu and parameters) is set up for a newly
+     * loaded avatar, or cleared.
+     * @function MyAvatar.avatarMenuChanged
+     * @returns {Signal}
+     */
+    void avatarMenuChanged();
+
     /**jsdoc
      * Triggered when the avatar's target scale is changed. The target scale is the desired scale of the avatar without any 
      * restrictions on permissible scale values imposed by the domain.
@@ -757,6 +776,13 @@ protected:
 
     std::unordered_map<std::string, graphics::MultiMaterial> _materials;
     std::mutex _materialsLock;
+
+    // Runs the menu's layers and shows what they set: parts hidden, the model's own blend shapes, joint poses.
+    void updateAvatarMenu(float deltaTime);
+    AvatarMenu _avatarMenu;
+    QString _avatarMenuModelURL;
+    graphics::MaterialPointer _avatarMenuHideMaterial;
+    std::string _avatarMenuHiddenParts;
 
     void processMaterials();
 

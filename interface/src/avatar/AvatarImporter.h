@@ -14,7 +14,8 @@
 #include <QString>
 #include <QUrl>
 
-// File > Import Avatar. An .fst is worn as it is. A character file (FBX, DAE, OBJ, glTF and the rest the client reads)
+// File > Import Avatar. A .unitypackage (an avatar, as avatar shops sell them) is converted by libraries/unity-import.
+// An .fst is worn as it is. A character file (FBX, DAE, OBJ, glTF and the rest the client reads)
 // gets the standard skeleton from libraries/auto-rigging, after asking when the file already has a rig, and an
 // offer to fix a height that looks like a units mistake. The result is saved under the app data folder's
 // Avatars/<name>/, and the client offers to wear it, here only or put in My Files.

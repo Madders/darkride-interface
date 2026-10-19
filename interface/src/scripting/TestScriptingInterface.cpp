@@ -7,6 +7,8 @@
 //
 #include "TestScriptingInterface.h"
 
+#include <SpringBones.h>
+
 #include <QtCore/QCoreApplication>
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QThread>
@@ -202,6 +204,46 @@ int TestScriptingInterface::getOtherAvatarsReplicaCount() {
 
 void TestScriptingInterface::setMinimumGPUTextureMemStabilityCount(int count) {
     QMetaObject::invokeMethod(qApp, "setMinimumGPUTextureMemStabilityCount", Qt::DirectConnection, Q_ARG(int, count));
+}
+
+void TestScriptingInterface::setSpringBoneLockstep(bool on) {
+    springbones::Solver::setLockstep(on);
+}
+
+void TestScriptingInterface::advanceSpringBones(float seconds) {
+    springbones::Solver::advance(seconds);
+}
+
+void TestScriptingInterface::advanceSpringBones(float seconds, const glm::vec3& avatarMove) {
+    springbones::Solver::advance(seconds, avatarMove);
+}
+
+int TestScriptingInterface::getSpringBoneSteps() {
+    return (int)springbones::Solver::getStepCount();
+}
+
+float TestScriptingInterface::getSpringBonePendingTime() {
+    return springbones::Solver::getPendingTime();
+}
+
+int TestScriptingInterface::getSpringBoneConsumed() {
+    return (int)springbones::Solver::getConsumedCount();
+}
+
+float TestScriptingInterface::getSpringBoneAlpha() {
+    return springbones::Solver::getLastAlpha();
+}
+
+int TestScriptingInterface::getSpringBoneUpdates() {
+    return (int)springbones::Solver::getUpdateCount();
+}
+
+float TestScriptingInterface::getGameLoopRate() {
+    return qApp->getGameLoopRate();
+}
+
+float TestScriptingInterface::getRenderLoopRate() {
+    return qApp->getRenderLoopRate();
 }
 
 bool TestScriptingInterface::isTextureLoadingComplete() {

@@ -63,7 +63,7 @@ CrashRecoveryHandler::Action CrashRecoveryHandler::promptUserForAction(bool show
     QDialog crashDialog;
     QLabel* label;
     if (showCrashMessage) {
-        crashDialog.setWindowTitle("Interface Crashed Last Run");
+        crashDialog.setWindowTitle("Darkride Crashed Last Run");
         label = new QLabel("If you are having trouble starting would you like to reset your settings?");
     } else {
         crashDialog.setWindowTitle("Reset Settings");

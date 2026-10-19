@@ -337,7 +337,7 @@ jobs:
         timeout-minutes: 300
         run: cmake --build build --target interface
 
-      # The bundle's own name is still interface.app; Darkride.app in the disk image. macdeployqt changed the
+      # The bundle is Darkride.app (INTERFACE_BUNDLE_NAME), as in the disk image. macdeployqt changed the
       # binaries, so they're signed again ad hoc (Apple Silicon runs nothing unsigned).
       - name: Package
         run: |
@@ -388,7 +388,7 @@ jobs:
             fi
           }
           start "$helper" helper.log 5
-          start "$app/Contents/MacOS/interface" interface.log 45
+          start "$app/Contents/MacOS/Darkride" interface.log 45
           echo "--- interface"; tail -n 80 interface.log || true
           echo "--- QtWebEngineProcess"; tail -n 20 helper.log || true
           if grep -h -E "Library not loaded|Symbol not found|image not found|dyld\[" interface.log helper.log; then
@@ -504,7 +504,7 @@ jobs:
             echo "## Windows"
             echo
             echo "- **Darkride-$v-windows-x64-setup.exe** installs Darkride for you (or for everyone on the PC), with Start menu and optional desktop shortcuts."
-            echo "- **Darkride-$v-windows-x64.zip** is the same files; unzip and run \`interface.exe\`."
+            echo "- **Darkride-$v-windows-x64.zip** is the same files; unzip and run \`Darkride.exe\`."
             echo
             echo "The installer isn't code-signed yet, so Windows SmartScreen may warn: choose *More info* then *Run anyway*."
             echo

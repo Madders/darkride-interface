@@ -67,7 +67,9 @@ export class InstanceBarComponent implements OnInit, OnDestroy {
 		return err => {
 			this.busy = false;
 			this.snackBar.open(
-				what + ": " + (err?.error?.message ?? err?.message ?? "unknown error"),
+				what +
+					": " +
+					(err?.error?.message ?? err?.message ?? "unknown error"),
 				"OK",
 				{ duration: 8000 },
 			);
@@ -83,11 +85,9 @@ export class InstanceBarComponent implements OnInit, OnDestroy {
 		this.scriptService
 			.rpc("Window.copyToClipboard", [this.current.instance.address])
 			.subscribe();
-		this.snackBar.open(
-			"Copied " + this.current.instance.address,
-			"OK",
-			{ duration: 4000 },
-		);
+		this.snackBar.open("Copied " + this.current.instance.address, "OK", {
+			duration: 4000,
+		});
 	}
 
 	onEditMode(on: boolean) {
@@ -135,11 +135,24 @@ export class InstanceBarComponent implements OnInit, OnDestroy {
 
 	onNewInstance(visibility: InstanceVisibility) {
 		this.busy = true;
+		this.exploreService.setHopping(this.current.world.id);
+		this.exploreService.hopStart(
+			this.current.world.label,
+			this.current.world.username,
+			this.current.world.id,
+		);
 		this.exploreService
 			.startInstance(this.current.world.id, visibility)
-			.subscribe(instance => {
-				this.busy = false;
-				this.exploreService.joinInstance(instance);
-			}, this.fail("Could not start an instance"));
+			.subscribe(
+				instance => {
+					this.busy = false;
+					this.exploreService.joinInstance(instance);
+				},
+				err => {
+					this.exploreService.setHopping(null);
+					this.exploreService.hopFailed();
+					this.fail("Could not start an instance")(err);
+				},
+			);
 	}
 }

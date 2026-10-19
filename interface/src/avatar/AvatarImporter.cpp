@@ -12,16 +12,26 @@
 
 #include <map>
 #include <memory>
+#include <vector>
 
+#include <QBoxLayout>
 #include <QDateTime>
+#include <QDialog>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QMessageBox>
+#include <QKeyEvent>
+#include <QLabel>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPainter>
+#include <QPlainTextEdit>
+#include <QPropertyAnimation>
 #include <QPushButton>
 #include <QRegExp>
+#include <QScreen>
+#include <QTimer>
+#include <QToolButton>
 #include <QUrl>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -31,10 +41,13 @@
 #include <FBXSerializer.h>
 #include <GLMHelpers.h>
 #include <GLTFSerializer.h>
+#include <MainWindow.h>
 #include <NetworkAccessManager.h>
 #include <OBJSerializer.h>
 #include <PathUtils.h>
 #include <StandardSkeleton.h>
+#include <UnityPackage.h>
+#include <UnityAvatar.h>
 
 #include "Application.h"
 #include "AvatarManager.h"
@@ -44,7 +57,6 @@
 
 namespace {
 
-const char* TITLE = "Import Avatar";
 const float USUAL_HEIGHT = 1.70f;
 
 // The joints a rig needs before Darkride's animations can drive it.
@@ -137,44 +149,329 @@ QString avatarFolder(const QString& name) {
     return folder;
 }
 
-struct Choice {
-    QString label;
-    QMessageBox::ButtonRole role;  // AcceptRole is the default button, RejectRole the one Escape presses
+// The importer's alerts and banner, in the design language Caity chose for all of Darkride's popups (10-18): a narrow
+// centred alert in the manner of macOS, with a picture on top, a bold title, at most one short line, and full-width
+// buttons, side by side when there are two (the default on the right) and stacked when there are more (the default on
+// top), the default in blue; further detail sits behind a small Details fold-out, in a scrolling field. A success gets
+// no alert but a banner in the window's corner that fades by itself.
+namespace popup {
+
+const int ALERT_WIDTH = 260;
+const int BANNER_WIDTH = 300;
+#ifdef Q_OS_MAC
+const int SHADOW = 0;  // macOS draws a frameless window's shadow from its opaque pixels
+#else
+const int SHADOW = 24;  // elsewhere the popup paints its own
+#endif
+
+enum class Role { Default, Cancel, Plain };
+
+struct Button {
+    QString label;  // "&&" for an ampersand: a button reads "&" as a keyboard shortcut mark
+    Role role;
 };
 
-// One of the importer's questions: a native dialog with buttons named for what they do (the client's own dialogs
-// only offer Yes, No and Cancel). Returns the chosen button's place in the list, or -1.
-int ask(const QString& text, const QString& details, const std::vector<Choice>& choices) {
-    QMessageBox box;
-    box.setWindowTitle(TITLE);
-    box.setText(text);
-    box.setInformativeText(details);
-    std::vector<QAbstractButton*> buttons;
-    for (const Choice& choice : choices) {
-        QPushButton* button = box.addButton(choice.label, choice.role);
-        buttons.push_back(button);
-        if (choice.role == QMessageBox::AcceptRole) {
-            box.setDefaultButton(button);
-        } else if (choice.role == QMessageBox::RejectRole) {
-            box.setEscapeButton(button);
+const char* const STYLE = R"(
+QLabel { background: transparent; }
+QLabel#title { color: #ffffff; font-size: 13px; font-weight: bold; }
+QLabel#text { color: rgba(255, 255, 255, 189); font-size: 11px; }
+QLabel#bannerTitle { color: #ffffff; font-size: 13px; font-weight: 600; }
+QLabel#bannerText { color: rgba(255, 255, 255, 189); font-size: 12px; }
+QToolButton#details { color: rgba(255, 255, 255, 189); font-size: 11px; border: none; background: transparent; padding: 2px 4px; }
+QPlainTextEdit#detailsText { color: rgba(255, 255, 255, 199); font-size: 11px; background: rgba(0, 0, 0, 71);
+    border: 1px solid rgba(255, 255, 255, 20); border-radius: 6px; padding: 4px 6px; }
+QPushButton { color: #ffffff; font-size: 13px; border: none; border-radius: 7px; background: rgba(255, 255, 255, 36); padding: 0 10px; }
+QPushButton:pressed { background: rgba(255, 255, 255, 56); }
+QPushButton[role="default"] { background: #0b6bd8; }
+QPushButton[role="default"]:pressed { background: #0a5bb8; }
+QPushButton:focus { border: 2px solid rgba(10, 132, 255, 150); }
+)";
+
+// The rounded panel every popup is drawn on, with its shadow where the system draws none.
+void paintPanel(QWidget* widget, qreal radius) {
+    QPainter painter(widget);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QRectF panel = QRectF(widget->rect()).adjusted(SHADOW + 0.5, SHADOW + 0.5, -SHADOW - 0.5, -SHADOW - 0.5);
+    painter.setPen(Qt::NoPen);
+    for (int spread = SHADOW; spread > 0; spread -= 2) {
+        const qreal fade = 1.0 - (qreal)spread / SHADOW;
+        painter.setBrush(QColor(0, 0, 0, (int)(10 * fade * fade)));
+        painter.drawRoundedRect(panel.adjusted(-spread, -spread + SHADOW / 3, spread, spread + SHADOW / 3),
+                                radius + spread, radius + spread);
+    }
+    painter.setBrush(QColor(43, 43, 46));
+    painter.setPen(QPen(QColor(255, 255, 255, 26), 1.0));
+    painter.drawRoundedRect(panel, radius, radius);
+}
+
+// A popup's height for its fixed width. (adjustSize asks the layout for its height at the layout's own preferred
+// width, narrower than the popup, so wrapped lines got counted twice and left gaps under them.)
+void fitHeight(QWidget* popup) {
+    popup->ensurePolished();
+    QLayout* layout = popup->layout();
+    layout->activate();
+    popup->resize(popup->width(), layout->hasHeightForWidth() ? layout->totalHeightForWidth(popup->width())
+                                                              : layout->totalSizeHint().height());
+}
+
+// A picture at a size in points, sharp on a high-density screen.
+QPixmap sized(const QPixmap& picture, int points, qreal devicePixelRatio) {
+    if (picture.isNull()) {
+        return picture;
+    }
+    QPixmap result = picture.scaled(QSize(points, points) * devicePixelRatio, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    result.setDevicePixelRatio(devicePixelRatio);
+    return result;
+}
+
+// The Details fold-out's chevron, pointing right while closed and down while open.
+QIcon chevron(bool open) {
+    const qreal ratio = 2.0;
+    QPixmap pixmap(QSize(10, 10) * ratio);
+    pixmap.setDevicePixelRatio(ratio);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(QColor(255, 255, 255, 189), 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    QPolygonF line;
+    if (open) {
+        line << QPointF(2.0, 3.5) << QPointF(5.0, 6.5) << QPointF(8.0, 3.5);
+    } else {
+        line << QPointF(3.5, 2.0) << QPointF(6.5, 5.0) << QPointF(3.5, 8.0);
+    }
+    painter.drawPolyline(line);
+    return QIcon(pixmap);
+}
+
+class Alert : public QDialog {
+public:
+    Alert(const QPixmap& picture, const QString& title, const QString& text, const QString& details,
+          const std::vector<Button>& buttons, QWidget* parent) :
+        QDialog(parent, Qt::Dialog | Qt::FramelessWindowHint) {
+        setAttribute(Qt::WA_TranslucentBackground);
+        setWindowModality(Qt::ApplicationModal);
+        setWindowTitle(title);
+        setFocusPolicy(Qt::StrongFocus);  // the alert holds the focus, so Return and Escape reach it
+        setStyleSheet(STYLE);
+        setFixedWidth(ALERT_WIDTH + 2 * SHADOW);
+        auto layout = new QVBoxLayout(this);
+        layout->setContentsMargins(SHADOW + 16, SHADOW + 20, SHADOW + 16, SHADOW + 16);
+        layout->setSpacing(0);
+
+        auto pictureLabel = new QLabel();
+        pictureLabel->setPixmap(sized(picture, 64, devicePixelRatioF()));
+        pictureLabel->setAlignment(Qt::AlignCenter);
+        layout->addWidget(pictureLabel);
+        layout->addSpacing(12);
+        layout->addWidget(label("title", title));
+        if (!text.isEmpty()) {
+            layout->addSpacing(6);
+            layout->addWidget(label("text", text));
+        }
+        if (!details.isEmpty()) {
+            layout->addSpacing(6);
+            auto toggle = new QToolButton();
+            toggle->setObjectName("details");
+            toggle->setText("Details");
+            toggle->setIcon(chevron(false));
+            toggle->setIconSize(QSize(10, 10));
+            toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            toggle->setLayoutDirection(Qt::RightToLeft);  // the chevron after the word
+            toggle->setFocusPolicy(Qt::TabFocus);
+            toggle->setAttribute(Qt::WA_MacShowFocusRect, false);
+            layout->addWidget(toggle, 0, Qt::AlignHCenter);
+            auto box = new QPlainTextEdit(details);
+            box->setObjectName("detailsText");
+            box->setReadOnly(true);
+            box->setFixedHeight(112);
+            box->setFrameShape(QFrame::NoFrame);
+            box->setAttribute(Qt::WA_MacShowFocusRect, false);
+            box->setVisible(false);
+            layout->addSpacing(4);
+            layout->addWidget(box);
+            QObject::connect(toggle, &QToolButton::clicked, this, [this, toggle, box]() {
+                const bool open = !box->isVisible();
+                box->setVisible(open);
+                toggle->setIcon(chevron(open));
+                fitHeight(this);
+            });
+        }
+        layout->addSpacing(details.isEmpty() ? 16 : 12);
+
+        // Two buttons side by side with the default on the right; more, stacked with the default on top.
+        const bool sideBySide = buttons.size() == 2;
+        auto row = sideBySide ? (QBoxLayout*)new QHBoxLayout() : (QBoxLayout*)new QVBoxLayout();
+        row->setSpacing(8);
+        std::vector<int> order;
+        for (int i = 0; i < (int)buttons.size(); i++) {
+            if (buttons[i].role == Role::Default && _default < 0) {
+                _default = i;
+            } else {
+                order.push_back(i);
+            }
+            if (buttons[i].role == Role::Cancel && _cancel < 0) {
+                _cancel = i;
+            }
+        }
+        if (_default >= 0) {
+            if (sideBySide) {
+                order.push_back(_default);
+            } else {
+                order.insert(order.begin(), _default);
+            }
+        }
+        for (int i : order) {
+            auto button = new QPushButton(buttons[i].label);
+            button->setProperty("role", i == _default ? "default" : "plain");
+            button->setFixedHeight(28);
+            button->setAutoDefault(false);
+            button->setFocusPolicy(Qt::TabFocus);  // no focus ring until the keyboard moves between buttons
+            button->setAttribute(Qt::WA_MacShowFocusRect, false);
+            QObject::connect(button, &QPushButton::clicked, this, [this, i]() {
+                _answer = i;
+                accept();
+            });
+            row->addWidget(button, 1);
+        }
+        layout->addLayout(row);
+        fitHeight(this);
+    }
+
+    int answer() const { return _answer; }
+
+protected:
+    void paintEvent(QPaintEvent*) override { paintPanel(this, 12.0); }
+
+    // Return is the default button, Escape the cancel button, as in every Mac alert.
+    void keyPressEvent(QKeyEvent* event) override {
+        if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) && _default >= 0) {
+            _answer = _default;
+            accept();
+        } else if (event->key() == Qt::Key_Escape) {
+            _answer = _cancel;
+            reject();
+        } else {
+            QDialog::keyPressEvent(event);
         }
     }
-    qCDebug(interfaceapp) << "Import Avatar: asking" << text;
-    box.exec();
-    auto chosen = std::find(buttons.begin(), buttons.end(), box.clickedButton());
-    const int answer = chosen == buttons.end() ? -1 : (int)(chosen - buttons.begin());
-    qCDebug(interfaceapp) << "Import Avatar: answered" << (answer < 0 ? QString("nothing") : choices[answer].label);
+
+    // Over the middle of the window, a third of the way down, where Mac alerts appear.
+    void showEvent(QShowEvent* event) override {
+        QDialog::showEvent(event);
+        QWidget* anchor = parentWidget() ? parentWidget()->window() : nullptr;
+        const QRect area = anchor ? anchor->geometry() : screen()->availableGeometry();
+        move(area.center().x() - width() / 2, area.top() + (area.height() - height()) / 3);
+        setFocus();
+    }
+
+private:
+    QLabel* label(const char* name, const QString& text) {
+        auto result = new QLabel(text);
+        result->setObjectName(name);
+        result->setWordWrap(true);
+        result->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
+        return result;
+    }
+
+    int _answer { -1 };
+    int _default { -1 };
+    int _cancel { -1 };
+};
+
+// A note that comes and goes in the top right corner of the window: clicked, it goes at once.
+class Banner : public QWidget {
+public:
+    Banner(const QPixmap& picture, const QString& title, const QString& text, QWidget* anchor, int milliseconds = 4500) :
+        QWidget(anchor, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus) {
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        setAttribute(Qt::WA_DeleteOnClose);
+        setStyleSheet(STYLE);
+        setFixedWidth(BANNER_WIDTH + 2 * SHADOW);
+        auto layout = new QHBoxLayout(this);
+        layout->setContentsMargins(SHADOW + 12, SHADOW + 10, SHADOW + 12, SHADOW + 10);
+        layout->setSpacing(10);
+        auto pictureLabel = new QLabel();
+        pictureLabel->setPixmap(sized(picture, 40, devicePixelRatioF()));
+        pictureLabel->setFixedSize(40, 40);
+        layout->addWidget(pictureLabel, 0, Qt::AlignVCenter);
+        auto words = new QVBoxLayout();
+        words->setSpacing(2);
+        auto titleLabel = new QLabel(title);
+        titleLabel->setObjectName("bannerTitle");
+        titleLabel->setWordWrap(true);
+        auto textLabel = new QLabel(text);
+        textLabel->setObjectName("bannerText");
+        textLabel->setWordWrap(true);
+        words->addWidget(titleLabel);
+        words->addWidget(textLabel);
+        layout->addLayout(words, 1);
+        fitHeight(this);
+        if (anchor) {
+            const QRect area = anchor->window()->geometry();
+            move(area.right() - width() - 16 + SHADOW, area.top() + 16 - SHADOW);
+            setWindowOpacity(0.0);
+            show();
+            fade(1.0, 180);
+            QTimer::singleShot(milliseconds, this, [this]() { fade(0.0, 400, true); });
+        }
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override { paintPanel(this, 14.0); }
+    void mousePressEvent(QMouseEvent*) override { close(); }
+
+private:
+    void fade(qreal to, int milliseconds, bool thenClose = false) {
+        auto animation = new QPropertyAnimation(this, "windowOpacity", this);
+        animation->setDuration(milliseconds);
+        animation->setEndValue(to);
+        if (thenClose) {
+            QObject::connect(animation, &QPropertyAnimation::finished, this, &QWidget::close);
+        }
+        animation->start(QAbstractAnimation::DeleteWhenStopped);
+    }
+};
+
+}
+
+QPixmap appIcon() {
+    return QPixmap(PathUtils::resourcesPath() + "images/darkride-logo.png");
+}
+
+// An error from below as a sentence of its own: "it was cut" becomes "It was cut."
+QString sentence(QString text) {
+    text = text.trimmed();
+    if (!text.isEmpty()) {
+        text[0] = text[0].toUpper();
+        if (!text.endsWith('.')) {
+            text += '.';
+        }
+    }
+    return text;
+}
+
+// One of the importer's questions. Returns the chosen button's place in the list, or -1.
+int ask(const QString& title, const QString& text, const std::vector<popup::Button>& buttons,
+        const QString& details = QString()) {
+    qCDebug(interfaceapp) << "Import Avatar: asking" << title;
+    popup::Alert alert(appIcon(), title, text, details, buttons, qApp->getWindow());
+    alert.exec();
+    const int answer = alert.answer();
+    qCDebug(interfaceapp) << "Import Avatar: answered" << (answer < 0 ? QString("nothing") : buttons[answer].label);
     return answer;
 }
 
-void warn(const QString& text) {
-    qCDebug(interfaceapp) << "Import Avatar: warning" << text;
-    QMessageBox::warning(nullptr, TITLE, text);
+void warn(const QString& title, const QString& text = QString()) {
+    qCDebug(interfaceapp) << "Import Avatar: warning" << title << text;
+    popup::Alert alert(appIcon(), title, text, QString(), { { "OK", popup::Role::Default } }, qApp->getWindow());
+    alert.exec();
 }
 
-void inform(const QString& text) {
-    qCDebug(interfaceapp) << "Import Avatar: telling" << text;
-    QMessageBox::information(nullptr, TITLE, text);
+// What went right needs no answer: a banner says it and goes.
+void announce(const QString& title, const QString& text) {
+    qCDebug(interfaceapp) << "Import Avatar: telling" << title << text;
+    new popup::Banner(appIcon(), title, text, qApp->getWindow());
 }
 
 // A line before and after each step, so a client that stops here shows in its log the step it stopped in (a freeze
@@ -212,6 +509,10 @@ using SharePointer = std::shared_ptr<Share>;
 void wearOnceItReadsBack(const SharePointer& share, const QString& url) {
     QNetworkRequest request { QUrl(url) };
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    // A check, so it neither reads nor writes the disk cache: Qt unpacks the gzip itself here and would cache the
+    // unpacked body under the gzip label, which the avatar's own load (HTTPResourceRequest) then fails to unpack.
+    request.setAttribute(QNetworkRequest::CacheLoadControlAttribute, QNetworkRequest::AlwaysNetwork);
+    request.setAttribute(QNetworkRequest::CacheSaveControlAttribute, false);
     QNetworkReply* reply = NetworkAccessManager::getInstance().get(request);
     QObject::connect(reply, &QNetworkReply::finished, reply, [reply, share, url]() {
         reply->deleteLater();
@@ -219,13 +520,13 @@ void wearOnceItReadsBack(const SharePointer& share, const QString& url) {
         if (reply->error() != QNetworkReply::NoError || !body.contains("filename")) {
             const QString why = reply->error() != QNetworkReply::NoError ? reply->errorString()
                                                                          : QString("it came back different");
-            warn(share->name + " went up to My Files, but its avatar file does not read back from the web (" + why +
-                 "), so you are still wearing the copy on this computer.");
+            warn("Couldn't wear " + share->name + " from My Files",
+                 "Its file doesn't read back from the web (" + why + "). You're still wearing the copy on this computer.");
             return;
         }
         qCDebug(interfaceapp) << "Import Avatar:" << share->name << "reads back from" << url;
         wearUrl(url, share->name);
-        inform(share->name + " is in My Files now, and you are wearing that copy, so everyone sees it.");
+        announce(share->name + " is in My Files", "You're wearing it, and everyone can see it.");
     });
 }
 
@@ -246,12 +547,12 @@ void shareNext(const SharePointer& share) {
     }
     if (!started) {
         delete upload;
-        warn("Could not put " + share->name + " in My Files: " + error + ".");
+        warn("Couldn't put " + share->name + " in My Files", sentence(error));
         return;
     }
     QObject::connect(upload, &EditorUpload::failed, upload, [upload, share](const QString& error) {
         upload->deleteLater();
-        warn("Could not put " + share->name + " in My Files: " + error + ".");
+        warn("Couldn't put " + share->name + " in My Files", sentence(error));
     });
     QObject::connect(upload, &EditorUpload::finished, upload, [upload, share, fstNow](const QString& url) {
         upload->deleteLater();
@@ -267,7 +568,7 @@ void shareNext(const SharePointer& share) {
 void shareAvatar(const QString& fstPath, const QString& name) {
     QFile fst(fstPath);
     if (!fst.open(QIODevice::ReadOnly)) {
-        warn("Could not read " + fstPath + ".");
+        warn("Couldn't read " + QFileInfo(fstPath).fileName(), fstPath);
         return;
     }
     auto share = std::make_shared<Share>();
@@ -275,7 +576,8 @@ void shareAvatar(const QString& fstPath, const QString& name) {
     share->fstName = QFileInfo(fstPath).fileName();
     share->remoteFolder = "/avatars/" + name + "-" + QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss");
     QString modelPath;
-    for (const QString& line : QString::fromUtf8(fst.readAll()).split('\n')) {
+    const QString fstText = QString::fromUtf8(fst.readAll());
+    for (const QString& line : fstText.split('\n')) {
         const QString key = line.section('=', 0, 0).trimmed();
         if (key == "texdir") {
             continue;  // the textures go up beside the model, where it looks for them anyway
@@ -295,15 +597,18 @@ void shareAvatar(const QString& fstPath, const QString& name) {
     if (!modelPath.isEmpty()) {
         QFile model(modelPath);
         if (!model.open(QIODevice::ReadOnly)) {
-            warn("Could not read " + modelPath + ".");
+            warn("Couldn't read " + QFileInfo(modelPath).fileName(), modelPath);
             return;
         }
         const QByteArray bytes = model.readAll();
         const QFileInfo modelInfo(modelPath);
         share->files.append(modelInfo.absoluteFilePath());
         share->modelIsLocal = true;
+        // The files beside the model that it names (game rips name their textures) or that the .fst names (a
+        // converted avatar's material map names its textures).
         for (const QFileInfo& file : modelInfo.dir().entryInfoList(QDir::Files)) {
-            if (file != modelInfo && file.suffix().toLower() != "fst" && bytes.contains(file.fileName().toUtf8())) {
+            if (file != modelInfo && file.suffix().toLower() != "fst" &&
+                (bytes.contains(file.fileName().toUtf8()) || fstText.contains("\"" + file.fileName() + "\""))) {
                 share->files.append(file.absoluteFilePath());
             }
         }
@@ -313,15 +618,19 @@ void shareAvatar(const QString& fstPath, const QString& name) {
     shareNext(share);
 }
 
-void offerToWear(const QString& fstPath, const QString& name, const QString& what) {
-    const int answer = ask(what, "Only you see it while it is on this computer. In My Files, everyone sees it.",
-                           { { "Wear it", QMessageBox::AcceptRole },
-                             { "Wear it and put it in My Files", QMessageBox::ActionRole },
-                             { "Not now", QMessageBox::RejectRole } });
+// Asked once an avatar is ready. Wear & Keep (wear it and put it in My Files) is the default; the importer's notes
+// go in the details.
+void offerToWear(const QString& fstPath, const QString& name, const QString& notes) {
+    const int answer = ask(name + " is ready",
+                           "Keep it in My Files so everyone can see it, or try it on this computer first.",
+                           { { "Wear && Keep", popup::Role::Default },
+                             { "Test Locally", popup::Role::Plain },
+                             { "Not Now", popup::Role::Cancel } },
+                           notes);
     if (answer == 0 || answer == 1) {
         wear(fstPath, name);
     }
-    if (answer == 1) {
+    if (answer == 0) {
         shareAvatar(fstPath, name);
     }
 }
@@ -346,12 +655,12 @@ void autoRig(const ImportPointer& import, float scale) {
                               << (!result.ok ? result.error : !written.ok ? written.error : written.fstPath);
         QMetaObject::invokeMethod(qApp, [import, result, written]() {
             if (!result.ok) {
-                warn("Could not rig " + import->name + ": " + result.error + ".");
+                warn("Couldn't rig " + import->name, sentence(result.error));
             } else if (!written.ok) {
-                warn("Could not save " + import->name + ": " + written.error + ".");
+                warn("Couldn't save " + import->name, sentence(written.error));
             } else {
                 offerToWear(written.fstPath, import->name,
-                            import->name + " is rigged with Darkride's standard skeleton. Wear it now?\n\nSaved in " +
+                            "Rigged with Darkride's standard skeleton.\n\nSaved in " +
                                 QFileInfo(written.fstPath).absolutePath() + ".");
             }
         }, Qt::QueuedConnection);
@@ -361,11 +670,11 @@ void autoRig(const ImportPointer& import, float scale) {
 void checkHeightThenRig(const ImportPointer& import) {
     const float height = import->body.maximum.y - import->body.minimum.y;
     if (height > 2.4f || height < 0.6f) {
-        const int answer = ask(QString("%1 is %2 m tall.").arg(import->name).arg(height, 0, 'f', 2),
+        const int answer = ask(QString("%1 is %2 m tall").arg(import->name).arg(height, 0, 'f', 2),
                                "That looks like a units mistake in its file.",
-                               { { QString("Make it %1 m tall").arg(USUAL_HEIGHT, 0, 'f', 2), QMessageBox::AcceptRole },
-                                 { QString("Keep it %1 m tall").arg(height, 0, 'f', 2), QMessageBox::ActionRole },
-                                 { "Cancel", QMessageBox::RejectRole } });
+                               { { QString("Make It %1 m").arg(USUAL_HEIGHT, 0, 'f', 2), popup::Role::Default },
+                                 { QString("Keep %1 m").arg(height, 0, 'f', 2), popup::Role::Plain },
+                                 { "Cancel", popup::Role::Cancel } });
         if (answer == 0) {
             autoRig(import, USUAL_HEIGHT / height);
         } else if (answer == 1) {
@@ -378,16 +687,16 @@ void checkHeightThenRig(const ImportPointer& import) {
 
 void decide(const ImportPointer& import) {
     if (!import->model || import->body.triangles.empty()) {
-        warn("Could not read " + QFileInfo(import->path).fileName() + " as a character.");
+        warn("Couldn't read " + QFileInfo(import->path).fileName(), "Darkride found no character in it.");
         return;
     }
     switch (import->rig) {
         case RigKind::Standard: {
-            const int answer = ask(import->name + " already has Darkride's standard skeleton.",
-                                   "Keep its own rig, or replace it with an automatic one. The file itself is not changed.",
-                                   { { "Keep existing rig", QMessageBox::AcceptRole },
-                                     { "Replace rig", QMessageBox::ActionRole },
-                                     { "Cancel", QMessageBox::RejectRole } });
+            const int answer = ask(import->name + " already has Darkride's skeleton",
+                                   "Keep its own rig, or replace it with an automatic one. The file itself doesn't change.",
+                                   { { "Keep Rig", popup::Role::Default },
+                                     { "Replace Rig", popup::Role::Plain },
+                                     { "Cancel", popup::Role::Cancel } });
             if (answer == 0) {
                 const QString folder = avatarFolder(import->name);
                 QDir().mkpath(folder);
@@ -395,7 +704,7 @@ void decide(const ImportPointer& import) {
                 if (autorig::writeFst(fstPath, import->name, QUrl::fromLocalFile(import->path).toString())) {
                     wear(fstPath, import->name);
                 } else {
-                    warn("Could not write " + fstPath + ".");
+                    warn("Couldn't write " + QFileInfo(fstPath).fileName(), fstPath);
                 }
             } else if (answer == 1) {
                 checkHeightThenRig(import);
@@ -403,20 +712,104 @@ void decide(const ImportPointer& import) {
             break;
         }
         case RigKind::Other:
-            if (ask(import->name + " has a skeleton of its own, but Darkride's animations would move it wrongly.",
-                    "Because " + import->why + ". Its rig can be replaced with Darkride's standard skeleton; the file "
-                    "itself is not changed.",
-                    { { "Replace rig", QMessageBox::AcceptRole }, { "Cancel", QMessageBox::RejectRole } }) == 0) {
+            if (ask(import->name + "'s skeleton won't move right",
+                    sentence("because " + import->why) + " Darkride can replace its rig; the file itself doesn't change.",
+                    { { "Replace Rig", popup::Role::Default }, { "Cancel", popup::Role::Cancel } }) == 0) {
                 checkHeightThenRig(import);
             }
             break;
         case RigKind::None:
-            if (ask(import->name + " has no skeleton yet.", "Darkride can rig it with the standard skeleton.",
-                    { { "Auto rig", QMessageBox::AcceptRole }, { "Cancel", QMessageBox::RejectRole } }) == 0) {
+            if (ask(import->name + " has no skeleton yet", "Darkride can rig it with its standard skeleton.",
+                    { { "Auto Rig", popup::Role::Default }, { "Cancel", popup::Role::Cancel } }) == 0) {
                 checkHeightThenRig(import);
             }
             break;
     }
+}
+
+// A .unitypackage (as avatar shops sell avatars): the avatars in it, converted with libraries/unity-import. The package is
+// read and the avatar written off the main thread; the questions come back to it.
+void convertPackageAvatar(const std::shared_ptr<unity::Package>& package, const avatarimport::AvatarSource& avatar,
+                         const QString& packageName) {
+    QtConcurrent::run([package, avatar, packageName]() {
+        const QString name = avatarName(avatar.name);
+        const avatarimport::WrittenAvatar written = avatarimport::writeAvatar(*package, avatar, avatarFolder(name), name);
+        for (const QString& note : written.notes) {
+            qCDebug(interfaceapp) << "Import Avatar:" << name << "note:" << note;
+        }
+        qCDebug(interfaceapp) << "Import Avatar:" << name << (written.ok ? "converted and saved as" : "not converted:")
+                              << (written.ok ? written.fstPath : written.error);
+        QMetaObject::invokeMethod(qApp, [written, name, packageName]() {
+            if (!written.ok) {
+                warn("Couldn't convert " + name, sentence(written.error));
+                return;
+            }
+            QString notes = "From " + packageName + ".\n\n";
+            QStringList notYet;
+            for (const QString& note : written.notes) {
+                if (note.startsWith("not yet: ")) {
+                    notYet << "- " + note.mid(9);
+                }
+            }
+            if (!notYet.isEmpty()) {
+                notes += "Not carried over yet:\n" + notYet.join("\n") + "\n\n";
+            }
+            offerToWear(written.fstPath, name, notes + "Saved in " + QFileInfo(written.fstPath).absolutePath() + ".");
+        }, Qt::QueuedConnection);
+    });
+}
+
+void importUnityPackage(const QString& path) {
+    QtConcurrent::run([path]() {
+        auto package = std::make_shared<unity::Package>();
+        QString error;
+        const bool opened = package->open(path, &error);
+        const QVector<avatarimport::AvatarSource> avatars = opened ? avatarimport::findAvatars(*package) : QVector<avatarimport::AvatarSource>();
+        qCDebug(interfaceapp) << "Import Avatar: read" << path << (opened ? QString("%1 avatars").arg(avatars.size()) : error);
+        QMetaObject::invokeMethod(qApp, [package, avatars, path, opened, error]() {
+            const QString packageName = QFileInfo(path).fileName();
+            if (!opened) {
+                warn("Couldn't read " + packageName, sentence(error));
+                return;
+            }
+            if (avatars.isEmpty()) {
+                warn(packageName + " holds no avatar",
+                     "An outfit or hair package goes onto its avatar, which Darkride can't do yet.");
+                return;
+            }
+            int chosen = 0;
+            if (avatars.size() > 1) {
+                // findAvatars puts a PC version before the phone ones: two such are versions of one avatar
+                bool firstIsPC = true;
+                for (int i = 0; i < avatars.size(); i++) {
+                    const QString lower = avatars[i].name.toLower();
+                    const bool forPhones = lower.contains("mobile") || lower.contains("quest") || lower.contains("android");
+                    if (forPhones == (i == 0)) {
+                        firstIsPC = false;  // the first is for phones, or another one isn't
+                    }
+                }
+                QString title;
+                std::vector<popup::Button> buttons;
+                if (avatars.size() == 2 && firstIsPC) {
+                    title = avatars[0].name + " comes in two versions";
+                    buttons = { { "PC Version", popup::Role::Default }, { "Mobile Version", popup::Role::Plain } };
+                } else {
+                    title = QString("%1 holds %2 avatars").arg(packageName).arg(avatars.size());
+                    for (int i = 0; i < avatars.size() && i < 3; i++) {
+                        buttons.push_back({ QString(avatars[i].name).replace("&", "&&"),
+                                            i == 0 ? popup::Role::Default : popup::Role::Plain });
+                    }
+                }
+                buttons.push_back({ "Cancel", popup::Role::Cancel });
+                const int answer = ask(title, "Which one do you want to import?", buttons);
+                if (answer < 0 || answer >= (int)buttons.size() - 1) {
+                    return;
+                }
+                chosen = answer;
+            }
+            convertPackageAvatar(package, avatars[chosen], packageName);
+        }, Qt::QueuedConnection);
+    });
 }
 
 }
@@ -424,7 +817,11 @@ void decide(const ImportPointer& import) {
 void AvatarImporter::importFile(const QString& path) {
     const QString name = avatarName(path);
     if (QFileInfo(path).suffix().toLower() == "fst") {
-        offerToWear(path, name, "Wear " + name + "?");
+        offerToWear(path, name, "From " + path + ".");
+        return;
+    }
+    if (QFileInfo(path).suffix().toLower() == "unitypackage") {
+        importUnityPackage(path);
         return;
     }
     auto import = std::make_shared<Import>();
@@ -449,8 +846,11 @@ void AvatarImporter::importFile(const QString& path) {
 
 void AvatarImporter::putInMyFiles(const QUrl& fstUrl) {
     if (!fstUrl.isLocalFile()) {
-        inform(fstUrl.scheme() == "qrc" ? QString("The default avatar is in every client already.")
-                                         : QString("Your avatar is on the web already, so everyone sees it."));
+        if (fstUrl.scheme() == "qrc") {
+            announce("Nothing to put in My Files", "The default avatar is in every viewer already.");
+        } else {
+            announce("Your avatar is on the web already", "Everyone can see it.");
+        }
         return;
     }
     shareAvatar(fstUrl.toLocalFile(), avatarName(fstUrl.toLocalFile()));

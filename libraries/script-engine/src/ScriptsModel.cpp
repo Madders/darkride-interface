@@ -56,7 +56,7 @@ ScriptsModel::ScriptsModel(QObject* parent) :
     _treeNodes()
 {
     _localDirectory.setFilter(QDir::Files | QDir::Readable);
-    _localDirectory.setNameFilters(QStringList("*.js"));
+    _localDirectory.setNameFilters(QStringList() << "*.js" << "*.wasm");
 
     connect(&_fsWatcher, &QFileSystemWatcher::directoryChanged, this, &ScriptsModel::reloadLocalFiles);
     reloadLocalFiles();
@@ -171,7 +171,7 @@ void ScriptsModel::requestDefaultFiles(QString marker) {
 #ifdef Q_OS_WIN
             localDirPartCount++; // one for the drive letter
 #endif
-            QDirIterator it(localDir, QStringList() << "*.js", QDir::Files, QDirIterator::Subdirectories);
+            QDirIterator it(localDir, QStringList() << "*.js" << "*.wasm", QDir::Files, QDirIterator::Subdirectories);
             while (it.hasNext()) {
                 QUrl jsFullPath = QUrl::fromLocalFile(it.next());
                 QString jsPartialPath = jsFullPath.path().split("/").mid(localDirPartCount).join("/");
@@ -226,7 +226,7 @@ bool ScriptsModel::parseXML(QByteArray xmlFile) {
     beginResetModel();
 
     QXmlStreamReader xml(xmlFile);
-    QRegExp jsRegex(".*\\.js");
+    QRegExp jsRegex(".*\\.(js|wasm)");
     bool truncated = false;
     QString lastKey;
 
