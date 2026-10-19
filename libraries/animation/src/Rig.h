@@ -137,6 +137,8 @@ public:
 
     void initJointStates(const HFMModel& hfmModel, const glm::mat4& modelOffset);
     void reset(const HFMModel& hfmModel);
+    // An avatar's rig: joints whose axes aren't Mixamo's get offsets that make them so (AnimSkeleton). Set before the above.
+    void setHumanoidRotationOffsets(bool humanoidRotationOffsets) { _humanoidRotationOffsets = humanoidRotationOffsets; }
     bool jointStatesEmpty() const;
     int getJointStateCount() const;
     int indexOfJoint(const QString& jointName) const;
@@ -470,6 +472,7 @@ protected:
     int _rigId;
     bool _headEnabled { false };
     bool _computeNetworkAnimation { false };
+    bool _humanoidRotationOffsets { false };
     bool _sendNetworkNode { false };
 
     AnimContext _lastContext;

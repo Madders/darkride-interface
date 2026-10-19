@@ -625,7 +625,7 @@ void Rig::initJointStates(const HFMModel& hfmModel, const glm::mat4& modelOffset
     _rigToGeometryTransform = glm::inverse(_geometryToRigTransform);
     setModelOffset(modelOffset);
 
-    _animSkeleton = std::make_shared<AnimSkeleton>(hfmModel);
+    _animSkeleton = std::make_shared<AnimSkeleton>(hfmModel, _humanoidRotationOffsets);
 
     _internalPoseSet._relativePoses.clear();
     _internalPoseSet._relativePoses = _animSkeleton->getRelativeDefaultPoses();
@@ -669,7 +669,7 @@ void Rig::reset(const HFMModel& hfmModel) {
     _geometryOffset = AnimPose(hfmModel.offset);
     _invGeometryOffset = _geometryOffset.inverse();
 
-    _animSkeleton = std::make_shared<AnimSkeleton>(hfmModel);
+    _animSkeleton = std::make_shared<AnimSkeleton>(hfmModel, _humanoidRotationOffsets);
 
     _internalPoseSet._relativePoses.clear();
     _internalPoseSet._relativePoses = _animSkeleton->getRelativeDefaultPoses();
@@ -1816,7 +1816,7 @@ glm::vec3 Rig::deflectHandFromTorso(const glm::vec3& handPosition, const HFMJoin
     if (hipsJoint >= 0) {
         AnimPose hipsPose;
         if (getAbsoluteJointPoseInRigFrame(hipsJoint, hipsPose)) {
-            if (findPointKDopDisplacement(position, hipsPose, hipsShapeInfo, displacement)) {
+            if (findPointKDopDisplacement(position, hipsPose * _animSkeleton->getShapeOffset(hipsJoint), hipsShapeInfo, displacement)) {
                 position += displacement;
             }
         }
@@ -1826,7 +1826,7 @@ glm::vec3 Rig::deflectHandFromTorso(const glm::vec3& handPosition, const HFMJoin
     if (spineJoint >= 0) {
         AnimPose spinePose;
         if (getAbsoluteJointPoseInRigFrame(spineJoint, spinePose)) {
-            if (findPointKDopDisplacement(position, spinePose, spineShapeInfo, displacement)) {
+            if (findPointKDopDisplacement(position, spinePose * _animSkeleton->getShapeOffset(spineJoint), spineShapeInfo, displacement)) {
                 position += displacement;
             }
         }
@@ -1836,7 +1836,7 @@ glm::vec3 Rig::deflectHandFromTorso(const glm::vec3& handPosition, const HFMJoin
     if (spine1Joint >= 0) {
         AnimPose spine1Pose;
         if (getAbsoluteJointPoseInRigFrame(spine1Joint, spine1Pose)) {
-            if (findPointKDopDisplacement(position, spine1Pose, spine1ShapeInfo, displacement)) {
+            if (findPointKDopDisplacement(position, spine1Pose * _animSkeleton->getShapeOffset(spine1Joint), spine1ShapeInfo, displacement)) {
                 position += displacement;
             }
         }
@@ -1846,7 +1846,7 @@ glm::vec3 Rig::deflectHandFromTorso(const glm::vec3& handPosition, const HFMJoin
     if (spine2Joint >= 0) {
         AnimPose spine2Pose;
         if (getAbsoluteJointPoseInRigFrame(spine2Joint, spine2Pose)) {
-            if (findPointKDopDisplacement(position, spine2Pose, spine2ShapeInfo, displacement)) {
+            if (findPointKDopDisplacement(position, spine2Pose * _animSkeleton->getShapeOffset(spine2Joint), spine2ShapeInfo, displacement)) {
                 position += displacement;
             }
         }
@@ -2713,7 +2713,7 @@ void Rig::computeAvatarBoundingCapsule(
     int index = indexOfJoint("Head");
     while (index != -1) {
         const HFMJointShapeInfo& shapeInfo = hfmModel.joints.at(index).shapeInfo;
-        AnimPose pose = _animSkeleton->getAbsoluteDefaultPose(index);
+        AnimPose pose = _animSkeleton->getAbsoluteDefaultPose(index) * _animSkeleton->getShapeOffset(index);
         if (shapeInfo.points.size() > 0) {
             for (auto& point : shapeInfo.points) {
                 totalExtents.addPoint((pose * point));
