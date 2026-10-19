@@ -1769,6 +1769,7 @@ glm::quat Rig::modelAxesLocalRotation(const AnimPoseVec& absolutePoses, int join
 void Rig::initNodeConstraints(const HFMModel& hfmModel) {
     _eyeLookScale = hfmModel.eyeLookScale;
     _eyeLookMaxAngle = hfmModel.eyeLookMaxAngle;
+    _eyeLookExpressionScale = hfmModel.eyeLookExpressionScale;
     _nodeConstraints.clear();
     for (const hfm::NodeConstraint& constraint : hfmModel.nodeConstraints) {
         NodeConstraint nodeConstraint;

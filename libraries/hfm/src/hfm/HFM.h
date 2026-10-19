@@ -402,6 +402,9 @@ public:
     // A VRM says how far its eyes may turn (lookAt); VRoid's flat irises leave their eye-whites past about 10 degrees.
     float eyeLookScale { 1.0f };
     float eyeLookMaxAngle { 25.0f * 3.14159265f / 180.0f };
+    // A model whose eyes look by expression instead (a VRM's EyeUp, EyeDown, EyeIn and EyeOut blendshapes): how much of
+    // each per radian of the gaze's turn that way; 0 where they don't
+    float eyeLookExpressionScale { 0.0f };
 
     void debugDump() const;
 };

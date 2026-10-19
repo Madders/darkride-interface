@@ -38,6 +38,7 @@ struct VRMInfo {
     // (degrees); a scale of 0 where its eyes look by expression rather than by turning their bones
     float eyeLookScale { 1.0f };
     float eyeLookMaxAngle { 25.0f };
+    float eyeLookExpressionScale { 0.0f };  // where they look by expression: how much of one per degree of gaze
     QString title;
     QString authors;
     QString licence;

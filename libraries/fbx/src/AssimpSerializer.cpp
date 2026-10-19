@@ -793,6 +793,7 @@ void AssimpSerializer::processScene(const hifi::VariantHash& mapping) {
         hfmModel->nodeConstraints = vrm.nodeConstraints;
         hfmModel->eyeLookScale = vrm.eyeLookScale;
         hfmModel->eyeLookMaxAngle = glm::radians(vrm.eyeLookMaxAngle);
+        hfmModel->eyeLookExpressionScale = vrm.eyeLookExpressionScale / RADIANS_PER_DEGREE;
         qCDebug(modelformat) << "VRM" << (vrm.version == 0 ? "0.x" : "1.0") << url.fileName() << "-" << vrm.title << "by"
                             << vrm.authors << "-" << vrm.licence << "-" << named << "humanoid joints,"
                             << vrm.blendshapes.size() << "blendshapes from its expressions," << springs << "spring joints in"

@@ -189,6 +189,16 @@ VRMInfo readVRM(const QByteArray& glb) {
         use(Blendshapes::EyeBlink_L, "blink", 0.5f);
         use(Blendshapes::EyeBlink_R, "blink", 0.5f);
     }
+    // Eyes that look by expression: up and down for both eyes at once, so half on each eye's; looking to its left is the
+    // left eye's out and the right eye's in
+    use(Blendshapes::EyeUp_L, "lookUp", 0.5f);
+    use(Blendshapes::EyeUp_R, "lookUp", 0.5f);
+    use(Blendshapes::EyeDown_L, "lookDown", 0.5f);
+    use(Blendshapes::EyeDown_R, "lookDown", 0.5f);
+    use(Blendshapes::EyeOut_L, "lookLeft", 0.5f);
+    use(Blendshapes::EyeIn_R, "lookLeft", 0.5f);
+    use(Blendshapes::EyeIn_L, "lookRight", 0.5f);
+    use(Blendshapes::EyeOut_R, "lookRight", 0.5f);
 
     // Spring bones as Flow threads. VRM moves a joint's tail each frame by (1 - drag) of its last move, plus gravity
     // power and stiffness (towards its rest direction) times the frame's time; Flow by damping times its last move plus
@@ -398,7 +408,14 @@ VRMInfo readVRM(const QByteArray& glb) {
             }
         }
         if (type != "bone") {
-            info.eyeLookScale = 0.0f;  // the eyes look by expression (Seed-san)
+            // the eyes look by expression (Seed-san): lookUp at the gaze's turn up over the range's input, times its output
+            info.eyeLookScale = 0.0f;
+            float input = 0.0f, output = 0.0f;
+            for (const auto& range : ranges) {
+                input += range.first;
+                output += range.second;
+            }
+            info.eyeLookExpressionScale = input > 0.0f ? output / input : 1.0f / 90.0f;
         } else if (!ranges.isEmpty()) {
             float input = 0.0f, output = 0.0f, smallest = ranges.front().second;
             for (const auto& range : ranges) {

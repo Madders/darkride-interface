@@ -141,6 +141,8 @@ public:
     void setHumanoidRotationOffsets(bool humanoidRotationOffsets) { _humanoidRotationOffsets = humanoidRotationOffsets; }
     // how far the model's eyes turn for the gaze's turn (hfm::Model::eyeLookScale)
     float getEyeLookScale() const { return _eyeLookScale; }
+    // how much of its eye-look expressions per radian of gaze, where its eyes look by expression (hfm::Model's)
+    float getEyeLookExpressionScale() const { return _eyeLookExpressionScale; }
     bool jointStatesEmpty() const;
     int getJointStateCount() const;
     int indexOfJoint(const QString& jointName) const;
@@ -491,6 +493,7 @@ protected:
     std::vector<NodeConstraint> _nodeConstraints;
     float _eyeLookScale { 1.0f };  // the model's (hfm::Model::eyeLookScale and eyeLookMaxAngle)
     float _eyeLookMaxAngle { 25.0f * RADIANS_PER_DEGREE };
+    float _eyeLookExpressionScale { 0.0f };
     void initNodeConstraints(const HFMModel& hfmModel);
     void applyNodeConstraints(AnimPoseVec& relativePoses, AnimPoseVec& absolutePoses) const;
     glm::quat modelAxesRotation(const AnimPoseVec& absolutePoses, int joint) const;
