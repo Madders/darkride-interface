@@ -872,7 +872,7 @@ WrittenAvatar autorig::writeAvatar(const hfm::Model& model, const Body& body, co
     return written;
 }
 
-bool autorig::writeFst(const QString& fstPath, const QString& name, const QString& modelFilename) {
+bool autorig::writeFst(const QString& fstPath, const QString& name, const QString& modelFilename, float scale) {
     QFile fst(fstPath);
     if (!fst.open(QIODevice::WriteOnly | QIODevice::Text)) {
         return false;
@@ -880,7 +880,7 @@ bool autorig::writeFst(const QString& fstPath, const QString& name, const QStrin
     QTextStream text(&fst);
     text << "name = " << name << "\n"
          << "type = body+head\n"
-         << "scale = 1\n"
+         << "scale = " << QString::number(scale, 'g', 6) << "\n"
          << "filename = " << modelFilename << "\n"
          << "joint = jointRoot = Hips\n"
          << "joint = jointLean = Spine\n"

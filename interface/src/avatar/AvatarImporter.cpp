@@ -383,7 +383,10 @@ void autoRig(const ImportPointer& import, float scale) {
     });
 }
 
-void checkHeightThenRig(const ImportPointer& import) {
+// The scale to wear it at: 1, unless it's implausibly tall or short, as a file whose units are wrong (the 100Avatars Devil's
+// FBX says centimetres but is 12 of them tall), when they're asked. False if they cancel.
+bool askScale(const ImportPointer& import, float& scale) {
+    scale = 1.0f;
     const float height = import->body.maximum.y - import->body.minimum.y;
     if (height > 2.4f || height < 0.6f) {
         const int answer = ask(QString("%1 is %2 m tall.").arg(import->name).arg(height, 0, 'f', 2),
@@ -392,12 +395,18 @@ void checkHeightThenRig(const ImportPointer& import) {
                                  { QString("Keep it %1 m tall").arg(height, 0, 'f', 2), QMessageBox::ActionRole },
                                  { "Cancel", QMessageBox::RejectRole } });
         if (answer == 0) {
-            autoRig(import, USUAL_HEIGHT / height);
-        } else if (answer == 1) {
-            autoRig(import, 1.0f);
+            scale = USUAL_HEIGHT / height;
+        } else if (answer != 1) {
+            return false;
         }
-    } else {
-        autoRig(import, 1.0f);
+    }
+    return true;
+}
+
+void checkHeightThenRig(const ImportPointer& import) {
+    float scale;
+    if (askScale(import, scale)) {
+        autoRig(import, scale);
     }
 }
 
@@ -416,11 +425,12 @@ void decide(const ImportPointer& import) {
                                    { { "Keep existing rig", QMessageBox::AcceptRole },
                                      { "Replace rig", QMessageBox::ActionRole },
                                      { "Cancel", QMessageBox::RejectRole } });
-            if (answer == 0) {
+            float scale;
+            if (answer == 0 && askScale(import, scale)) {
                 const QString folder = avatarFolder(import->name);
                 QDir().mkpath(folder);
                 const QString fstPath = QDir(folder).filePath(import->name + ".fst");
-                bool written = autorig::writeFst(fstPath, import->name, QUrl::fromLocalFile(import->path).toString());
+                bool written = autorig::writeFst(fstPath, import->name, QUrl::fromLocalFile(import->path).toString(), scale);
                 if (written && !import->fstLines.isEmpty()) {
                     QFile fst(fstPath);
                     written = fst.open(QIODevice::Append | QIODevice::Text) &&
