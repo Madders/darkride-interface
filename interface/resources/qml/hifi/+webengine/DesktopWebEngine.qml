@@ -1,4 +1,5 @@
 import QtQuick 2.7
+import QtQuick.Dialogs 1.2 as OriginalDialogs
 import QtWebEngine 1.5
 
 Item {
@@ -23,6 +24,17 @@ Item {
         webViewProfileSetup = true;
 
         profile.downloadRequested.connect(function(download){
+            // a page can start a download by itself: the user says yes to each one
+            var question = desktop.messageBox({
+                icon: OriginalDialogs.StandardIcon.Question,
+                buttons: OriginalDialogs.StandardButton.Yes | OriginalDialogs.StandardButton.No,
+                defaultButton: OriginalDialogs.StandardButton.No,
+                text: "Download " + download.url + "?"
+            });
+            if (question.exec() !== OriginalDialogs.StandardButton.Yes) {
+                download.cancel();
+                return;
+            }
             adaptedPath = File.convertUrlToPath(downloadUrl);
             tempDir = File.getTempDir();
             download.path = tempDir + "/" + adaptedPath;
