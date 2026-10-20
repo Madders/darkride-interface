@@ -10,6 +10,7 @@
 //
 
 #include "AddressManager.h"
+#include <shared/LocalFileAccessGate.h>
 
 #include <QGuiApplication>
 #include <QClipboard>
@@ -237,6 +238,10 @@ const JSONCallbackParameters& AddressManager::apiCallbackParameters() {
 }
 
 bool AddressManager::handleUrl(const QUrl& lookupUrlIn, LookupTrigger trigger) {
+    if (hifi::scripting::isRestrictedScriptThread() && lookupUrlIn.isLocalFile()) {
+        qWarning() << "Opening a local file as a world isn't available to a world's scripts";
+        return false;
+    }
     static QString URL_TYPE_USER = "user";
     static QString URL_TYPE_DOMAIN_ID = "domain_id";
     static QString URL_TYPE_PLACE = "place";

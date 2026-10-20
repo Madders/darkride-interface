@@ -10,6 +10,8 @@
 //
 
 #include "MenuScriptingInterface.h"
+#include <shared/LocalFileAccessGate.h>
+#include <QtCore/QDebug>
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QThread>
@@ -41,6 +43,10 @@ void MenuScriptingInterface::addMenu(const QString& menu, const QString& groupin
 }
 
 void MenuScriptingInterface::removeMenu(const QString& menu) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "Menu.removeMenu isn't available to a world's scripts";
+        return;
+    }
     Menu* menuInstance = Menu::getInstance();
     if (!menuInstance) {
         return;
@@ -120,6 +126,10 @@ void MenuScriptingInterface::addMenuItem(const QString& menu, const QString& men
 }
 
 void MenuScriptingInterface::removeMenuItem(const QString& menu, const QString& menuitem) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "Menu.removeMenuItem isn't available to a world's scripts";
+        return;
+    }
     Menu* menuInstance = Menu::getInstance();
     if (!menuInstance) {
         return;
@@ -168,6 +178,10 @@ bool MenuScriptingInterface::isOptionChecked(const QString& menuOption) {
 }
 
 void MenuScriptingInterface::setIsOptionChecked(const QString& menuOption, bool isChecked) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "Menu.setIsOptionChecked isn't available to a world's scripts";
+        return;
+    }
     Menu* menuInstance = Menu::getInstance();
     if (!menuInstance) {
         return;
@@ -209,6 +223,10 @@ void MenuScriptingInterface::setMenuEnabled(const QString& menuOption, bool isCh
 }
 
 void MenuScriptingInterface::triggerOption(const QString& menuOption) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "Menu.triggerOption isn't available to a world's scripts";
+        return;
+    }
     Menu* menuInstance = Menu::getInstance();
     if (!menuInstance) {
         return;

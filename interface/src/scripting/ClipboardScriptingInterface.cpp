@@ -9,6 +9,7 @@
 //
 
 #include "ClipboardScriptingInterface.h"
+#include <shared/LocalFileAccessGate.h>
 
 #include <shared/QtHelpers.h>
 
@@ -26,6 +27,10 @@ float ClipboardScriptingInterface::getClipboardContentsLargestDimension() {
 }
 
 bool ClipboardScriptingInterface::exportEntities(const QString& filename, const QVector<QUuid>& entityIDs) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "Clipboard.exportEntities isn't available to a world's scripts";
+        return false;
+    }
     bool retVal;
     BLOCKING_INVOKE_METHOD(qApp, "exportEntities",
                               Q_RETURN_ARG(bool, retVal),
@@ -35,6 +40,10 @@ bool ClipboardScriptingInterface::exportEntities(const QString& filename, const 
 }
 
 bool ClipboardScriptingInterface::exportEntities(const QString& filename, float x, float y, float z, float scale) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "Clipboard.exportEntities isn't available to a world's scripts";
+        return false;
+    }
     bool retVal;
     BLOCKING_INVOKE_METHOD(qApp, "exportEntities",
                               Q_RETURN_ARG(bool, retVal),

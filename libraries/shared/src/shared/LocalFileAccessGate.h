@@ -16,6 +16,12 @@ void setLocalAccessSafeThread(bool safe = true);
 
 bool isLocalAccessSafeThread();
 
+// A thread running a world's scripts on the visitor's computer (entity scripts): APIs that act on the user's own
+// installation (their scripts, settings, menus, files, account) check this and refuse, or keep to the world's own space
+void setRestrictedScriptThread(bool restricted = true);
+
+bool isRestrictedScriptThread();
+
 }}  // namespace hifi::scripting
 
 #endif

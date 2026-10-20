@@ -19,3 +19,13 @@ void hifi::scripting::setLocalAccessSafeThread(bool safe) {
 bool hifi::scripting::isLocalAccessSafeThread() {
     return localAccessSafe.hasLocalData() && localAccessSafe.localData();
 }
+
+static QThreadStorage<bool> restrictedScript;
+
+void hifi::scripting::setRestrictedScriptThread(bool restricted) {
+    restrictedScript.setLocalData(restricted);
+}
+
+bool hifi::scripting::isRestrictedScriptThread() {
+    return restrictedScript.hasLocalData() && restrictedScript.localData();
+}

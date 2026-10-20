@@ -17,6 +17,7 @@
 #include <QScriptValue>
 #include <QtGui/QDesktopServices>
 #include <shared/QtHelpers.h>
+#include <shared/LocalFileAccessGate.h>
 #include <SettingHandle.h>
 
 #include <plugins/PluginManager.h>
@@ -489,6 +490,10 @@ void WindowScriptingInterface::takeSecondaryCamera360Snapshot(const glm::vec3& c
 }
 
 void WindowScriptingInterface::shareSnapshot(const QString& path, const QUrl& href) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "Window.shareSnapshot isn't available to a world's scripts";
+        return;
+    }
     qApp->shareSnapshot(path, href);
 }
 

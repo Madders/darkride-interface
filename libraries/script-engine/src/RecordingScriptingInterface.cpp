@@ -7,6 +7,7 @@
 //
 
 #include "RecordingScriptingInterface.h"
+#include <shared/LocalFileAccessGate.h>
 
 #include <QStandardPaths>
 #include <QtCore/QThread>
@@ -274,6 +275,10 @@ QString RecordingScriptingInterface::getDefaultRecordingSaveDirectory() {
 }
 
 void RecordingScriptingInterface::saveRecording(const QString& filename) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "Recording.saveRecording isn't available to a world's scripts";
+        return;
+    }
     if (QThread::currentThread() != thread()) {
         BLOCKING_INVOKE_METHOD(this, "saveRecording",
             Q_ARG(QString, filename));

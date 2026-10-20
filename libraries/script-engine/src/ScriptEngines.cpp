@@ -7,6 +7,7 @@
 //
 
 #include "ScriptEngines.h"
+#include <shared/LocalFileAccessGate.h>
 
 #include <QtCore/QStandardPaths>
 
@@ -307,6 +308,10 @@ void ScriptEngines::loadDefaultScripts() {
 }
 
 void ScriptEngines::loadOneScript(const QString& scriptFilename) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "ScriptDiscoveryService.loadOneScript isn't available to a world's scripts";
+        return;
+    }
     loadScript(scriptFilename);
 }
 
@@ -404,6 +409,10 @@ QStringList ScriptEngines::getRunningScripts() {
 }
 
 void ScriptEngines::stopAllScripts(bool restart) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "ScriptDiscoveryService.stopAllScripts isn't available to a world's scripts";
+        return;
+    }
     QReadLocker lock(&_scriptEnginesHashLock);
 
     if (_isReloading) {
@@ -453,6 +462,10 @@ void ScriptEngines::setRunOnWebAssembly(const QString& rawScriptURL, bool onWebA
 }
 
 bool ScriptEngines::stopScript(const QString& rawScriptURL, bool restart) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "ScriptDiscoveryService.stopScript isn't available to a world's scripts";
+        return false;
+    }
     bool stoppedScript = false;
     {
         QUrl scriptURL = normalizeScriptURL(QUrl(rawScriptURL));
@@ -488,6 +501,10 @@ void ScriptEngines::reloadLocalFiles() {
 }
 
 void ScriptEngines::reloadAllScripts() {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "ScriptDiscoveryService.reloadAllScripts isn't available to a world's scripts";
+        return;
+    }
     qCDebug(scriptengine) << "reloadAllScripts -- clearing caches";
     DependencyManager::get<ScriptCache>()->clearCache();
     qCDebug(scriptengine) << "reloadAllScripts -- stopping all scripts";
@@ -503,6 +520,10 @@ bool ScriptEngines::getBypassScriptThrottling(){ return _bypassScriptThrottling;
 
 ScriptEnginePointer ScriptEngines::loadScript(const QUrl& scriptFilename, bool isUserLoaded, bool loadScriptFromEditor,
                                               bool activateMainWindow, bool reload, bool quitWhenFinished) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "ScriptDiscoveryService.loadScript isn't available to a world's scripts";
+        return nullptr;
+    }
     if (thread() != QThread::currentThread()) {
         ScriptEnginePointer result { nullptr };
         BLOCKING_INVOKE_METHOD(this, "loadScript", Q_RETURN_ARG(ScriptEnginePointer, result),

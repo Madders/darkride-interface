@@ -12,6 +12,7 @@
 #include "SettingsScriptingInterface.h"
 
 #include <SettingHandle.h>
+#include <shared/LocalFileAccessGate.h>
 
 #include <QJsonValue>
 
@@ -20,8 +21,14 @@ SettingsScriptingInterface* SettingsScriptingInterface::getInstance() {
     return &sharedInstance;
 }
 
+// A world's scripts read and write settings of their own, under worldScripts/, so they can keep their state without
+// reaching the user's settings
+static QString settingKey(const QString& setting) {
+    return hifi::scripting::isRestrictedScriptThread() ? "worldScripts/" + setting : setting;
+}
+
 QVariant SettingsScriptingInterface::getValue(const QString& setting) {
-    QVariant value = Setting::Handle<QVariant>(setting).get();
+    QVariant value = Setting::Handle<QVariant>(settingKey(setting)).get();
     if (!value.isValid()) {
         value = "";
     }
@@ -29,7 +36,7 @@ QVariant SettingsScriptingInterface::getValue(const QString& setting) {
 }
 
 QVariant SettingsScriptingInterface::getValue(const QString& setting, const QVariant& defaultValue) {
-    QVariant value = Setting::Handle<QVariant>(setting, defaultValue).get();
+    QVariant value = Setting::Handle<QVariant>(settingKey(setting), defaultValue).get();
     if (!value.isValid()) {
         value = "";
     }
@@ -51,7 +58,7 @@ void SettingsScriptingInterface::setValue(const QString& setting, const QVariant
     
     // Make a deep-copy of the string.
     // Dangling pointers can occur with QStrings that are implicitly shared from a QScriptEngine.
-    QString deepCopy = QString::fromUtf16(setting.utf16());
+    QString deepCopy = QString::fromUtf16(settingKey(setting).utf16());
 
     // pointers in the QVariant that dont exist anymore can crash when getValue is run
     // QVariant sanitizedValue = value.type() == QVariant::Type::Map ?
