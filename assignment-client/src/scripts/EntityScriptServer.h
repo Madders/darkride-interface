@@ -86,6 +86,11 @@ private:
     std::set<QUuid> _logListeners;
     std::vector<std::pair<QUuid, quint64>> _killedListeners;
 
+    // entities whose atp: server script waits for the asset server's link to be live (nodeActivated loads them). A
+    // mapping request sent before that is never answered and never times out, so the script stayed unloaded for good
+    // whenever the first scene arrived in the same second as the asset server (Darkside's pad, 2026-10-19).
+    std::set<QUuid> _preloadsWaitingForAssetServer;
+
     QString _selectedCodecName;
     CodecPluginPointer _codec;
     Encoder* _encoder { nullptr };

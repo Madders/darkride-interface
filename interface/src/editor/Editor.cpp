@@ -53,6 +53,8 @@
 #include <EntityTreeRenderer.h>
 #include <LightEntityItem.h>
 #include <ParticleEffectEntityItem.h>
+#include <VehiclePropertyGroup.h>
+#include <WheeledVehicleSpec.h>
 #include <gl/GLWidget.h>
 #include <GLMHelpers.h>
 #include <MainWindow.h>
@@ -293,6 +295,8 @@ void Editor::setActive(bool active) {
         _terrain.clear();
         _terrain.flushSaves();   // sculpting that was waiting to be saved goes up now
         _lightGizmos.clear();
+        _vehicleGizmoVehicles.clear();
+        _vehicleGizmos.setVehicles(_vehicleGizmoVehicles);
         _nearbyLights.clear();
         _lightSearchFrame = -1;
         _inspectorRefresh.stop();
@@ -574,6 +578,10 @@ void Editor::createPanels() {
     connect(_inspector, &InspectorPanel::terrainLayerChosen, this, [this](int slot) { _terrainBar->setLayer(slot); });
     _terrainBar->setLayerNameSource([this] { return _terrain.layerNamesForTool(_selection.ids()); });
     connect(_inspector, &InspectorPanel::terrainLayersShown, _terrainBar, &TerrainToolBar::refreshLayerNames);
+    // a vehicle's Wheels or Seats list: the selected row is drawn bright in the viewport
+    connect(_inspector, &InspectorPanel::vehiclePartChosen, this, [this](const QString& key, int index) {
+        _vehiclePartChosen[key] = index;
+    });
     connect(&_terrain, &EditorTerrain::terrainUnderPointerChanged, _terrainBar, &TerrainToolBar::refreshLayerNames);
 
     // notes ("Terrain saved", an upload's progress, a refusal) in a status bar along the bottom, where the
@@ -704,6 +712,7 @@ void Editor::update(float deltaTime) {
     updateGizmo();
     updateBounds();
     updateLightGizmos();
+    updateVehicleGizmos();
     _terrain.setView(_camera.position(), 2.0f * tanHalfFov() / viewportHeight());
     if (_tool == EditorToolBar::Tool::Terrain) {
         _terrain.update(deltaTime);
@@ -853,6 +862,94 @@ void Editor::updateLightGizmos() {
     }
     float pixelSize = 2.0f * tanHalfFov() / viewportHeight();
     _lightGizmos.update(lights, handlesFor, cameraPosition, viewDirection(), pixelSize);
+}
+
+void Editor::updateVehicleGizmos() {
+    // the points the physics acts at: the centre of mass in orange, an airship's or aircraft's others in white
+    static const glm::vec4 MASS_COLOR(1.0f, 0.6f, 0.2f, 1.0f);
+    static const glm::vec4 POINT_COLOR(0.92f, 0.92f, 0.92f, 1.0f);
+    static const float MASS_CROSS = 0.3f;
+    static const float POINT_CROSS = 0.2f;
+    std::vector<EditorVehicleGizmoVehicle> vehicles;
+    auto tree = entityTree();
+    if (tree && !_selection.isEmpty()) {
+        tree->withReadLock([&] {
+            QSet<QUuid> shown;
+            for (const auto& id : _selection.ids()) {
+                auto entity = tree->findEntityByEntityItemID(id);
+                if (!entity) {
+                    continue;
+                }
+                // a wheel entity selected shows its parent's gizmo, with that wheel bright
+                QString chosenWheel;
+                if (entity->isWheel()) {
+                    chosenWheel = entity->getVehicleProperties().getWheel();
+                    entity = tree->findEntityByEntityItemID(entity->getParentID());
+                    if (!entity) {
+                        continue;
+                    }
+                }
+                if (!entity->isVehicle() || shown.contains(entity->getID())) {
+                    continue;
+                }
+                shown.insert(entity->getID());
+                const VehiclePropertyGroup& group = entity->getVehicleProperties();
+                EditorVehicleGizmoVehicle vehicle;
+                vehicle.position = entity->getWorldPosition();
+                vehicle.rotation = entity->getWorldOrientation();
+                // the Inspector's chosen rows are on the first vehicle selected (the one the Inspector shows)
+                bool first = vehicles.empty() && chosenWheel.isEmpty();
+                int chosenWheelRow = first ? _vehiclePartChosen.value(QStringLiteral("vehicle.wheels"), -1) : -1;
+                int chosenSeatRow = first ? _vehiclePartChosen.value(QStringLiteral("vehicle.seats"), -1) : -1;
+                std::vector<WheelSpec> wheels;
+                WheeledVehicleSpec::parseWheels(group.getWheels(), wheels);
+                for (size_t i = 0; i < wheels.size(); ++i) {
+                    const WheelSpec& wheel = wheels[i];
+                    EditorVehicleGizmoWheel gizmo;
+                    gizmo.center = wheel.center;
+                    gizmo.radius = wheel.radius;
+                    gizmo.width = wheel.width;
+                    gizmo.travel = wheel.suspensionDistance;
+                    gizmo.rest = 1.0f - wheel.targetPosition;
+                    gizmo.chosen = (int)i == chosenWheelRow || (!chosenWheel.isEmpty() && wheel.name == chosenWheel);
+                    vehicle.wheels.push_back(gizmo);
+                }
+                std::vector<SeatSpec> seats;
+                WheeledVehicleSpec::parseSeats(group.getSeats(), seats);
+                for (size_t i = 0; i < seats.size(); ++i) {
+                    const SeatSpec& seat = seats[i];
+                    EditorVehicleGizmoSeat gizmo;
+                    gizmo.position = seat.position;
+                    gizmo.yaw = seat.yaw;
+                    gizmo.driver = seat.driver;
+                    gizmo.chosen = (int)i == chosenSeatRow;
+                    vehicle.seats.push_back(gizmo);
+                }
+                auto point = [&](const glm::vec3& position, float size, const glm::vec4& color) {
+                    EditorVehicleGizmoPoint gizmo;
+                    gizmo.position = position;
+                    gizmo.size = size;
+                    gizmo.color = color;
+                    vehicle.points.push_back(gizmo);
+                };
+                point(group.getCenterOfMass(), MASS_CROSS, MASS_COLOR);
+                if (entity->isAirship()) {
+                    point(group.getCenterOfBuoyancy(), POINT_CROSS, POINT_COLOR);
+                    point(group.getThrustPoint(), POINT_CROSS, POINT_COLOR);
+                    point(group.getFinPoint(), POINT_CROSS, POINT_COLOR);
+                } else if (entity->isAircraft()) {
+                    point(group.getWingPoint(), POINT_CROSS, POINT_COLOR);
+                    point(group.getThrustPoint(), POINT_CROSS, POINT_COLOR);
+                    point(group.getFinPoint(), POINT_CROSS, POINT_COLOR);
+                }
+                vehicles.push_back(vehicle);
+            }
+        });
+    }
+    if (vehicles != _vehicleGizmoVehicles) {
+        _vehicleGizmoVehicles = vehicles;
+        _vehicleGizmos.setVehicles(vehicles);
+    }
 }
 
 bool Editor::pointerOverHierarchy() const {
@@ -1422,6 +1519,17 @@ void Editor::finishMarquee(Qt::KeyboardModifiers modifiers) {
     }
     --_selectionBatch;
     recordSelection();
+}
+
+void Editor::select(const QList<QUuid>& ids) {
+    if (!_active) {
+        setActive(true);
+    }
+    _selection.set(ids);
+}
+
+QPixmap Editor::inspectorPicture() const {
+    return _inspector ? _inspector->contentPicture() : QPixmap();
 }
 
 void Editor::selectAll() {

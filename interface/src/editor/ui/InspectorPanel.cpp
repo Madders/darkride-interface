@@ -24,6 +24,7 @@
 #include "TerrainCapsEditor.h"
 #include "TerrainLayersEditor.h"
 #include "UserDataEditor.h"
+#include "VehiclePartsEditor.h"
 
 namespace {
     const QString NULL_UUID = QUuid().toString(QUuid::WithoutBraces);
@@ -104,6 +105,11 @@ bool InspectorPanel::eventFilter(QObject* watched, QEvent* event) {
         }
     }
     return QDockWidget::eventFilter(watched, event);
+}
+
+QPixmap InspectorPanel::contentPicture() const {
+    QWidget* shown = _scroll->widget();
+    return shown ? shown->grab() : QPixmap();
 }
 
 void InspectorPanel::setSummary(const QString& text) {
@@ -209,11 +215,12 @@ QWidget* InspectorPanel::buildSection(const QString& sectionId, QWidget* parent)
         auto editor = PropertyEditor::create(*spec, body);
         auto label = editor->createLabel(body);
         label->setObjectName("EditorInspectorLabel");
+        bool parts = spec->kind == PropertyKind::VehicleWheels || spec->kind == PropertyKind::VehicleSeats;
         bool tall = spec->kind == PropertyKind::Json || spec->kind == PropertyKind::UserData
             || spec->kind == PropertyKind::CollisionMask || spec->kind == PropertyKind::TerrainLayers
-            || spec->kind == PropertyKind::Impostor;
+            || spec->kind == PropertyKind::Impostor || parts;
         grid->addWidget(label, rowIndex, 0, Qt::AlignLeft | (tall ? Qt::AlignTop : Qt::AlignVCenter));
-        if (spec->kind == PropertyKind::UserData || spec->kind == PropertyKind::TerrainLayers || spec->kind == PropertyKind::Impostor) {
+        if (spec->kind == PropertyKind::UserData || spec->kind == PropertyKind::TerrainLayers || spec->kind == PropertyKind::Impostor || parts) {
             grid->addWidget(editor, rowIndex, 0, 1, 2);   // its section's header names it: it takes the whole width
         } else {
             grid->addWidget(editor, rowIndex, 1);
@@ -237,6 +244,9 @@ QWidget* InspectorPanel::buildSection(const QString& sectionId, QWidget* parent)
         }
         if (auto caps = qobject_cast<TerrainCapsEditor*>(editor)) {
             caps->setTerrainEditor(_terrainEditor);
+        }
+        if (auto parts = qobject_cast<VehiclePartsEditor*>(editor)) {
+            connect(parts, &VehiclePartsEditor::partChosen, this, [this, key](int index) { emit vehiclePartChosen(key, index); });
         }
         // right-click on a label: Copy and Paste the row's value, as Unity does
         label->setContextMenuPolicy(Qt::CustomContextMenu);

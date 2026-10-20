@@ -21,6 +21,7 @@
 #include <EntityScriptingInterface.h>
 #include <LogHandler.h>
 #include <MessagesClient.h>
+#include <NetworkingConstants.h>
 #include <plugins/CodecPlugin.h>
 #include <plugins/PluginManager.h>
 #include <ResourceManager.h>
@@ -343,6 +344,19 @@ void EntityScriptServer::nodeActivated(SharedNodePointer activatedNode) {
             }
             break;
         }
+        case NodeType::AssetServer: {
+            // the atp: server scripts checkAndCallPreload held back until the asset server's link was live
+            auto waiting = std::move(_preloadsWaitingForAssetServer);
+            _preloadsWaitingForAssetServer.clear();
+            if (!waiting.empty()) {
+                qCDebug(entity_script_server) << "Asset server active: loading" << waiting.size()
+                                              << "server script(s) that waited for it";
+            }
+            for (const auto& entityID : waiting) {
+                checkAndCallPreload(EntityItemID(entityID), true);
+            }
+            break;
+        }
         default:
             // Do nothing
             break;
@@ -489,6 +503,7 @@ void EntityScriptServer::clear() {
     }
 
     _entityViewer.clear();
+    _preloadsWaitingForAssetServer.clear();
 
     // reset the engine
     if (!_shuttingDown) {
@@ -550,6 +565,18 @@ void EntityScriptServer::checkAndCallPreload(const EntityItemID& entityID, bool 
             QString scriptUrl = entity->getServerScripts();
             if (!scriptUrl.isEmpty()) {
                 scriptUrl = DependencyManager::get<ResourceManager>()->normalizeURL(scriptUrl);
+                if (QUrl(scriptUrl).scheme() == URL_SCHEME_ATP) {
+                    // an atp: script needs the asset server's link live: a mapping request sent before then goes
+                    // nowhere and is never answered (nor timed out), so the script would stay unloaded. Hold it;
+                    // nodeActivated loads it once the asset server is in (the Agent does the same for its script).
+                    auto assetServer = DependencyManager::get<NodeList>()->soloNodeOfType(NodeType::AssetServer);
+                    if (!assetServer || !assetServer->getActiveSocket()) {
+                        qCDebug(entity_script_server) << "Waiting for the asset server before loading" << scriptUrl
+                                                      << "for" << entityID;
+                        _preloadsWaitingForAssetServer.insert(entityID);
+                        return;
+                    }
+                }
                 _entitiesScriptEngine->loadEntityScript(entityID, scriptUrl, forceRedownload);
             }
         }

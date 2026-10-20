@@ -3,6 +3,7 @@
 	[class.has-people]="people > 0"
 	[class.selected]="exploreService.chooserWorldId == world.id"
 	[class.hopping-target]="exploreService.hoppingWorldId == world.id"
+	[class.hidden-world]="world.instances?.access == 'private'"
 >
 	<div
 		class="thumbnail"
@@ -19,6 +20,14 @@
 		(mouseenter)="scriptService.emitEvent('explore', 'hover')"
 	>
 		<div class="chips">
+			<span class="chip hidden-chip" *ngIf="world.instances?.access == 'private'">
+				<mat-icon>visibility_off</mat-icon>
+				Hidden · visitors can't see this
+			</span>
+			<span class="chip friends-only" *ngIf="world.instances?.access == 'friends'">
+				<mat-icon>group</mat-icon>
+				Friends only
+			</span>
 			<span class="chip presence" *ngIf="people > 0">
 				<span class="dot"></span>
 				{{ people }} here
@@ -32,6 +41,7 @@
 				Invited only
 			</span>
 		</div>
+		<div class="hidden-stamp" *ngIf="world.instances?.access == 'private'">HIDDEN</div>
 		<div class="hop-hint"><mat-icon svgIcon="dr-rabbit"></mat-icon></div>
 		<p class="label">{{ world.label }}</p>
 	</div>

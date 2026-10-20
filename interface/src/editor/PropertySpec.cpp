@@ -11,6 +11,7 @@
 #include <cmath>
 #include <functional>
 
+#include <QtCore/QDateTime>
 #include <QtCore/QHash>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
@@ -316,6 +317,67 @@ namespace {
         P_STR("terrainURL", TerrainURL);
         P_INT("terrainVersion", TerrainVersion, uint32_t);
         P_STR("terrainLayers", TerrainLayers);
+
+        // vehicle (PHYSICS.md 4.8): the group's definition, which the simulator rebuilds the vehicle from whenever it
+        // changes, and the state the simulator writes (shown read-only)
+#define G_VEC3(key, G, N)   add(key, [](const EP& p) { return QVariant(toQ(p.G().get##N())); }, [](EP& p, const QVariant& v) { p.G().set##N(fromQ(v.value<QVector3D>())); })
+#define G_INT(key, G, N, T) add(key, [](const EP& p) { return QVariant((int)p.G().get##N()); }, [](EP& p, const QVariant& v) { p.G().set##N((T)v.toInt()); })
+        G_STR("vehicle.type", getVehicle, Type);
+        G_FLOAT("vehicle.mass", getVehicle, Mass);
+        G_VEC3("vehicle.centerOfMass", getVehicle, CenterOfMass);
+        G_STR("vehicle.wheels", getVehicle, Wheels);
+        G_STR("vehicle.seats", getVehicle, Seats);
+        G_FLOAT("vehicle.maxSteerAngle", getVehicle, MaxSteerAngle);
+        G_FLOAT("vehicle.maxTorque", getVehicle, MaxTorque);
+        G_FLOAT("vehicle.minRPM", getVehicle, MinRPM);
+        G_FLOAT("vehicle.maxRPM", getVehicle, MaxRPM);
+        G_STR("vehicle.gearRatios", getVehicle, GearRatios);
+        G_FLOAT("vehicle.reverseGearRatio", getVehicle, ReverseGearRatio);
+        G_FLOAT("vehicle.finalDriveRatio", getVehicle, FinalDriveRatio);
+        G_FLOAT("vehicle.maxBrakeTorque", getVehicle, MaxBrakeTorque);
+        G_FLOAT("vehicle.maxHandBrakeTorque", getVehicle, MaxHandBrakeTorque);
+        G_STR("vehicle.driveType", getVehicle, DriveType);
+        G_FLOAT("vehicle.suspensionFrequency", getVehicle, SuspensionFrequency);
+        G_FLOAT("vehicle.suspensionDamping", getVehicle, SuspensionDamping);
+        G_STR("vehicle.wheel", getVehicle, Wheel);
+        G_STR("vehicle.axle", getVehicle, Axle);
+        add("vehicle.driver", [](const EP& p) { return QVariant(p.getVehicle().getDriver().toString(QUuid::WithoutBraces)); },
+            [](EP& p, const QVariant& v) { p.getVehicle().setDriver(QUuid(v.toString())); });
+        G_INT("vehicle.inputSequence", getVehicle, InputSequence, quint32);
+        G_FLOAT("vehicle.throttle", getVehicle, Throttle);
+        G_FLOAT("vehicle.steering", getVehicle, Steering);
+        G_FLOAT("vehicle.brake", getVehicle, Brake);
+        G_FLOAT("vehicle.handBrake", getVehicle, HandBrake);
+        G_FLOAT("vehicle.engineRPM", getVehicle, EngineRPM);
+        G_INT("vehicle.gear", getVehicle, Gear, int);
+        // the domain time of the state (microseconds since the epoch) as a clock time; the simulator's to write
+        add("vehicle.stateTime", [](const EP& p) {
+                quint64 time = p.getVehicle().getStateTime();
+                return QVariant(time == 0 ? QString() : QDateTime::fromMSecsSinceEpoch((qint64)(time / 1000)).toString("HH:mm:ss.zzz"));
+            }, [](EP&, const QVariant&) {});
+        G_FLOAT("vehicle.envelopeVolume", getVehicle, EnvelopeVolume);
+        G_VEC3("vehicle.centerOfBuoyancy", getVehicle, CenterOfBuoyancy);
+        G_FLOAT("vehicle.gasDensity", getVehicle, GasDensity);
+        G_FLOAT("vehicle.maxThrust", getVehicle, MaxThrust);
+        G_FLOAT("vehicle.maxVerticalThrust", getVehicle, MaxVerticalThrust);
+        G_VEC3("vehicle.thrustPoint", getVehicle, ThrustPoint);
+        G_VEC3("vehicle.dragArea", getVehicle, DragArea);
+        G_VEC3("vehicle.angularDragArea", getVehicle, AngularDragArea);
+        G_FLOAT("vehicle.rudderArea", getVehicle, RudderArea);
+        G_FLOAT("vehicle.elevatorArea", getVehicle, ElevatorArea);
+        G_VEC3("vehicle.finPoint", getVehicle, FinPoint);
+        G_FLOAT("vehicle.maxFinAngle", getVehicle, MaxFinAngle);
+        G_FLOAT("vehicle.ballastRate", getVehicle, BallastRate);
+        G_FLOAT("vehicle.ventRate", getVehicle, VentRate);
+        G_FLOAT("vehicle.pitch", getVehicle, Pitch);
+        G_FLOAT("vehicle.lift", getVehicle, Lift);
+        G_FLOAT("vehicle.trim", getVehicle, Trim);
+        G_FLOAT("vehicle.ballast", getVehicle, Ballast);
+        G_FLOAT("vehicle.fill", getVehicle, Fill);
+        G_FLOAT("vehicle.wingArea", getVehicle, WingArea);
+        G_FLOAT("vehicle.wingSpan", getVehicle, WingSpan);
+        G_VEC3("vehicle.wingPoint", getVehicle, WingPoint);
+        G_FLOAT("vehicle.tilt", getVehicle, Tilt);
 
         // particles
         P_BOOL("isEmitting", IsEmitting);
@@ -1202,6 +1264,79 @@ namespace {
         add(spec("terrainClosedBox", "Closed Box", K::TerrainCaps, "terrain"));
         add(spec("terrainLayers", "Layers", K::TerrainLayers, "terrain"));
 
+        // vehicle (PHYSICS.md 4.8): the entity is the chassis or hull, with the names Unity gives a Rigidbody and a
+        // WheelCollider where it has them and Jolt's for the engine and transmission; the simulator (the physics server,
+        // or the owning client) rebuilds the vehicle as any of these change, so they can be tuned while it drives.
+        // The state at the bottom is what the simulator last published: read it, the simulator writes it.
+        const char* ANY_VEHICLE = "vehicle.type in wheeled,airship,aircraft";
+        const char* WHEELED = "vehicle.type=wheeled";
+        const char* WHEEL = "vehicle.type=wheel";
+        const char* AIRSHIP = "vehicle.type=airship";
+        const char* AIRCRAFT = "vehicle.type=aircraft";
+        const char* FLYING = "vehicle.type in airship,aircraft";
+        en("vehicle.type", "Type", "vehicle", { "none:None", "wheeled:Wheeled", "wheel:Wheel (of the parent)", "airship:Airship",
+            "aircraft:Aircraft" });
+        with(range(add(spec("vehicle.mass", "Mass", K::Float, "vehicle")), 0, 10000000, 1, 1, "kg"), ANY_VEHICLE);
+        with(stepping(add(spec("vehicle.centerOfMass", "Center of Mass", K::Vec3, "vehicle")), 0.01, 3, "m"), ANY_VEHICLE);
+        // the wheels and seats take the whole width, under their own headings
+        with(add(spec("vehicle.wheels", "Wheels", K::VehicleWheels, "vehicle")), WHEELED);
+        with(add(spec("vehicle.seats", "Seats", K::VehicleSeats, "vehicle")), ANY_VEHICLE);
+        with(range(add(spec("vehicle.maxSteerAngle", "Steering Lock", K::Float, "vehicle")), 0, 80, 1, 1, "°"), WHEELED);
+        en("vehicle.driveType", "Drive", "vehicle", { "rear:Rear wheels", "front:Front wheels", "all:All wheels" }, WHEELED);
+        with(range(add(spec("vehicle.maxTorque", "Engine Torque", K::Float, "vehicle")), 0, 1000000, 10, 0, "N m"), WHEELED);
+        with(range(add(spec("vehicle.minRPM", "Idle RPM", K::Float, "vehicle")), 1, 50000, 100, 0), WHEELED);
+        with(range(add(spec("vehicle.maxRPM", "Red Line RPM", K::Float, "vehicle")), 2, 50000, 100, 0), WHEELED);
+        with(add(spec("vehicle.gearRatios", "Gear Ratios", K::String, "vehicle")), WHEELED);
+        with(range(add(spec("vehicle.reverseGearRatio", "Reverse Ratio", K::Float, "vehicle")), 0.01, 100, 0.01, 2), WHEELED);
+        with(range(add(spec("vehicle.finalDriveRatio", "Final Drive Ratio", K::Float, "vehicle")), 0.01, 100, 0.01, 2), WHEELED);
+        with(range(add(spec("vehicle.maxBrakeTorque", "Brake Torque", K::Float, "vehicle")), 0, 1000000, 10, 0, "N m"), WHEELED);
+        with(range(add(spec("vehicle.maxHandBrakeTorque", "Hand Brake Torque", K::Float, "vehicle")), 0, 1000000, 10, 0, "N m"), WHEELED);
+        with(range(add(spec("vehicle.suspensionFrequency", "Suspension Frequency", K::Slider, "vehicle")), 0.1, 5, 0.01, 2, "Hz"), WHEELED);
+        with(range(add(spec("vehicle.suspensionDamping", "Suspension Damping", K::Slider, "vehicle")), 0, 2, 0.01, 2), WHEELED);
+        // a wheel entity: a child of the chassis that shows one of its wheels
+        with(add(spec("vehicle.wheel", "Wheel Name", K::String, "vehicle")), WHEEL);
+        en("vehicle.axle", "Axle Axis", "vehicle", { "x:X (a model made for Unity)", "y:Y (a Cylinder shape)", "z:Z" }, WHEEL);
+        // an airship: a hull with buoyancy, propellers, fins and ballast
+        with(range(add(spec("vehicle.envelopeVolume", "Envelope Volume", K::Float, "vehicle")), 0, 10000000, 10, 1, "m³"), AIRSHIP);
+        with(stepping(add(spec("vehicle.centerOfBuoyancy", "Center of Buoyancy", K::Vec3, "vehicle")), 0.01, 3, "m"), AIRSHIP);
+        with(range(add(spec("vehicle.gasDensity", "Gas Density", K::Float, "vehicle")), 0, 2, 0.0001, 4, "kg/m³"), AIRSHIP);
+        with(range(add(spec("vehicle.maxThrust", "Thrust", K::Float, "vehicle")), 0, 10000000, 10, 0, "N"), FLYING);
+        with(range(add(spec("vehicle.maxVerticalThrust", "Vertical Thrust", K::Float, "vehicle")), 0, 10000000, 10, 0, "N"), AIRSHIP);
+        with(stepping(add(spec("vehicle.thrustPoint", "Thrust Point", K::Vec3, "vehicle")), 0.01, 3, "m"), FLYING);
+        // an aircraft: a wing, tilting engines and a tail
+        with(range(add(spec("vehicle.wingArea", "Wing Area", K::Float, "vehicle")), 0, 100000, 0.1, 2, "m²"), AIRCRAFT);
+        with(range(add(spec("vehicle.wingSpan", "Wing Span", K::Float, "vehicle")), 0, 1000, 0.1, 2, "m"), AIRCRAFT);
+        with(stepping(add(spec("vehicle.wingPoint", "Wing Point", K::Vec3, "vehicle")), 0.01, 3, "m"), AIRCRAFT);
+        with(range(add(spec("vehicle.rudderArea", "Rudder Area", K::Float, "vehicle")), 0, 100000, 0.1, 2, "m²"), FLYING);
+        with(range(add(spec("vehicle.elevatorArea", "Elevator Area", K::Float, "vehicle")), 0, 100000, 0.1, 2, "m²"), FLYING);
+        with(stepping(add(spec("vehicle.finPoint", "Fin Point", K::Vec3, "vehicle")), 0.01, 3, "m"), FLYING);
+        with(range(add(spec("vehicle.maxFinAngle", "Fin Deflection", K::Float, "vehicle")), 0, 90, 1, 1, "°"), FLYING);
+        with(stepping(add(spec("vehicle.dragArea", "Drag Area", K::Vec3, "vehicle")), 0.1, 2, "m²"), FLYING);
+        with(stepping(add(spec("vehicle.angularDragArea", "Angular Drag Area", K::Vec3, "vehicle")), 0.1, 2, "m⁵"), FLYING);
+        with(range(add(spec("vehicle.ballastRate", "Ballast Drop Rate", K::Float, "vehicle")), 0, 100000, 1, 1, "kg/s"), AIRSHIP);
+        with(range(add(spec("vehicle.ventRate", "Vent Rate", K::Float, "vehicle")), 0, 1, 0.001, 3, "/s"), AIRSHIP);
+        with(range(add(spec("vehicle.ballast", "Ballast", K::Float, "vehicle")), 0, 10000000, 1, 1, "kg"), AIRSHIP);
+        // the state, read-only
+        auto state = [&](const char* key, const char* label, const char* showWhen, double min, double max, int decimals, const char* unit = "") {
+            PropertySpec& s = with(range(add(spec(key, label, K::Float, "vehicle_state")), min, max, 0.01, decimals, unit), showWhen);
+            s.readOnly = true;
+            return &s;
+        };
+        with(add(spec("vehicle.driver", "Driver", K::String, "vehicle_state")), ANY_VEHICLE).readOnly = true;
+        state("vehicle.inputSequence", "Input Sequence", ANY_VEHICLE, 0, DBL_MAX, 0);
+        state("vehicle.throttle", "Throttle", ANY_VEHICLE, -1, 1, 2);
+        state("vehicle.steering", "Steering", ANY_VEHICLE, -1, 1, 2);
+        state("vehicle.brake", "Brake", WHEELED, 0, 1, 2);
+        state("vehicle.handBrake", "Hand Brake", WHEELED, 0, 1, 2);
+        state("vehicle.engineRPM", "Engine RPM", WHEELED, 0, DBL_MAX, 0);
+        state("vehicle.gear", "Gear", WHEELED, -1, 100, 0);
+        state("vehicle.pitch", "Pitch", FLYING, -1, 1, 2);
+        state("vehicle.lift", "Lift", FLYING, -1, 1, 2);
+        state("vehicle.trim", "Trim", AIRSHIP, -1, 1, 2);
+        state("vehicle.fill", "Fill", AIRSHIP, 0, 1, 3);
+        state("vehicle.tilt", "Tilt", AIRCRAFT, 0, 1, 2);
+        with(add(spec("vehicle.stateTime", "State Time", K::String, "vehicle_state")), ANY_VEHICLE).readOnly = true;
+
         // particles
         add(spec("isEmitting", "Emit", K::Bool, "particles"));
         range(add(spec("lifespan", "Lifespan", K::Float, "particles")), 0, 86400, 0.01, 2, "s");
@@ -1310,6 +1445,8 @@ namespace {
         { "behavior", "Behavior", false },
         { "collision", "Collision", false },
         { "physics", "Physics", false },
+        { "vehicle", "Vehicle", false },
+        { "vehicle_state", "Vehicle State", true },
         { "userData", "User Data", false }
     };
 }
@@ -1358,13 +1495,13 @@ static QStringList typeSections(EntityTypes::EntityType type, bool multiple) {
         case EntityTypes::Box:
         case EntityTypes::Sphere:
         case EntityTypes::Shape:
-            return { "base", "spatial", "shape", "reflectionProbe", "impostor", "behavior", "collision", "physics" };
+            return { "base", "spatial", "shape", "reflectionProbe", "impostor", "behavior", "collision", "physics", "vehicle", "vehicle_state" };
         case EntityTypes::Text:
             return { "base", "spatial", "text", "behavior", "collision", "physics" };
         case EntityTypes::Zone:
             return { "base", "spatial", "zone", "behavior", "physics" };
         case EntityTypes::Model:
-            return { "base", "spatial", "model", "lightmap", "impostor", "behavior", "collision", "physics" };
+            return { "base", "spatial", "model", "lightmap", "impostor", "behavior", "collision", "physics", "vehicle", "vehicle_state" };
         case EntityTypes::Image:
             return { "base", "spatial", "image", "behavior", "collision", "physics" };
         case EntityTypes::Web:
