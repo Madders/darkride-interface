@@ -44,6 +44,9 @@ scriptable::ScriptableMaterial& scriptable::ScriptableMaterial::operator=(const 
         bumpMap = material.bumpMap;
         occlusionMap = material.occlusionMap;
         lightMap = material.lightMap;
+        lightMapDirection = material.lightMapDirection;
+        lightmapMode = material.lightmapMode;
+        lightmapParams = material.lightmapParams;
         scatteringMap = material.scatteringMap;
         cullFaceMode = material.cullFaceMode;
     } else if (model.toStdString() == graphics::Material::HIFI_SHADER_SIMPLE) {
@@ -122,6 +125,13 @@ scriptable::ScriptableMaterial::ScriptableMaterial(const graphics::MaterialPoint
             map = material->getTextureMap(graphics::Material::MapChannel::LIGHT_MAP);
             if (map && map->getTextureSource()) {
                 lightMap = map->getTextureSource()->getUrl().toString();
+            }
+            lightmapMode = QString(graphics::MaterialKey::getLightmapModeName(material->getLightmapMode()).c_str());
+            lightmapParams = material->getLightmapParams();
+
+            map = material->getTextureMap(graphics::Material::MapChannel::LIGHTMAP_DIRECTION_MAP);
+            if (map && map->getTextureSource()) {
+                lightMapDirection = map->getTextureSource()->getUrl().toString();
             }
 
             map = material->getTextureMap(graphics::Material::MapChannel::SCATTERING_MAP);

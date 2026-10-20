@@ -57,6 +57,8 @@ class EditorBrushOutline {
 public:
     // the ring's points in the world, in order, closed; width in metres; the lines turn to face toCamera
     void set(const QVector<glm::vec3>& ring, const glm::vec4& color, float width, const glm::vec3& toCamera);
+    // several closed rings at once: a brush shape with holes or pieces
+    void set(const QVector<QVector<glm::vec3>>& rings, const glm::vec4& color, float width, const glm::vec3& toCamera);
     void clear();
 
 private:

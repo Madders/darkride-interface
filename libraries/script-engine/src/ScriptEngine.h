@@ -165,7 +165,7 @@ public:
     void runDebuggable();
 
     /// run the script in the callers thread, exit when stop() is called.
-    void run();
+    virtual void run();
 
     QString getFilename() const;
    
@@ -188,10 +188,10 @@ public:
      */
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // NOTE - this is intended to be a public interface for Agent scripts, and local scripts, but not for EntityScripts
-    Q_INVOKABLE void stop(bool marshal = false);
+    Q_INVOKABLE virtual void stop(bool marshal = false);
 
     // Stop any evaluating scripts and wait for the scripting thread to finish.
-    void waitTillDoneRunning();
+    virtual void waitTillDoneRunning();
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // NOTE - these are NOT intended to be public interfaces available to scripts, the are only Q_INVOKABLE so we can
@@ -204,7 +204,12 @@ public:
      * @deprecated This function is deprecated and will be removed.
      */
     /// registers a global object by name
-    Q_INVOKABLE void registerGlobalObject(const QString& name, QObject* object);
+    Q_INVOKABLE virtual void registerGlobalObject(const QString& name, QObject* object);
+
+    /// A plain value (numbers by name, as DriveKeys and PickType are; a number; text) under a global name, unless
+    /// the name is taken: for a host that would otherwise put one on the QtScript global object itself, so that
+    /// every engine sees it (the WebAssembly engine gives a module these through Script.scriptGlobalValues).
+    virtual void registerGlobalValue(const QString& name, const QVariant& value);
 
     /**jsdoc
      * @function Script.registerGetterSetter
@@ -215,7 +220,7 @@ public:
      * @deprecated This function is deprecated and will be removed.
      */
     /// registers a global getter/setter
-    Q_INVOKABLE void registerGetterSetter(const QString& name, QScriptEngine::FunctionSignature getter,
+    Q_INVOKABLE virtual void registerGetterSetter(const QString& name, QScriptEngine::FunctionSignature getter,
                                           QScriptEngine::FunctionSignature setter, const QString& parent = QString(""));
 
     /**jsdoc
@@ -226,7 +231,7 @@ public:
      * @deprecated This function is deprecated and will be removed.
      */
     /// register a global function
-    Q_INVOKABLE void registerFunction(const QString& name, QScriptEngine::FunctionSignature fun, int numArguments = -1);
+    Q_INVOKABLE virtual void registerFunction(const QString& name, QScriptEngine::FunctionSignature fun, int numArguments = -1);
 
     /**jsdoc
      * @function Script.registerFunction
@@ -237,7 +242,7 @@ public:
      * @deprecated This function is deprecated and will be removed.
      */
     /// register a function as a method on a previously registered global object
-    Q_INVOKABLE void registerFunction(const QString& parent, const QString& name, QScriptEngine::FunctionSignature fun,
+    Q_INVOKABLE virtual void registerFunction(const QString& parent, const QString& name, QScriptEngine::FunctionSignature fun,
                                       int numArguments = -1);
 
     /**jsdoc
@@ -247,7 +252,7 @@ public:
      * @deprecated This function is deprecated and will be removed.
      */
     /// registers a global object by name
-    Q_INVOKABLE void registerValue(const QString& valueName, QScriptValue value);
+    Q_INVOKABLE virtual void registerValue(const QString& valueName, QScriptValue value);
 
     /**jsdoc
      * @function Script.evaluate
@@ -272,8 +277,8 @@ public:
     /// if the script engine is not already running, this will download the URL and start the process of seting it up
     /// to run... NOTE - this is used by Application currently to load the url. We don't really want it to be exposed
     /// to scripts. we may not need this to be invokable
-    void loadURL(const QUrl& scriptURL, bool reload);
-    bool hasValidScriptSuffix(const QString& scriptFileName);
+    virtual void loadURL(const QUrl& scriptURL, bool reload);
+    virtual bool hasValidScriptSuffix(const QString& scriptFileName);
 
     /**jsdoc
      * Gets the context that the script is running in: Interface/avatar, client entity, server entity, or assignment client.
@@ -577,7 +582,7 @@ public:
      * @param {boolean} forceRedownload - Force re-download.
      * @deprecated This function is deprecated and will be removed.
      */
-    Q_INVOKABLE void loadEntityScript(const EntityItemID& entityID, const QString& entityScript, bool forceRedownload);
+    Q_INVOKABLE virtual void loadEntityScript(const EntityItemID& entityID, const QString& entityScript, bool forceRedownload);
 
     /**jsdoc
      * @function Script.unloadEntityScript
@@ -585,14 +590,14 @@ public:
      * @param {boolean} [shouldRemoveFromMap=false] - Should remove from map.
      * @deprecated This function is deprecated and will be removed.
      */
-    Q_INVOKABLE void unloadEntityScript(const EntityItemID& entityID, bool shouldRemoveFromMap = false); // will call unload method
+    Q_INVOKABLE virtual void unloadEntityScript(const EntityItemID& entityID, bool shouldRemoveFromMap = false); // will call unload method
 
     /**jsdoc
      * @function Script.unloadAllEntityScripts
      * @param {boolean} [blockingCall=false] - Wait for completion if call moved to another thread.
      * @deprecated This function is deprecated and will be removed.
      */
-    Q_INVOKABLE void unloadAllEntityScripts(bool blockingCall = false);
+    Q_INVOKABLE virtual void unloadAllEntityScripts(bool blockingCall = false);
 
     /**jsdoc
      * Calls a method in an entity script.
@@ -614,7 +619,7 @@ public:
      * @param {PointerEvent} event - Pointer event.
      * @deprecated This function is deprecated and will be removed.
      */
-    Q_INVOKABLE void callEntityScriptMethod(const EntityItemID& entityID, const QString& methodName, const PointerEvent& event);
+    Q_INVOKABLE virtual void callEntityScriptMethod(const EntityItemID& entityID, const QString& methodName, const PointerEvent& event);
 
     /**jsdoc
      * Calls a method in an entity script.
@@ -625,7 +630,7 @@ public:
      * @param {Collision} collision - Collision.
      * @deprecated This function is deprecated and will be removed.
      */
-    Q_INVOKABLE void callEntityScriptMethod(const EntityItemID& entityID, const QString& methodName, const EntityItemID& otherID, const Collision& collision);
+    Q_INVOKABLE virtual void callEntityScriptMethod(const EntityItemID& entityID, const QString& methodName, const EntityItemID& otherID, const Collision& collision);
 
     /**jsdoc
      * Manually runs the JavaScript garbage collector which reclaims memory by disposing of objects that are no longer 
@@ -640,6 +645,17 @@ public:
      * @deprecated This function is deprecated and will be removed. Use {@link Uuid(0).generate|Uuid.generate} instead.
      */
     Q_INVOKABLE QUuid generateUUID() { return QUuid::createUuid(); }
+
+    /**jsdoc
+     * Writes a description of every global object this script sees to a JSON file: for an object from the engine, its
+     * class and the methods, properties, signals and enums of its meta-object, with parameter and return types; for
+     * anything else, its kind and members. A developer tool: the file is the machine-readable form of the API in this
+     * script's context.
+     * @function Script.dumpApi
+     * @param {string} path - The file to write.
+     * @returns {boolean} <code>true</code> if the file was written.
+     */
+    Q_INVOKABLE bool dumpApi(const QString& path);
 
     void setType(Type type) { _type = type; };
     Type getType() { return _type; };
@@ -982,8 +998,11 @@ protected:
     QWeakPointer<ScriptEngines> _scriptEngines;
 };
 
+// scriptURL, when known, is the script's full URL: an engine chosen for the script in the Running Scripts window
+// takes precedence over the setting.
 ScriptEnginePointer scriptEngineFactory(ScriptEngine::Context context,
                                         const QString& scriptContents,
-                                        const QString& fileNameString);
+                                        const QString& fileNameString,
+                                        const QUrl& scriptURL = QUrl());
 
 #endif // hifi_ScriptEngine_h

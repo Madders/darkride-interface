@@ -44,16 +44,43 @@ class DeferredLightingEffect : public Dependency {
 public:
     void init();
  
-    static void setupKeyLightBatch(const RenderArgs* args, gpu::Batch& batch);
-    static void setupKeyLightBatch(const RenderArgs* args, gpu::Batch& batch, const LightStage::Frame& lightFrame);
-    static void unsetKeyLightBatch(gpu::Batch& batch);
+    // the key light and the ambient light of the frame's zone, with the zone's probe volume (or an empty one) at
+    // probeVolumeSlot: the material, forward and translucent programs' slot by default (-1), the deferred directional
+    // pass gives its own (render_utils::slot::texture::ProbeVolumeDeferred)
+    static void setupKeyLightBatch(const RenderArgs* args, gpu::Batch& batch, int probeVolumeSlot = -1);
+    static void setupKeyLightBatch(const RenderArgs* args, gpu::Batch& batch, const LightStage::Frame& lightFrame, int probeVolumeSlot = -1);
+    static void unsetKeyLightBatch(gpu::Batch& batch, int probeVolumeSlot = -1);
+    // a 1 x 9 x 1 black probe volume, for the shaders' sampler when the zone has none
+    static const gpu::TexturePointer& getEmptyProbeVolume();
+    // the probe volume the key light setup last bound (the zone's, or the empty one): the material binding puts it
+    // back after the material texture table, whose entries cover its slot (RenderPipelines::bindMaterials)
+    static const gpu::TexturePointer& getFrameProbeVolume();
 
     // localShadows: the spot lights casting shadows this frame, or null for none
     static void setupLocalLightsBatch(gpu::Batch& batch, const LightClustersPointer& lightClusters, const LocalShadowsPointer& localShadows);
     static void unsetLocalLightsBatch(gpu::Batch& batch);
 
+    // The frame's lighting for the forward pipelines: the view's light clusters, as its clustering pass built them,
+    // and its shadow frame (the sun's cascades, the lights' shadow maps and cookies), as its shadow tasks left it.
+    // Each view publishes them before it draws (SetFrameLighting, in the forward task and the deferred one: the
+    // in-front and HUD layers of a deferred frame draw with the forward pipelines too), and the forward pipelines'
+    // batch setter binds them at every pipeline change
+    void setFrameLighting(const LightClustersPointer& lightClusters, const LightStage::ShadowFramePointer& shadowFrame,
+                          const LightingModelPointer& lightingModel);
+    // Binds what the forward shaders light with: the light array and the clusters (a grid of one empty cluster
+    // before any view has published), the lights' shadow atlas, cookies and table, and the sun's cascades with
+    // their parameters (a cascade count of 0 with no shadow this frame, or shadows off: the shaders then skip the
+    // sampling). Bound again at every pipeline change, since a program drawn in between may keep its own maps and
+    // buffers at the same slots (the terrain's arrays at the shadow texture units, its chunk at the parameters' slot)
+    void setupFrameLightingBatch(gpu::Batch& batch, const RenderArgs* args) const;
+
 private:
+    static gpu::TexturePointer _frameProbeVolume;
     DeferredLightingEffect() = default;
+
+    LightClustersPointer _frameLightClusters;
+    LightStage::ShadowFramePointer _frameShadowFrame;
+    bool _frameShadowsEnabled { false };
 
     graphics::MeshPointer _pointLightMesh;
     graphics::MeshPointer getPointLightMesh();
@@ -73,6 +100,15 @@ private:
     friend class RenderDeferredSetup;
     friend class RenderDeferredLocals;
     friend class RenderDeferredCleanup;
+};
+
+// Publishes the view's light clusters and shadow frame to the DeferredLightingEffect for the forward pipelines
+class SetFrameLighting {
+public:
+    using Inputs = render::VaryingSet3<LightClustersPointer, LightStage::ShadowFramePointer, LightingModelPointer>;
+    using JobModel = render::Job::ModelI<SetFrameLighting, Inputs>;
+
+    void run(const render::RenderContextPointer& renderContext, const Inputs& inputs);
 };
 
 class PrepareDeferred {
@@ -101,7 +137,8 @@ public:
         const HazeStage::FramePointer& hazeFrame,
         const SurfaceGeometryFramebufferPointer& surfaceGeometryFramebuffer,
         const AmbientOcclusionFramebufferPointer& ambientOcclusionFramebuffer,
-        const SubsurfaceScatteringResourcePointer& subsurfaceScatteringResource);
+        const SubsurfaceScatteringResourcePointer& subsurfaceScatteringResource,
+        const LightClustersPointer& lightClusters);
 };
 
 class RenderDeferredLocals {

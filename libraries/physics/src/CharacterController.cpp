@@ -20,6 +20,9 @@
 #include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 
@@ -180,6 +183,10 @@ void CharacterController::recordContacts() {
         }
         ObjectMotionState* other = PhysicsEngine::motionStateOf(lock.GetBody());
         if (other) {
+            // a frame's copy of its interior (round 8): the contact is with the part the sub-shape copies
+            if (ObjectMotionState* part = other->interiorPartAt(contact.mSubShapeIDB)) {
+                other = part;
+            }
             _world->recordCharacterContact(other, joltToGLM(contact.mPosition), joltToGLM(contact.mContactNormal), contact.mDistance);
         }
     }
@@ -201,6 +208,60 @@ void CharacterController::measureFloorDistance(float rayLength, bool& rayHasHit)
     }
 }
 
+// A triangle mesh (a Terrain, a static mesh model) is a surface with no inside. A character put partly under one (by a
+// teleport, a scale-up, a respawn) meets its triangles edge-on and from behind, where Jolt's penetration recovery
+// finds no way out: the character stays stuck, and judders when it is driven. A box floor has an inside and pushes
+// it out by itself. So look down the character's own axis, from the centre of its top sphere to its bottom, for a
+// floor seen from above (front faces only, static bodies only). The axis is inside the capsule, so a character
+// standing, walking or sliding on anything never has a floor across it; only a buried one does: lift it onto that
+// floor. A character wholly under the surface sees nothing here and stays where it is.
+namespace {
+class StaticBodiesOnly : public JPH::BodyFilter {
+public:
+    StaticBodiesOnly(const JPH::BodyID& ignore) : _ignore(ignore) {}
+    bool ShouldCollide(const JPH::BodyID& id) const override { return id != _ignore; }
+    bool ShouldCollideLocked(const JPH::Body& body) const override { return body.IsStatic(); }
+private:
+    JPH::BodyID _ignore;
+};
+}
+
+void CharacterController::liftOutOfFloor() {
+    const float MIN_LIFT = 0.04f; // shallower than this, Jolt's own recovery copes (its padding is 0.02 m)
+    bool lifted = false;
+    glm::vec3 position = joltToGLM(_character->GetPosition());
+    glm::vec3 top = position + _halfHeight * _currentUp;
+    float length = 2.0f * _halfHeight + _radius; // the top sphere's centre to the bottom of the capsule
+    JPH::RRayCast ray(glmToJoltR(top), glmToJolt(-length * _currentUp));
+    JPH::RayCastSettings settings;
+    settings.SetBackFaceMode(JPH::EBackFaceMode::IgnoreBackFaces);
+    settings.mTreatConvexAsSolid = false; // from inside a static box the ray sees only its back faces: Jolt handles boxes
+    JPH::ClosestHitCollisionCollector<JPH::CastRayCollector> collector;
+    JPH::ObjectLayer layer = characterLayer();
+    const JoltLayers::Tables& layers = _world->getLayers();
+    JPH::DefaultBroadPhaseLayerFilter broadPhaseFilter(layers.objectVsBroadPhase, layer);
+    JPH::DefaultObjectLayerFilter objectLayerFilter(layers.objectLayerPairs, layer);
+    StaticBodiesOnly bodyFilter(getInnerBodyID());
+    _world->getPhysicsSystem()->GetNarrowPhaseQueryNoLock().CastRay(ray, settings, collector, broadPhaseFilter,
+                                                                     objectLayerFilter, bodyFilter);
+    if (collector.HadHit()) {
+        float depth = (1.0f - collector.mHit.mFraction) * length; // how far the floor is above the capsule's bottom
+        if (depth > MIN_LIFT) {
+            _character->SetPosition(glmToJoltR(position + depth * _currentUp));
+            glm::vec3 velocity = joltToGLM(_character->GetLinearVelocity());
+            float upward = glm::dot(velocity, _currentUp);
+            if (upward < 0.0f) {
+                _character->SetLinearVelocity(glmToJolt(velocity - upward * _currentUp));
+            }
+            if (!_liftedOutOfFloor) {
+                qCDebug(physics) << "CharacterController: the feet were" << depth << "m under a floor; lifted onto it";
+            }
+            lifted = true;
+        }
+    }
+    _liftedOutOfFloor = lifted;
+}
+
 const float MIN_TARGET_SPEED = 0.001f;
 const float MIN_TARGET_SPEED_SQUARED = MIN_TARGET_SPEED * MIN_TARGET_SPEED;
 
@@ -208,6 +269,11 @@ void CharacterController::substep(float dt) {
     if (!_character || !_inWorld || !_world) {
         return;
     }
+    // where this substep starts from, for the presentation (getPositionAndOrientation)
+    _substepStartPosition = joltToGLM(_character->GetPosition());
+    _substepStartStep = ObjectMotionState::getWorldSimulationStep();
+
+    liftOutOfFloor();
 
     // scan down for nearby floor
     const float FLOOR_PROXIMITY_THRESHOLD = 0.3f * _radius;
@@ -480,24 +546,32 @@ void CharacterController::setPositionAndOrientation(
         const glm::quat& orientation) {
     updateUpAxis(orientation);
     _rotation = orientation;
-    glm::vec3 bodyPosition = position;
     const float UNCHANGED_DISTANCE2 = 1.0e-8f; // a tenth of a millimetre, squared
-    if (glm::distance2(position, _handedOutPosition) < UNCHANGED_DISTANCE2) {
-        // the pose read ahead at the last harvest came back untouched: the body stays where the simulation
-        // left it, so the read-ahead is not integrated twice
-        bodyPosition -= _readAhead;
+    if (_character && glm::distance2(position, _handedOutPosition) < UNCHANGED_DISTANCE2) {
+        // the pose handed out at the last harvest came back untouched: it was the presentation, a substep
+        // behind, so the body stays where the simulation left it; only the rotation is taken, and the shape's
+        // offset swings with it about the avatar's origin
+        glm::quat bodyRotation = joltToGLM(_character->GetRotation());
+        _position = joltToGLM(_character->GetPosition()) + orientation * _shapeLocalOffset - bodyRotation * _shapeLocalOffset;
+        return;
     }
-    _position = bodyPosition + orientation * _shapeLocalOffset;
+    // placed from outside (a teleport, a script, the follow helper): the body goes there, with no blend from where it was
+    _position = position + orientation * _shapeLocalOffset;
+    _substepStartStep = 0;
 }
 
-// The pose is read ahead to the present along the character's velocity (ObjectMotionState::getLeftoverTime),
-// as every simulated object's is; setPositionAndOrientation takes the read-ahead back out when the pose
-// comes back unchanged.
+// The pose as presented: the character's position blended between the start and the end of its last substep
+// by the leftover time, as every simulated object's is (ObjectMotionState::getPresentedBodyTransform), so
+// walking is even at any display rate; setPositionAndOrientation keeps the body where it is when this pose
+// comes back unchanged. The rotation is the avatar's own and is not simulated.
 void CharacterController::getPositionAndOrientation(glm::vec3& position, glm::quat& rotation) const {
     if (_character) {
         rotation = joltToGLM(_character->GetRotation());
-        _readAhead = ObjectMotionState::getLeftoverTime() * joltToGLM(_character->GetLinearVelocity());
-        position = joltToGLM(_character->GetPosition()) + _readAhead - rotation * _shapeLocalOffset;
+        glm::vec3 bodyPosition = joltToGLM(_character->GetPosition());
+        if (ObjectMotionState::getInterpolatePresentation() && _substepStartStep == ObjectMotionState::getWorldSimulationStep()) {
+            bodyPosition = glm::mix(_substepStartPosition, bodyPosition, ObjectMotionState::getPresentationAlpha());
+        }
+        position = bodyPosition - rotation * _shapeLocalOffset;
         _handedOutPosition = position;
     }
 }

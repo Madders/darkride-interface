@@ -433,6 +433,14 @@ void PickScriptingInterface::setIncludeItems(unsigned int uid, const QScriptValu
     DependencyManager::get<PickManager>()->setIncludeItems(uid, qVectorQUuidFromScriptValue(includeItems));
 }
 
+void PickScriptingInterface::setIgnoreItemsVector(unsigned int uid, const QVector<QUuid>& ignoreItems) {
+    DependencyManager::get<PickManager>()->setIgnoreItems(uid, ignoreItems);
+}
+
+void PickScriptingInterface::setIncludeItemsVector(unsigned int uid, const QVector<QUuid>& includeItems) {
+    DependencyManager::get<PickManager>()->setIncludeItems(uid, includeItems);
+}
+
 bool PickScriptingInterface::isLeftHand(unsigned int uid) {
     return DependencyManager::get<PickManager>()->isLeftHand(uid);
 }

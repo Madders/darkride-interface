@@ -77,6 +77,8 @@ enum Type {
     LIGHTMAP_TEXTURE,
     UNUSED_TEXTURE,
     OCCLUSION_TEXTURE,      // one channel of linear data, as glTF and Unity's URP read it
+    LIGHTMAP_DIRECTION_TEXTURE, // a lightmap's direction map: four linear channels, the dominant light direction and its
+                            // share (Unity's directional lightmap, LIGHTMAPS.md §3.4)
 };
 
 using TextureLoader = std::function<gpu::TexturePointer(Image&&, const std::string&, bool, gpu::BackendTarget, const std::atomic<bool>&)>;
@@ -108,8 +110,13 @@ gpu::TexturePointer createAmbientCubeTextureAndIrradianceFromImage(Image&& image
                                                                    bool compress, gpu::BackendTarget target, const std::atomic<bool>& abortProcessing);
 gpu::TexturePointer createLightmapTextureFromImage(Image&& image, const std::string& srcImageName,
                                                    bool compress, gpu::BackendTarget target, const std::atomic<bool>& abortProcessing); 
+gpu::TexturePointer createLightmapDirectionTextureFromImage(Image&& image, const std::string& srcImageName,
+                                                            bool compress, gpu::BackendTarget target, const std::atomic<bool>& abortProcessing);
 gpu::TexturePointer process2DTextureColorFromImage(Image&& srcImage, const std::string& srcImageName, bool compress,
                                                    gpu::BackendTarget target, bool isStrict, const std::atomic<bool>& abortProcessing);
+// a linear HDR picture (an EXR) kept at half precision, with mips: lightmaps (LIGHTMAPS.md)
+gpu::TexturePointer process2DTextureHDRFromImage(Image&& srcImage, const std::string& srcImageName,
+                                                 gpu::BackendTarget target, const std::atomic<bool>& abortProcessing);
 gpu::TexturePointer process2DTextureNormalMapFromImage(Image&& srcImage, const std::string& srcImageName, bool compress,
                                                        gpu::BackendTarget target, bool isBumpMap, const std::atomic<bool>& abortProcessing);
 gpu::TexturePointer process2DTextureGrayscaleFromImage(Image&& srcImage, const std::string& srcImageName, bool compress,

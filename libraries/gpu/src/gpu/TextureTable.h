@@ -12,7 +12,7 @@
 
 #include <array>
 
-#define TEXTURE_TABLE_COUNT 8
+#define TEXTURE_TABLE_COUNT 9     // the material's maps: seven, the lightmap and its direction map (LIGHTMAPS.md)
 
 namespace gpu {
 

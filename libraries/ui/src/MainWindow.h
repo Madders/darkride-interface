@@ -29,8 +29,13 @@ public:
     void setDockedWidgetRelativePositionOffset(const QSize& newOffset) { _dockedWidgetRelativePositionOffset.setWidth(newOffset.width()); _dockedWidgetRelativePositionOffset.setHeight(newOffset.height()); }
     QSize getDockedWidgetRelativePositionOffset() { return _dockedWidgetRelativePositionOffset; }
 public slots:
+    // where it was left at the last quit, if that still fits a connected screen and isn't tiny; else the whole of the
+    // main screen, as at a first start
     void restoreGeometry();
     void saveGeometry();
+    // soon after the start: logs where the window is, and puts it back if something shrank it below the smallest
+    // size a start allows before anyone touched it
+    void checkStartGeometry();
 
 signals:
     void windowGeometryChanged(QRect geometry);
@@ -50,6 +55,7 @@ protected:
 private:
     Setting::Handle<QRect> _windowGeometry;
     Setting::Handle<int> _windowState;
+    QRect _startGeometry;
     QSize _dockedWidgetRelativePositionOffset{ 0, 0 };
 };
 

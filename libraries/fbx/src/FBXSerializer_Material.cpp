@@ -222,6 +222,8 @@ void FBXSerializer::consolidateHFMMaterials() {
             detectDifferentUVs |= (ambientTexture.texcoordSet != 0) || (!ambientTexture.transform.isIdentity());
             material.lightmapTexture = ambientTexture;
             material.lightmapParams = lightmapParams;
+            // High Fidelity's bakes hold the whole lighting
+            material.lightmapMode = graphics::MaterialKey::LIGHTMAP_FULL;
         }
 
         // Finally create the true material representation

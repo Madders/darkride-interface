@@ -11,6 +11,8 @@
 
 #include "MeshPartPayload.h"
 
+#include "ImpostorSwitch.h"
+
 #include <QProcess>
 
 #include <PerfStat.h>
@@ -280,6 +282,13 @@ ModelMeshPartPayload::ModelMeshPartPayload(ModelPointer model,
     _meshNumVertices = (int)modelMesh->getNumVertices();
 
     updateMeshPart(modelMesh, partIndex);
+    for (const auto& lod : modelMesh->getLods()) {
+        if (partIndex >= (int)lod.parts.size()) {
+            break;
+        }
+        _lodParts.push_back(lod.parts[partIndex]);
+        _lodErrors.push_back(lod.error);
+    }
 
     Transform renderTransform = transform;
     const Model::ShapeState& shapeState = model->getShapeState(shapeIndex);
@@ -289,6 +298,7 @@ ModelMeshPartPayload::ModelMeshPartPayload(ModelPointer model,
     _deformerIndex = shape.skinDeformer;
 
     initCache(model);
+    _impostorSwitch = model->getImpostorSwitch();
 
 #if defined(Q_OS_MACOS) || defined(Q_OS_ANDROID)
     // On mac AMD, we specifically need to have a _meshBlendshapeBuffer bound when using a deformed mesh pipeline
@@ -459,6 +469,11 @@ void ModelMeshPartPayload::setShapeKey(bool invalidateShapeKey, PrimitiveMode pr
 }
 
 ShapeKey ModelMeshPartPayload::getShapeKey() const {
+    // during the dissolve into or out of the model's impostor card the part draws through its fade pipeline, which
+    // clips it by the dissolve's noise (ImpostorSwitch, IMPOSTORS.md 2.4)
+    if (_impostorSwitch && _impostorSwitch->isFading() && _shapeKey.isValid() && !_shapeKey.hasOwnPipeline()) {
+        return ShapeKey::Builder(_shapeKey).withFade().build();
+    }
     return _shapeKey;
 }
 
@@ -484,6 +499,10 @@ void ModelMeshPartPayload::render(RenderArgs* args) {
     if (!args || (args->_renderMode == RenderArgs::RenderMode::DEFAULT_RENDER_MODE && _cauterized)) {
         return;
     }
+    // the model's impostor card stands in for it in this view, or the two dissolve into each other (IMPOSTORS.md 2.4)
+    if (_impostorSwitch && !_impostorSwitch->evaluate(args).model) {
+        return;
+    }
 
     gpu::Batch& batch = *(args->_batch);
 
@@ -491,6 +510,13 @@ void ModelMeshPartPayload::render(RenderArgs* args) {
 
     //Bind the index buffer and vertex buffer and Blend shapes if needed
     bindMesh(batch);
+    // the automatic LOD this view draws (AUTOMATIC-LODS.md 3.3): a range of the mesh's LOD index buffer over the same
+    // vertices
+    const int lodLevel = chooseLodLevel(args);
+    const graphics::Mesh::Part& drawPart = lodLevel > 0 ? _lodParts[lodLevel - 1] : _drawPart;
+    if (lodLevel > 0) {
+        batch.setIndexBuffer(gpu::UINT32, _drawMesh->getLodIndexBuffer()._buffer, 0);
+    }
 
     // IF deformed pass the mesh key
     auto drawcallInfo = (uint16_t)(((_isBlendShaped && _meshBlendshapeBuffer && args->_enableBlendshape) << 0) |
@@ -517,15 +543,81 @@ void ModelMeshPartPayload::render(RenderArgs* args) {
             args->_details._materialSwitches++;
         }
     }
+    if (_impostorSwitch) {
+        // the dissolve's threshold for the fade pipeline the key asked for (the fade effect's own item setter binds
+        // nothing for an item without a transition of the scene's)
+        batch.setUniformBuffer(render_utils::slot::buffer::FadeObjectParameters, _impostorSwitch->fadeParams(args));
+    }
 
     // Draw!
     {
         PerformanceTimer perfTimer("batch.drawIndexed()");
-        drawCall(batch);
+        batch.drawIndexed(gpu::TRIANGLES, drawPart._numIndices, drawPart._startIndex);
     }
 
-    const int INDICES_PER_TRIANGLE = 3;
-    args->_details._trianglesRendered += _drawPart._numIndices / INDICES_PER_TRIANGLE;
+    args->_details._trianglesRendered += drawPart._numIndices / INDICES_PER_TRIANGLE;
+}
+
+namespace {
+    // the main view's hysteresis band on the error test, as the impostor switch's: a part steps down to a coarser
+    // level where that level's error is a fifth under the tolerance, and back up where it is a fifth over
+    const float LOD_BAND = 0.2f;
+}
+
+int ModelMeshPartPayload::chooseLodLevel(const RenderArgs* args) {
+    const int levels = (int)_lodParts.size();
+    if (levels == 0) {
+        return 0;
+    }
+    if (args->_renderMode == RenderArgs::RenderMode::SHADOW_RENDER_MODE) {
+        return _mainViewLodLevel;   // the shadow pass's camera is the light's
+    }
+    const bool mainView = args->_renderMode == RenderArgs::RenderMode::DEFAULT_RENDER_MODE;
+    int level = 0;
+    if (args->_meshLodForceLevel >= 0) {
+        level = std::min(args->_meshLodForceLevel, levels);
+    } else if (args->_meshLodErrorPixels > 0.0f && args->hasViewFrustum()) {
+        const ViewFrustum& frustum = args->getViewFrustum();
+        glm::vec3 eye = frustum.getPosition();
+        glm::vec3 nearest = glm::clamp(eye, _worldBound.getMinimumPoint(), _worldBound.getMaximumPoint());
+        float distance = glm::distance(eye, nearest);   // 0 inside the part's box: full detail
+        // the view's pixels per radian at its centre, and the part's scale from its mesh's units to the world's
+        float pixelsPerRadian = 0.5f * (float)args->_viewport.w * frustum.getProjection()[1][1];
+        glm::vec3 scale = glm::abs(_worldFromLocalTransform.getScale());
+        float worldPerUnit = std::max(scale.x, std::max(scale.y, scale.z));
+        // the coarsest level, going from the finest, whose error looks no bigger than the tolerance: a level's error in
+        // pixels is its error in the world over the distance, times the pixels per radian
+        auto coarsestWithin = [&](float tolerance) {
+            int chosen = 0;
+            for (int i = 0; i < levels; i++) {
+                if (_lodErrors[i] * worldPerUnit * pixelsPerRadian > tolerance * distance) {
+                    break;
+                }
+                chosen = i + 1;
+            }
+            return chosen;
+        };
+        if (mainView) {
+            int stepDownTo = coarsestWithin(args->_meshLodErrorPixels * (1.0f - LOD_BAND));
+            int coarsestAllowed = coarsestWithin(args->_meshLodErrorPixels * (1.0f + LOD_BAND));
+            level = glm::clamp(_mainViewLodLevel, stepDownTo, coarsestAllowed);
+        } else {
+            level = coarsestWithin(args->_meshLodErrorPixels);   // mirrors and the secondary camera: no band
+        }
+    }
+    if (mainView) {
+        _mainViewLodLevel = level;
+        _shownLodLevel.store(level, std::memory_order_relaxed);
+    }
+    return level;
+}
+
+std::vector<int> ModelMeshPartPayload::getLodTriangles() const {
+    std::vector<int> triangles;
+    for (const auto& part : _lodParts) {
+        triangles.push_back((int)(part._numIndices / INDICES_PER_TRIANGLE));
+    }
+    return triangles;
 }
 
 void ModelMeshPartPayload::setBlendshapeBuffer(const std::unordered_map<int, gpu::BufferPointer>& blendshapeBuffers,

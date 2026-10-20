@@ -12,6 +12,8 @@
 #ifndef hifi_MeshPartPayload_h
 #define hifi_MeshPartPayload_h
 
+#include <atomic>
+
 #include <Interpolate.h>
 
 #include <gpu/Batch.h>
@@ -22,6 +24,7 @@
 
 #include "Model.h"
 
+class ImpostorSwitch;
 class Model;
 
 class MeshPartPayload {
@@ -127,6 +130,15 @@ public:
 
     void setShapeKey(bool invalidateShapeKey, PrimitiveMode primitiveMode, bool useDualQuaternionSkinning);
     void setCauterized(bool cauterized) { _cauterized = cauterized; }
+    // the model's impostor switch (Model::setImpostorSwitch): this part draws only in the views where it says the
+    // model shows rather than its card
+    void setImpostorSwitch(const std::shared_ptr<ImpostorSwitch>& impostorSwitch) { _impostorSwitch = impostorSwitch; }
+
+    // automatic LODs (AUTOMATIC-LODS.md 3.3): the part's triangles in full and in each level of its mesh, and the level
+    // the main view draws now, 0 for the full mesh (read from the main thread by LODManager.describeEntity)
+    int getFullTriangles() const { return (int)(_drawPart._numIndices / INDICES_PER_TRIANGLE); }
+    std::vector<int> getLodTriangles() const;
+    int getShownLodLevel() const { return _shownLodLevel.load(std::memory_order_relaxed); }
 
     // ModelMeshPartPayload functions to perform render
     void bindMesh(gpu::Batch& batch) override;
@@ -160,6 +172,16 @@ private:
     render::ShapeKey _shapeKey{ render::ShapeKey::Builder::invalid() };
     bool _prevUseDualQuaternionSkinning{ false };
     bool _cauterized{ false };
+    std::shared_ptr<ImpostorSwitch> _impostorSwitch;
+
+    static const uint32_t INDICES_PER_TRIANGLE { 3 };
+    // the level a view draws: the coarsest whose error looks small enough from its camera; the shadow pass takes the
+    // main view's, which keeps a hysteresis band
+    int chooseLodLevel(const RenderArgs* args);
+    std::vector<graphics::Mesh::Part> _lodParts;   // the part's range in each level of the mesh's LOD index buffer
+    std::vector<float> _lodErrors;                 // each level's error, in the mesh's units
+    int _mainViewLodLevel { 0 };
+    std::atomic<int> _shownLodLevel { 0 };
 };
 
 namespace render {

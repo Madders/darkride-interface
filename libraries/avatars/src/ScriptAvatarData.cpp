@@ -213,6 +213,13 @@ bool ScriptAvatarData::getLookAtSnappingEnabled() const {
         return false;
     }
 }
+QString ScriptAvatarData::getGazeStyle() const {
+    if (AvatarSharedPointer sharedAvatarData = _avatarData.lock()) {
+        return sharedAvatarData->getGazeStyle();
+    } else {
+        return QString();
+    }
+}
 //
 // IDENTIFIER PROPERTIES
 // END

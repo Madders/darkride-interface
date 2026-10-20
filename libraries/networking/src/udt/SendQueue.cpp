@@ -62,7 +62,7 @@ private:
 };
 
 const microseconds SendQueue::MAXIMUM_ESTIMATED_TIMEOUT = seconds(5);
-const microseconds SendQueue::MINIMUM_ESTIMATED_TIMEOUT = milliseconds(10);
+const microseconds SendQueue::MINIMUM_ESTIMATED_TIMEOUT = milliseconds(200);   // TCPVegasCC::MIN_RTO_USECS (round 10)
 
 std::unique_ptr<SendQueue> SendQueue::create(Socket* socket, HifiSockAddr destination, SequenceNumber currentSequenceNumber,
                                              MessageNumber currentMessageNumber, bool hasReceivedHandshakeACK) {
@@ -138,7 +138,14 @@ void SendQueue::stop() {
     
 int SendQueue::sendPacket(const Packet& packet) {
     _lastPacketSentAt = std::chrono::high_resolution_clock::now();
-    return _socket->writeDatagram(packet.getData(), packet.getDataSize(), _destination);
+    int written = _socket->writeDatagram(packet.getData(), packet.getDataSize(), _destination);
+    static const bool trace = !qgetenv("TIVOLI_UDT_TRACE").isEmpty();
+    if (trace && _traceSent < 600) {
+        ++_traceSent;
+        qDebug().nospace() << "udt sent " << (uint32_t)packet.getSequenceNumber() << " at " << usecTimestampNow() << " to " << _destination.getPort()
+            << " window " << _flowWindowSize.load() << " queued " << _packets.isEmpty();
+    }
+    return written;
 }
     
 void SendQueue::ack(SequenceNumber ack) {
@@ -534,6 +541,14 @@ bool SendQueue::isInactive(bool attemptedToSendPacket) {
                     
                     // Note that thanks to the DoubleLock we have the _naksLock right now
                     _naks.append(SequenceNumber(_lastACKSequenceNumber) + 1, _currentSequenceNumber);
+                    static const bool trace = !qgetenv("TIVOLI_UDT_TRACE").isEmpty();
+                    if (trace) {
+                        qDebug().nospace() << "udt timeout: resending " << (uint32_t)_lastACKSequenceNumber + 1 << " to "
+                            << (uint32_t)_currentSequenceNumber << " after " << estimatedTimeout.count() << " us ("
+                            << (cvStatus == std::cv_status::timeout ? "no ACK woke the queue" : "woken, the last packet sent ")
+                            << duration_cast<microseconds>(now - _lastPacketSentAt).count() << " us ago), queue "
+                            << _packets.isEmpty() << " window full " << isFlowWindowFull();
+                    }
 
                     // we have the lock again - time to unlock it
                     locker.unlock();

@@ -38,6 +38,9 @@ public:
         ConicalViewFrustums viewFrustums;
         uint64_t startTime { 0 };
         float lodScaleFactor { 1.0f };
+        // the client draws impostor cards (its query's "impostorCards" flag, ENTITY-STREAMING.md 3.3): an entity with a
+        // card, or under one, is as big as the card's sphere and goes out to where the card is drawn
+        bool impostorCards { false };
     };
 
     // Waypoint is an bookmark in a "path" of waypoints during a traversal.

@@ -33,6 +33,9 @@ namespace AvatarTraits {
         FirstInstancedTrait,
         AvatarEntity = FirstInstancedTrait,
         Grab,
+        // An avatar's menu parameters, one instance (AVATAR_MENU_PARAMETERS_ID). Sent in a traits packet of its own:
+        // an avatar mixer that doesn't know a kind stops reading the packet there.
+        AvatarMenuParameters,
 
         // Traits count
         TotalTraitTypes
@@ -43,6 +46,9 @@ namespace AvatarTraits {
     const int NUM_TRAITS = (int)TotalTraitTypes;
 
     using TraitInstanceID = QUuid;
+
+    // The one instance of AvatarMenuParameters.
+    const TraitInstanceID AVATAR_MENU_PARAMETERS_ID { 0x6d3c1f52, 0x9b0e, 0x4a7d, 0x8e, 0x41, 0x2f, 0x6a, 0x93, 0xc5, 0x07, 0xd8 };
 
     inline bool isSimpleTrait(TraitType traitType) {
         return traitType > NullTrait && traitType < FirstInstancedTrait;

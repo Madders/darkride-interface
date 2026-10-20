@@ -9,8 +9,10 @@
 #if defined(HAVE_EXT_clip_cull_distance) && !defined(VULKAN)
 #extension GL_EXT_clip_cull_distance : enable
 #endif
+#extension GL_EXT_texture_cube_map_array : enable
 precision highp float;
 precision highp samplerBuffer;
+precision lowp samplerCubeArray;
 precision highp sampler2DShadow;
 precision highp sampler2DArrayShadow;
 precision lowp sampler2DArray;

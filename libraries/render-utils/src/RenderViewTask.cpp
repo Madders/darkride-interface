@@ -16,29 +16,8 @@
 #include "RenderForwardTask.h"
 #include "RenderLocalShadowTask.h"
 
-void RenderShadowsAndDeferredTask::build(JobModel& task, const render::Varying& input, render::Varying& output, render::CullFunctor cullFunctor, uint8_t tagBits, uint8_t tagMask) {
-    task.addJob<SetRenderMethod>("SetRenderMethodTask", render::Args::DEFERRED);
-
-    const auto items = input.getN<DeferredForwardSwitchJob::Input>(0);
-    const auto lightingModel = input.getN<DeferredForwardSwitchJob::Input>(1);
-    const auto lightingStageFramesAndZones = input.getN<DeferredForwardSwitchJob::Input>(2);
-
-    // Warning : the cull functor passed to the shadow pass should only be testing for LOD culling. If frustum culling
-    // is performed, then casters not in the view frustum will be removed, which is not what we wish.
-    const auto shadowTaskIn = RenderShadowTask::Input(lightingStageFramesAndZones.get<AssembleLightingStageTask::Output>().get0()[0], lightingModel).asVarying();
-    const auto shadowTaskOut = task.addJob<RenderShadowTask>("RenderShadowTask", shadowTaskIn, cullFunctor, tagBits, tagMask);
-
-    // spot lights' shadows join the sun's in the frame's shadows, where the lighting finds them
-    const auto localShadowTaskIn = RenderLocalShadowTask::Input(lightingStageFramesAndZones.get<AssembleLightingStageTask::Output>().get0()[0],
-        lightingModel, shadowTaskOut.getN<RenderShadowTask::Output>(1)).asVarying();
-    task.addJob<RenderLocalShadowTask>("RenderLocalShadowTask", localShadowTaskIn, tagBits, tagMask);
-
-    const auto renderDeferredInput = RenderDeferredTask::Input(items, lightingModel, lightingStageFramesAndZones, shadowTaskOut).asVarying();
-    task.addJob<RenderDeferredTask>("RenderDeferredTask", renderDeferredInput);
-}
-
-void DeferredForwardSwitchJob::build(JobModel& task, const render::Varying& input, render::Varying& output, render::CullFunctor cullFunctor, uint8_t tagBits, uint8_t tagMask) {
-    task.addBranch<RenderShadowsAndDeferredTask>("RenderShadowsAndDeferredTask", 0, input, cullFunctor, tagBits, tagMask);
+void DeferredForwardSwitchJob::build(JobModel& task, const render::Varying& input, render::Varying& output) {
+    task.addBranch<RenderDeferredTask>("RenderDeferredTask", 0, input);
 
     task.addBranch<RenderForwardTask>("RenderForwardTask", 1, input);
 }
@@ -51,12 +30,23 @@ void RenderViewTask::build(JobModel& task, const render::Varying& input, render:
 
     // Assemble the lighting stages current frames
     const auto lightingStageFramesAndZones = task.addJob<AssembleLightingStageTask>("AssembleStages", items);
+    const auto lightFrame = lightingStageFramesAndZones.get<AssembleLightingStageTask::Output>().get0()[0];
+
+    // The frame's shadows, drawn before the choice of render method so that deferred and forward light with the same:
+    // the sun's cascades first, then the spot and point lights' shadow maps and cookies, which join them in the frame
+    // Warning : the cull functor passed to the shadow pass should only be testing for LOD culling. If frustum culling
+    // is performed, then casters not in the view frustum will be removed, which is not what we wish.
+    const auto shadowTaskIn = RenderShadowTask::Input(lightFrame, lightingModel).asVarying();
+    const auto shadowTaskOut = task.addJob<RenderShadowTask>("RenderShadowTask", shadowTaskIn, cullFunctor, tagBits, tagMask);
+
+    const auto localShadowTaskIn = RenderLocalShadowTask::Input(lightFrame, lightingModel, shadowTaskOut.getN<RenderShadowTask::Output>(1)).asVarying();
+    task.addJob<RenderLocalShadowTask>("RenderLocalShadowTask", localShadowTaskIn, tagBits, tagMask);
 
 #ifndef Q_OS_ANDROID
-        const auto deferredForwardIn = DeferredForwardSwitchJob::Input(items, lightingModel, lightingStageFramesAndZones).asVarying();
-        task.addJob<DeferredForwardSwitchJob>("DeferredForwardSwitch", deferredForwardIn, cullFunctor, tagBits, tagMask);
+        const auto deferredForwardIn = DeferredForwardSwitchJob::Input(items, lightingModel, lightingStageFramesAndZones, shadowTaskOut).asVarying();
+        task.addJob<DeferredForwardSwitchJob>("DeferredForwardSwitch", deferredForwardIn);
 #else
-        const auto renderInput = RenderForwardTask::Input(items, lightingModel, lightingStageFramesAndZones).asVarying();
+        const auto renderInput = RenderForwardTask::Input(items, lightingModel, lightingStageFramesAndZones, shadowTaskOut).asVarying();
         task.addJob<RenderForwardTask>("RenderForwardTask", renderInput);
 #endif
 }

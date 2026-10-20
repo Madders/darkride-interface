@@ -18,6 +18,8 @@
 	<string>${MACOSX_BUNDLE_LONG_VERSION_STRING}</string>
 	<key>CFBundleName</key>
 	<string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+	<key>CFBundleDisplayName</key>
+	<string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -60,6 +62,12 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string></string>
+	<string>Darkride uses your microphone so the people near you in a world can hear you.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Darkride opens your Downloads folder when you import an avatar or a model.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Darkride keeps avatar projects in your Documents folder.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Darkride saves Snaps on your Desktop when they cannot go to My Files.</string>
 </dict>
 </plist>

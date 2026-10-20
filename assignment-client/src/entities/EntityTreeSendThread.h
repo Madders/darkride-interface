@@ -42,16 +42,22 @@ private:
     bool addAncestorsToExtraFlaggedEntities(const QUuid& filteredEntityID, EntityItem& entityItem, EntityNodeData& nodeData);
     bool addDescendantsToExtraFlaggedEntities(const QUuid& filteredEntityID, EntityItem& entityItem, EntityNodeData& nodeData);
 
-    void startNewTraversal(const DiffTraversal::View& viewFrustum, EntityTreeElementPointer root, bool forceFirstPass = false);
+    DiffTraversal::Type startNewTraversal(const DiffTraversal::View& viewFrustum, EntityTreeElementPointer root, bool forceFirstPass = false);
     bool traverseTreeAndBuildNextPacketPayload(EncodeBitstreamParams& params, const QJsonObject& jsonFilters) override;
 
     void preDistributionProcessing() override;
     bool hasSomethingToSend(OctreeQueryNode* nodeData) override { return !_sendQueue.empty(); }
     bool shouldStartNewTraversal(OctreeQueryNode* nodeData, bool viewFrustumChanged) override { return viewFrustumChanged || _traversal.finished(); }
+    size_t queuedEntityCount() const override { return _sendQueue.size(); }
 
     DiffTraversal _traversal;
+    quint64 _traversalStartTime { 0 };   // diagnostics: when the current traversal began and the entities sent since
+    int _entitiesSinceMark { 0 };
+    quint64 _lastCompletionLog { 0 };
     EntityPriorityQueue _sendQueue;
     std::unordered_map<EntityItem*, uint64_t> _knownState;
+    quint64 _diagLastLog { 0 };       // TIVOLI_STREAM_DIAG: the last periodic line's time
+    int _diagSentSinceLog { 0 };      // TIVOLI_STREAM_DIAG: entities written out since that line
 
     // packet construction stuff
     EntityTreeElementExtraEncodeDataPointer _extraEncodeData { new EntityTreeElementExtraEncodeData() };

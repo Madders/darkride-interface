@@ -173,6 +173,7 @@ protected:
     void updateUpAxis(const glm::quat& rotation);
     bool checkForSupport();
     void measureFloorDistance(float rayLength, bool& rayHasHit);
+    void liftOutOfFloor();
     void recordContacts();
     JPH::ObjectLayer characterLayer() const;
 
@@ -199,8 +200,9 @@ protected:
     float _followTimeRemaining { 0.0f };
     glm::vec3 _position { 0.0f };
     glm::quat _rotation;
-    mutable glm::vec3 _readAhead { 0.0f }; // how far the last pose handed out was read ahead of the body
-    mutable glm::vec3 _handedOutPosition { 0.0f };
+    mutable glm::vec3 _handedOutPosition { 0.0f }; // the pose last handed out (getPositionAndOrientation)
+    glm::vec3 _substepStartPosition { 0.0f };       // the character's position before its last substep, for the presentation
+    uint32_t _substepStartStep { 0 };
     glm::vec3 _shapeLocalOffset { 0.0f };
 
     glm::vec3 _boxScale { 1.0f }; // used to compute capsule shape
@@ -223,6 +225,7 @@ protected:
     bool _stepUpEnabled { true };
     bool _hasSupport { false };
     bool _floorBelowNow { false }; // the floor ray reached floor in this update, with none of the grace period below
+    bool _liftedOutOfFloor { false }; // the last substep found the feet under a floor and lifted them out
 
     float _currentGravity { 0.0f };
     float _gravity { DEFAULT_AVATAR_GRAVITY };

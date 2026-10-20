@@ -19,6 +19,7 @@
 AnimSkeleton::AnimSkeleton(const HFMModel& hfmModel) {
 
     _geometryOffset = hfmModel.offset;
+    _humanoid = hfmModel.humanoid;
 
     buildSkeletonFromJoints(hfmModel.joints, hfmModel.jointRotationOffsets);
 

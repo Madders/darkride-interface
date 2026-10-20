@@ -83,6 +83,17 @@ void ScriptCache::getScriptContents(const QString& scriptOrURL, contentAvailable
         return;
     }
 
+    request(url, contentAvailable, nullptr, forceDownload, maxRetries);
+}
+
+void ScriptCache::getScriptBytes(const QString& scriptURL, bytesAvailableCallback bytesAvailable, bool forceDownload, int maxRetries) {
+    QUrl url = DependencyManager::get<ResourceManager>()->normalizeURL(QUrl(scriptURL));
+    request(url, nullptr, bytesAvailable, forceDownload, maxRetries);
+}
+
+// The fetch and the cache behind both: one of the two callbacks is given, the text one or the bytes one.
+void ScriptCache::request(const QUrl& url, contentAvailableCallback contentAvailable, bytesAvailableCallback bytesAvailable,
+                          bool forceDownload, int maxRetries) {
     Lock lock(_containerLock);
     if (_scriptCache.contains(url) && !forceDownload) {
         auto entry = _scriptCache[url];
@@ -99,14 +110,24 @@ void ScriptCache::getScriptContents(const QString& scriptOrURL, contentAvailable
         if (!forceDownload) {
             lock.unlock();
             qCDebug(scriptengine) << "Found script in cache:" << url.fileName();
-            contentAvailable(url.toString(), entry["data"].toString(), true, true, STATUS_CACHED);
+            if (contentAvailable) {
+                contentAvailable(url.toString(), entry["data"].toString(), true, true, STATUS_CACHED);
+            }
+            if (bytesAvailable) {
+                bytesAvailable(url.toString(), entry["bytes"].toByteArray(), true, STATUS_CACHED);
+            }
             return;
         }
     }
     {
         auto& scriptRequest = _activeScriptRequests[url];
-        bool alreadyWaiting = scriptRequest.scriptUsers.size() > 0;
-        scriptRequest.scriptUsers.push_back(contentAvailable);
+        bool alreadyWaiting = scriptRequest.scriptUsers.size() + scriptRequest.byteUsers.size() > 0;
+        if (contentAvailable) {
+            scriptRequest.scriptUsers.push_back(contentAvailable);
+        }
+        if (bytesAvailable) {
+            scriptRequest.byteUsers.push_back(bytesAvailable);
+        }
 
         lock.unlock();
 
@@ -125,11 +146,15 @@ void ScriptCache::getScriptContents(const QString& scriptOrURL, contentAvailable
                 qCWarning(scriptengine) << "Error loading script from URL (createResourceRequest failed)" << url;
                 lock.lock();
                 auto allCallbacks = scriptRequest.scriptUsers;
+                auto allByteCallbacks = scriptRequest.byteUsers;
                 _activeScriptRequests.remove(url);
                 lock.unlock();
-                if (allCallbacks.size() > 0 && !DependencyManager::get<ScriptEngines>()->isStopped()) {
+                if (!DependencyManager::get<ScriptEngines>()->isStopped()) {
                     foreach(contentAvailableCallback thisCallback, allCallbacks) {
                         thisCallback(url.toString(), "", true, false, "!createResourceRequest");
+                    }
+                    foreach(bytesAvailableCallback thisCallback, allByteCallbacks) {
+                        thisCallback(url.toString(), QByteArray(), false, "!createResourceRequest");
                     }
                 }
                 return;
@@ -151,7 +176,9 @@ void ScriptCache::scriptContentAvailable(int maxRetries) {
     QUrl url = req->getUrl();
 
     QString scriptContent;
+    QByteArray scriptBytes;
     std::vector<contentAvailableCallback> allCallbacks;
+    std::vector<bytesAvailableCallback> allByteCallbacks;
     QString status = QMetaEnum::fromType<ResourceRequest::Result>().valueToKey(req->getResult());
     bool success { false };
 
@@ -166,11 +193,13 @@ void ScriptCache::scriptContentAvailable(int maxRetries) {
 
             if (success) {
                 allCallbacks = scriptRequest.scriptUsers;
-
+                allByteCallbacks = scriptRequest.byteUsers;
                 _activeScriptRequests.remove(url);
-
+                scriptBytes = req->getData();
+                scriptContent = QString::fromUtf8(scriptBytes);
                 _scriptCache[url] = {
-                    { "data", scriptContent = req->getData() },
+                    { "data", scriptContent },
+                    { "bytes", scriptBytes },
                     { "last-modified", req->property("last-modified") },
                 };
             } else {
@@ -207,9 +236,10 @@ void ScriptCache::scriptContentAvailable(int maxRetries) {
                     // Dubious, but retained here because it matches the behavior before fixing the threading
 
                     allCallbacks = scriptRequest.scriptUsers;
-
+                    allByteCallbacks = scriptRequest.byteUsers;
                     if (_scriptCache.contains(url)) {
                         scriptContent = _scriptCache[url]["data"].toString();
+                        scriptBytes = _scriptCache[url]["bytes"].toByteArray();
                     }
                     _activeScriptRequests.remove(url);
                     qCWarning(scriptengine) << "Error loading script from URL (" << status <<")" << url;
@@ -221,9 +251,12 @@ void ScriptCache::scriptContentAvailable(int maxRetries) {
 
     req->deleteLater();
 
-    if (allCallbacks.size() > 0 && !DependencyManager::get<ScriptEngines>()->isStopped()) {
+    if (!DependencyManager::get<ScriptEngines>()->isStopped()) {
         foreach(contentAvailableCallback thisCallback, allCallbacks) {
             thisCallback(url.toString(), scriptContent, true, success, status);
+        }
+        foreach(bytesAvailableCallback thisCallback, allByteCallbacks) {
+            thisCallback(url.toString(), scriptBytes, success, status);
         }
     }
 }

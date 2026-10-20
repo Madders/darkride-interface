@@ -159,6 +159,7 @@ public:
 
     /// appends a unsigned 32 bit int to the end of the stream, may fail if new data stream is too long to fit in packet
     bool appendValue(uint32_t value);
+    bool appendValue(int32_t value);
 
     /// appends a unsigned 64 bit int to the end of the stream, may fail if new data stream is too long to fit in packet
     bool appendValue(quint64 value);
@@ -264,6 +265,7 @@ public:
     static int unpackDataFromBytes(const unsigned char* dataBytes, bool& result) { memcpy(&result, dataBytes, sizeof(result)); return sizeof(result); }
     static int unpackDataFromBytes(const unsigned char* dataBytes, quint64& result) { memcpy(&result, dataBytes, sizeof(result)); return sizeof(result); }
     static int unpackDataFromBytes(const unsigned char* dataBytes, uint32_t& result) { memcpy(&result, dataBytes, sizeof(result)); return sizeof(result); }
+    static int unpackDataFromBytes(const unsigned char* dataBytes, int32_t& result) { memcpy(&result, dataBytes, sizeof(result)); return sizeof(result); }
     static int unpackDataFromBytes(const unsigned char* dataBytes, uint16_t& result) { memcpy(&result, dataBytes, sizeof(result)); return sizeof(result); }
     static int unpackDataFromBytes(const unsigned char* dataBytes, uint8_t& result) { memcpy(&result, dataBytes, sizeof(result)); return sizeof(result); }
     static int unpackDataFromBytes(const unsigned char* dataBytes, glm::quat& result) { int bytes = unpackOrientationQuatFromBytes(dataBytes, result); return bytes; }

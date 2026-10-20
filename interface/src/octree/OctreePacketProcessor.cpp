@@ -11,6 +11,8 @@
 
 #include "OctreePacketProcessor.h"
 
+#include <chrono>
+
 #include <PerfStat.h>
 
 #include "Application.h"
@@ -98,6 +100,37 @@ void OctreePacketProcessor::processPacket(QSharedPointer<ReceivedMessage> messag
     // seek back to beginning of packet after tracking
     message->seek(0);
 
+    // The server's sequence number of this packet: entity data and erase packets both carry one (the erase packets
+    // consume numbers too, so the safe landing's window must count them), the completion carries the number after the
+    // last packet of the scene
+    OCTREE_PACKET_SEQUENCE sequence = 0;
+    bool hasSequence = false;
+    if (packetType == PacketType::EntityQueryInitialResultsComplete) {
+        message->readPrimitive(&sequence);
+        message->seek(0);
+    } else if (message->getSize() >= (int)(sizeof(OCTREE_PACKET_FLAGS) + sizeof(OCTREE_PACKET_SEQUENCE))) {
+        message->seek(sizeof(OCTREE_PACKET_FLAGS));
+        message->readPrimitive(&sequence);
+        message->seek(0);
+        hasSequence = true;
+    }
+    bool landingTracks = _safeLanding && _safeLanding->isTracking();
+    if (landingTracks && hasSequence) {
+        _safeLanding->addToSequence(sequence);
+    }
+
+    // TIVOLI_ARRIVAL_TRACE=1: a line per octree packet while the safe landing is tracking (WORLD-LOADING.md, the
+    // arrival gate): its type, the server's sequence number, its size and how long it waited in this processor's queue
+    static const bool arrivalTrace = !qgetenv("TIVOLI_ARRIVAL_TRACE").isEmpty();
+    if (arrivalTrace && landingTracks) {
+        qint64 received = message->getFirstPacketReceiveTime();   // microseconds of the high-resolution clock, 0 for a piggyback
+        qint64 queuedUs = received > 0 ? (qint64)std::chrono::duration_cast<std::chrono::microseconds>(
+            p_high_resolution_clock::now().time_since_epoch()).count() - received : -1;
+        qDebug() << "arrival trace:" << packetType << "sequence" << sequence << "bytes" << message->getSize()
+            << "queued" << (queuedUs >= 0 ? QString::number(queuedUs / 1000.0, 'f', 1) : QString("?")) << "ms"
+            << (wasStatsPacket ? "piggybacked on stats" : "") << "backlog" << packetsToProcessCount();
+    }
+
     switch(packetType) {
         case PacketType::EntityErase: {
             if (DependencyManager::get<SceneScriptingInterface>()->shouldRenderEntities()) {
@@ -113,23 +146,17 @@ void OctreePacketProcessor::processPacket(QSharedPointer<ReceivedMessage> messag
                 auto renderer = qApp->getEntities();
                 if (renderer) {
                     renderer->processDatagram(*message, sendingNode);
-                    if (_safeLanding && _safeLanding->isTracking()) {
-                        OCTREE_PACKET_SEQUENCE thisSequence = renderer->getLastOctreeMessageSequence();
-                        _safeLanding->addToSequence(thisSequence);
-                        if (_safeLandingSequenceStart == SafeLanding::INVALID_SEQUENCE) {
-                            _safeLandingSequenceStart = thisSequence;
-                        }
-                    }
                 }
             }
         } break;
 
         case PacketType::EntityQueryInitialResultsComplete: {
-            // Read sequence #
-            OCTREE_PACKET_SEQUENCE completionNumber;
-            message->readPrimitive(&completionNumber);
-            if (_safeLanding && _safeLanding->isTracking()) {
-                _safeLanding->finishSequence(_safeLandingSequenceStart, completionNumber);
+            // the number after the last packet of the initial scene; the landing's window starts at the first packet it
+            // saw since it began tracking (an earlier landing's packets do not count: until 2026-10-19 the start was
+            // kept here across landings, so a landing restarted by the arrival's teleport waited for packets that had
+            // been seen, and consumed, before it began, and the loading screen held to its time limit)
+            if (landingTracks) {
+                _safeLanding->finishSequence(sequence);
             }
         } break;
 
@@ -161,7 +188,6 @@ void OctreePacketProcessor::resetSafeLanding() {
     if (_safeLanding) {
         _safeLanding->reset();
     }
-    _safeLandingSequenceStart = SafeLanding::INVALID_SEQUENCE;
 }
 
 bool OctreePacketProcessor::safeLandingIsActive() const {

@@ -1,10 +1,11 @@
 import { SignalManager } from "./lib/signal-manager";
 
-// The metaverse's users list for the domain we are in, fetched once and shared by the nametags, the
-// chat and the Tab overview: session id ("{...}") → the account behind that avatar. In round 1 this is
-// where an AI resident's mark, its own word and its host come from (AI-FIRST-CLIENT.md §10.4). An
-// avatar is matched to its account by the session id that account reported to the metaverse, never
-// by the display name it shows.
+// Who each avatar in this world is: session id ("{...}") → the account behind it, shared by the nametags, the chat and
+// the Tab overview. The world server says which account each session signed in with (it checked that account when the
+// session connected; Users.requestUsernameFromID), and the account's public profile on the metaverse gives its picture
+// and, for an AI resident, its mark, its own word and its host (AI-FIRST-CLIENT.md §10.4). So an avatar is matched to
+// its account by the world's check, never by the display name it shows, and nothing here asks the metaverse who is
+// where.
 
 export interface CachedUser {
 	username: string;
@@ -28,18 +29,32 @@ export function markLine(user: { aiWord?: string; host?: string }) {
 
 const NULL_UUID = "{00000000-0000-0000-0000-000000000000}";
 
+interface Profile {
+	username: string;
+	ai: boolean;
+	aiWord: string;
+	host: string;
+	image: string;
+	fetchedAt: number;
+}
+
 class UsersCache {
 	private bySession: CachedUsers = {};
+	// what the world said each session signed in with ("" for a visitor without an account)
+	private names: { [sessionId: string]: string } = {};
+	private profiles: { [username: string]: Profile } = {};
+	private fetching: { [username: string]: boolean } = {};
 	private listeners: ((users: CachedUsers) => any)[] = [];
 	private signals = new SignalManager();
 
 	private started = false;
 	private interval: object = null;
-	private fetchTimeout: object = null;
-	private lastFetchAt = 0;
+	private askTimeout: object = null;
+	private lastAskAt = 0;
 
-	private readonly minFetchIntervalMs = 5 * 1000;
+	private readonly minAskIntervalMs = 2 * 1000;
 	private readonly pollIntervalMs = 20 * 1000;
+	private readonly profileMaxAgeMs = 5 * 60 * 1000;
 
 	get(sessionId: string): CachedUser | null {
 		if (sessionId == null) return null;
@@ -62,16 +77,16 @@ class UsersCache {
 		this.listeners = this.listeners.filter(l => l !== listener);
 	}
 
-	// a fetch soon, at most one every few seconds (arrivals and departures call this)
+	// ask the world again soon, at most once every few seconds (arrivals and departures call this)
 	refreshSoon() {
 		this.start();
-		const due = this.lastFetchAt + this.minFetchIntervalMs - Date.now();
+		const due = this.lastAskAt + this.minAskIntervalMs - Date.now();
 		if (due <= 0) {
-			this.fetch();
-		} else if (this.fetchTimeout == null) {
-			this.fetchTimeout = Script.setTimeout(() => {
-				this.fetchTimeout = null;
-				this.fetch();
+			this.ask();
+		} else if (this.askTimeout == null) {
+			this.askTimeout = Script.setTimeout(() => {
+				this.askTimeout = null;
+				this.ask();
 			}, due);
 		}
 	}
@@ -80,26 +95,96 @@ class UsersCache {
 		if (this.started) return;
 		this.started = true;
 
-		this.interval = Script.setInterval(() => this.fetch(), this.pollIntervalMs);
+		this.interval = Script.setInterval(() => this.ask(), this.pollIntervalMs);
 		this.signals.connect(AvatarList.avatarAddedEvent, () => this.refreshSoon());
 		this.signals.connect(AvatarList.avatarRemovedEvent, () => this.refreshSoon());
 		this.signals.connect(AddressManager.hostChanged, () => {
 			this.bySession = {};
+			this.names = {};
 			this.refreshSoon();
 		});
+		// the nametags ask too (for the admin mark); every answer is used
+		this.signals.connect(Users.usernameFromIDReply, (sessionId: string, username: string) =>
+			this.onName(sessionId, username),
+		);
 
-		this.fetch();
+		this.ask();
 	}
 
-	private fetch() {
-		const domainID = AddressManager.domainID;
-		if (domainID == null || domainID == "" || domainID == NULL_UUID) return;
+	// ask the world which account each avatar here signed in with, and forget the ones who left
+	private ask() {
+		this.lastAskAt = Date.now();
 
-		this.lastFetchAt = Date.now();
+		const here: { [sessionId: string]: boolean } = {};
+		const ids = AvatarList.getAvatarIdentifiers().concat([MyAvatar.sessionUUID]);
+		for (const id of ids) {
+			if (id == null || id == "" || id == NULL_UUID) continue;
+			here[id] = true;
+			Users.requestUsernameFromID(id);
+		}
+
+		let changed = false;
+		for (const id of Object.keys(this.names)) {
+			if (here[id]) continue;
+			delete this.names[id];
+			if (this.bySession[id]) {
+				delete this.bySession[id];
+				changed = true;
+			}
+		}
+		if (changed) this.notify();
+	}
+
+	private onName(sessionId: string, username: string) {
+		this.names[sessionId] = username || "";
+		if (!username) {
+			if (this.bySession[sessionId]) {
+				delete this.bySession[sessionId];
+				this.notify();
+			}
+			return;
+		}
+
+		const profile = this.profiles[username];
+		if (profile != null) this.wear(sessionId, profile);
+		if (profile == null || Date.now() - profile.fetchedAt > this.profileMaxAgeMs) {
+			this.fetchProfile(username);
+		}
+	}
+
+	private wear(sessionId: string, profile: Profile) {
+		const old = this.bySession[sessionId];
+		if (
+			old != null &&
+			old.username == profile.username &&
+			old.ai == profile.ai &&
+			old.aiWord == profile.aiWord &&
+			old.host == profile.host &&
+			old.thumbnail == profile.image
+		)
+			return;
+
+		this.bySession[sessionId] = {
+			username: profile.username,
+			ai: profile.ai,
+			aiWord: profile.aiWord,
+			host: profile.host,
+			thumbnail: profile.image,
+			connection: null,
+		};
+		this.notify();
+	}
+
+	// an account's public card on the metaverse: its picture, and for an AI resident its mark, word and host
+	private fetchProfile(username: string) {
+		if (this.fetching[username]) return;
+		this.fetching[username] = true;
 
 		const req = new XMLHttpRequest();
 		req.onreadystatechange = () => {
-			if (req.readyState != 4 || req.status != 200) return;
+			if (req.readyState != 4) return;
+			delete this.fetching[username];
+			if (req.status != 200) return;
 
 			let json: any;
 			try {
@@ -107,51 +192,51 @@ class UsersCache {
 			} catch (err) {
 				return;
 			}
-			if (json.status != "success" || json.data == null || json.data.users == null)
-				return;
+			if (json == null || typeof json.username != "string") return;
 
-			const users: CachedUsers = {};
-			for (const u of json.data.users) {
-				if (u.location == null || !u.location.node_id) continue;
-				users["{" + u.location.node_id + "}"] = {
-					username: u.username,
-					ai: u.ai === true,
-					aiWord: u.ai_word || "",
-					host: u.host || "",
-					thumbnail: u.images ? u.images.thumbnail : "",
-					connection: u.connection,
-				};
-			}
-			this.bySession = users;
-
-			for (const listener of this.listeners) {
-				try {
-					listener(users);
-				} catch (err) {
-					console.error(err);
-				}
+			const profile: Profile = {
+				username: json.username,
+				ai: json.ai === true,
+				aiWord: json.aiWord || "",
+				host: json.host || "",
+				image: json.image || "",
+				fetchedAt: Date.now(),
+			};
+			this.profiles[username] = profile;
+			for (const sessionId of Object.keys(this.names)) {
+				if (this.names[sessionId] == username) this.wear(sessionId, profile);
 			}
 		};
 		req.open(
 			"GET",
 			AccountServices.metaverseServerURL +
-				"/api/v1/users?per_page=1000&status=" +
-				domainID.slice(1, -1) +
-				"&a=" +
-				Date.now(),
+				"/api/user/" +
+				encodeURIComponent(username) +
+				"/profile",
 			true,
 		);
 		req.send();
 	}
 
+	private notify() {
+		for (const listener of this.listeners) {
+			try {
+				listener(this.bySession);
+			} catch (err) {
+				console.error(err);
+			}
+		}
+	}
+
 	cleanup() {
 		if (this.interval) Script.clearInterval(this.interval);
-		if (this.fetchTimeout) Script.clearTimeout(this.fetchTimeout);
+		if (this.askTimeout) Script.clearTimeout(this.askTimeout);
 		this.interval = null;
-		this.fetchTimeout = null;
+		this.askTimeout = null;
 		this.signals.cleanup();
 		this.listeners = [];
 		this.bySession = {};
+		this.names = {};
 		this.started = false;
 	}
 }

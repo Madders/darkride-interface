@@ -290,3 +290,66 @@ void TrackTests::determinism() {
     a.advance(curve, schedule, STEP);
     QCOMPARE(c.state().s, a.state().s);
 }
+
+// Round 5: a train state handed from one follower to another and run on in the same substeps lands on the same place;
+// a state run on in one long step would not (the profile integrates per step), which is why the server and its clients
+// both step the state in 1/90 s and why a client catching up uses a whole number of substeps.
+void TrackTests::stateHandover() {
+    TrackCurve curve = square(true);
+    TrackFollower::Schedule schedule;
+    schedule.speed = 5.0f;
+    schedule.acceleration = 2.0f;
+    schedule.dwell = { 3.0f, 0.0f, 3.0f, 0.0f };
+
+    // the server: a train started at the first station, run for 20 s in substeps
+    TrackFollower server;
+    server.reset(curve, schedule, 0.0f);
+    const int STEPS_BEFORE = 90 * 20;
+    for (int i = 0; i < STEPS_BEFORE; ++i) {
+        server.advance(curve, schedule, STEP);
+    }
+    TrackFollower::State published = server.state();   // what goes on the wire
+    QVERIFY(published.speed > 0.0f);                   // moving between stations by then
+
+    // the server goes on for 1.5 s (a heartbeat and a half of latency, say)
+    const int STEPS_AFTER = 135;
+    for (int i = 0; i < STEPS_AFTER; ++i) {
+        server.advance(curve, schedule, STEP);
+    }
+
+    // a client that adopts the published state and catches up in the same substeps agrees to the micrometre
+    TrackFollower client;
+    client.setState(published);
+    for (int i = 0; i < STEPS_AFTER; ++i) {
+        client.advance(curve, schedule, STEP);
+    }
+    QVERIFY(std::fabs(client.state().s - server.state().s) < 1.0e-4f);
+    QVERIFY(std::fabs(client.state().speed - server.state().speed) < 1.0e-5f);
+    QCOMPARE(client.state().station, server.state().station);
+    QCOMPARE(client.state().direction, server.state().direction);
+
+    // the same catch-up in one step lands elsewhere while the speed changes: the reason for the substeps
+    TrackFollower lazy;
+    lazy.setState(published);
+    lazy.advance(curve, schedule, STEPS_AFTER * STEP);
+    bool speedChanged = std::fabs(published.speed - server.state().speed) > 1.0e-3f;
+    if (speedChanged) {
+        QVERIFY(std::fabs(lazy.state().s - server.state().s) > 1.0e-3f);
+    }
+
+    // a state adopted while the train stands keeps its dwell: the client leaves the station when the server does
+    TrackFollower standing;
+    standing.reset(curve, schedule, 0.0f);   // at station 0 with its 3 s dwell
+    TrackFollower::State atRest = standing.state();
+    QVERIFY(atRest.dwellRemaining > 0.0f);
+    TrackFollower follower;
+    follower.setState(atRest);
+    int stepsToDepart = 0;
+    while (follower.state().speed == 0.0f && stepsToDepart < 90 * 10) {
+        follower.advance(curve, schedule, STEP);
+        standing.advance(curve, schedule, STEP);
+        ++stepsToDepart;
+    }
+    QVERIFY(stepsToDepart > 0 && stepsToDepart < 90 * 4);
+    QVERIFY(std::fabs(follower.state().s - standing.state().s) < 1.0e-5f);
+}

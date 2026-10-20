@@ -20,8 +20,7 @@ static const char* const URL_PROPERTY = "source";
 static const char* const SCRIPT_PROPERTY = "scriptUrl";
 
 // Method called by Qt scripts to create a new web window in the overlay
-QScriptValue QmlWebWindowClass::internal_constructor(QScriptContext* context, QScriptEngine* engine, bool restricted) {
-    auto properties = parseArguments(context);
+QmlWebWindowClass* QmlWebWindowClass::createWebWindow(QVariantMap properties, bool restricted) {
     auto offscreenUi = DependencyManager::get<OffscreenUi>();
     QmlWebWindowClass* retVal = new QmlWebWindowClass(restricted);
     Q_ASSERT(retVal);
@@ -31,6 +30,11 @@ QScriptValue QmlWebWindowClass::internal_constructor(QScriptContext* context, QS
     } else {
         retVal->initQml(properties);
     }
+    return retVal;
+}
+
+QScriptValue QmlWebWindowClass::internal_constructor(QScriptContext* context, QScriptEngine* engine, bool restricted) {
+    QmlWebWindowClass* retVal = createWebWindow(parseArguments(context), restricted);
     connect(engine, &QScriptEngine::destroyed, retVal, &QmlWindowClass::deleteLater);
     return engine->newQObject(retVal);
 }

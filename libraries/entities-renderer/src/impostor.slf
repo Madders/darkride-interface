@@ -1,0 +1,450 @@
+<@include gpu/Config.slh@>
+<$VERSION_HEADER$>
+//  <$_SCRIBE_FILENAME$>
+//  Generated on <$_SCRIBE_DATE$>
+//
+//  An impostor card (ImpostorCard, IMPOSTORS.md 2.3): the six-view impostor of a model, read from the atlases its
+//  bake wrote (ImpostorBaker, 2.2): 3 x 2 frames of the subject's bounding sphere seen orthographically along +X, -X,
+//  +Y, -Y, +Z, -Z of the subject's own axes, the albedo with its coverage in one, the subject-space normal with the
+//  depth through the sphere (0 the near face, 1 the far face) in another, and, since step 4, the roughness and
+//  metallic in a third. Per pixel: this pixel's view ray is followed through the sphere to where it meets the
+//  subject, taking a point as inside the subject where every one of the six frames sees a surface in front of it
+//  along its axis (the visual hull the depth maps carve, which is what keeps one frame's picture from smearing
+//  across another's view); the candidates are each facing frame's parallax hit (the ray taken to the height that
+//  frame holds, which finds a thin surface exactly) and a march along the ray's chord in steps of two texels (so
+//  that a tube a few texels across is not stepped over), and the nearest valid one wins. The hit's colour, normal
+//  and material are the three facing frames' (the signs of the direction from the centre to the camera) where the
+//  hit projects into them, weighed by that direction's components. The fragment is shaded like any opaque surface,
+//  in the G-buffer (deferred) or in place as a model is on the forward path (model.slf), and it writes the hit's
+//  depth along the ray, so the card is occluded, lit, fogged and shadowed as geometry standing where the model
+//  stood (the depth in the engine's reversed-Z convention, transformClipToDepth, as simple_procedural.slf writes
+//  it). The shadow variant writes that depth alone, into the light's map, from the light's orthographic view (a
+//  view whose rays are parallel: the direction the view looks along stands in for the direction to the camera).
+//  The dissolve into or out of the model (ImpostorSwitch, 2.4) clips the card where the fade effect's noise is at
+//  or above the card's share, the complement of the model's own fade clip.
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//
+
+<@include render-utils/ShaderConstants.h@>
+<@include entities-renderer/ShaderConstants.h@>
+
+<@if HIFI_USE_SHADOW@>
+    // the shadow pass: the hit's depth alone
+<@else@>
+    <@if not HIFI_USE_FORWARD@>
+        <@include DeferredBufferWrite.slh@>
+    <@else@>
+        <@include DefaultMaterials.slh@>
+
+        <@include GlobalLight.slh@>
+        <@include Shadow.slh@>
+        <@include LightLocal.slh@>
+        <$declareEvalSkyboxGlobalColor(_SCRIBE_NULL, HIFI_USE_FORWARD)$>
+
+        layout(location=0) out vec4 _fragColor0;
+    <@endif@>
+<@endif@>
+
+<@include gpu/Transform.slh@>
+<$declareStandardCameraTransform()$>
+
+<@include Fade.slh@>
+<$declareFadeFragmentCommon()$>
+<$declareFadeFragmentUniform()$>
+
+layout(location=RENDER_UTILS_ATTR_POSITION_WS) in vec4 _positionWS;
+layout(location=RENDER_UTILS_ATTR_POSITION_ES) in vec4 _positionES;
+
+struct ImpostorParams {
+    mat4 worldToObject;   // the subject's rotation, inverted: takes a world direction into the subject's frame
+    mat4 objectToWorld;   // the subject's rotation: takes a subject-frame normal to the world
+    vec4 centerRadius;    // xyz: the sphere's centre in world space; w: its radius, metres
+    vec4 material;        // x: roughness; y: metallic (both the entry's, for a bake without a material atlas);
+                          // z: the frame size in texels; w: 1 when the material atlas is bound
+    vec4 flags;           // x: the debug view; the rest unused
+};
+
+LAYOUT_STD140(binding=ENTITIES_BUFFER_IMPOSTOR) uniform impostorParamsBuffer {
+    ImpostorParams params;
+};
+
+LAYOUT(binding=ENTITIES_TEXTURE_IMPOSTOR_ALBEDO) uniform sampler2D albedoAtlas;       // sRGB rgb, a: coverage
+LAYOUT(binding=ENTITIES_TEXTURE_IMPOSTOR_NORMAL) uniform sampler2D normalAtlas;       // rgb: 0.5 + 0.5 normal (subject frame), a: depth
+LAYOUT(binding=ENTITIES_TEXTURE_IMPOSTOR_MATERIAL) uniform sampler2D materialAtlas;   // r: roughness, g: metallic
+
+// The six frames as the bake drew them (ImpostorBaker's VIEWS), +X, -X, +Y, -Y, +Z, -Z: the camera's backward axis
+// (where it stood) and its up, in the subject's frame; its right is cross(up, backward). Frame i sits at column
+// i % 3, row i / 3 of the atlas. Arithmetic rather than a const array: the macOS GL compiler reads a const array
+// indexed at run time as its first entry or nothing, and every frame came out as its centre texel.
+vec3 frameBackward(int frame) {
+    int axis = frame / 2;
+    float sign = (frame % 2 == 0) ? 1.0 : -1.0;
+    return sign * vec3(axis == 0 ? 1.0 : 0.0, axis == 1 ? 1.0 : 0.0, axis == 2 ? 1.0 : 0.0);
+}
+vec3 frameUp(int frame) {
+    // +Y is seen with -Z up the picture, -Y with +Z, the others with +Y
+    return (frame == 2) ? vec3(0.0, 0.0, -1.0) : ((frame == 3) ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0));
+}
+
+const float LEAST_WEIGHT = 0.02;       // a frame weighing less lends no colour
+const float GRAZING = 0.2;             // the view ray's least component along a frame's axis for the parallax step
+const float COVERED = 0.5;             // the albedo's alpha, 0 or 1 in the atlas, half way once mips blend it
+const float STEP_TEXELS = 2.0;         // the march's step along the ray's chord, in frame texels
+const float SEEN_TEXELS = 2.0;         // a frame lends colour where its surface is this close to the hit, in texels
+const int MARCH_MIN = 14;              // steps along the chord, at least (a coarse atlas) and at most (a fine one)
+const int MARCH_MAX = 96;
+
+// A frame's texture coordinate for a point of the subject's frame: the point projected onto the frame's plane, u
+// along right and v along up, each 0 to 1 across the sphere's diameter; v runs up the view and the atlas rows run
+// down the picture (row 0 is the top).
+vec2 frameUV(int frame, vec3 point, float radius) {
+    vec3 backward = frameBackward(frame);
+    vec3 up = frameUp(frame);
+    vec3 right = cross(up, backward);
+    return vec2(0.5 + dot(point, right) / (2.0 * radius), 0.5 + dot(point, up) / (2.0 * radius));
+}
+vec2 atlasUV(int frame, vec2 uv) {
+    return vec2((float(frame % 3) + uv.x) / 3.0, (float(frame / 3) + 1.0 - uv.y) / 2.0);
+}
+bool inFrame(vec2 uv) {
+    return all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)));
+}
+
+// Whether a frame sees a surface along its axis through the point, and where: the height of that surface along
+// the frame's backward axis (the depth is 0 at the sphere's near face, 1 at the far face). The four texels of the
+// first mip around the point, read together (textureGather: the coverage from the albedo's alpha, the depth from
+// the normal atlas's alpha), unblended: the point counts as covered where any of the four is, at the depth of the
+// front-most covered one. That widens each frame's outline by half a texel, which a thin plate seen edge-on needs:
+// the school chair's backrest is a curved plate one or two texels thick from the side, and the nearest single texel
+// put many points on its face just outside that thin profile, which showed as see-through speckles and ragged
+// edges on the card (2026-10-18). A filtered read would mix the empty neighbours' far-face depth into a thin
+// surface's edge and put it short of where it is; the front-most covered depth does not. The footprint is kept
+// inside the frame (texel centres half a texel to one texel in from its edges), so a neighbouring frame's border
+// never lends its coverage. (Measured against the nearest texel for the march with this widening only for the
+// parallax hits: the table read 7.5 % bright at 2.2 m with holes at its edges, since the hull and the colour read
+// must agree on the outline; widened everywhere, a thin tube is a texel thicker instead, which is the trade taken.)
+// Straight-line code throughout the hull, no early returns, breaks or switches inside loops: the macOS GLSL compiler
+// mishandled the control flow the cross-compiler made of those (the first build's hull said "inside" everywhere).
+bool frameSurface(int frame, vec3 point, float radius, out float height) {
+    vec2 uv = frameUV(frame, point, radius);
+    bool within = inFrame(uv);
+    float frameTexels = params.material.z;
+    // the frame's texel coordinates in the atlas's orientation (rows run down), kept where the 2 x 2 footprint
+    // (the texel below the coordinate's centre and the next one) stays inside the frame
+    vec2 texelInFrame = vec2(uv.x, 1.0 - uv.y) * frameTexels;
+    texelInFrame = clamp(texelInFrame, vec2(0.5), vec2(frameTexels - 1.0));
+    vec2 at = (vec2(float(frame % 3), float(frame / 3)) * frameTexels + texelInFrame) / (vec2(3.0, 2.0) * frameTexels);
+    vec4 coverage = textureGather(albedoAtlas, at, 3);
+    vec4 depths = textureGather(normalAtlas, at, 3);
+    vec4 hits = step(vec4(COVERED), coverage);
+    vec4 nearest = mix(vec4(1.0), depths, hits);
+    float depth = min(min(nearest.x, nearest.y), min(nearest.z, nearest.w));
+    bool covered = within && (hits.x + hits.y + hits.z + hits.w > 0.0);
+    height = covered ? radius * (1.0 - 2.0 * depth) : -radius;
+    return covered;
+}
+
+// A point is inside the subject where every one of the six frames sees a surface in front of it along its axis:
+// the visual hull the frames carve, each pair of opposite frames bounding the subject's extent along their axis.
+// No point outside it is drawn, which is what keeps a frame's picture from smearing across another's view.
+// slack: metres a point may stand proud of a frame's surface and still count inside (a texel's worth)
+bool inside(vec3 point, float radius, float slack) {
+    bool within = true;
+    for (int frame = 0; frame < 6; frame++) {
+        float height;
+        bool covered = frameSurface(frame, point, radius, height);
+        within = within && covered && (dot(point, frameBackward(frame)) <= height + slack);
+    }
+    return within;
+}
+
+// The dissolve into or out of the model (ImpostorSwitch): between 0 and 1 the threshold is the card's share, and
+// the card shows where the fade effect's noise at the surface's world position is below it, which is where the
+// model's own fade clip (applyFadeClip, visible at or above the threshold) hides the model. The same noise at the
+// same place, so where the two surfaces coincide the clips are complementary.
+void applyCrossfadeClip(vec3 positionWS) {
+    FadeObjectParams fadeParams;
+    <$fetchFadeObjectParams(fadeParams)$>
+    if (fadeParams.threshold > 0.0 && fadeParams.threshold < 1.0 &&
+        evalFadeGradient(fadeParams, positionWS) >= fadeParams.threshold) {
+        discard;
+    }
+}
+
+void main(void) {
+    vec3 center = params.centerRadius.xyz;
+    float radius = params.centerRadius.w;
+    mat3 worldToObject = mat3(params.worldToObject);
+    mat3 objectToWorld = mat3(params.objectToWorld);
+    TransformCamera cam = getTransformCamera();
+    vec3 cameraWS = cam._viewInverse[3].xyz;
+
+    // this pixel's point on the card, the view's direction from the centre (it picks the frames, the same for every
+    // pixel of the card so the blend has no seams) and this pixel's ray into the scene, all in the subject's frame.
+    // An orthographic view (a shadow cascade's) has parallel rays along the direction it looks: that direction is
+    // every pixel's ray, and its opposite stands for the direction to the camera.
+    bool orthographic = cam._projection[2][3] == 0.0;
+    vec3 viewDirWS = orthographic ? normalize(-cam._viewInverse[2].xyz) : normalize(_positionWS.xyz - cameraWS);
+    vec3 toCameraWS = orthographic ? -viewDirWS : normalize(cameraWS - center);
+    vec3 p = worldToObject * (_positionWS.xyz - center);
+    vec3 d = worldToObject * toCameraWS;
+    vec3 v = worldToObject * viewDirWS;
+
+    // the frames facing the camera and their weights
+    int frames[3] = int[3](d.x >= 0.0 ? 0 : 1, d.y >= 0.0 ? 2 : 3, d.z >= 0.0 ? 4 : 5);
+    vec3 weights = abs(d);
+    weights /= max(weights.x + weights.y + weights.z, 1.0e-4);
+
+    // one mip level for every read: the card's pixel footprint in metres against the frames' texels (the reads sit
+    // in branches that differ from one pixel to the next, where the hardware's own derivatives are undefined)
+    float footprint = max(length(dFdx(p)), length(dFdy(p)));
+    float texelsPerMetre = params.material.z / (2.0 * radius);
+    float lod = log2(max(footprint * texelsPerMetre, 1.0));
+    float texel = 1.0 / texelsPerMetre;   // a frame texel's side, metres: the hull's tolerance and the march's measure
+
+<@if not HIFI_USE_SHADOW@>
+    // The debug views (LODManager.impostorDebug), painted unlit on the card's plane: what the shader reads there.
+    //   1, 2, 3: the facing frames' reads at the card's point, red the albedo's alpha (coverage), green the normal
+    //            atlas's alpha (depth), blue 1 where the point projects inside the frame
+    //   4: the three opposite frames' depths as red, green, blue
+    //   5: white where the card's point is inside the hull, red where no chord, black otherwise
+    //   6: the first facing frame's frame coordinates as red and green, its index over five as blue
+    //   7: the normal atlas's colour at the first facing frame's coordinates
+    //   8: the atlases' sizes over 1024 (red, green: the albedo's; blue: the normal's width)
+    //   9: the card's point in the subject's frame over the radius
+    //   10: not a debug view: the card drawn as it is, its albedo tinted blue (the Inspector's Tint Cards), so a card
+    //       is told from its model at a glance
+    int debugMode = int(params.flags.x + 0.5);
+    if (debugMode > 0 && debugMode < 10) {
+        vec3 debugColor = vec3(0.0);
+        if (debugMode >= 1 && debugMode <= 3) {
+            int frame = frames[debugMode - 1];
+            vec2 uv = frameUV(frame, p, radius);
+            vec2 at = atlasUV(frame, clamp(uv, 0.0, 1.0));
+            debugColor = vec3(textureLod(albedoAtlas, at, 0.0).a, textureLod(normalAtlas, at, 0.0).a, inFrame(uv) ? 1.0 : 0.0);
+        } else if (debugMode == 4) {
+            for (int k = 0; k < 3; k++) {
+                int frame = frames[k] ^ 1;
+                vec2 uv = frameUV(frame, p, radius);
+                debugColor[k] = textureLod(normalAtlas, atlasUV(frame, clamp(uv, 0.0, 1.0)), 0.0).a;
+            }
+        } else if (debugMode == 5) {
+            float pvDebug = dot(p, v);
+            bool chord = (pvDebug * pvDebug - (dot(p, p) - radius * radius)) > 0.0;
+            debugColor = !chord ? vec3(1.0, 0.0, 0.0) : (inside(p, radius, texel) ? vec3(1.0) : vec3(0.0));
+        } else if (debugMode == 6) {
+            vec2 uv = frameUV(frames[0], p, radius);
+            debugColor = vec3(uv, float(frames[0]) / 5.0);
+        } else if (debugMode == 7) {
+            vec2 uv = frameUV(frames[0], p, radius);
+            debugColor = textureLod(normalAtlas, atlasUV(frames[0], clamp(uv, 0.0, 1.0)), 0.0).rgb;
+        } else if (debugMode == 8) {
+            // the atlases' sizes as the shader sees them, over 1024: red the albedo's width, green its height, blue the normal's width
+            debugColor = vec3(float(textureSize(albedoAtlas, 0).x), float(textureSize(albedoAtlas, 0).y), float(textureSize(normalAtlas, 0).x)) / 1024.0;
+        } else {
+            // the card's point in the subject's frame, over the radius, half grey at the centre
+            debugColor = 0.5 + 0.5 * p / radius;
+        }
+        gl_FragDepth = gl_FragCoord.z;
+    <@if not HIFI_USE_FORWARD@>
+        packDeferredFragmentUnlit(vec3(0.0, 1.0, 0.0), 1.0, debugColor);
+    <@else@>
+        _fragColor0 = vec4(debugColor, 1.0);
+    <@endif@>
+        return;
+    }
+<@endif@>
+
+    // the ray's chord through the sphere, as distances along v from the card's point
+    float pv = dot(p, v);
+    float chordSq = pv * pv - (dot(p, p) - radius * radius);
+    if (chordSq <= 0.0) {
+        discard;
+    }
+    float chord = sqrt(chordSq);
+    float tEnter = -pv - chord;
+    float tExit = -pv + chord;
+
+    // Where the ray meets the subject: the nearest point along it that is inside the hull. Two kinds of candidate.
+    // First each facing frame's parallax hit, the ray followed to the height the frame holds where the ray's point
+    // projects, twice over, which finds a thin surface (a table top, from the frame that faces it) exactly; then a
+    // march along the chord for whatever those miss, refined by bisection.
+    float tHit = tExit + 1.0;
+    for (int k = 0; k < 3; k++) {
+        int frame = frames[k];
+        vec3 backward = frameBackward(frame);
+        float along = min(dot(v, backward), -GRAZING);   // negative: the ray goes into the frame
+        float t = 0.0;
+        bool valid = true;
+        for (int iteration = 0; iteration < 2; iteration++) {
+            vec3 q = p + v * t;
+            float height;
+            bool covered = frameSurface(frame, q, radius, height);
+            valid = valid && covered;
+            t = valid ? clamp(t + (height - dot(q, backward)) / along, tEnter, tExit) : t;
+        }
+        // the candidate sits on the frame's surface, where the other frames' coverage is a texel's toss-up at a
+        // thin surface's edge: it is judged a texel inside, along the frame's axis
+        bool candidate = valid && (t < tHit) && inside(p + v * t - backward * texel, radius, texel);
+        tHit = candidate ? t : tHit;
+    }
+    {
+        // the march's step is two texels of the atlas along the chord, so that a tube a few texels across (the
+        // school chair's 2 cm frame) is met rather than stepped over; a coarse atlas or a short chord takes fewer
+        // steps, a fine one is capped
+        int steps = int(clamp((tExit - tEnter) / (STEP_TEXELS * texel), float(MARCH_MIN), float(MARCH_MAX)));
+        float step = (tExit - tEnter) / float(steps);
+        float tPrev = tEnter;
+        bool found = false;
+        for (int i = 1; i <= steps; i++) {
+            float t = tEnter + step * float(i);
+            bool hit = !found && (t < tHit) && inside(p + v * t, radius, texel);
+            // the surface is between the last outside point and this one
+            float lo = tPrev;
+            float hi = t;
+            for (int b = 0; b < 4; b++) {
+                float mid = 0.5 * (lo + hi);
+                bool midInside = hit && inside(p + v * mid, radius, texel);
+                hi = midInside ? mid : hi;
+                lo = midInside ? lo : mid;
+            }
+            tHit = hit ? min(tHit, hi) : tHit;
+            found = found || hit;
+            tPrev = found ? tPrev : t;
+        }
+    }
+    if (tHit > tExit) {
+        discard;
+    }
+    vec3 hit = p + v * tHit;
+
+    // the hit's depth, along this pixel's ray from the card's point
+    vec3 surfaceWS = _positionWS.xyz + (objectToWorld * v) * tHit;
+    vec4 surfaceES = vec4((cam._view * vec4(surfaceWS - cameraWS, 0.0)).xyz, 1.0);
+    vec4 surfaceClip = cam._projection * surfaceES;
+
+    // the dissolve, before any shading
+    applyCrossfadeClip(surfaceWS);
+
+<@if HIFI_USE_SHADOW@>
+    gl_FragDepth = transformClipToDepth(surfaceClip);
+<@else@>
+    // The surface's colour, normal and material at the hit: the facing frames' pictures where the hit projects into
+    // them and where they see it, their surface at that texel within a couple of texels of the hit's height along
+    // their axis, blended by the frames' weights. A frame that sees nothing there lends nothing, and neither does
+    // one whose surface there is another part of the subject (a side view's texel of a table top's rim, where the
+    // hit is on the top's face a long way behind it: the hit is inside the hull by that frame, and the hull's slack
+    // of a texel let the march stop a hair above the face, so the rim's colour and sideways normal fell across the
+    // top in rings before this test).
+    // Where no facing frame sees the hit (a hollow the three views all look past), the frames covering it lend their
+    // colour as before, so the test never opens a hole: two sums, the seeing frames' and the covering frames'.
+    bool hasMaterial = params.material.w > 0.5;
+    vec3 albedo = vec3(0.0);
+    vec3 normal = vec3(0.0);
+    vec2 surfaceSum = vec2(0.0);
+    float total = 0.0;
+    vec3 albedoAny = vec3(0.0);
+    vec3 normalAny = vec3(0.0);
+    vec2 surfaceAny = vec2(0.0);
+    float totalAny = 0.0;
+    for (int k = 0; k < 3; k++) {
+        float weight = weights[k];
+        int frame = frames[k];
+        vec2 uv = frameUV(frame, hit, radius);
+        vec2 at = atlasUV(frame, clamp(uv, 0.0, 1.0));
+        vec4 color = textureLod(albedoAtlas, at, lod);
+        vec3 frameNormal = textureLod(normalAtlas, at, lod).rgb * 2.0 - 1.0;
+        vec2 frameSurfaceValues = hasMaterial ? textureLod(materialAtlas, at, lod).xy : params.material.xy;
+        float height;
+        bool covered = frameSurface(frame, hit, radius, height);
+        bool seen = covered && abs(dot(hit, frameBackward(frame)) - height) <= SEEN_TEXELS * texel;
+        // the frame covers the hit where the nearest texel of its first mip does: the outline the frames' pictures
+        // draw, without the hull's half-texel widening (frameSurface) or the filter's (a filtered alpha passes half
+        // a texel beyond the edge, which drew a fringe round the chair's back and lumps on the table's legs)
+        ivec2 albedoSize = textureSize(albedoAtlas, 0);
+        ivec2 nearestTexel = ivec2(clamp(at * vec2(albedoSize), vec2(0.0), vec2(albedoSize) - 1.0));
+        float coveredHere = step(COVERED, texelFetch(albedoAtlas, nearestTexel, 0).a);
+        float shareAny = (weight >= LEAST_WEIGHT && inFrame(uv)) ? weight * coveredHere : 0.0;
+        float share = seen ? shareAny : 0.0;
+        // the atlas's colour is its coverage times the colour (an empty texel is black), so a filtered read at an
+        // edge or a far mip mixes black in: divided by the filtered coverage, it is the covered texels' own colour
+        color.rgb = color.rgb / max(color.a, 1.0e-3);
+        albedo += color.rgb * share;
+        normal += frameNormal * share;
+        surfaceSum += frameSurfaceValues * share;
+        total += share;
+        albedoAny += color.rgb * shareAny;
+        normalAny += frameNormal * shareAny;
+        surfaceAny += frameSurfaceValues * shareAny;
+        totalAny += shareAny;
+    }
+    bool anySeen = total > 0.0;
+    albedo = anySeen ? albedo : albedoAny;
+    normal = anySeen ? normal : normalAny;
+    surfaceSum = anySeen ? surfaceSum : surfaceAny;
+    total = anySeen ? total : totalAny;
+    if (total <= 0.0) {
+        discard;
+    }
+    albedo /= total;
+    albedo = (debugMode == 10) ? mix(albedo, vec3(0.1, 0.45, 1.0), 0.6) : albedo;
+    float roughness = clamp(surfaceSum.x / total, 0.0, 1.0);
+    float metallic = clamp(surfaceSum.y / total, 0.0, 1.0);
+    float normalLength = length(normal);
+    normal = (normalLength > 1.0e-4) ? normal / normalLength : d;
+    vec3 normalWS = normalize(objectToWorld * normal);
+
+    gl_FragDepth = transformClipToDepth(surfaceClip);
+
+    <@if not HIFI_USE_FORWARD@>
+    packDeferredFragment(
+        normalWS,
+        1.0,
+        albedo,
+        roughness,
+        metallic,
+        DEFAULT_EMISSIVE,
+        DEFAULT_OCCLUSION,
+        DEFAULT_SCATTERING);
+    <@else@>
+    // the reflectance at normal incidence as the deferred pass derives it from the G-buffer (a dielectric's 0.03,
+    // the albedo for a metal): DEFAULT_FRESNEL is zero in this engine, and a card lit with it read a tenth darker
+    // than its deferred self under a probe volume, whose diffuse term has no Fresnel share to make up for the loss
+    vec3 fresnel = getFresnelF0(metallic, albedo);
+    vec4 positionWS = vec4(surfaceWS, 1.0);
+
+    // the sun's shadow, from its cascades, when the frame has them
+    float shadowAttenuation = 1.0;
+    if (getShadowCascadeCount() > 0) {
+        shadowAttenuation = evalShadowAttenuation(getLightDirection(getKeyLight()), positionWS, -surfaceES.z, normalWS);
+    }
+    // the point and spot lights of the cluster the fragment falls in; the derivatives are for their cookies
+    vec3 fragPositionWSDx = dFdx(surfaceWS);
+    vec3 fragPositionWSDy = dFdy(surfaceWS);
+    vec3 fragToEyeDirWS = normalize(cameraWS - surfaceWS);
+    SurfaceData surfaceWSData = initSurfaceData(roughness, normalWS, fragToEyeDirWS);
+
+    vec4 localLighting = vec4(0.0);
+    <$fetchClusterInfo(positionWS)$>;
+    if (hasLocalLights(cluster)) {
+        localLighting = evalLocalLighting(cluster, surfaceWS, fragPositionWSDx, fragPositionWSDy, surfaceWSData,
+                                          metallic, fresnel, albedo, 0.0,
+                                          vec4(0), vec4(0), 1.0);
+    }
+    _fragColor0 = vec4(evalSkyboxGlobalColor(
+        cam._viewInverse,
+        shadowAttenuation,
+        DEFAULT_OCCLUSION,
+        surfaceES.xyz,
+        albedo,
+        fresnel,
+        metallic,
+        DEFAULT_EMISSIVE,
+        surfaceWSData,
+        localLighting.rgb),
+        1.0);
+    <@endif@>
+<@endif@>
+}

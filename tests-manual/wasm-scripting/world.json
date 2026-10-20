@@ -1,0 +1,14 @@
+{
+  "DataVersion": 0,
+  "Paths": { "/": "/0,1.2,0/0,0,0,1" },
+  "Entities": [
+    { "id": "{bbbbbbbb-0000-0000-0000-000000000001}", "type": "Box", "name": "Ground",
+      "position": { "x": 0, "y": -0.05, "z": 0 }, "dimensions": { "x": 200, "y": 0.1, "z": 200 },
+      "color": { "red": 100, "green": 100, "blue": 110 }, "shapeType": "box", "locked": true },
+    { "id": "{bbbbbbbb-0000-0000-0000-000000000002}", "type": "Zone", "name": "Sky",
+      "position": { "x": 0, "y": 0, "z": 0 }, "dimensions": { "x": 400, "y": 400, "z": 400 },
+      "keyLightMode": "enabled", "keyLight": { "direction": { "x": -0.5, "y": -1, "z": -0.5 }, "intensity": 1 },
+      "ambientLightMode": "enabled", "ambientLight": { "ambientIntensity": 0.5 },
+      "skyboxMode": "enabled", "skybox": { "color": { "red": 60, "green": 80, "blue": 120 } }, "locked": true }
+  ]
+}

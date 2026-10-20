@@ -3,13 +3,22 @@
 //  <$_SCRIBE_FILENAME$>
 //  Generated on <$_SCRIBE_DATE$>
 //
-//  A Terrain entity's ground (TERRAIN.md section 5, the voxel-material half). Each voxel material is one of the
-//  terrain's layers: a colour texture tiled by a size in metres, sampled triplanar in the terrain's own space (its
-//  box's axes, metres) and blended by how squarely the surface faces each axis, so slopes and cliffs do not
-//  stretch. A triangle's three vertices may hold three materials; the fragment blends them by its barycentric
-//  weights, so materials fade into each other across a cell rather than cut along triangle edges. A layer without
-//  a texture is a plain colour with a faint metre checker. The paint maps that take over where the ground faces up
-//  come next. The fragment is shaded like any opaque material (deferred), or lit in place on the forward path.
+//  A Terrain entity's ground (TERRAIN.md section 5). Each of the terrain's layers is a colour texture tiled by a
+//  size in metres, sampled triplanar in the terrain's own space (its box's axes, metres) and blended by how
+//  squarely the surface faces each axis, so slopes and cliffs do not stretch; a layer without a texture is a plain
+//  colour with a faint metre checker. A layer may also have a normal map, tilting the ground's normal in each
+//  projection's tangent frame (a whiteout blend, as Ben Golus describes for triplanar normal mapping), and masks:
+//  roughness, occlusion and a height the Height blend reads; the colour, the normals and the masks come from three
+//  texture arrays with a slice per layer (TerrainLayerSet). Two things say which layers show where. The voxels' materials: a triangle's three
+//  vertices may hold three, and the fragment blends them by its barycentric weights, so materials fade into each
+//  other across a cell rather than cut along triangle edges. And the paint map (PaintMap.h), read from the chunk's
+//  tile by the position within the chunk wherever the ground faces up: its eight layer weights lay their layers
+//  over the voxel material bottom to top, each by its blend mode, and the voxel material takes over again as the
+//  ground turns to face sideways or down, on cliffs and in anything dug. The map is a picture seen from the sky, so
+//  it lies on the ground the sky sees alone (TopSurface.h): a fragment further below the top surface's height than
+//  a voxel, on a cave's floor or under an overhang, shows its voxel material. The fragment is shaded like any opaque
+//  material (deferred), or lit in place on the forward path as a model is (model.slf): the sun with its shadow
+//  cascades, the ambient, and the point and spot lights of the fragment's cluster with their shadows and cookies.
 //
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
@@ -25,6 +34,8 @@
     <@include DefaultMaterials.slh@>
 
     <@include GlobalLight.slh@>
+    <@include Shadow.slh@>
+    <@include LightLocal.slh@>
     <$declareEvalSkyboxGlobalColor(_SCRIBE_NULL, HIFI_USE_FORWARD)$>
 
     <@include gpu/Transform.slh@>
@@ -34,111 +45,384 @@
     layout(location=0) out vec4 _fragColor0;
 <@endif@>
 
+layout(location=RENDER_UTILS_ATTR_POSITION_MS) in vec4 _positionMS;
 layout(location=RENDER_UTILS_ATTR_POSITION_WS) in vec4 _positionWS;
 layout(location=RENDER_UTILS_ATTR_NORMAL_WS) in vec3 _normalWS;
 layout(location=RENDER_UTILS_ATTR_TEXCOORD01) flat in ivec3 _materials;
 layout(location=RENDER_UTILS_ATTR_COLOR) in vec3 _weights;
 
-// One layer, as TerrainLayerSet packs it.
+// One layer, as TerrainLayerSet packs it, by slot (the voxel material index and the paint map plane).
 struct TerrainLayer {
     vec4 color;    // rgb: the plain colour; a: 1 while a texture is bound for the layer
-    vec4 tiling;   // x: repeats per metre
+    vec4 tiling;   // x: repeats per metre; yz: the offset, in repeats; w: opacity
+    vec4 tint;     // rgb: multiplies the texture; w: the normal map's strength
+    ivec4 flags;   // x: visible; y: the blend mode (0 normal, 1 multiply, 2 screen, 3 overlay, 4 height); z: the
+                   // normal array's slice holds the layer's normal map and it is on; w: the mask array's slice is drawn
 };
 
 struct TerrainParams {
     mat4 worldToTerrain;
     TerrainLayer layers[8];
+    ivec4 order[2];   // the slots drawn over the voxel material, bottom to top; -1 past the stack's end
+};
+
+// This chunk's own: its level's voxels are a fraction of its column's tile, and it starts part way across the tile.
+struct TerrainChunkParams {
+    vec4 paint;    // x: tile texture coordinates per voxel of the chunk; yz: the tile coordinates of the chunk's voxel (0, 0);
+                   // w: 1 while the Height blend applies here, 0 on a coarse node (its tile averages the map)
+    vec4 top;      // x: top tile texture coordinates per voxel of the chunk; yz: the top tile coordinates of its voxel
+                   // (0, 0); w: 1 while the paint lies on the top surface alone, 0 on a coarse node (which draws the top)
+    vec4 vertical; // x: grid voxels per voxel of the chunk; y: the grid height of its voxel 0
 };
 
 LAYOUT_STD140(binding=ENTITIES_BUFFER_TERRAIN_LAYERS) uniform terrainParamsBuffer {
     TerrainParams params;
 };
+LAYOUT_STD140(binding=ENTITIES_BUFFER_TERRAIN_CHUNK) uniform terrainChunkBuffer {
+    TerrainChunkParams chunk;
+};
 
-LAYOUT(binding=ENTITIES_TEXTURE_TERRAIN_LAYER0) uniform sampler2D layerMap0;
-LAYOUT(binding=ENTITIES_TEXTURE_TERRAIN_LAYER1) uniform sampler2D layerMap1;
-LAYOUT(binding=ENTITIES_TEXTURE_TERRAIN_LAYER2) uniform sampler2D layerMap2;
-LAYOUT(binding=ENTITIES_TEXTURE_TERRAIN_LAYER3) uniform sampler2D layerMap3;
-LAYOUT(binding=ENTITIES_TEXTURE_TERRAIN_LAYER4) uniform sampler2D layerMap4;
-LAYOUT(binding=ENTITIES_TEXTURE_TERRAIN_LAYER5) uniform sampler2D layerMap5;
-LAYOUT(binding=ENTITIES_TEXTURE_TERRAIN_LAYER6) uniform sampler2D layerMap6;
-LAYOUT(binding=ENTITIES_TEXTURE_TERRAIN_LAYER7) uniform sampler2D layerMap7;
+LAYOUT(binding=ENTITIES_TEXTURE_TERRAIN_LAYERS) uniform sampler2DArray layerAlbedos;   // a slice per slot: the colour texture (sRGB)
+LAYOUT(binding=ENTITIES_TEXTURE_TERRAIN_PAINT0) uniform sampler2D paintMap0;   // the chunk's tile: weights of layers 0 to 3
+LAYOUT(binding=ENTITIES_TEXTURE_TERRAIN_PAINT1) uniform sampler2D paintMap1;   // and of layers 4 to 7
+LAYOUT(binding=ENTITIES_TEXTURE_TERRAIN_TOP) uniform sampler2D topHeights;      // the column's top surface heights, grid voxels
+LAYOUT(binding=ENTITIES_TEXTURE_TERRAIN_NORMALS) uniform sampler2DArray layerNormals;   // a slice per slot: the normal map's xyz, 0 to 1
+LAYOUT(binding=ENTITIES_TEXTURE_TERRAIN_MASKS) uniform sampler2DArray layerMasks;       // r roughness, g occlusion, b height
 
-const float TERRAIN_ROUGHNESS = 0.9;
+const float TERRAIN_ROUGHNESS = 0.9;     // a layer without a roughness map
 const float TRIPLANAR_SHARPNESS = 4.0;   // how quickly one projection gives way to the next as the slope turns
+const float PROJECTION_LEAST = 0.02;     // a projection weighing less is not sampled
+// The paint map shows where the surface faces up: fully while the terrain-space normal's y is above the second
+// value (a slope of about 53 degrees), not at all below the first (about 73 degrees), fading between.
+const float PAINT_FACING_LOW = 0.3;
+const float PAINT_FACING_HIGH = 0.6;
+const float PAINT_LEAST = 0.002;         // a weight below this is nothing: its layer is not sampled
+// The paint map lies on the top surface: fully within the first value (grid voxels) below its height, not at all
+// beyond the sum of both (TOP_SURFACE_TOLERANCE and TOP_SURFACE_FADE in TopSurface.h).
+const float TOP_SURFACE_TOLERANCE = 1.0;
+const float TOP_SURFACE_FADE = 0.5;
+// How far below its column's top, in grid voxels, a wall still takes the paint of the ground above it (and the fade
+// past that): a raised terrace's sides, not a cave's walls (TopSurface.h, PAINT_WALL_REACH there for the editor)
+const float PAINT_WALL_REACH = 8.0;
+const float PAINT_WALL_FADE = 4.0;
+const float HEIGHT_BLEND_EDGE = 0.2;     // the Height blend: how far above what is below a layer rises to show fully
 
-// The layer's texture at uv. The layer is the same across a triangle, so the branch is uniform in practice; the
-// derivatives are taken outside it all the same, which keeps the mip selection defined.
-vec4 sampleLayer(int layer, vec2 uv) {
-    vec2 dx = dFdx(uv);
-    vec2 dy = dFdy(uv);
-    switch (layer) {
-        case 0: return textureGrad(layerMap0, uv, dx, dy);
-        case 1: return textureGrad(layerMap1, uv, dx, dy);
-        case 2: return textureGrad(layerMap2, uv, dx, dy);
-        case 3: return textureGrad(layerMap3, uv, dx, dy);
-        case 4: return textureGrad(layerMap4, uv, dx, dy);
-        case 5: return textureGrad(layerMap5, uv, dx, dy);
-        case 6: return textureGrad(layerMap6, uv, dx, dy);
-        default: return textureGrad(layerMap7, uv, dx, dy);
-    }
+// The surface's derivatives in terrain space, taken once for the whole fragment, so every texture sample can be
+// given its gradients outright: the samples sit in branches that differ from one fragment to the next (which of
+// the eight layers the paint map holds here), where a derivative taken on the spot would be undefined.
+struct Gradients {
+    vec3 dx;
+    vec3 dy;
+};
+
+// What the ground is at a point: one layer's, or the blend so far.
+struct Surface {
+    vec3 albedo;
+    vec3 normal;       // in terrain space, unit
+    float roughness;
+    float occlusion;
+    float height;      // 0 to 1, read by the Height blend
+};
+
+// The layer's colour texture at uv, with the gradients of uv.
+vec4 sampleLayer(int layer, vec2 uv, vec2 dx, vec2 dy) {
+    return textureGrad(layerAlbedos, vec3(uv, float(layer)), dx, dy);
 }
 
-// The layer's colour at a point of the terrain (metres along the box's axes), the three projections blended.
-vec3 layerColor(int layer, vec3 point, vec3 blend) {
+// The layer's normal map at uv, tangent space, its strength applied.
+vec3 sampleNormal(int layer, vec2 uv, vec2 dx, vec2 dy, float strength) {
+    vec3 t = textureGrad(layerNormals, vec3(uv, float(layer)), dx, dy).xyz * 2.0 - 1.0;
+    t.xy *= strength;
+    return t;
+}
+
+Surface mixSurface(Surface a, Surface b, float t) {
+    Surface s;
+    s.albedo = mix(a.albedo, b.albedo, t);
+    s.normal = normalize(mix(a.normal, b.normal, t));
+    s.roughness = mix(a.roughness, b.roughness, t);
+    s.occlusion = mix(a.occlusion, b.occlusion, t);
+    s.height = mix(a.height, b.height, t);
+    return s;
+}
+
+// The layer at a point of the terrain (metres along the box's axes), the three projections blended: its colour,
+// its normal with the map's tilt and its masks.
+Surface layerSurface(int layer, vec3 point, vec3 blend, vec3 terrainNormal, Gradients g) {
     layer = clamp(layer, 0, 7);
     TerrainLayer l = params.layers[layer];
+    Surface s;
+    s.normal = terrainNormal;
+    s.roughness = TERRAIN_ROUGHNESS;
+    s.occlusion = 1.0;
+    s.height = 0.5;
     if (l.color.a < 0.5) {
         // no texture: the plain colour, with a metre checker along the surface's main axis so shape and scale read
         vec2 planar = blend.y >= max(blend.x, blend.z) ? point.xz : (blend.x >= blend.z ? point.zy : point.xy);
         vec2 cell = floor(planar);
-        return l.color.rgb * (0.94 + 0.06 * mod(cell.x + cell.y, 2.0));
+        s.albedo = l.color.rgb * (0.94 + 0.06 * mod(cell.x + cell.y, 2.0));
+        return s;
     }
     float repeats = l.tiling.x;
-    vec3 alongX = sampleLayer(layer, point.zy * repeats).rgb;
-    vec3 alongY = sampleLayer(layer, point.xz * repeats).rgb;
-    vec3 alongZ = sampleLayer(layer, point.xy * repeats).rgb;
-    return alongX * blend.x + alongY * blend.y + alongZ * blend.z;
+    vec2 offset = l.tiling.yz;   // along the terrain's x and z; nothing up the sides
+    bool withNormal = l.flags.z != 0;
+    bool withMasks = l.flags.w != 0;
+    float strength = l.tint.w;
+    // Each projection's u runs to the right as its face is looked at straight on, so a texture reads unmirrored on
+    // every side and the normal map's x axis follows it: the +x face is seen from +x, where right is -z; the top as
+    // a map, x to the right and z down the page; the +z face from +z, where right is +x. The faces opposite mirror.
+    float uX = terrainNormal.x < 0.0 ? 1.0 : -1.0;
+    float uY = terrainNormal.y < 0.0 ? -1.0 : 1.0;
+    float uZ = terrainNormal.z < 0.0 ? -1.0 : 1.0;
+    vec3 albedo = vec3(0.0);
+    vec3 normal = vec3(0.0);
+    vec3 masks = vec3(0.0);
+    float used = 0.0;
+    if (blend.x > PROJECTION_LEAST) {
+        vec2 uv = vec2(point.z * uX, point.y) * repeats + vec2(offset.y, 0.0);
+        vec2 dx = vec2(g.dx.z * uX, g.dx.y) * repeats;
+        vec2 dy = vec2(g.dy.z * uX, g.dy.y) * repeats;
+        albedo += sampleLayer(layer, uv, dx, dy).rgb * blend.x;
+        if (withNormal) {
+            vec3 t = sampleNormal(layer, uv, dx, dy, strength);
+            t.x *= uX;
+            t = vec3(t.xy + terrainNormal.zy, abs(t.z) * terrainNormal.x);
+            normal += t.zyx * blend.x;
+        }
+        if (withMasks) {
+            masks += textureGrad(layerMasks, vec3(uv, float(layer)), dx, dy).rgb * blend.x;
+        }
+        used += blend.x;
+    }
+    if (blend.y > PROJECTION_LEAST) {
+        vec2 uv = vec2(point.x * uY, point.z) * repeats + offset;
+        vec2 dx = vec2(g.dx.x * uY, g.dx.z) * repeats;
+        vec2 dy = vec2(g.dy.x * uY, g.dy.z) * repeats;
+        albedo += sampleLayer(layer, uv, dx, dy).rgb * blend.y;
+        if (withNormal) {
+            vec3 t = sampleNormal(layer, uv, dx, dy, strength);
+            t.x *= uY;
+            t = vec3(t.xy + terrainNormal.xz, abs(t.z) * terrainNormal.y);
+            normal += t.xzy * blend.y;
+        }
+        if (withMasks) {
+            masks += textureGrad(layerMasks, vec3(uv, float(layer)), dx, dy).rgb * blend.y;
+        }
+        used += blend.y;
+    }
+    if (blend.z > PROJECTION_LEAST) {
+        vec2 uv = vec2(point.x * uZ, point.y) * repeats + vec2(offset.x, 0.0);
+        vec2 dx = vec2(g.dx.x * uZ, g.dx.y) * repeats;
+        vec2 dy = vec2(g.dy.x * uZ, g.dy.y) * repeats;
+        albedo += sampleLayer(layer, uv, dx, dy).rgb * blend.z;
+        if (withNormal) {
+            vec3 t = sampleNormal(layer, uv, dx, dy, strength);
+            t.x *= uZ;
+            t = vec3(t.xy + terrainNormal.xy, abs(t.z) * terrainNormal.z);
+            normal += t.xyz * blend.z;
+        }
+        if (withMasks) {
+            masks += textureGrad(layerMasks, vec3(uv, float(layer)), dx, dy).rgb * blend.z;
+        }
+        used += blend.z;
+    }
+    // the projections too slight to sample leave the rest to carry the whole
+    float share = 1.0 / max(used, PROJECTION_LEAST);
+    s.albedo = albedo * share * l.tint.rgb;
+    if (withNormal) {
+        s.normal = normalize(normal);
+    }
+    if (withMasks) {
+        masks *= share;
+        s.roughness = masks.r;
+        s.occlusion = masks.g;
+        s.height = masks.b;
+    }
+    return s;
+}
+
+// A layer's colour laid over what is below it, by its blend mode (the Height blend keeps the colour and changes the
+// amount instead: heightWeight).
+vec3 blendLayer(int mode, vec3 below, vec3 color) {
+    if (mode == 1) {
+        return below * color;
+    }
+    if (mode == 2) {
+        return 1.0 - (1.0 - below) * (1.0 - color);
+    }
+    if (mode == 3) {
+        vec3 dark = 2.0 * below * color;
+        vec3 light = 1.0 - 2.0 * (1.0 - below) * (1.0 - color);
+        return mix(dark, light, step(vec3(0.5), below));
+    }
+    return color;
+}
+
+// The Height blend: how much of the layer shows, where its height plus its coverage rises above what is below it
+// (its height plus what the coverage leaves), within an edge: grass blades over dirt, pebbles out of sand.
+float heightWeight(float belowHeight, float layerHeight, float amount) {
+    float below = belowHeight + (1.0 - amount);
+    float above = layerHeight + amount;
+    float top = max(below, above) - HEIGHT_BLEND_EDGE;
+    float b = max(below - top, 0.0);
+    float a = max(above - top, 0.0);
+    return a / (a + b);
 }
 
 void main(void) {
-    vec3 normal = normalize(_normalWS);
+    // a zero normal (a degenerate triangle) would be NaN normalized, which the forward colour keeps: it points up instead
+    vec3 normal = _normalWS;
+    float normalLength = length(normal);
+    normal = (normalLength > 1.0e-6) ? normal / normalLength : vec3(0.0, 1.0, 0.0);
     vec3 point = (params.worldToTerrain * vec4(_positionWS.xyz, 1.0)).xyz;
+    Gradients g;
+    g.dx = dFdx(point);
+    g.dy = dFdy(point);
     vec3 terrainNormal = normalize(mat3(params.worldToTerrain) * normal);
     vec3 blend = pow(abs(terrainNormal), vec3(TRIPLANAR_SHARPNESS));
     blend /= (blend.x + blend.y + blend.z);
 
-    // the triangle's materials, each sampled once, blended by the corner weights
+    // the voxels' materials: the triangle's three, each sampled once, blended by the corner weights
     ivec3 m = _materials;
-    vec3 color0 = layerColor(m.x, point, blend);
-    vec3 albedo = color0;
+    Surface surface0 = layerSurface(m.x, point, blend, terrainNormal, g);
+    Surface surface = surface0;
     if (m.y != m.x || m.z != m.x) {
-        vec3 color1 = (m.y == m.x) ? color0 : layerColor(m.y, point, blend);
-        vec3 color2 = (m.z == m.x) ? color0 : ((m.z == m.y) ? color1 : layerColor(m.z, point, blend));
-        albedo = _weights.x * color0 + _weights.y * color1 + _weights.z * color2;
+        Surface surface1;
+        if (m.y == m.x) {
+            surface1 = surface0;
+        } else {
+            surface1 = layerSurface(m.y, point, blend, terrainNormal, g);
+        }
+        Surface surface2;
+        if (m.z == m.x) {
+            surface2 = surface0;
+        } else if (m.z == m.y) {
+            surface2 = surface1;
+        } else {
+            surface2 = layerSurface(m.z, point, blend, terrainNormal, g);
+        }
+        float firstTwo = _weights.x + _weights.y;
+        Surface surface01 = surface0;
+        if (firstTwo > 0.0) {
+            surface01 = mixSurface(surface0, surface1, _weights.y / firstTwo);
+        }
+        surface = mixSurface(surface01, surface2, _weights.z);
     }
+
+    // the paint map, where the ground faces up: the stack's layers bottom to top, each laid over what is below it
+    // by its coverage here times its opacity, as a painter would, starting from the voxel material
+    float up = terrainNormal.y;
+    float facingUp = smoothstep(PAINT_FACING_LOW, PAINT_FACING_HIGH, up);
+    if (chunk.top.w > 0.5) {
+        // and only on the ground the sky sees: under it, on a cave's floor or the ground beneath an overhang, the
+        // voxel material shows (an explicit level: the tile has one, and this may be a branch no neighbour takes).
+        // A wall, steep ground within PAINT_WALL_REACH grid voxels below its column's top, takes the paint of the
+        // ground it rises from, so a raised terrace is snow down its sides rather than a band of voxel material
+        // (2026-10-18); deeper down, a cave's wall shows its voxels as its floor does, and so does an overhang.
+        // the top is one height a voxel column; a point takes the lowest of the four columns around it, so the ground
+        // at the foot of a wall is not read as under the wall's own column (a square notch of voxel material along
+        // every raised edge, 2026-10-18), and the ground over a lower neighbour still counts as on top. The tile's
+        // second channel is a sheltered floor (TopSurface.h: the ground under a pillar's lip or a ledge that open
+        // ground of its height reaches): a point at the highest of the four around it is the sky's ground too.
+        vec2 uv = _positionMS.xz * chunk.top.x + chunk.top.yz;
+        vec4 tops = textureGather(topHeights, uv, 0);
+        vec4 floors = textureGather(topHeights, uv, 1);
+        float topHeight = min(min(tops.x, tops.y), min(tops.z, tops.w));
+        float floorHeight = max(max(floors.x, floors.y), max(floors.z, floors.w));
+        float height = chunk.vertical.y + _positionMS.y * chunk.vertical.x;
+        float below = topHeight - height;
+        float onTop = 1.0 - smoothstep(TOP_SURFACE_TOLERANCE, TOP_SURFACE_TOLERANCE + TOP_SURFACE_FADE, below);
+        onTop = max(onTop, 1.0 - smoothstep(TOP_SURFACE_TOLERANCE, TOP_SURFACE_TOLERANCE + TOP_SURFACE_FADE, abs(floorHeight - height)));
+        // (a wall cut by the box's closed face, or a plumb one, has a normal at or a hair under horizontal: upright
+        // counts down to a slight overhang)
+        float upright = smoothstep(-0.2, 0.0, up);
+        float wall = (1.0 - facingUp) * upright * (1.0 - smoothstep(PAINT_WALL_REACH, PAINT_WALL_REACH + PAINT_WALL_FADE, below));
+        facingUp = facingUp * onTop + wall;
+    } else {
+        // a coarse node draws the top alone: its walls take the paint too, only an overhang shows its voxels
+        facingUp = max(facingUp, smoothstep(-0.2, 0.0, up));
+    }
+    if (facingUp > 0.0) {
+        vec2 uv = _positionMS.xz * chunk.paint.x + chunk.paint.yz;
+        vec4 low = texture(paintMap0, uv);
+        vec4 high = texture(paintMap1, uv);
+        float painted = dot(low, vec4(1.0)) + dot(high, vec4(1.0));
+        if (painted > PAINT_LEAST) {
+            float coverage[8] = float[8](low.x, low.y, low.z, low.w, high.x, high.y, high.z, high.w);
+            for (int i = 0; i < 8; ++i) {
+                int slot = params.order[i >> 2][i & 3];
+                if (slot < 0) {
+                    break;
+                }
+                TerrainLayer l = params.layers[slot];
+                float amount = coverage[slot] * l.tiling.w;
+                if (l.flags.x == 0 || amount * facingUp <= PAINT_LEAST) {
+                    continue;
+                }
+                Surface painted = layerSurface(slot, point, blend, terrainNormal, g);
+                if (l.flags.y == 4) {
+                    // the heights decide the mix where the map applies; the slope decides how much it applies, after,
+                    // or a tall material would hold a steep wall at a trace of coverage. On a coarse node the tile
+                    // is an average of the map's texels and the edge would draw their lattice: a plain mix there.
+                    if (chunk.paint.w > 0.5) {
+                        amount = heightWeight(surface.height, painted.height, amount);
+                    }
+                } else {
+                    painted.albedo = blendLayer(l.flags.y, surface.albedo, painted.albedo);
+                }
+                surface = mixSurface(surface, painted, amount * facingUp);
+            }
+        }
+    }
+
+    // back to world space: the transpose of world-to-terrain is the normal transform of terrain-to-world
+    vec3 shadingNormal = normalize(transpose(mat3(params.worldToTerrain)) * surface.normal);
 
 <@if not HIFI_USE_FORWARD@>
     packDeferredFragment(
-        normal,
+        shadingNormal,
         1.0,
-        albedo,
-        TERRAIN_ROUGHNESS,
+        surface.albedo,
+        surface.roughness,
         DEFAULT_METALLIC,
         DEFAULT_EMISSIVE,
-        DEFAULT_OCCLUSION,
+        surface.occlusion,
         DEFAULT_SCATTERING);
 <@else@>
     TransformCamera cam = getTransformCamera();
+    vec3 fragPositionWS = _positionWS.xyz;
+    vec3 fresnel = DEFAULT_FRESNEL;
+
+    // the sun's shadow, from its cascades, when the frame has them (a count of 0 with shadows off, or none drawn)
+    float shadowAttenuation = 1.0;
+    if (getShadowCascadeCount() > 0) {
+        shadowAttenuation = evalShadowAttenuation(getLightDirection(getKeyLight()), _positionWS, -_positionES.z, shadingNormal);
+    }
+    // the point and spot lights of the cluster the fragment falls in, with their shadows and cookies; the
+    // derivatives are for the cookies, taken here where control flow is uniform
+    vec3 fragPositionWSDx = dFdx(fragPositionWS);
+    vec3 fragPositionWSDy = dFdy(fragPositionWS);
+    vec3 fragToEyeDirWS = normalize(cam._viewInverse[3].xyz - fragPositionWS);
+    SurfaceData surfaceWS = initSurfaceData(surface.roughness, shadingNormal, fragToEyeDirWS);
+
+    vec4 localLighting = vec4(0.0);
+    <$fetchClusterInfo(_positionWS)$>;
+    if (hasLocalLights(cluster)) {
+        localLighting = evalLocalLighting(cluster, fragPositionWS, fragPositionWSDx, fragPositionWSDy, surfaceWS,
+                                          DEFAULT_METALLIC, fresnel, surface.albedo, 0.0,
+                                          vec4(0), vec4(0), 1.0);
+    }
     _fragColor0 = vec4(evalSkyboxGlobalColor(
         cam._viewInverse,
-        1.0,
-        DEFAULT_OCCLUSION,
+        shadowAttenuation,
+        surface.occlusion,
         _positionES.xyz,
-        normal,
-        albedo,
-        DEFAULT_FRESNEL,
+        surface.albedo,
+        fresnel,
         DEFAULT_METALLIC,
-        TERRAIN_ROUGHNESS),
+        DEFAULT_EMISSIVE,
+        surfaceWS,
+        localLighting.rgb),
         1.0);
 <@endif@>
 }

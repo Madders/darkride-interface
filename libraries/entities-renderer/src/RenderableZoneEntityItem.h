@@ -26,6 +26,8 @@
 #include <ComponentMode.h>
 //#include "EntityScriptingInterface.h"
 
+class ResourceRequest;
+
 namespace render { namespace entities {
 
 class ZoneEntityRenderer : public TypedEntityRenderer<ZoneEntityItem> {
@@ -59,6 +61,13 @@ private:
     void updateSkyboxMap();
     void setAmbientURL(const QString& ambientUrl);
     void setSkyboxURL(const QString& skyboxUrl);
+
+    // the zone's probe volume (LIGHTMAPS.md step 4): the entry "probeVolume" { url, intensity } of the userData
+    void updateProbeVolumeFromUserData();
+    void fetchProbeVolume(const QString& url);
+    void dropProbeVolumeRequest();
+    bool loadProbeVolume(const QByteArray& data, const QString& url, QString& error);
+    void applyProbeVolume();
 
     void setHazeMode(ComponentMode mode);
     void setKeyLightMode(ComponentMode mode);
@@ -162,6 +171,14 @@ private:
     bool _pendingSkyboxTexture{ false };
 
     QString _proceduralUserData;
+
+    QString _probeVolumeURL;
+    float _probeVolumeIntensity { 1.0f };
+    ResourceRequest* _probeVolumeRequest { nullptr };
+    gpu::TexturePointer _probeVolumeTexture;
+    glm::vec3 _probeVolumeOrigin { 0.0f };
+    glm::vec3 _probeVolumeSpacing { 1.0f };
+    glm::uvec3 _probeVolumeDims { 0 };
 };
 
 }}  // namespace render::entities

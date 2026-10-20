@@ -453,6 +453,11 @@ HFMModel* FBXSerializer::extractHFMModel(const hifi::VariantHash& mapping, const
         }
     }
     QMultiHash<QString, WeightedIndex> blendshapeChannelIndices;
+    // The model's own blend shapes (hfm::Model::ownBlendshapeNames), when the .fst asks for them.
+    const hifi::VariantHash ownBlendshapeDefaults = mapping.value("blendshapeDefault").toHash();
+    const bool keepOwnBlendshapes = !ownBlendshapeDefaults.isEmpty() ||
+        mapping.value("ownBlendshapes").toString().trimmed().compare("true", Qt::CaseInsensitive) == 0;
+    QHash<hifi::ByteArray, int> ownBlendshapeSlots;
 #if defined(DEBUG_FBXSERIALIZER)
     int unknown = 0;
 #endif
@@ -1083,12 +1088,22 @@ HFMModel* FBXSerializer::extractHFMModel(const hifi::VariantHash& mapping, const
                         hifi::ByteArray name = object.properties.at(1).toByteArray();
 
                         name = name.left(name.indexOf('\0'));
+                        const hifi::ByteArray wholeName = name;
                         if (!blendshapeIndices.contains(name)) {
                             // try everything after the dot
                             name = name.mid(name.lastIndexOf('.') + 1);
                         }
                         QString id = getID(object.properties);
                         hfmModel.blendshapeChannelNames << name;
+                        if (keepOwnBlendshapes && !blendshapeIndices.contains(name)) {
+                            // the model's own blend shape, by its whole name, in a slot after the standard ones
+                            auto slot = ownBlendshapeSlots.find(wholeName);
+                            if (slot == ownBlendshapeSlots.end()) {
+                                slot = ownBlendshapeSlots.insert(wholeName, hfmModel.ownBlendshapeNames.size());
+                                hfmModel.ownBlendshapeNames << QString::fromUtf8(wholeName);
+                            }
+                            blendshapeChannelIndices.insert(id, WeightedIndex((int)Blendshapes::BlendshapeCount + *slot, 1.0f));
+                        }
                         foreach (const WeightedIndex& index, blendshapeIndices.values(name)) {
                             blendshapeChannelIndices.insert(id, index);
                         }
@@ -1226,6 +1241,15 @@ HFMModel* FBXSerializer::extractHFMModel(const hifi::VariantHash& mapping, const
         if (hifiGlobalNodeID.isEmpty()) {
             auto light = lights.begin();
             _lightmapLevel = (*light).second.intensity;
+        }
+    }
+
+    // the own blend shapes' starting weights
+    hfmModel.ownBlendshapeDefaults.fill(0.0f, hfmModel.ownBlendshapeNames.size());
+    for (auto it = ownBlendshapeDefaults.begin(); it != ownBlendshapeDefaults.end(); ++it) {
+        const int slot = hfmModel.ownBlendshapeNames.indexOf(it.key());
+        if (slot >= 0) {
+            hfmModel.ownBlendshapeDefaults[slot] = glm::clamp(it.value().toFloat(), 0.0f, 1.0f);
         }
     }
 

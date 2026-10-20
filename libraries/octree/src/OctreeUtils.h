@@ -34,4 +34,12 @@ const float MIN_ELEMENT_ANGULAR_DIAMETER = 0.0043301f; // radians
 const float MIN_ENTITY_ANGULAR_DIAMETER = MIN_ELEMENT_ANGULAR_DIAMETER * SQRT_THREE;
 const float MIN_VISIBLE_DISTANCE = 0.0001f; // helps avoid divide-by-zero check
 
+// An impostor card (IMPOSTORS.md) is drawn as a square of side two radii around its sphere. The client's draw cull
+// (LODManager::shouldRender at the default LOD angle) keeps a bound whose half-diagonal looks larger than
+// UNIT_ELEMENT_MAX_EXTENT / DEFAULT_VISIBILITY_DISTANCE_FOR_UNIT_ELEMENT; a card's half-diagonal is sqrt(3) radii, so
+// the card draws while radius / distance is above this: 1 / 800, 0.0716 degrees, 800 radii. The entity server sends
+// a carded entity out to there, to a client that draws cards (ENTITY-STREAMING.md 3.3), as radius / distance like the
+// two tests above.
+const float MIN_IMPOSTOR_CARD_ANGULAR_SIZE = 1.0f / (2.0f * DEFAULT_VISIBILITY_DISTANCE_FOR_UNIT_ELEMENT); // radians
+
 #endif // hifi_OctreeUtils_h

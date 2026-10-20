@@ -13,6 +13,8 @@
 #include <functional>
 #include <QtCore/QObject>
 
+#include <glm/glm.hpp>
+
 /**jsdoc
  * Here's how you could use the Test API:
  * 
@@ -189,6 +191,127 @@ public slots:
      * @returns {boolean} <code>true</code> texture memory usage is not increasing
      */
     Q_INVOKABLE bool isTextureLoadingComplete();
+
+    /**jsdoc
+     * The rate of the game loop (simulation and script updates), in frames per second, as the stats show it.
+     * @function Test.getGameLoopRate
+     * @returns {number}
+     */
+    Q_INVOKABLE float getGameLoopRate();
+
+    /**jsdoc
+     * The rate at which frames are presented, in frames per second.
+     * @function Test.getRenderLoopRate
+     * @returns {number}
+     */
+    Q_INVOKABLE float getRenderLoopRate();
+
+    /*@jsdoc
+     * Runs the avatar's spring bones in lockstep: once on, they advance only by the time handed to them with
+     * {@link Test.advanceSpringBones}, whatever the frames take, so a recording can be replayed frame by frame.
+     * @function Test.setSpringBoneLockstep
+     * @param {boolean} on - Lockstep on or off (off returns them to real time).
+     */
+    Q_INVOKABLE void setSpringBoneLockstep(bool on);
+
+    /*@jsdoc
+     * Hands the spring bones time to advance by at their next update, in lockstep.
+     * @function Test.advanceSpringBones
+     * @param {number} seconds - The time to advance.
+     */
+    Q_INVOKABLE void advanceSpringBones(float seconds);
+
+    /*@jsdoc
+     * The same, with the avatar's own movement over those seconds given (a replay whose avatar is placed by its hips
+     * says what the recorded root did) rather than read from the avatar's position.
+     * @function Test.advanceSpringBones
+     * @param {number} seconds - The time to advance.
+     * @param {Vec3} avatarMove - The avatar's own movement over that time.
+     */
+    Q_INVOKABLE void advanceSpringBones(float seconds, const glm::vec3& avatarMove);
+
+    /*@jsdoc
+     * Gets how many steps the avatar's spring bones have taken since the client started.
+     * @function Test.getSpringBoneSteps
+     * @returns {number} The step count.
+     */
+    Q_INVOKABLE int getSpringBoneSteps();
+
+    /*@jsdoc
+     * Gets the time handed to {@link Test.advanceSpringBones} that the spring bones have not consumed yet.
+     * @function Test.getSpringBonePendingTime
+     * @returns {number} Seconds.
+     */
+    Q_INVOKABLE float getSpringBonePendingTime();
+
+    /*@jsdoc
+     * Gets how many updates of the spring bones have consumed time handed by {@link Test.advanceSpringBones}, each
+     * counted once its poses are written, so a test can read poses back only then.
+     * @function Test.getSpringBoneConsumed
+     * @returns {number} The count.
+     */
+    Q_INVOKABLE int getSpringBoneConsumed();
+
+    /*@jsdoc
+     * Gets the blend between the last two steps the spring bones last presented: 0.5 at a step's own frame, 1 a frame
+     * of 60 Hz later.
+     * @function Test.getSpringBoneAlpha
+     * @returns {number} The blend.
+     */
+    Q_INVOKABLE float getSpringBoneAlpha();
+
+    /*@jsdoc
+     * Gets how many updates the avatar's spring bones have run in all.
+     * @function Test.getSpringBoneUpdates
+     * @returns {number} The count.
+     */
+    Q_INVOKABLE int getSpringBoneUpdates();
+
+    /**jsdoc
+     * Turns build mode on and selects these entities in the editor, so a scripted test can picture the Inspector.
+     * @function Test.selectInEditor
+     * @param {Uuid[]} ids - The entities to select.
+     */
+    Q_INVOKABLE void selectInEditor(const QStringList& ids);
+
+    /**jsdoc
+     * Frames the editor's selection in the viewport, as the F key does in build mode.
+     * @function Test.frameEditorSelection
+     */
+    Q_INVOKABLE void frameEditorSelection();
+
+    /**jsdoc
+     * Saves a picture of the Inspector's whole content, whatever is scrolled into view, as the panel draws it.
+     * @function Test.saveInspectorPicture
+     * @param {string} path - Where to save it (PNG).
+     * @returns {boolean} Whether it was saved.
+     */
+    Q_INVOKABLE bool saveInspectorPicture(const QString& path);
+
+    /**jsdoc
+     * Saves a picture of the client's window as its widgets draw it (the editor's panels; the viewport itself may come
+     * out blank, being drawn by the GPU: Window.takeSnapshot pictures that).
+     * @function Test.saveWindowPicture
+     * @param {string} path - Where to save it (PNG).
+     * @returns {boolean} Whether it was saved.
+     */
+    Q_INVOKABLE bool saveWindowPicture(const QString& path);
+
+    /**jsdoc
+     * Starts tracing an entity as it is drawn: one sample per rendered frame, taken on the render thread once the frame's
+     * scene is in place, of the frame's camera position and the centre of the entity's drawn bound. A null id stops it.
+     * @function Test.traceRenderedEntity
+     * @param {Uuid} entityID - The entity.
+     * @returns {boolean} Whether the entity has a render item to trace.
+     */
+    Q_INVOKABLE bool traceRenderedEntity(const QUuid& entityID);
+
+    /**jsdoc
+     * Takes the samples traced so far: each is [time in ms, camera x, y, z, item x, y, z].
+     * @function Test.takeRenderTrace
+     * @returns {Array<Array<number>>} The samples, oldest first.
+     */
+    Q_INVOKABLE QVariantList takeRenderTrace();
 
 private:
     bool waitForCondition(qint64 maxWaitMs, std::function<bool()> condition);

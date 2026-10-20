@@ -24,6 +24,7 @@ using namespace shader::render_utils::program;
 
 gpu::PipelinePointer ToneMapAndResample::_pipeline;
 gpu::PipelinePointer ToneMapAndResample::_mirrorPipeline;
+std::atomic<bool> ToneMapAndResample::_showNaNPixels { false };
 
 ToneMapAndResample::ToneMapAndResample() {
     Parameters parameters;
@@ -95,6 +96,11 @@ void ToneMapAndResample::run(const RenderContextPointer& renderContext, const In
 
     if (!_pipeline) {
         init();
+    }
+
+    const int showNaNPixels = _showNaNPixels ? 1 : 0;
+    if (_parametersBuffer.get<Parameters>()._showNaNPixels != showNaNPixels) {
+        _parametersBuffer.edit<Parameters>()._showNaNPixels = showNaNPixels;
     }
 
     const auto bufferSize = destinationFramebuffer->getSize();

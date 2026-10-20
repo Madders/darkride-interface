@@ -8,3 +8,4 @@ include_hifi_library_headers(image)
 include_hifi_library_headers(ktx)
 
 target_draco()
+target_meshoptimizer()

@@ -18,9 +18,18 @@
 
 namespace EntityJSONQueryProperties {
     static const QString SERVER_SCRIPTS_PROPERTY = "serverScripts";
+    static const QString TRACK_ID_PROPERTY = "trackID";
+    static const QString FRAME_PROPERTY = "frame";
+    static const QString ENTITY_TYPE_PROPERTY = "type";
+    static const QString VEHICLE_PROPERTY = "vehicle";       // "+": a vehicle chassis or wheel (PHYSICS.md round 6)
+    static const QString COLLIDABLE_PROPERTY = "collidable"; // "+": collidable with a primitive shape
     static const QString FLAGS_PROPERTY = "flags";
     static const QString INCLUDE_ANCESTORS_PROPERTY = "includeAncestors";
     static const QString INCLUDE_DESCENDANTS_PROPERTY = "includeDescendants";
+    // true: the client draws impostor cards, so a carded entity (and the models under it) is sent out to where its
+    // card is drawn (ENTITY-STREAMING.md 3.3, DiffTraversal::View::computePriority); a server that does not know
+    // the flag sends as before
+    static const QString IMPOSTOR_CARDS_PROPERTY = "impostorCards";
 }
 
 class EntityNodeData : public OctreeQueryNode {

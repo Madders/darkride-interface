@@ -117,6 +117,18 @@ public:
     const BufferView& getPartBuffer() const { return _partBuffer; }
     size_t getNumParts() const { return _partBuffer.getNumElements(); }
 
+    // Automatic LODs (AUTOMATIC-LODS.md): simplified versions of the mesh over the same vertices, coarsest last. Their
+    // indices live in an index buffer of their own, so the index buffer and the part table above stay the full mesh
+    // for every reader that walks them (picking, the scripting API, the OBJ writer).
+    class Lod {
+    public:
+        float error { 0.0f };       // the farthest the level's surface strays from the full mesh, in mesh units
+        std::vector<Part> parts;    // one per part of the full mesh, as ranges of the LOD index buffer
+    };
+    void setLods(const BufferView& lodIndexBuffer, const std::vector<Lod>& lods);
+    const BufferView& getLodIndexBuffer() const { return _lodIndexBuffer; }
+    const std::vector<Lod>& getLods() const { return _lods; }
+
     // evaluate the bounding box of A part
     Box evalPartBound(int partNum) const;
     // evaluate the bounding boxes of the parts in the range [start, end]
@@ -153,6 +165,9 @@ protected:
     BufferView _indexBuffer;
 
     BufferView _partBuffer;
+
+    BufferView _lodIndexBuffer;
+    std::vector<Lod> _lods;
 
     void evalVertexFormat();
     void evalVertexStream();

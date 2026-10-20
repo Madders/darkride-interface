@@ -291,12 +291,14 @@ uint64_t ShapeInfo::getHash() const {
             // TODO: we could avoid hashing all of these points if we were to supply the ShapeInfo with a unique
             // descriptive string.  Shapes that are uniquely described by their type and URL could just put their
             // url in the description.
-            assert(_pointCollection.size() == (size_t)1);
-            const PointList & points = _pointCollection.back();
-            const int numPoints = (int)points.size();
+            // a hull without its points yet (a model not loaded, or a server that loads none) hashes as its type alone
+            if (!_pointCollection.empty()) {
+                const PointList & points = _pointCollection.back();
+                const int numPoints = (int)points.size();
 
-            for (int i = 0; i < numPoints; ++i) {
-                hasher.hashVec3(points[i]);
+                for (int i = 0; i < numPoints; ++i) {
+                    hasher.hashVec3(points[i]);
+                }
             }
         }
 

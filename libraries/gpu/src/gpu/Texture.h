@@ -18,6 +18,7 @@
 #include <QUrl>
 
 #include <functional>
+#include <atomic>
 #include <shared/Storage.h>
 #include <shared/FileCache.h>
 #include <RegisteredMetaTypes.h>
@@ -316,6 +317,8 @@ public:
 
         void setFormat(const Element& format) { _format = format; }
         Element getFormat() const { return _format; }
+        // the faces a mip holds (a cube map array's layers' faces, in layer order)
+        uint16 getNumFaces() const;
 
     private:
         Stamp _stamp { 0 };
@@ -386,8 +389,16 @@ public:
     static TexturePointer create1D(const Element& texelFormat, uint16 width, uint16 numMips = SINGLE_MIP, const Sampler& sampler = Sampler());
     static TexturePointer create2D(const Element& texelFormat, uint16 width, uint16 height, uint16 numMips = SINGLE_MIP, const Sampler& sampler = Sampler());
     static TexturePointer create2DArray(const Element& texelFormat, uint16 width, uint16 height, uint16 numSlices, uint16 numMips = SINGLE_MIP, const Sampler& sampler = Sampler());
+    // A 3D texture (a volume): width x height x depth texels in one stored face a mip (assignStoredMip with the
+    // slices back to back, x fastest), a strict resource uploaded whole, GL_TEXTURE_3D in the GL backends, sampled
+    // with a sampler3D (the zone's probe volume, LightAmbient.slh)
     static TexturePointer create3D(const Element& texelFormat, uint16 width, uint16 height, uint16 depth, uint16 numMips = SINGLE_MIP, const Sampler& sampler = Sampler());
     static TexturePointer createCube(const Element& texelFormat, uint16 width, uint16 numMips = 1, const Sampler& sampler = Sampler());
+    // A cube map array (one strict resource texture, uploaded whole): numSlices cube maps of one size and format, a
+    // layer each, sampled with a samplerCubeArray by direction and layer. Its stored mips are assigned face by face
+    // with assignStoredMipFace(level, layer * 6 + face, ...), in layer order (the reflection probes' array,
+    // ReflectionProbeStage)
+    static TexturePointer createCubeArray(const Element& texelFormat, uint16 width, uint16 numSlices, uint16 numMips = 1, const Sampler& sampler = Sampler());
     static TexturePointer createRenderBuffer(const Element& texelFormat, uint16 width, uint16 height, uint16 numMips = SINGLE_MIP, const Sampler& sampler = Sampler());
     static TexturePointer createRenderBufferMultisample(const Element& texelFormat, uint16 width, uint16 height, uint16 numSamples, const Sampler& sampler = Sampler());
     static TexturePointer createRenderBufferArray(const Element& texelFormat, uint16 width, uint16 height, uint16 numSlices, uint16 numMips = SINGLE_MIP, const Sampler& sampler = Sampler());
@@ -397,6 +408,17 @@ public:
 
     // After the texture has been created, it should be defined
     bool isDefined() const { return _defined; }
+
+    // How much of the texture the backend has on the GPU: the most detailed mip populated so far (0 once every mip
+    // is; a texture the backend uploads whole is 0 from the start), and a stamp that changes with it, so that
+    // whatever copies the texture elsewhere (a terrain's layer arrays, the lights' cookies) can copy it again as more
+    // of it arrives. The backend sets it as it transfers; readable from any thread.
+    uint16 getResidentMip() const { return _residentMip.load(std::memory_order_relaxed); }
+    Stamp getResidencyStamp() const { return _residencyStamp.load(std::memory_order_acquire); }
+    void setResidentMip(uint16 mip) const {
+        _residentMip.store(mip, std::memory_order_relaxed);
+        _residencyStamp.fetch_add(1, std::memory_order_release);
+    }
 
     Texture(TextureUsageType usageType);
     ~Texture();
@@ -427,6 +449,8 @@ public:
     // as if the height was NUM_FACES time bigger.
     static uint8 NUM_FACES_PER_TYPE[NUM_TYPES];
     uint8 getNumFaces() const { return NUM_FACES_PER_TYPE[getType()]; }
+    // the faces a stored mip holds: a cube map array's are its layers' faces, in layer order (a 2D array stores none)
+    uint16 getNumStoredFaces() const { return (uint16)getNumFaces() * (getType() == TEX_CUBE ? getNumSlices() : 1); }
 
     // The texture is an array if the _numSlices is not 0.
     // otherwise, if _numSLices is 0, then the texture is NOT an array
@@ -632,6 +656,8 @@ protected:
     bool _autoGenerateMips = false;
     bool _isIrradianceValid = false;
     bool _defined = false;
+    mutable std::atomic<uint16> _residentMip { 0 };
+    mutable std::atomic<Stamp> _residencyStamp { 0 };
    
     static TexturePointer create(TextureUsageType usageType, Type type, const Element& texelFormat, uint16 width, uint16 height, uint16 depth, uint16 numSamples, uint16 numSlices, uint16 numMips, const Sampler& sampler);
 

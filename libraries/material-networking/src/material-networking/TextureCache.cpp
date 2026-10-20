@@ -313,6 +313,10 @@ gpu::TexturePointer getFallbackTextureForType(image::TextureUsage::Type type) {
             result = textureCache->getBlueTexture();
             break;
 
+        case image::TextureUsage::LIGHTMAP_DIRECTION_TEXTURE:
+            result = textureCache->getGrayTexture();
+            break;
+
         case image::TextureUsage::EMISSIVE_TEXTURE:
         case image::TextureUsage::LIGHTMAP_TEXTURE:
             result = textureCache->getBlackTexture();

@@ -118,7 +118,7 @@ static const std::string DEFAULT_LIGHTING_SHADER{
 
 static const std::string DEFAULT_SHADOW_DEPTH_SHADER{
     "vec4 getFragmentColor() {"
-    "    for (int i = 255; i >= 0; --i) {"
+    "    for (int i = 0; i <= 255; ++i) {" // reversed-Z: the compare passes once the probe exceeds the stored depth
     "        float depth = i / 255.0;"
     "        if (texture(shadowMaps, vec4(uv, parameters._shadowCascadeIndex, depth)) > 0.5) {"
     "            return vec4(vec3(depth), 1.0);"

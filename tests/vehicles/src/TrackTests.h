@@ -24,6 +24,7 @@ private slots:
     void loopStations();
     void carVelocities();
     void determinism();
+    void stateHandover();
 };
 
 #endif // hifi_TrackTests_h

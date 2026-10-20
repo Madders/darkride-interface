@@ -24,6 +24,9 @@ enum FadeCategory {
     FADE_BUBBLE_ISECT_TRESPASSER,
     FADE_USER_ENTER_LEAVE_DOMAIN,
     FADE_AVATAR_CHANGE,
+    // the cross-fade between a model and its impostor card (ImpostorSwitch, IMPOSTORS.md 2.4): fine noise, no
+    // gradient, no glow; its threshold is the card's share of the dissolve, set by the switch rather than a transition
+    FADE_LOD_SWITCH,
 
     // Don't forget to modify Fade.slh to reflect the change in number of categories
     FADE_CATEGORY_COUNT,

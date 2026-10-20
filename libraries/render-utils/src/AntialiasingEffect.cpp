@@ -56,7 +56,7 @@ const gpu::PipelinePointer& Antialiasing::getAntialiasingPipeline() {
         gpu::ShaderPointer program = gpu::Shader::createProgram(shader::render_utils::program::fxaa);
         gpu::StatePointer state = gpu::StatePointer(new gpu::State());
 
-        state->setDepthTest(false, false, gpu::LESS_EQUAL);
+        state->setDepthTest(false, false, gpu::GREATER_EQUAL);
         PrepareStencil::testNoAA(*state);
 
         // Good to go add the brand new pipeline
@@ -70,7 +70,7 @@ const gpu::PipelinePointer& Antialiasing::getBlendPipeline() {
     if (!_blendPipeline) {
         gpu::ShaderPointer program = gpu::Shader::createProgram(shader::render_utils::program::fxaa_blend);
         gpu::StatePointer state = gpu::StatePointer(new gpu::State());
-        state->setDepthTest(false, false, gpu::LESS_EQUAL);
+        state->setDepthTest(false, false, gpu::GREATER_EQUAL);
         PrepareStencil::testNoAA(*state);
 
         // Good to go add the brand new pipeline

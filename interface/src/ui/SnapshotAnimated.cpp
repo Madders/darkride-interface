@@ -12,6 +12,7 @@
 #include "SnapshotAnimated.h"
 
 #include <QtCore/QDateTime>
+#include <QtCore/QFileInfo>
 #include <QtCore/QObject>
 #include <QtCore/QString>
 #include <QtGui/QImage>
@@ -20,6 +21,8 @@
 #include <gif.h>
 
 #include <plugins/DisplayPlugin.h>
+
+#include "Snapshot.h"
 
 QTimer* SnapshotAnimated::snapshotAnimatedTimer = NULL;
 qint64 SnapshotAnimated::snapshotAnimatedTimestamp = 0;
@@ -44,8 +47,10 @@ void SnapshotAnimated::saveSnapshotAnimated(QString pathStill, float aspectRatio
         SnapshotAnimated::snapshotAnimatedDM = dm;
         // Define the output location of the still and animated snapshots.
         SnapshotAnimated::snapshotStillPath = pathStill;
-        SnapshotAnimated::snapshotAnimatedPath = pathStill;
-        SnapshotAnimated::snapshotAnimatedPath.replace("jpg", "gif");
+        // the still's name with .gif in place of its suffix (not "jpg" replaced anywhere in the path)
+        QFileInfo stillInfo(pathStill);
+        SnapshotAnimated::snapshotAnimatedPath =
+            pathStill.isEmpty() ? QString() : stillInfo.path() + "/" + stillInfo.completeBaseName() + ".gif";
 
         // Ensure the snapshot timer is Precise (attempted millisecond precision)
         SnapshotAnimated::snapshotAnimatedTimer->setTimerType(Qt::PreciseTimer);
@@ -154,4 +159,6 @@ void SnapshotAnimated::processFrames() {
     
     // Update the "Share" dialog with the processed GIF.
     emit SnapshotAnimated::snapshotAnimatedDM->processingGifCompleted(SnapshotAnimated::snapshotAnimatedPath);
+    // and the GIF goes where its still went: to the user's files, or it stays on this computer
+    DependencyManager::get<Snapshot>()->storeSnapshot(SnapshotAnimated::snapshotAnimatedPath);
 }

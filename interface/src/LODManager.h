@@ -114,6 +114,25 @@ class AABox;
  *     it to be rendered, in degrees. The angular dimension is calculated as a sphere of radius half the diagonal of the 
  *     entity's AA box.
  *
+ * @property {number} impostorAngleDeg - The angular size (degrees) below which an entity with an impostor card draws the card
+ *     instead of its model, down to <code>lodAngleDeg</code>. <code>0</code> (the default) means four times <code>lodAngleDeg</code>
+ *     and reads back as <code>0</code>, so that a script can save and restore it.
+ * @property {number} impostorAngleInEffectDeg - The impostor angle in use (degrees): <code>impostorAngleDeg</code>, or four
+ *     times <code>lodAngleDeg</code> while that is <code>0</code>. <em>Read-only.</em>
+ * @property {number} impostorDebug - The impostor card's debug view: <code>0</code> draws the cards as they are,
+ *     <code>10</code> tints them blue (the Inspector's Tint Cards), <code>1</code> to <code>9</code> paint what the card's
+ *     shader reads. Not saved.
+ * @property {boolean} impostorsEnabled - <code>true</code> (the default) draws impostor cards; <code>false</code> draws
+ *     every entity's model instead (Developer &gt; Render &gt; Impostor Cards). Not saved.
+ * @property {boolean} meshLodsEnabled - <code>true</code> (the default) draws the automatic LODs, the simplified versions
+ *     of each mesh, where they look the same (Developer &gt; Render &gt; Automatic LODs); <code>false</code> draws every
+ *     mesh in full. Not saved.
+ * @property {number} meshLodErrorPixels - How far, in pixels on screen, a simplified mesh may stray from the full one
+ *     where it is drawn (AUTOMATIC-LODS.md): <code>1</code> by default; <code>0</code> draws every mesh in full.
+ * @property {number} meshLodForceLevel - The LOD level every mesh draws, a test hook: <code>-1</code> (the default) lets
+ *     the error decide; <code>0</code> is full detail; a mesh with fewer levels draws its coarsest. Not saved.
+ * @property {boolean} showImpostorsAndLods - <code>true</code> while Developer &gt; Render &gt; Show Impostors and LODs is
+ *     checked (its readout script reads it). Not saved.
  * @property {number} pidKp - <em>Not used.</em>
  * @property {number} pidKi - <em>Not used.</em>
  * @property {number} pidKd - <em>Not used.</em>
@@ -149,6 +168,15 @@ class LODManager : public QObject, public Dependency {
         Q_PROPERTY(float lodTargetFPS READ getLODTargetFPS)
 
         Q_PROPERTY(float lodAngleDeg READ getLODAngleDeg WRITE setLODAngleDeg)
+        Q_PROPERTY(float impostorAngleDeg READ getImpostorAngleSetting WRITE setImpostorAngleDeg)
+        Q_PROPERTY(float impostorAngleInEffectDeg READ getImpostorAngleDeg)
+        Q_PROPERTY(int impostorDebug READ getImpostorDebug WRITE setImpostorDebug)
+        Q_PROPERTY(float impostorCrossfade READ getImpostorCrossfade WRITE setImpostorCrossfade)
+        Q_PROPERTY(bool impostorsEnabled READ getImpostorsEnabled WRITE setImpostorsEnabled)
+        Q_PROPERTY(bool meshLodsEnabled READ getMeshLodsEnabled WRITE setMeshLodsEnabled)
+        Q_PROPERTY(float meshLodErrorPixels READ getMeshLodErrorPixels WRITE setMeshLodErrorPixels)
+        Q_PROPERTY(int meshLodForceLevel READ getMeshLodForceLevel WRITE setMeshLodForceLevel)
+        Q_PROPERTY(bool showImpostorsAndLods READ getShowImpostorsAndLods WRITE setShowImpostorsAndLods)
 
         Q_PROPERTY(float pidKp READ getPidKp WRITE setPidKp)
         Q_PROPERTY(float pidKi READ getPidKi WRITE setPidKi)
@@ -287,6 +315,57 @@ public:
     float getLODAngleDeg() const;
     void setLODAngleDeg(float lodAngle);
     float getLODHalfAngleTan() const;
+    // the impostor switch (IMPOSTORS.md 2.4): an entity with an impostor card draws its model while it subtends more
+    // than this angle and the card below it, down to lodAngleDeg; 0 (the default) means four times lodAngleDeg
+    float getImpostorAngleDeg() const;
+    void setImpostorAngleDeg(float angle);
+    // the setting as stored: 0 for the automatic angle
+    float getImpostorAngleSetting() const { return _impostorAngleDeg; }
+    // the angle as RenderArgs::_impostorAngleHalfTanSq takes it
+    float getImpostorAngleHalfTanSq() const;
+    // the angle a model shown as its card fetches its mesh at (ENTITY-STREAMING.md 3.1): half the impostor angle, as
+    // the squared tangent of half of it (EntityTreeRenderer::setImpostorLoadView); 0 with the cards off
+    float getImpostorLoadHalfTanSq() const;
+    // the card shader's debug view (impostor.slf), not saved: 0 draws the card
+    int getImpostorDebug() const { return _impostorDebug; }
+    void setImpostorDebug(int mode) { _impostorDebug = mode; }
+    // the cross-fade between a model and its card held at a share (ImpostorSwitch), not saved: below 0 the switch
+    // times its own; 0 the model alone, 1 the card alone, between them both, dissolved (a test hook)
+    float getImpostorCrossfade() const { return _impostorCrossfade; }
+    void setImpostorCrossfade(float share) { _impostorCrossfade = share < 0.0f ? -1.0f : std::min(share, 1.0f); }
+    // Developer > Render > Impostor Cards, not saved: off, every entity draws its model (the angle above reads 0)
+    bool getImpostorsEnabled() const { return _impostorsEnabled; }
+    void setImpostorsEnabled(bool enabled) { _impostorsEnabled = enabled; }
+    // automatic LODs (AUTOMATIC-LODS.md 3.3): Developer > Render > Automatic LODs (not saved), the tolerance in pixels
+    // (saved; 0 draws every mesh in full), the error tolerance in effect as RenderArgs::_meshLodErrorPixels takes it,
+    // and a level forced for tests (not saved; -1 lets the error decide)
+    bool getMeshLodsEnabled() const { return _meshLodsEnabled; }
+    void setMeshLodsEnabled(bool enabled) { _meshLodsEnabled = enabled; }
+    float getMeshLodErrorPixels() const { return _meshLodErrorPixels; }
+    void setMeshLodErrorPixels(float pixels);
+    float getMeshLodErrorPixelsInEffect() const { return _meshLodsEnabled ? _meshLodErrorPixels : 0.0f; }
+    int getMeshLodForceLevel() const { return _meshLodForceLevel; }
+    void setMeshLodForceLevel(int level) { _meshLodForceLevel = level < 0 ? -1 : level; }
+    // Developer > Render > Show Impostors and LODs, not saved: the cards tinted (impostorDebug 10) and the readout of
+    // scripts/system/impostorLodView.js, which reads this rather than the menu (a menu read waits on the main thread)
+    bool getShowImpostorsAndLods() const { return _showImpostorsAndLods; }
+    void setShowImpostorsAndLods(bool show);
+
+    /**jsdoc
+     * Says what the main view draws of an entity now: its impostor card or its model, and for a model entity its
+     * automatic LODs (Developer &gt; Render &gt; Show Impostors and LODs reads it for what is at the centre of the view).
+     * @function LODManager.describeEntity
+     * @param {Uuid} entityID - The entity.
+     * @returns {object} <code>name</code>; <code>visuallyReady</code> (what it draws now has loaded, which the loading
+     *     screen waits for); <code>card</code>, when the entity or an ancestor has an impostor card:
+     *     <code>ownerID</code>, <code>ownerName</code>, <code>showing</code> ("card", "model", "dissolving" or "loading"),
+     *     <code>standIn</code> (the card stands in for models not here yet), <code>angleDeg</code> (how wide its sphere
+     *     looks), <code>switchAngleDeg</code> and <code>enabled</code>; <code>mesh</code>, for a model entity: "waiting"
+     *     (behind its card, not fetched), "loading" or "loaded"; <code>lods</code>, for a loaded model: <code>parts</code>, one per mesh part, each with <code>full</code>
+     *     (its triangles), <code>levels</code> (each level's triangles) and <code>shown</code> (the level the main view
+     *     draws, 0 for full detail), and <code>enabled</code>.
+     */
+    Q_INVOKABLE QVariantMap describeEntity(const QUuid& entityID) const;
     float getLODAngle() const;
     float getVisibilityDistance() const;
     void setVisibilityDistance(float distance);
@@ -371,6 +450,14 @@ private:
     float _hmdTargetFPS { QUALITY_TO_FPS_HMD[_hmdWorldDetailQuality] };
 
     float _lodHalfAngle = getHalfAngleFromVisibilityDistance(DEFAULT_VISIBILITY_DISTANCE_FOR_UNIT_ELEMENT);
+    float _impostorAngleDeg { 0.0f };   // 0: automatic, four times the LOD angle
+    int _impostorDebug { 0 };
+    float _impostorCrossfade { -1.0f };
+    bool _impostorsEnabled { true };
+    bool _meshLodsEnabled { true };
+    float _meshLodErrorPixels { 1.0f };
+    int _meshLodForceLevel { -1 };
+    bool _showImpostorsAndLods { false };
     int _boundaryLevelAdjust = 0;
 
     glm::vec4 _pidCoefs{ 1.0f, 0.0f, 0.0f, 1.0f }; // Kp, Ki, Kd, Kv

@@ -42,6 +42,8 @@ public:
     void updateOrbPosition();
     void removeOrb();
     void setOrbVisible(bool isVisible);
+    // the model has loaded: the silhouette gives way to it with a shimmer of rising sparkles, once
+    void arrived();
 
     void setSpaceIndex(int32_t index);
     int32_t getSpaceIndex() const { return _spaceIndex; }
@@ -91,6 +93,8 @@ protected:
 
     std::vector<QUuid> _attachedAvatarEntities;
     QUuid _otherAvatarOrbMeshPlaceholderID;
+    bool _orbVisible { false };
+    glm::vec3 _orbPosition;
     AvatarMotionState* _motionState { nullptr };
     std::vector<DetailedMotionState*> _detailedMotionStates;
     int32_t _spaceIndex { -1 };

@@ -19,6 +19,16 @@
 #include <FramebufferCache.h>
 #include <UpdateSceneTask.h>
 #include <RenderViewTask.h>
+#include <AmbientOcclusionEffect.h>
+#include <BloomEffect.h>
+#include <HighlightEffect.h>
+#include <Mirrors.h>
+#include <RenderLocalShadowTask.h>
+#include <RenderMirrorsTask.h>
+#include <ImpostorBake.h>
+#include <RenderableTerrainEntityItem.h>
+#include <RenderShadowTask.h>
+#include <ToneMapAndResampleTask.h>
 #include <SecondaryCamera.h>
 
 #include "RenderEventHandler.h"
@@ -29,7 +39,9 @@
 #include <display-plugins/DisplayPlugin.h>
 
 #include <display-plugins/CompositorHelper.h>
+#include <FrameDiag.h>
 #include <QMetaObject>
+#include <ColorUtils.h>
 #include "ui/Stats.h"
 #include "Application.h"
 
@@ -66,16 +78,63 @@ void GraphicsEngine::initializeGPU(GLWidget* glwidget) {
     DependencyManager::get<TextureCache>()->setGPUContext(_gpuContext);
 }
 
+namespace {
+    const float MIRROR_SHADOW_DISTANCE = 20.0f;   // metres
+}
+
 void GraphicsEngine::initializeRender() {
 
     // Set up the render engine
     render::CullFunctor cullFunctor = LODManager::shouldRender;
     _renderEngine->addJob<UpdateSceneTask>("UpdateScene");
+    // the terrain layer sets' slices due this frame, drawn before any view: their batch leaves its framebuffer and
+    // viewport bound, which a pass later in the frame must not inherit (the black frames of KNOWN-ISSUES.md)
+    _renderEngine->addJob<render::entities::DrawTerrainLayerMaps>("TerrainLayerMaps");
 #ifndef Q_OS_ANDROID
     _renderEngine->addJob<SecondaryCameraRenderTask>("SecondaryCameraJob", cullFunctor);
 #endif
+    // the impostor bake's frames (IMPOSTORS.md 2.2): one a frame while a bake is queued, nothing otherwise
+    _renderEngine->addJob<RenderImpostorBakeTask>("RenderImpostorBake", cullFunctor);
+    // the mirrors' pictures, drawn before the main view shows them
+    _renderEngine->addJob<RenderMirrorsTask>("RenderMirrors", cullFunctor);
     _renderEngine->addJob<RenderViewTask>("RenderMainView", cullFunctor, render::ItemKey::TAG_BITS_0, render::ItemKey::TAG_BITS_0);
     _renderEngine->load();
+    // a mirror's view: no ambient occlusion, bloom, selection outline or HUD; no local light shadows (an atlas for
+    // each would cost too much); a linear tone curve, since the picture is tone mapped again in the main view
+    auto configuration = _renderEngine->getConfiguration();
+    for (int slot = 0; slot < Mirrors::SLOT_COUNT; ++slot) {
+        std::string view = "RenderMirrors.MirrorView" + std::to_string(slot) + ".";
+        if (auto config = configuration->getConfig<AmbientOcclusionEffect>(view + "AmbientOcclusion")) {
+            config->setEnabled(false);
+        }
+        if (auto config = configuration->getConfig<BloomEffect>(view + "Bloom")) {
+            config->setEnabled(false);
+        }
+        if (auto config = configuration->getConfig<BloomEffect>(view + "BloomForward")) {
+            config->setEnabled(false);
+        }
+        if (auto config = configuration->getConfig<DrawHighlightTask>(view + "DrawHighlight")) {
+            config->setEnabled(false);
+        }
+        if (auto config = configuration->getConfig<DrawHighlightTask>(view + "DrawHighlightForward")) {
+            config->setEnabled(false);
+        }
+        if (auto config = configuration->getJobConfig(view + "RenderHUDLayer")) {
+            config->setEnabled(false);
+        }
+        if (auto config = configuration->getConfig<ToneMapAndResample>(view + "ToneMapping")) {
+            config->setCurve((int)ToneCurve::None);
+        }
+        if (auto config = configuration->getConfig<RenderLocalShadowSetup>(view + "LocalShadowSetup")) {
+            config->setLocalLights(false);
+        }
+        // the sun's shadows reach less far in a reflection (mirrors mostly stand in rooms), and the view is
+        // drawn only while the slot has a mirror
+        if (auto config = configuration->getConfig<RenderShadowSetup>(view + "ShadowSetup")) {
+            config->setProperty("maxDistance", MIRROR_SHADOW_DISTANCE);
+        }
+        Mirrors::instance().setSlotView(slot, configuration->getJobConfig("RenderMirrors.MirrorView" + std::to_string(slot)));
+    }
     _renderEngine->registerScene(_renderScene);
 
     // Now that OpenGL is initialized, we are sure we have a valid context and can create the various pipeline shaders with success.
@@ -255,13 +314,53 @@ void GraphicsEngine::render_performFrame() {
         finalFramebuffer = framebufferCache->getFramebuffer();
     }
 
+    // Until the viewer goes in (Application::isSignInPending), the window shows only Darkride's navy and the user
+    // interface over it, where the sign-in screen is: no avatar in an empty world before that screen is up, at the start
+    // or after signing out. A headset still gets the 3D view, where its sign-in screen is (Application::createLoginDialog).
+    const bool signInCover = qApp->isSignInPending() && !displayPlugin->isHmd();
+    auto drawSignInNavy = [&](gpu::Batch& batch) {
+        if (!_signInNavy) {
+            // the sign-in screen's #1c2136 (LoginDialog.qml), stored as the user interface's texture stores it, so the
+            // two come out the same colour
+            static const uint8_t NAVY[4] = { 0x1c, 0x21, 0x36, 0xff };
+            _signInNavy = gpu::Texture::createStrict(gpu::Element::COLOR_RGBA_32, 1, 1);
+            _signInNavy->setSource("GraphicsEngine::_signInNavy");
+            _signInNavy->setStoredMipFormat(_signInNavy->getTexelFormat());
+            _signInNavy->assignStoredMip(0, sizeof(NAVY), NAVY);
+        }
+        batch.setFramebuffer(finalFramebuffer);
+        // in case the display's drawing isn't ready yet
+        batch.clearColorFramebuffer(gpu::Framebuffer::BUFFER_COLOR0,
+            ColorUtils::sRGBToLinearVec4(glm::vec4(0x1c / 255.0f, 0x21 / 255.0f, 0x36 / 255.0f, 1.0f)));
+        batch.setProjectionTransform(glm::mat4());
+        batch.resetViewTransform();
+        batch.setModelTransform(Transform());
+        displayPlugin->getHUDOperator()(batch, _signInNavy);
+    };
+
     std::queue<Application::SnapshotOperator> snapshotOperators;
-    if (!_programsCompiled.load()) {
+    if (signInCover && !_programsCompiled.load()) {
+        gpu::doInBatch("signInFrame", _gpuContext, drawSignInNavy);
+    } else if (signInCover) {
+        // the scene's changes are still applied, as the render engine would, so they don't pile up while someone signs in
+        _renderScene->processTransactionQueue();
+        {
+            PROFILE_RANGE(render, "/renderOverlay");
+            PerformanceTimer perfTimer("renderOverlay");
+            renderArgs._viewport = glm::ivec4(0, 0, qApp->getDeviceSize());
+            qApp->getApplicationOverlay().renderOverlay(&renderArgs);
+        }
+        auto hudTexture = qApp->getApplicationOverlay().getOverlayTexture();
+        gpu::doInBatch("signInFrame", _gpuContext, [&](gpu::Batch& batch) {
+            drawSignInNavy(batch);
+            displayPlugin->getHUDOperator()(batch, hudTexture);
+        });
+    } else if (!_programsCompiled.load()) {
         gpu::doInBatch("splashFrame", _gpuContext, [&](gpu::Batch& batch) {
             batch.setFramebuffer(finalFramebuffer);
             batch.enableSkybox(true);
             batch.enableStereo(isStereo);
-            batch.clearDepthStencilFramebuffer(1.0, 0);
+            batch.clearDepthStencilFramebuffer(0.0f, 0); // depth 0 is the far plane (reversed-Z)
             batch.setViewportTransform({ 0, 0, finalFramebuffer->getSize() });
             _splashScreen->render(batch, viewFrustum, renderArgs._renderMethod == RenderArgs::RenderMethod::FORWARD);
         });
@@ -286,8 +385,32 @@ void GraphicsEngine::render_performFrame() {
             renderArgs._hudTexture = qApp->getApplicationOverlay().getOverlayTexture();
             renderArgs._takingSnapshot = qApp->takeSnapshotOperators(snapshotOperators);
             renderArgs._blitFramebuffer = finalFramebuffer;
+            FrameDiag::beginFrame();
             render_runRenderFrame(&renderArgs);
+            // the trace: this frame's camera against the traced item as it was just drawn
+            render::ItemID traced = _traceItem.load();
+            if (render::Item::isValidID(traced)) {
+                const auto& item = _renderScene->getItem(traced);
+                if (item.exist()) {
+                    glm::vec3 center = item.getBound().calcCenter();
+                    std::lock_guard<std::mutex> lock(_traceMutex);
+                    if (_traceSamples.size() < 200000) {
+                        _traceSamples.push_back({ usecTimestampNow(), viewFrustum.getPosition(), center });
+                    }
+                }
+            }
         }
+    }
+
+    if (FrameDiag::enabled()) {
+        auto size = finalFramebuffer->getSize();
+        FrameDiag::log("R %llu f=%u vp=%dx%d fb=%dx%d@%p items=%d zones=%d sun=%d amb=%d bake=%d shadowMaps=%d drawn=%d static=%d lm=%x",
+                       (unsigned long long)usecTimestampNow(), (unsigned)_renderFrameCount, renderArgs._viewport.z,
+                       renderArgs._viewport.w, (int)size.x, (int)size.y, (void*)finalFramebuffer.get(),
+                       FrameDiag::mainOpaques().load(), FrameDiag::zones().load(), FrameDiag::sunLights().load(),
+                       FrameDiag::ambientLights().load(), FrameDiag::bake().load(), renderArgs._details._localShadowMaps,
+                       renderArgs._details._localShadowMapsDrawn, renderArgs._details._localShadowStaticMapsDrawn,
+                       FrameDiag::lightingFlags().load());
     }
 
     auto frame = getGPUContext()->endFrame();
@@ -328,4 +451,17 @@ void GraphicsEngine::render_performFrame() {
 void GraphicsEngine::editRenderArgs(RenderArgsEditor editor) {
     QMutexLocker renderLocker(&_renderArgsMutex);
     editor(_appRenderArgs);
+}
+
+void GraphicsEngine::setRenderTraceItem(render::ItemID id) {
+    std::lock_guard<std::mutex> lock(_traceMutex);
+    _traceSamples.clear();
+    _traceItem = id;
+}
+
+std::vector<GraphicsEngine::TraceSample> GraphicsEngine::takeRenderTrace() {
+    std::lock_guard<std::mutex> lock(_traceMutex);
+    std::vector<TraceSample> samples;
+    samples.swap(_traceSamples);
+    return samples;
 }

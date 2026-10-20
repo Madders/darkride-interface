@@ -66,6 +66,15 @@ namespace gl {
     // How the main thread puts its pending window changes in place at once (on macOS, a Core Animation commit,
     // which otherwise waits for the end of the run loop pass): set by the app, run by ViewChangeGuard
     void setViewChangeFlush(const std::function<void()>& flush);
+    // Whether a ViewChangeGuard has ended since the last call: the presenting thread then lets the main thread catch
+    // the context up with the view before it draws (on macOS, making the context current on another thread after its
+    // view changed queues Qt's update of the context for the main thread, QCocoaGLContext::update, which attaches the
+    // view's new surface there while this thread would draw: the crash of 10-18 20:16, Apple's GL driver aborting a
+    // clear of the window's framebuffer)
+    bool takeViewChanged();
+    // Waits until the main thread has run what was queued for it so far (its dispatch queue on macOS), at most
+    // milliseconds; returns at once elsewhere. Never with the global lock held: a change of the view waits for it.
+    void waitForMainQueue(int milliseconds);
 
     // While the main thread moves or resizes the window's GL view, the presenting thread doesn't draw to it: the
     // global lock is held for the change, and before it is let go the change is put in place (setViewChangeFlush);

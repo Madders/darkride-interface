@@ -125,6 +125,8 @@ private:
     
     Socket* _parentSocket { nullptr };
     HifiSockAddr _destination;
+    int _traceReceived { 0 };   // the trace (TIVOLI_UDT_TRACE)
+    int _traceAcks { 0 };
    
     std::unique_ptr<CongestionControl> _congestionControl;
    

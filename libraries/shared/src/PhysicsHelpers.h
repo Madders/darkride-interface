@@ -36,6 +36,11 @@ namespace Physics {
 
     void setSessionUUID(const QUuid& sessionID);
     const QUuid& getSessionUUID();
+
+    // This process is the domain's physics server (PHYSICS.md 4.5): it drives the trains, owns their cars at
+    // SERVER_SIMULATION_PRIORITY and publishes their state; a client never sets this.
+    void setServerAuthority(bool authority);
+    bool isServerAuthority();
 };
 
 #endif // hifi_PhysicsHelpers_h

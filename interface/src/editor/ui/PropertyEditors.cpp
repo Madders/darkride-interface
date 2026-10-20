@@ -24,6 +24,10 @@
 
 #include <NetworkAccessManager.h>
 
+#include "ImpostorEditor.h"
+#include "TerrainCapsEditor.h"
+#include "TerrainLayersEditor.h"
+#include "VehiclePartsEditor.h"
 #include "UserDataEditor.h"
 #include <QtCore/QRect>
 #include <QtCore/QRegularExpression>
@@ -424,6 +428,11 @@ PropertyEditor* PropertyEditor::create(const PropertySpec& spec, QWidget* parent
         case PropertyKind::Json: return new JsonEditor(spec, parent);
         case PropertyKind::Image: return new ImageEditor(spec, parent);
         case PropertyKind::UserData: return new UserDataEditor(spec, parent);
+        case PropertyKind::TerrainLayers: return new TerrainLayersEditor(spec, parent);
+        case PropertyKind::TerrainCaps: return new TerrainCapsEditor(spec, parent);
+        case PropertyKind::Impostor: return new ImpostorEditor(spec, parent);
+        case PropertyKind::VehicleWheels:
+        case PropertyKind::VehicleSeats: return new VehiclePartsEditor(spec, parent);
         case PropertyKind::Color:
         case PropertyKind::FloatColor: return new ColorEditor(spec, parent);
         case PropertyKind::Vec2:
@@ -706,6 +715,18 @@ void BoolEditor::setValue(const QVariant& value, bool mixed) {
 
 // --- TextEditor ---------------------------------------------------------------------------------
 
+namespace {
+    // the link in what is dragged, if it is a web address: a file from the Assets panel, or from a browser
+    QUrl droppedWebAddress(const QMimeData* mime) {
+        for (const auto& url : mime->urls()) {
+            if (url.scheme() == QStringLiteral("http") || url.scheme() == QStringLiteral("https")) {
+                return url;
+            }
+        }
+        return QUrl();
+    }
+}
+
 TextEditor::TextEditor(const PropertySpec& spec, QWidget* parent) : PropertyEditor(spec, parent) {
     auto layout = new QHBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -713,6 +734,9 @@ TextEditor::TextEditor(const PropertySpec& spec, QWidget* parent) : PropertyEdit
     _edit->setReadOnly(spec.readOnly);
     if (spec.kind == PropertyKind::Url) {
         _edit->setPlaceholderText("URL");
+        // the field takes the link itself, rather than letting the line edit paste it as typing
+        _edit->setAcceptDrops(false);
+        setAcceptDrops(!spec.readOnly);
     }
     layout->addWidget(_edit);
     connect(_edit, &QLineEdit::editingFinished, this, [this] {
@@ -728,6 +752,24 @@ TextEditor::TextEditor(const PropertySpec& spec, QWidget* parent) : PropertyEdit
 void TextEditor::revertTyping() {
     _edit->setText(_shown);
     _edit->setModified(false);
+}
+
+void TextEditor::dragEnterEvent(QDragEnterEvent* event) {
+    if (!_spec.readOnly && _spec.kind == PropertyKind::Url && !droppedWebAddress(event->mimeData()).isEmpty()) {
+        event->acceptProposedAction();
+    }
+}
+
+void TextEditor::dropEvent(QDropEvent* event) {
+    QUrl url = droppedWebAddress(event->mimeData());
+    if (url.isEmpty()) {
+        return;
+    }
+    _shown = url.toString();
+    _edit->setText(_shown);
+    _edit->setModified(false);
+    emit committed(QVariant(_shown));
+    event->acceptProposedAction();
 }
 
 void TextEditor::setValue(const QVariant& value, bool mixed) {
@@ -753,7 +795,8 @@ bool TextEditor::isEditing() const {
 
 namespace {
     const int THUMBNAIL_PIXELS = 28;
-    const QStringList PICTURE_SUFFIXES { "png", "jpg", "jpeg", "webp", "bmp", "gif", "tga", "tif", "tiff" };
+    const int HOLD_MS = 400;   // the left button held this long in a picture field opens its menu
+    const QStringList PICTURE_SUFFIXES { "png", "jpg", "jpeg", "webp", "bmp", "gif", "tga", "tif", "tiff", "ktx", "exr", "hdr" };
 
     bool isPictureFile(const QString& path) {
         return PICTURE_SUFFIXES.contains(QFileInfo(path).suffix().toLower());
@@ -761,6 +804,27 @@ namespace {
 
     bool isWebAddress(const QUrl& url) {
         return url.scheme() == QStringLiteral("http") || url.scheme() == QStringLiteral("https");
+    }
+
+    // a web address that may name a picture: its file has a picture's suffix, or none (some links have none); a
+    // model, a sound or a script dragged from the Assets panel is not one
+    bool mayBePicture(const QUrl& url) {
+        const QString name = url.fileName();
+        const int dot = name.lastIndexOf('.');
+        return dot < 0 || PICTURE_SUFFIXES.contains(name.mid(dot + 1).toLower());
+    }
+
+    // the picture in what is dragged: a picture file on this computer, or a web address that may be one
+    QUrl draggedPicture(const QMimeData* mime) {
+        if (!mime->hasUrls()) {
+            return QUrl();
+        }
+        for (const auto& url : mime->urls()) {
+            if ((url.isLocalFile() && isPictureFile(url.toLocalFile())) || (isWebAddress(url) && mayBePicture(url))) {
+                return url;
+            }
+        }
+        return QUrl();
     }
 }
 
@@ -774,16 +838,27 @@ ImageEditor::ImageEditor(const PropertySpec& spec, QWidget* parent) : PropertyEd
     _thumbnail->setFixedSize(THUMBNAIL_PIXELS, THUMBNAIL_PIXELS);
     _thumbnail->setAlignment(Qt::AlignCenter);
     _thumbnail->setFrameShape(QFrame::StyledPanel);
+    if (!spec.readOnly) {
+        _thumbnail->setCursor(Qt::PointingHandCursor);
+        _thumbnail->setToolTip("Click to choose a picture on this computer, or to clear the field");
+        _thumbnail->installEventFilter(this);
+    }
     layout->addWidget(_thumbnail);
     _url = new QLineEdit(this);
     _url->setPlaceholderText("None");
     _url->setReadOnly(spec.readOnly);
+    // the field takes a dropped picture itself: the line edit would paste its link in as typing, which commits nothing
+    _url->setAcceptDrops(false);
+    if (!spec.readOnly) {
+        _url->setToolTip("A picture by its link. Drag one here from the Assets panel or Finder, or hold the left button down "
+                         "in the field to choose one on this computer");
+        _url->installEventFilter(this);
+    }
     layout->addWidget(_url, 1);
-    auto choose = new QToolButton(this);
-    choose->setText("Choose…");
-    choose->setToolTip("A picture on this computer, uploaded to the world's files");
-    choose->setEnabled(!spec.readOnly);
-    layout->addWidget(choose);
+    _holdTimer = new QTimer(this);
+    _holdTimer->setSingleShot(true);
+    _holdTimer->setInterval(HOLD_MS);
+    connect(_holdTimer, &QTimer::timeout, this, [this] { showMenu(); });
     auto clear = new QToolButton(this);
     clear->setText(QStringLiteral("×"));
     clear->setToolTip("No picture");
@@ -799,21 +874,77 @@ ImageEditor::ImageEditor(const PropertySpec& spec, QWidget* parent) : PropertyEd
             emit committed(QVariant(url));
         }
     });
-    connect(choose, &QToolButton::clicked, this, [this] {
-        QString path = QFileDialog::getOpenFileName(this, "Choose a picture", QDir::homePath(),
-            "Pictures (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.tga *.tif *.tiff)");
-        if (!path.isEmpty()) {
-            takeFile(path);
+    connect(clear, &QToolButton::clicked, this, [this] { clearPicture(); });
+}
+
+bool ImageEditor::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == _thumbnail && event->type() == QEvent::MouseButtonPress
+            && static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton) {
+        showMenu();
+        return true;
+    }
+    if (watched == _url) {
+        switch (event->type()) {
+            case QEvent::MouseButtonPress: {
+                auto mouse = static_cast<QMouseEvent*>(event);
+                if (mouse->button() == Qt::LeftButton) {
+                    _holdPos = mouse->pos();
+                    _holdTimer->start();   // a click still places the cursor; held still, it opens the menu
+                }
+                break;
+            }
+            case QEvent::MouseMove:
+                if (_holdTimer->isActive() && (static_cast<QMouseEvent*>(event)->pos() - _holdPos).manhattanLength()
+                        > QApplication::startDragDistance()) {
+                    _holdTimer->stop();   // a drag that selects text
+                }
+                break;
+            case QEvent::MouseButtonRelease:
+            case QEvent::FocusOut:
+                _holdTimer->stop();
+                break;
+            default:
+                break;
         }
-    });
-    connect(clear, &QToolButton::clicked, this, [this] {
-        if (!_shown.isEmpty()) {
-            _shown.clear();
-            _url->clear();
-            showThumbnail(QString());
-            emit committed(QVariant(QString()));
-        }
-    });
+    }
+    return PropertyEditor::eventFilter(watched, event);
+}
+
+void ImageEditor::showMenu() {
+    _holdTimer->stop();
+    if (_spec.readOnly) {
+        return;
+    }
+    QMenu menu(this);
+    menu.setToolTipsVisible(true);
+    QAction* choose = menu.addAction("Choose File…");
+    choose->setToolTip("A picture on this computer, uploaded to your files");
+    QAction* clear = menu.addAction("Clear");
+    clear->setEnabled(!_shown.isEmpty());
+    // the choice is acted on once the menu has gone, so that the file dialog does not open inside it
+    QAction* chosen = menu.exec(_url->mapToGlobal(QPoint(0, _url->height())));
+    if (chosen == choose) {
+        chooseFile();
+    } else if (chosen == clear) {
+        clearPicture();
+    }
+}
+
+void ImageEditor::chooseFile() {
+    QString path = QFileDialog::getOpenFileName(this, "Choose a picture", QDir::homePath(),
+        "Pictures (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.tga *.tif *.tiff *.ktx *.exr *.hdr)");
+    if (!path.isEmpty()) {
+        takeFile(path);
+    }
+}
+
+void ImageEditor::clearPicture() {
+    if (!_shown.isEmpty()) {
+        _shown.clear();
+        _url->clear();
+        showThumbnail(QString());
+        emit committed(QVariant(QString()));
+    }
 }
 
 void ImageEditor::revertTyping() {
@@ -894,33 +1025,26 @@ void ImageEditor::showThumbnail(const QString& url) {
 }
 
 void ImageEditor::dragEnterEvent(QDragEnterEvent* event) {
-    if (_spec.readOnly || !event->mimeData()->hasUrls()) {
-        return;
-    }
-    for (const auto& url : event->mimeData()->urls()) {
-        if ((url.isLocalFile() && isPictureFile(url.toLocalFile())) || isWebAddress(url)) {
-            event->acceptProposedAction();
-            return;
-        }
+    if (!_spec.readOnly && !draggedPicture(event->mimeData()).isEmpty()) {
+        event->acceptProposedAction();
     }
 }
 
 void ImageEditor::dropEvent(QDropEvent* event) {
-    for (const auto& url : event->mimeData()->urls()) {
-        if (url.isLocalFile() && isPictureFile(url.toLocalFile())) {
-            takeFile(url.toLocalFile());
-            event->acceptProposedAction();
-            return;
-        }
-        if (isWebAddress(url)) {
-            _shown = url.toString();
-            _url->setText(_shown);
-            showThumbnail(_shown);
-            emit committed(QVariant(_shown));
-            event->acceptProposedAction();
-            return;
-        }
+    const QUrl url = draggedPicture(event->mimeData());
+    if (_spec.readOnly || url.isEmpty()) {
+        return;
     }
+    event->acceptProposedAction();
+    if (url.isLocalFile()) {
+        takeFile(url.toLocalFile());
+        return;
+    }
+    _shown = url.toString();
+    _url->setText(_shown);
+    _url->setModified(false);
+    showThumbnail(_shown);
+    emit committed(QVariant(_shown));
 }
 
 // --- JsonEditor ---------------------------------------------------------------------------------
