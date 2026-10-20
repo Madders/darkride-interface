@@ -50,22 +50,83 @@
         android:src="@drawable/ic_clear"
         />
 
-    <!-- What's typed, when it looks like an address rather than a name: joins it (a world testing, or a private one) -->
-    <TextView
-        android:id="@+id/goToAddressView"
+    <!-- What's typed, when it looks like an address rather than a name: joins it (a world being tested, or a private
+         one), and the bookmark button saves it with a name -->
+    <LinearLayout
+        android:id="@+id/goToAddressRow"
         android:layout_width="match_parent"
         android:layout_height="@dimen/searchEditHeight"
         app:layout_constraintTop_toBottomOf="@id/searchView"
         android:layout_marginTop="8dp"
+        android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:paddingStart="@dimen/searchEditPaddingStart"
-        android:paddingEnd="@dimen/searchEditPaddingStart"
-        android:singleLine="true"
-        android:ellipsize="middle"
-        android:textSize="@dimen/searchEditTextSize"
-        android:background="?android:attr/selectableItemBackground"
-        android:visibility="gone"
-        />
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/goToAddressView"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:paddingStart="@dimen/searchEditPaddingStart"
+            android:paddingEnd="12dp"
+            android:singleLine="true"
+            android:ellipsize="middle"
+            android:textSize="@dimen/searchEditTextSize"
+            android:background="?android:attr/selectableItemBackground"
+            />
+
+        <ImageView
+            android:id="@+id/saveBookmarkButton"
+            android:layout_width="@dimen/searchEditHeight"
+            android:layout_height="match_parent"
+            android:layout_marginStart="8dp"
+            android:padding="13dp"
+            android:contentDescription="@string/save_bookmark"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_bookmark"
+            />
+    </LinearLayout>
+
+    <!-- The directory or the bookmarks, and back to where you were, small, at the end of the row -->
+    <LinearLayout
+        android:id="@+id/placesTabsRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        app:layout_constraintTop_toBottomOf="@id/goToAddressRow"
+        android:layout_marginTop="4dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <com.google.android.material.tabs.TabLayout
+            android:id="@+id/placesTabs"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:background="@android:color/transparent"
+            app:tabMode="fixed"
+            app:tabGravity="start"
+            app:tabIndicatorFullWidth="false"
+            app:tabMinWidth="0dp"
+            app:tabPaddingStart="16dp"
+            app:tabPaddingEnd="16dp"
+            />
+
+        <TextView
+            android:id="@+id/lastLocationButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginEnd="12dp"
+            android:gravity="center_vertical"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:drawablePadding="6dp"
+            android:textSize="14sp"
+            android:text="@string/last_location_short"
+            android:background="?android:attr/selectableItemBackground"
+            android:visibility="gone"
+            />
+    </LinearLayout>
 
     <TextView
         android:id="@+id/searchNoResultsView"
@@ -74,15 +135,18 @@
         style="@style/SearchText"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/goToAddressView"
+        app:layout_constraintTop_toBottomOf="@id/placesTabsRow"
         android:layout_marginTop="32dp"
+        android:layout_marginStart="24dp"
+        android:layout_marginEnd="24dp"
+        android:gravity="center"
         android:text="@string/search_no_results"
         android:visibility="gone"
         />
 
     <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
         android:id="@+id/swipeRefreshLayout"
-        app:layout_constraintTop_toBottomOf="@id/goToAddressView"
+        app:layout_constraintTop_toBottomOf="@id/placesTabsRow"
         app:layout_constraintBottom_toBottomOf="@id/contentHomeRoot"
         app:layout_constraintStart_toStartOf="@id/contentHomeRoot"
         app:layout_constraintEnd_toEndOf="@id/contentHomeRoot"
@@ -94,4 +158,15 @@
             android:layout_height="match_parent"
         />
     </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rvBookmarks"
+        app:layout_constraintTop_toBottomOf="@id/placesTabsRow"
+        app:layout_constraintBottom_toBottomOf="@id/contentHomeRoot"
+        app:layout_constraintStart_toStartOf="@id/contentHomeRoot"
+        app:layout_constraintEnd_toEndOf="@id/contentHomeRoot"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone"
+        />
 </androidx.constraintlayout.widget.ConstraintLayout>

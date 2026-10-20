@@ -85,10 +85,7 @@ public class DomainAdapter extends RecyclerView.Adapter<DomainAdapter.ViewHolder
         domainProvider.retrieve(filterText, new DomainProvider.DomainCallback() {
             @Override
             public void retrieveOk(List<Domain> domain) {
-                if (filterText.length() == 0) {
-                    addLastLocation(domain);
-                }
-
+                // (the last location is a small button by Places' tabs, not a world's card)
                 overrideDefaultThumbnails(domain);
 
                 mDomains = new Domain[domain.size()];
@@ -124,21 +121,6 @@ public class DomainAdapter extends RecyclerView.Adapter<DomainAdapter.ViewHolder
                 d.thumbnail = DEFAULT_THUMBNAIL_PLACE;
             }
         }
-    }
-
-    private void addLastLocation(List<Domain> domain) {
-        Domain lastVisitedDomain = new Domain(mContext.getString(R.string.your_last_location), mLastLocation, DEFAULT_THUMBNAIL_PLACE);
-        if (!mLastLocation.isEmpty() && mLastLocation.contains("://")) {
-            int startIndex = mLastLocation.indexOf("://");
-            int endIndex = mLastLocation.indexOf("/", startIndex + 3);
-            String toSearch = mLastLocation.substring(0, endIndex + 1).toLowerCase();
-            for (Domain d : domain) {
-                if (d.url.toLowerCase().startsWith(toSearch)) {
-                    lastVisitedDomain.thumbnail = d.thumbnail;
-                }
-            }
-        }
-        domain.add(0, lastVisitedDomain);
     }
 
     @Override

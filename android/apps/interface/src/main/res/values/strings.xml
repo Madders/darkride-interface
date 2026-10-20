@@ -21,6 +21,18 @@
     <string name="logging_in">Logging in</string>
     <string name="search_hint"><i>Search for a place, or type an address</i>\u00A0</string>
     <string name="go_to_address">Go to %1$s</string>
+    <string name="places_tab_directory">Directory</string>
+    <string name="places_tab_bookmarks">Bookmarks</string>
+    <string name="last_location_short">Last location</string>
+    <string name="save_bookmark">Save as a bookmark</string>
+    <string name="bookmark_name_title">Name this bookmark</string>
+    <string name="bookmark_name_hint">A name for the world</string>
+    <string name="bookmark_save">Save</string>
+    <string name="bookmark_cancel">Cancel</string>
+    <string name="bookmark_rename">Rename</string>
+    <string name="bookmark_delete">Delete</string>
+    <string name="bookmarks_empty">No bookmarks yet. Type a world\'s address in the box above, then tap the bookmark beside it to save it here.</string>
+    <string name="bookmarks_no_match">No bookmarks match</string>
     <string name="search_loading">Loading places…</string>
     <string name="search_no_results">No places exist with that name</string>
     <!-- the same, in a Wonderland theme (under the Cheshire Cat's grin) -->
