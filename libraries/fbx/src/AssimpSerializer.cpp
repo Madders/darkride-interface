@@ -482,6 +482,11 @@ void AssimpSerializer::processMeshes(const hifi::VariantHash& mapping) {
         for (size_t faceIndex = 0; faceIndex < mMesh->mNumFaces; faceIndex++) {
             aiFace face = mMesh->mFaces[faceIndex];
             if (face.mNumIndices != 3) continue; // must be a triangle
+            // and of the mesh's own vertices
+            if (face.mIndices[0] >= mMesh->mNumVertices || face.mIndices[1] >= mMesh->mNumVertices ||
+                face.mIndices[2] >= mMesh->mNumVertices) {
+                continue;
+            }
             for (size_t i = 0; i < face.mNumIndices; i++) {
                 meshPartPtr->triangleIndices.push_back(face.mIndices[i]);
             }
@@ -957,6 +962,7 @@ HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi
         data.constData(), data.size(),
         // aiProcess_CalcTangentSpace |
         joinIdenticalVertices |
+        aiProcess_ValidateDataStructure | // refuses scenes whose indices or counts don't add up
         aiProcess_Triangulate |
         aiProcess_RemoveComponent |
         aiProcess_GenNormals | 
