@@ -103,6 +103,8 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
     private static final int SETTINGS_PANEL_MAX_WIDTH_DP = 420;
     private static final float SETTINGS_PANEL_ALPHA = 0.94f;
     private boolean mStartInDomain;
+    // a world to join once the app has loaded (a hifi:// link that started it)
+    private String mPendingDomainUrl;
     private boolean isLoading;
 //    private GvrApi gvrApi;
     // Opaque native pointer to the Application C++ object.
@@ -121,6 +123,10 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
         Intent intent = getIntent();
         if (intent.hasExtra(DOMAIN_URL) && !TextUtils.isEmpty(intent.getStringExtra(DOMAIN_URL))) {
             intent.putExtra("applicationArguments", "--url " + intent.getStringExtra(DOMAIN_URL));
+            // (--url isn't acted on at startup: the world is joined once the app has loaded, and the splash goes
+            // straight to it, not to Places)
+            mPendingDomainUrl = intent.getStringExtra(DOMAIN_URL);
+            mStartInDomain = true;
         } else if (intent.hasExtra(EXTRA_ARGS)) {
             String args = intent.getStringExtra(EXTRA_ARGS);
             if (!TextUtils.isEmpty(args)) {
@@ -516,6 +522,10 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
         }
         runOnUiThread(() -> {
             nativeInitAfterAppLoaded();
+            if (mPendingDomainUrl != null) {
+                nativeGotoUrl(mPendingDomainUrl);
+                mPendingDomainUrl = null;
+            }
         });
     }
 

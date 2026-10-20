@@ -79,6 +79,11 @@ public class PermissionChecker extends Activity {
         if (!TextUtils.isEmpty(mArgs)) {
             i.putExtra(EXTRA_ARGS, mArgs);
         }
+        // a hifi:// link: the world it names, in the app that's running (onNewIntent) or the one starting
+        if (Intent.ACTION_VIEW.equals(getIntent().getAction()) && getIntent().getData() != null) {
+            i.putExtra(InterfaceActivity.DOMAIN_URL, getIntent().getData().toString());
+            i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        }
 
         startActivity(i);
         finish();
