@@ -8,6 +8,11 @@ export class WebEventHandler {
 
 	signalManager = new SignalManager();
 
+	// Whether the page sending events is this button's own (Darkride's frontend). rpc and eval run with this
+	// script's powers, so they're taken only from it: the tablet can show any page (one the user browses to, or
+	// one a world opens), and those pages reach the same event bridge. The button manager keeps this up to date.
+	trusted = false;
+
 	private panel: PanelPair;
 
 	constructor(
@@ -91,7 +96,7 @@ export class WebEventHandler {
 			return;
 		}
 
-		if (typeof data.uuid != "string") return;
+		if (typeof data.uuid != "string" || data.uuid == "") return;
 		if (this.uuid.indexOf(data.uuid) != 0) return;
 
 		switch (data.key) {
@@ -99,10 +104,10 @@ export class WebEventHandler {
 				this.button.close();
 				break;
 			case "rpc":
-				this.handleRPC(data.value);
+				if (this.trusted) this.handleRPC(data.value);
 				break;
 			case "eval":
-				if (data.value) eval(data.value);
+				if (this.trusted && data.value) eval(data.value);
 				break;
 		}
 
