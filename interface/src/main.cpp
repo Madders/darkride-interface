@@ -8,7 +8,10 @@
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 
+#include <cstring>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include <QCommandLineParser>
 #include <QtCore/QProcess>
@@ -43,6 +46,28 @@ extern "C" {
 #endif
 
 int main(int argc, const char* argv[]) {
+    // Started for a hifi:// link (the system's handler for the scheme runs "Darkride --protocol-url <link>"): the link
+    // is the only thing taken from the command line, so a link can't carry other switches with it
+    static std::vector<const char*> protocolArgv;
+    static std::string protocolUrl;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--protocol-url") == 0) {
+            protocolArgv = { argv[0] };
+            if (i + 1 < argc) {
+                protocolUrl = argv[i + 1];
+                bool isAddress = protocolUrl.rfind("hifi:", 0) == 0 &&
+                    protocolUrl.find_first_of(" \t\r\n\"") == std::string::npos;
+                if (isAddress) {
+                    protocolArgv.push_back("--url");
+                    protocolArgv.push_back(protocolUrl.c_str());
+                }
+            }
+            argc = (int)protocolArgv.size();
+            argv = protocolArgv.data();
+            break;
+        }
+    }
+
 #ifdef Q_OS_MACOS
     auto format = getDefaultOpenGLSurfaceFormat();
     // Deal with some weirdness in the chromium context sharing on Mac.
