@@ -23,6 +23,7 @@
 
 #include <gl/OffscreenGLCanvas.h>
 #include <shared/ReadWriteLockable.h>
+#include <shared/LocalFileAccessGate.h>
 #include <NetworkingConstants.h>
 
 #include "Logging.h"
@@ -34,24 +35,18 @@
 using namespace hifi::qml;
 using namespace hifi::qml::impl;
 
-QmlUrlValidator OffscreenSurface::validator = [](const QUrl& url) -> bool { 
-    // if (url.isRelative()) {
-    //     return true;
-    // }
+QmlUrlValidator OffscreenSurface::validator = [](const QUrl& url) -> bool {
+    // QML is Darkride's own interface code, so it comes from the app (qrc:), a relative path, or a file on this
+    // computer (not a network share)
+    if (url.isRelative() || url.scheme() == URL_SCHEME_QRC) {
+        return true;
+    }
+    if (url.isLocalFile() && url.host().isEmpty()) {
+        return true;
+    }
 
-    // if (url.isLocalFile()) {
-    //     return true;
-    // }
-
-    // if (url.scheme() == URL_SCHEME_QRC) {
-    //     return true;
-    // }
-
-    // // By default, only allow local QML, either from the local filesystem or baked into the QRC
-    // return false;
-
-    // does this need to be filtered to local only?
-    return true;
+    // or from elsewhere when the user's own scripts ask for it (the thread is marked as theirs while they do)
+    return hifi::scripting::isLocalAccessSafeThread();
 };
 
 static uvec2 clampSize(const uvec2& size, uint32_t maxDimension) {
