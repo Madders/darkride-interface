@@ -15,6 +15,8 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.TextView;
@@ -35,6 +37,7 @@ public class HomeFragment extends Fragment {
     private ImageView mSearchIconView;
     private ImageView mClearSearch;
     private EditText mSearchView;
+    private TextView mGoToAddressView;
 
 
     private OnHomeInteractionListener mListener;
@@ -117,12 +120,15 @@ public class HomeFragment extends Fragment {
         mSearchView = rootView.findViewById(R.id.searchView);
         mSearchIconView = rootView.findViewById(R.id.search_mag_icon);
         mClearSearch = rootView.findViewById(R.id.search_clear);
+        mGoToAddressView = rootView.findViewById(R.id.goToAddressView);
 
         getActivity().getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
 
         Theme theme = ThemeManager.get(getContext());
         rootView.setBackground(new BackgroundDrawable(theme, getResources().getDisplayMetrics().density));
         ThemeStyler.styleField(mSearchView, theme);
+        ThemeStyler.styleField(mGoToAddressView, theme);
+        mGoToAddressView.setTextColor(theme.primary);
         mSearchIconView.setColorFilter(theme.icon);
         mClearSearch.setColorFilter(theme.icon);
         ThemeStyler.styleBody(searchNoResultsView, theme);
@@ -146,6 +152,13 @@ public class HomeFragment extends Fragment {
             @Override
             public void afterTextChanged(Editable editable) {
                 mDomainAdapter.loadDomains(editable.toString(), false);
+                String address = editable.toString().trim();
+                if (looksLikeAddress(address)) {
+                    mGoToAddressView.setText(getString(R.string.go_to_address, address));
+                    mGoToAddressView.setVisibility(View.VISIBLE);
+                } else {
+                    mGoToAddressView.setVisibility(View.GONE);
+                }
                 if (editable.length() > 0) {
                     mSearchIconView.setVisibility(View.GONE);
                     mClearSearch.setVisibility(View.VISIBLE);
@@ -155,19 +168,22 @@ public class HomeFragment extends Fragment {
                 }
             }
         });
+        // Enter on a hardware keyboard, or the on-screen keyboard's Go: an address is joined; a name is just searched
         mSearchView.setOnKeyListener((view, i, keyEvent) -> {
-            if (i == KeyEvent.KEYCODE_ENTER) {
-                String urlString = mSearchView.getText().toString();
-                if (!urlString.trim().isEmpty()) {
-                    urlString = HifiUtils.getInstance().sanitizeHifiUrl(urlString);
-                }
-                if (mListener != null) {
-                    mListener.onSelectedDomain(urlString);
-                }
+            if (i == KeyEvent.KEYCODE_ENTER && keyEvent.getAction() == KeyEvent.ACTION_UP) {
+                onSearchSubmitted();
+                return true;
+            }
+            return i == KeyEvent.KEYCODE_ENTER;
+        });
+        mSearchView.setOnEditorActionListener((view, actionId, keyEvent) -> {
+            if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
+                onSearchSubmitted();
                 return true;
             }
             return false;
         });
+        mGoToAddressView.setOnClickListener(view -> goToAddress(mSearchView.getText().toString().trim()));
 
         mClearSearch.setOnClickListener(view -> onSearchClear(view));
 
@@ -220,6 +236,35 @@ public class HomeFragment extends Fragment {
             searchNoResultsView.setText(R.string.search_no_results);
             searchNoResultsView.setCompoundDrawables(null, null, null, null);
         }
+    }
+
+    // An address rather than a place's name: a URL (hifi://, or any scheme), a host with a dot, an IP, a port or a path
+    // (hifi://host:port/x,y,z/orientation), with no spaces, which names have and addresses don't
+    static boolean looksLikeAddress(String text) {
+        if (text.isEmpty() || text.matches(".*\\s.*")) {
+            return false;
+        }
+        return text.contains("://") || text.contains(".") || text.contains(":") || text.contains("/");
+    }
+
+    private void onSearchSubmitted() {
+        String text = mSearchView.getText().toString().trim();
+        if (looksLikeAddress(text)) {
+            goToAddress(text);
+        } else {
+            // the list already shows the matches: put the keyboard away to see them
+            InputMethodManager keyboard = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (keyboard != null) {
+                keyboard.hideSoftInputFromWindow(mSearchView.getWindowToken(), 0);
+            }
+        }
+    }
+
+    private void goToAddress(String address) {
+        if (address.isEmpty() || mListener == null) {
+            return;
+        }
+        mListener.onSelectedDomain(HifiUtils.getInstance().sanitizeHifiUrl(address));
     }
 
     public interface OnHomeInteractionListener {

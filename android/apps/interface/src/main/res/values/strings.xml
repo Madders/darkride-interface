@@ -19,7 +19,8 @@
     <string name="cant_access_your_account"><u>Can\u0027t access your account?</u></string>
     <string name="login_username_or_password_incorrect">Username or password incorrect.</string>
     <string name="logging_in">Logging in</string>
-    <string name="search_hint"><i>Search for a place by name</i>\u00A0</string>
+    <string name="search_hint"><i>Search for a place, or type an address</i>\u00A0</string>
+    <string name="go_to_address">Go to %1$s</string>
     <string name="search_loading">Loading places…</string>
     <string name="search_no_results">No places exist with that name</string>
     <!-- the same, in a Wonderland theme (under the Cheshire Cat's grin) -->

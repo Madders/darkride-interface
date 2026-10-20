@@ -10,8 +10,10 @@ import ".."
 
 Item {
     id: bar
-    x:0
-    y:0
+    // At the top right, kept there by binding to the UI's own size: placed once from the window's width, it stayed
+    // where a portrait window put it when it was made before a turn to landscape (the middle of the screen)
+    x: parent ? parent.width - 328 : 0
+    y: 19
     width: 300
     height: 300
     z: -1
@@ -36,26 +38,6 @@ Item {
             anchors.fill: parent
             anchors.margins: 4
         }
-    }
-
-    function relocateAndResize(newWindowWidth, newWindowHeight) {
-        x = newWindowWidth-328;
-        y = 19;
-        width = 300;
-        height = 300;
-    }
-
-    function onWindowGeometryChanged(rect) {
-        relocateAndResize(rect.width, rect.height);
-    }
-
-    Component.onCompleted: {
-        relocateAndResize(parent.width, parent.height);
-        Window.geometryChanged.connect(onWindowGeometryChanged); // In devices with bars appearing at startup we should listen for this
-    }
-
-    Component.onDestruction: {
-        Window.geometryChanged.disconnect(onWindowGeometryChanged);
     }
 
     
