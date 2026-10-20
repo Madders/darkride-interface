@@ -58,16 +58,10 @@ WebEntityRenderer::ContentType WebEntityRenderer::getContentType(const QString& 
 
     const QUrl url(urlString);
     auto path = url.path().toLower();
-    auto scheme = url.scheme();
 
-    if (
-        scheme == HIFI_URL_SCHEME_ABOUT ||
-        scheme == HIFI_URL_SCHEME_HTTP ||
-        scheme == HIFI_URL_SCHEME_HTTPS ||
-        scheme == URL_SCHEME_DATA ||
-        path.endsWith(".html") ||
-        path.endsWith(".htm")
-    ) {
+    // QML is Darkride's own interface code: a web entity shows it only from Darkride's own resources (the tablet,
+    // the mic bar). Any other address, wherever it points, is shown as a web page.
+    if (path.endsWith(".html") || path.endsWith(".htm") || !PathUtils::isAppResourceUrl(url)) {
         return ContentType::HtmlContent;
     }
 
