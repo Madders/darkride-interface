@@ -26,7 +26,9 @@ Mesh::Mesh(const Mesh& mesh) :
     _vertexBuffer(mesh._vertexBuffer),
     _attributeBuffers(mesh._attributeBuffers),
     _indexBuffer(mesh._indexBuffer),
-    _partBuffer(mesh._partBuffer) {
+    _partBuffer(mesh._partBuffer),
+    _lodIndexBuffer(mesh._lodIndexBuffer),
+    _lods(mesh._lods) {
 }
 
 Mesh::~Mesh() {
@@ -106,6 +108,11 @@ void Mesh::setIndexBuffer(const BufferView& buffer) {
 
 void Mesh::setPartBuffer(const BufferView& buffer) {
     _partBuffer = buffer;
+}
+
+void Mesh::setLods(const BufferView& lodIndexBuffer, const std::vector<Lod>& lods) {
+    _lodIndexBuffer = lodIndexBuffer;
+    _lods = lods;
 }
 
 Box Mesh::evalPartBound(int partNum) const {

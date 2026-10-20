@@ -31,7 +31,6 @@ Item {
     property bool linkSteam: linkSteam
     property bool linkOculus: linkOculus
     property bool createOculus: createOculus
-    property string displayName: ""
 
     readonly property bool loginDialogPoppedUp: loginDialog.getLoginDialogPoppedUp()
 
@@ -107,7 +106,7 @@ Item {
             loggingInText.text = "Logging in to Oculus";
             loggingInText.x = loggingInHeader.width/2 - loggingInTextMetrics.width/2 + loggingInGlyphTextMetrics.width/2;
         } else {
-            loggingInText.text = "Logging in";
+            loggingInText.text = "Logging in…";
             loggingInText.anchors.centerIn = loggingInHeader;
         }
         loggingInSpinner.visible = true;
@@ -162,7 +161,7 @@ Item {
             }
 
         }
-        MyAvatar.displayName = displayName;
+        // the avatar's name is the account's username, set by the viewer when the username arrives (Application)
         successTimer.start();
     }
 
@@ -180,9 +179,10 @@ Item {
                 id: loggingInHeader
                 width: parent.width
                 height: loggingInGlyph.height
+                // under the banner (0.18 of the height down, OverlayLoginDialog.qml), not across it
                 anchors {
                     top: parent.top
-                    topMargin: 0.4 * parent.height
+                    topMargin: 0.18 * parent.height + root.bannerHeight + 0.08 * parent.height
                     left: parent.left
                 }
                 TextMetrics {
@@ -216,14 +216,15 @@ Item {
                     id: loggingInText;
                     width: loggingInTextMetrics.width
                     anchors.verticalCenter: parent.verticalCenter
-                    color: "white";
+                    // the sign-in form's type: Roboto, as the website and chat set it
+                    color: "#f4f6f8";
                     font.family: loggingInBody.fontFamily
-                    font.pixelSize: 24
-                    font.bold: loggingInBody.fontBold
+                    font.pixelSize: 20
+                    font.weight: Font.Medium
                     wrapMode: Text.NoWrap
                     verticalAlignment: Text.AlignVCenter
                     horizontalAlignment: Text.AlignHCenter
-                    text: "Logging in"
+                    text: "Logging in…"
                 }
             }
             Item {

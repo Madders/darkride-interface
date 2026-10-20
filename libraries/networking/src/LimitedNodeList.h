@@ -344,7 +344,8 @@ public:
         NodeType::AssetServer,
         NodeType::EntityServer,
         NodeType::MessagesMixer,
-        NodeType::EntityScriptServer
+        NodeType::EntityScriptServer,
+        NodeType::PhysicsServer
     };
 
 public slots:

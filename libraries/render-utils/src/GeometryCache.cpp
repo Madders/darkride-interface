@@ -2019,7 +2019,7 @@ void GeometryCache::useSimpleDrawPipeline(gpu::Batch& batch, bool noBlend) {
 void GeometryCache::useGridPipeline(gpu::Batch& batch, GridBuffer gridBuffer, bool transparent, bool forward) {
     if (_gridPipelines.empty()) {
         using namespace shader::render_utils::program;
-        const float DEPTH_BIAS = 0.001f;
+        const float DEPTH_BIAS = -0.001f; // reversed-Z: away from the viewer is the smaller depth
 
         static const std::vector<std::tuple<bool, bool, uint32_t>> keys = {
             std::make_tuple(false, false, grid), std::make_tuple(false, true, grid_forward), std::make_tuple(true, false, grid_translucent), std::make_tuple(true, true, grid_translucent_forward)
@@ -2027,7 +2027,7 @@ void GeometryCache::useGridPipeline(gpu::Batch& batch, GridBuffer gridBuffer, bo
 
         for (auto& key : keys) {
             gpu::StatePointer state = gpu::StatePointer(new gpu::State());
-            state->setDepthTest(true, true, gpu::LESS_EQUAL);
+            state->setDepthTest(true, true, gpu::GREATER_EQUAL);
             if (std::get<0>(key)) {
                 PrepareStencil::testMask(*state);
             } else {
@@ -2138,7 +2138,7 @@ gpu::PipelinePointer GeometryCache::getWebBrowserProgram(bool transparent, bool 
                 ((transparent || forward) ? web_browser_forward : web_browser);
 
             gpu::StatePointer state = gpu::StatePointer(new gpu::State());
-            state->setDepthTest(true, true, gpu::LESS_EQUAL);
+            state->setDepthTest(true, true, gpu::GREATER_EQUAL);
             // FIXME: do we need a testMaskDrawNoAA?
             PrepareStencil::testMaskDrawShapeNoAA(*state);
             state->setBlendFunction(transparent,
@@ -2210,10 +2210,10 @@ gpu::PipelinePointer GeometryCache::getSimplePipeline(bool textured, bool transp
     } else {
         state->setCullMode(gpu::State::CULL_BACK);
     }
-    state->setDepthTest(true, true, gpu::LESS_EQUAL);
+    state->setDepthTest(true, true, gpu::GREATER_EQUAL);
     if (config.hasDepthBias()) {
-        state->setDepthBias(1.0f);
-        state->setDepthBiasSlopeScale(1.0f);
+        state->setDepthBias(-1.0f); // reversed-Z: away from the viewer is the smaller depth
+        state->setDepthBiasSlopeScale(-1.0f);
     }
     state->setBlendFunction(config.isTransparent(),
         gpu::State::SRC_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::INV_SRC_ALPHA,

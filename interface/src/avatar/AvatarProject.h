@@ -95,7 +95,14 @@ public:
     static bool isValidNewProjectName(const QString& projectPath, const QString& projectName);
 
     static QString getDefaultProjectsPath() {
-        return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + "/Tivoli Cloud VR Projects";
+        const QString documents = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        const QString path = documents + "/Darkride Projects";
+        // the folder was "Tivoli Cloud VR Projects" until 10-18: moved once, so nobody's projects go missing
+        const QString oldPath = documents + "/Tivoli Cloud VR Projects";
+        if (!QDir(path).exists() && QDir(oldPath).exists()) {
+            QDir().rename(oldPath, path);
+        }
+        return path;
     }
 
 signals:

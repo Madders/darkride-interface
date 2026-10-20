@@ -78,9 +78,49 @@ vec3 evalAmbientSpecularIrradiance(LightAmbient ambient, SurfaceData surface, ve
 }
 <@endfunc@>
 
-<@func declareLightingAmbient(supportAmbientSphere, supportAmbientMap, supportIfAmbientMapElseAmbientSphere, supportScattering)@>
+<@func declareLightingAmbient(supportAmbientSphere, supportAmbientMap, supportIfAmbientMapElseAmbientSphere, supportScattering, supportReflectionProbes)@>
 
 <$declareEvalAmbientSpecularIrradiance($supportAmbientSphere$, $supportAmbientMap$, $supportIfAmbientMapElseAmbientSphere$)$>
+
+<@if supportReflectionProbes@>
+// the reflection probes the fragment is inside take the ambient specular from the zone's map (ReflectionProbe.slh);
+// the fragment's world position finds its probes in the frame's light culling
+<@include ReflectionProbe.slh@>
+<$declareReflectionProbes()$>
+
+// The zone's probe volume (LIGHTMAPS.md step 4, graphics::Light::setProbeVolume): L2 spherical harmonics on a
+// uniform grid of probes in world space, in a 3D texture of dims.x by 9 * dims.y by dims.z texels, the nine
+// coefficients' blocks stacked along y. It gives the diffuse irradiance at the fragment's world position for its
+// normal, in place of the zone's one ambient sphere, for whatever has no lightmap (avatars, moving things). In the
+// deferred directional pass it sits in a slot that pass has free.
+<@if PROBE_VOLUME_DEFERRED@>
+LAYOUT(binding=RENDER_UTILS_TEXTURE_PROBE_VOLUME_DEFERRED) uniform sampler3D probeVolumeMap;
+<@else@>
+LAYOUT(binding=RENDER_UTILS_TEXTURE_PROBE_VOLUME) uniform sampler3D probeVolumeMap;
+<@endif@>
+
+// The irradiance at positionWS for normalWS: the eight probes around the position blended trilinearly by the sampler,
+// each coefficient read within its own block at the texel centres of the block's rows, so the filter never crosses
+// into the next block; a position outside the grid takes the probes at its edge
+vec3 evalProbeVolumeIrradiance(LightAmbient ambient, vec3 normalWS, vec3 positionWS) {
+    vec3 dims = getLightProbeVolumeDims(ambient);
+    vec3 cell = clamp((positionWS - getLightProbeVolumeOrigin(ambient)) * getLightProbeVolumeInvSpacing(ambient), vec3(0.0), dims - vec3(1.0));
+    vec3 texels = vec3(dims.x, 9.0 * dims.y, dims.z);
+    vec3 uvw = (cell + vec3(0.5)) / texels;
+    vec3 block = vec3(0.0, dims.y / texels.y, 0.0);
+    SphericalHarmonics sh;
+    sh.L00  = textureLod(probeVolumeMap, uvw, 0.0);
+    sh.L1m1 = textureLod(probeVolumeMap, uvw + 1.0 * block, 0.0);
+    sh.L10  = textureLod(probeVolumeMap, uvw + 2.0 * block, 0.0);
+    sh.L11  = textureLod(probeVolumeMap, uvw + 3.0 * block, 0.0);
+    sh.L2m2 = textureLod(probeVolumeMap, uvw + 4.0 * block, 0.0);
+    sh.L2m1 = textureLod(probeVolumeMap, uvw + 5.0 * block, 0.0);
+    sh.L20  = textureLod(probeVolumeMap, uvw + 6.0 * block, 0.0);
+    sh.L21  = textureLod(probeVolumeMap, uvw + 7.0 * block, 0.0);
+    sh.L22  = textureLod(probeVolumeMap, uvw + 8.0 * block, 0.0);
+    return sphericalHarmonics_evalSphericalLight(sh, normalWS).xyz;
+}
+<@endif@>
 
 <@if supportScattering@>
 float curvatureAO(in float k) {
@@ -93,6 +133,9 @@ void evalLightingAmbient(out vec3 diffuse, out vec3 specular, LightAmbient ambie
 <@if supportScattering@>
     , float scattering, vec4 midNormalCurvature, vec4 lowNormalCurvature
 <@endif@>
+<@if supportReflectionProbes@>
+    , vec3 fragPositionWS
+<@endif@>
     ) {
 
     // Rotate surface normal and eye direction
@@ -104,12 +147,38 @@ void evalLightingAmbient(out vec3 diffuse, out vec3 specular, LightAmbient ambie
 
     vec3 ambientFresnel = fresnelSchlickAmbient(fresnelF0, surface.ndotv, surface.roughness);
 
+    // the diffuse term: the ambient sphere's irradiance for the normal, under the ambient intensity, or, in a zone
+    // with a probe volume, the volume's irradiance at the fragment under the volume's own intensity and without the
+    // ambient Fresnel term, as the lightmap's indirect mode has none, so that an avatar matches the baked floor it
+    // stands on (LIGHTMAPS.md step 4)
+    float diffuseIntensity = getLightAmbientIntensity(ambient);
     diffuse = (1.0 - metallic) * (vec3(1.0) - ambientFresnel) * 
               sphericalHarmonics_evalSphericalLight(getLightAmbientSphere(ambient), ambientSpaceSurfaceNormal).xyz;
+<@if supportReflectionProbes@>
+    bool useProbeVolume = getLightHasProbeVolume(ambient) && isProbeVolumeEnabled() > 0.0;
+    if (useProbeVolume) {
+        diffuse = (1.0 - metallic) * evalProbeVolumeIrradiance(ambient, surface.normal, fragPositionWS);
+        diffuseIntensity = getLightProbeVolumeIntensity(ambient);
+    }
+<@endif@>
 
     // Specular highlight from ambient
     vec3 ambientSpaceLightDir = -reflect(ambientSpaceSurfaceEyeDir, ambientSpaceSurfaceNormal);
     specular = evalAmbientSpecularIrradiance(ambient, surface, ambientSpaceLightDir)  * ambientFresnel;
+<@if supportReflectionProbes@>
+    // the reflection probes the fragment is inside: their light along the world-space reflection, and the zone's
+    // map keeps the share they leave; the probes carry their own intensity, so only the zone's share takes the
+    // ambient light's below
+    vec3 probeSpecular = vec3(0.0);
+    LightCluster cluster = fetchLightCluster(vec4(fragPositionWS, 1.0), gl_FragCoord.xy);
+    if (hasReflectionProbes(cluster) && isReflectionProbesEnabled() > 0.0) {
+        vec3 lightDirWS = -reflect(surface.eyeDir, surface.normal);
+        float probeLod = max(getMipLevelFromRoughness(surface.roughness, getReflectionProbeNumMips()), 0.0);
+        vec4 probeLight = evalReflectionProbes(cluster, fragPositionWS, lightDirWS, probeLod);
+        probeSpecular = probeLight.rgb * ambientFresnel;
+        specular *= probeLight.a;
+    }
+<@endif@>
 
 <@if supportScattering@>
     if (scattering * isScatteringEnabled() > 0.0) {
@@ -121,6 +190,11 @@ void evalLightingAmbient(out vec3 diffuse, out vec3 specular, LightAmbient ambie
 
         // Diffuse from ambient
         diffuse = sphericalHarmonics_evalSphericalLight(getLightAmbientSphere(ambient), ambientSpaceLowNormal).xyz;
+<@if supportReflectionProbes@>
+        if (useProbeVolume) {
+            diffuse = evalProbeVolumeIrradiance(ambient, lowNormalCurvature.xyz, fragPositionWS);
+        }
+<@endif@>
 
         // Scattering ambient specular is the same as non scattering for now
         // TODO: we should use the same specular answer as for direct lighting
@@ -129,13 +203,15 @@ void evalLightingAmbient(out vec3 diffuse, out vec3 specular, LightAmbient ambie
 
     obscurance = mix(1.0, obscurance, isObscuranceEnabled());
 
-    float lightEnergy = obscurance * getLightAmbientIntensity(ambient);
+    float lightEnergy = obscurance * isAmbientEnabled();
 
     diffuse *= mix(vec3(1), albedo, isAlbedoEnabled());
 
-    lightEnergy *= isAmbientEnabled();
-    diffuse *= lightEnergy * isDiffuseEnabled();
-    specular *= lightEnergy * isSpecularEnabled();
+    diffuse *= lightEnergy * diffuseIntensity * isDiffuseEnabled();
+    specular *= lightEnergy * getLightAmbientIntensity(ambient) * isSpecularEnabled();
+<@if supportReflectionProbes@>
+    specular += probeSpecular * (obscurance * isAmbientEnabled() * isSpecularEnabled());
+<@endif@>
 }
 
 <@endfunc@>

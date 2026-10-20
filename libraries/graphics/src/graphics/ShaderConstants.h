@@ -23,10 +23,14 @@
 #define GRAPHICS_TEXTURE_MATERIAL_ALBEDO 0
 #define GRAPHICS_TEXTURE_MATERIAL_NORMAL 1
 #define GRAPHICS_TEXTURE_MATERIAL_METALLIC 2
-#define GRAPHICS_TEXTURE_MATERIAL_EMISSIVE_LIGHTMAP 3
+#define GRAPHICS_TEXTURE_MATERIAL_EMISSIVE 3
 #define GRAPHICS_TEXTURE_MATERIAL_ROUGHNESS 4
 #define GRAPHICS_TEXTURE_MATERIAL_OCCLUSION 5
 #define GRAPHICS_TEXTURE_MATERIAL_SCATTERING 6
+// the lightmap had the emissive map's slot (a lightmapped surface could have no emissive map); it has its own since
+// LIGHTMAPS.md, so that Unity's emissive panels keep their glow in a lightmapped room
+#define GRAPHICS_TEXTURE_MATERIAL_LIGHTMAP 7
+#define GRAPHICS_TEXTURE_MATERIAL_LIGHTMAP_DIRECTION 8
 
 // Make sure these match the ones in render-utils/ShaderConstants.h
 #define GRAPHICS_TEXTURE_SKYBOX 11
@@ -55,10 +59,12 @@ enum Texture {
     MaterialAlbedo = GRAPHICS_TEXTURE_MATERIAL_ALBEDO,
     MaterialNormal = GRAPHICS_TEXTURE_MATERIAL_NORMAL,
     MaterialMetallic = GRAPHICS_TEXTURE_MATERIAL_METALLIC,
-    MaterialEmissiveLightmap = GRAPHICS_TEXTURE_MATERIAL_EMISSIVE_LIGHTMAP, 
+    MaterialEmissive = GRAPHICS_TEXTURE_MATERIAL_EMISSIVE,
     MaterialRoughness = GRAPHICS_TEXTURE_MATERIAL_ROUGHNESS,
     MaterialOcclusion = GRAPHICS_TEXTURE_MATERIAL_OCCLUSION,
     MaterialScattering = GRAPHICS_TEXTURE_MATERIAL_SCATTERING,
+    MaterialLightmap = GRAPHICS_TEXTURE_MATERIAL_LIGHTMAP,
+    MaterialLightmapDirection = GRAPHICS_TEXTURE_MATERIAL_LIGHTMAP_DIRECTION,
     Skybox = GRAPHICS_TEXTURE_SKYBOX
 };
 } // namespace texture

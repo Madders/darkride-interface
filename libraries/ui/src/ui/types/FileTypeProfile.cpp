@@ -28,7 +28,7 @@ FileTypeProfile::FileTypeProfile(QQmlContext* parent) :
     ContextAwareProfile(parent)
 {
     static const QString WEB_ENGINE_USER_AGENT = QString(
-        "TivoliCloudVR/" + 
+        "Darkride/" + 
         (BuildInfo::BUILD_TYPE == BuildInfo::BuildType::Stable ? BuildInfo::VERSION : "dev")
     );
     setHttpUserAgent(WEB_ENGINE_USER_AGENT);

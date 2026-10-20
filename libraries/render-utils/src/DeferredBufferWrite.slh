@@ -40,7 +40,8 @@ void packDeferredFragment(vec3 normal, float alpha, vec3 albedo, float roughness
     _fragColor3 = vec4(isEmissiveEnabled() * emissive, 1.0);
 }
 
-void packDeferredFragmentLightmap(vec3 normal, float alpha, vec3 albedo, float roughness, float metallic, vec3 lightmap) {
+// the full-bake lightmap (High Fidelity's): the lightmap times the albedo is the whole lighting, the emissive over it
+void packDeferredFragmentLightmap(vec3 normal, float alpha, vec3 albedo, float roughness, float metallic, vec3 lightmap, vec3 emissive) {
     if (alpha < 1.0) {
         discard;
     }
@@ -48,7 +49,21 @@ void packDeferredFragmentLightmap(vec3 normal, float alpha, vec3 albedo, float r
     _fragColor0 = vec4(albedo, packLightmappedMetallic(metallic));
     _fragColor1 = vec4(packNormal(normal), clamp(roughness, 0.0, 1.0));
     _fragColor2 = vec4(isLightmapEnabled() * lightmap, 1.0);
-    _fragColor3 = vec4(isLightmapEnabled() * lightmap * albedo, 1.0);
+    _fragColor3 = vec4(isLightmapEnabled() * lightmap * albedo + isEmissiveEnabled() * emissive, 1.0);
+}
+
+// the indirect-mode lightmap (LIGHTMAPS.md): a shaded fragment whose baked diffuse light (evalLightmapDiffuse) starts
+// the lighting buffer with the emissive; the directional pass adds the ambient specular and the sun, not the ambient
+// diffuse, and the local lights add themselves as to any shaded fragment
+void packDeferredFragmentLightmapIndirect(vec3 normal, float alpha, vec3 albedo, float roughness, float metallic, vec3 emissive, float occlusion, vec3 lightmapDiffuse) {
+    if (alpha < 1.0) {
+        discard;
+    }
+
+    _fragColor0 = vec4(albedo, packLightmappedIndirectMetallic(metallic));
+    _fragColor1 = vec4(packNormal(normal), clamp(roughness, 0.0, 1.0));
+    _fragColor2 = vec4(emissive, occlusion);
+    _fragColor3 = vec4(isEmissiveEnabled() * emissive + lightmapDiffuse, 1.0);
 }
 
 void packDeferredFragmentUnlit(vec3 normal, float alpha, vec3 color) {

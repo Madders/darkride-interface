@@ -18,6 +18,7 @@
 #include <map>
 #include <set>
 #include <QScriptValue>
+#include <QVariantMap>
 #include <StreamUtils.h>
 #include <GLMHelpers.h>
 #include "AnimationLogging.h"
@@ -230,6 +231,9 @@ public:
 
     // Answer a Plain Old Javascript Object (for the given engine) all of our values set as properties.
     QScriptValue animVariantMapToScriptValue(QScriptEngine* engine, const QStringList& names, bool useNames) const;
+    // The same two, with plain values (what the WebAssembly script engine passes a handler and reads back)
+    QVariantMap animVariantMapToVariantMap(const QStringList& names, bool useNames) const;
+    void animVariantMapFromVariantMap(const QVariantMap& source);
     // Side-effect us with the value of object's own properties. (No inherited properties.)
     void animVariantMapFromScriptValue(const QScriptValue& object);
     void copyVariantsFrom(const AnimVariantMap& other);

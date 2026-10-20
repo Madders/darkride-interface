@@ -53,6 +53,15 @@ function announce(emoteName, seconds) {
     Messages.sendMessage(EMOTE_CHANNEL, JSON.stringify({ emote: emoteName, seconds: seconds }), false);
 }
 
+// The Eyes row: the gaze style the avatar wears, or "auto" (autoGaze.js: the eyes follow the owner's mood)
+var autoGaze = Script.require("/~/system/libraries/autoGaze.js");
+autoGaze.start();
+function showGaze() {
+    if (onEmoteScreen) {
+        tablet.emitScriptEvent(JSON.stringify({ type: "gaze", data: MyAvatar.gazeStyle, auto: autoGaze.isOn() }));
+    }
+}
+
 button = tablet.addButton({
     icon: "icons/tablet-icons/emote.svg",
     // activeIcon: "icons/tablet-icons/emote.svg",
@@ -81,6 +90,24 @@ function onWebEventReceived(event) {
     // Converts the event to a JavasScript Object
     if (typeof event === "string") {
         event = JSON.parse(event);
+    }
+
+    if (event.type === "ready" && onEmoteScreen) {
+        // the page marks the gaze style the avatar wears, and auto
+        showGaze();
+        return;
+    }
+
+    if (event.type === "gaze" && onEmoteScreen) {
+        // one of the Eyes buttons: how the avatar's eyes behave, for everyone to see; a style picked by hand ends auto
+        if (event.data === "auto") {
+            autoGaze.setOn(!autoGaze.isOn());
+        } else {
+            autoGaze.setOn(false);
+            MyAvatar.gazeStyle = event.data;
+        }
+        Script.setTimeout(showGaze, 50);
+        return;
     }
 
     if (event.type === "click") {
@@ -172,6 +199,7 @@ eventMapping.from(Controller.Standard.Start).peek().to(restoreAnimation);
 button.clicked.connect(onClicked);
 tablet.screenChanged.connect(onScreenChanged);
 tablet.webEventReceived.connect(onWebEventReceived);
+MyAvatar.gazeStyleChanged.connect(showGaze);
 
 Script.scriptEnding.connect(function () {
     if (onEmoteScreen) {
@@ -179,6 +207,8 @@ Script.scriptEnding.connect(function () {
     }
     button.clicked.disconnect(onClicked);
     tablet.screenChanged.disconnect(onScreenChanged);
+    MyAvatar.gazeStyleChanged.disconnect(showGaze);
+    autoGaze.shutdown();
     if (tablet) {
         tablet.removeButton(button);
     }

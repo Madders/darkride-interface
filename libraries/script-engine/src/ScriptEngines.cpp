@@ -21,6 +21,7 @@
 
 #include "ScriptEngine.h"
 #include "ScriptEngineLogging.h"
+#include "WasmScriptEngine.h"
 
 #define __STR2__(x) #x
 #define __STR1__(x) __STR2__(x)
@@ -290,6 +291,8 @@ QVariantList ScriptEngines::getRunning() {
         resultNode.insert("path", displayURLString);
         resultNode.insert("url", normalizeScriptURL(runningScript).toString());
         resultNode.insert("local", runningScriptURL.isLocalFile());
+        auto engine = getScriptEngine(QUrl(runningScript));
+        resultNode.insert("engine", qobject_cast<WasmScriptEngine*>(engine.data()) ? "WebAssembly" : "QtScript");
         result.append(resultNode);
     }
     return result;
@@ -435,6 +438,16 @@ void ScriptEngines::stopAllScripts(bool restart) {
     }
 }
 
+void ScriptEngines::setRunOnWebAssembly(const QString& rawScriptURL, bool onWebAssembly) {
+    // kept by the normalized URL, which loadScript gives the factory when the script loads again
+    QUrl scriptURL = normalizeScriptURL(QUrl(rawScriptURL));
+    if (!scriptURL.isValid()) {
+        scriptURL = normalizeScriptURL(QUrl::fromLocalFile(rawScriptURL));
+    }
+    WasmScriptEngine::chooseEngineForScript(scriptURL, onWebAssembly);
+    stopScript(rawScriptURL, true);
+}
+
 bool ScriptEngines::stopScript(const QString& rawScriptURL, bool restart) {
     bool stoppedScript = false;
     {
@@ -512,7 +525,7 @@ ScriptEnginePointer ScriptEngines::loadScript(const QUrl& scriptFilename, bool i
         return scriptEngine;
     }
 
-    scriptEngine = scriptEngineFactory(_context, NO_SCRIPT, "about:" + scriptFilename.fileName());
+    scriptEngine = scriptEngineFactory(_context, NO_SCRIPT, "about:" + scriptFilename.fileName(), scriptUrl);
     scriptEngine->setUserLoaded(isUserLoaded);
     scriptEngine->setQuitWhenFinished(quitWhenFinished);
 

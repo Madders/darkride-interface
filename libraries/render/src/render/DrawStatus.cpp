@@ -38,7 +38,7 @@ const gpu::PipelinePointer DrawStatus::getDrawItemBoundsPipeline() {
 
         auto state = std::make_shared<gpu::State>();
 
-        state->setDepthTest(true, false, gpu::LESS_EQUAL);
+        state->setDepthTest(true, false, gpu::GREATER_EQUAL);
 
         // Blend on transparent
         state->setBlendFunction(true,
@@ -57,7 +57,7 @@ const gpu::PipelinePointer DrawStatus::getDrawItemStatusPipeline() {
 
         auto state = std::make_shared<gpu::State>();
 
-        state->setDepthTest(false, false, gpu::LESS_EQUAL);
+        state->setDepthTest(false, false, gpu::GREATER_EQUAL);
 
         // Blend on transparent
         state->setBlendFunction(true,

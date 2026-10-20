@@ -309,6 +309,10 @@ void EntityTreeRenderer::clear() {
     _renderablesToUpdate.clear();
     _priorityRenderablesToUpdate.clear();
     _staticRenderablesToUpdate.clear();
+    {
+        std::lock_guard<std::mutex> lock(_deferredModelMeshesLock);
+        _deferredModelMeshes.clear();
+    }
     _layeredZones.clear();
 
     if (!_shuttingDown) {
@@ -583,6 +587,65 @@ void EntityTreeRenderer::updateChangedEntities(const render::ScenePointer& scene
     }
 }
 
+void EntityTreeRenderer::deferModelMesh(const EntityItemID& id, const glm::vec3& centerWS, float radius) {
+    std::lock_guard<std::mutex> lock(_deferredModelMeshesLock);
+    auto& entry = _deferredModelMeshes[id];
+    entry.center = centerWS;
+    entry.radius = radius;
+    entry.wake = false;
+}
+
+void EntityTreeRenderer::undeferModelMesh(const EntityItemID& id) {
+    std::lock_guard<std::mutex> lock(_deferredModelMeshesLock);
+    _deferredModelMeshes.erase(id);
+}
+
+void EntityTreeRenderer::wakeDeferredModelMesh(const EntityItemID& id) {
+    std::lock_guard<std::mutex> lock(_deferredModelMeshesLock);
+    auto itr = _deferredModelMeshes.find(id);
+    if (itr != _deferredModelMeshes.end()) {
+        itr->second.wake = true;
+    }
+}
+
+void EntityTreeRenderer::setImpostorLoadView(const glm::vec3& cameraPosition, float loadHalfTanSq) {
+    _impostorLoadPosition = cameraPosition;
+    _impostorLoadHalfTanSq = loadHalfTanSq;
+}
+
+// The waiting meshes whose time has come update now, whatever their entity's update priority; each one's renderer
+// decides again, starts its download or puts it back here (ModelEntityRenderer::doRenderUpdateSynchronousTyped).
+// One distance test each per frame.
+void EntityTreeRenderer::updateDeferredModelMeshes(const render::ScenePointer& scene, render::Transaction& transaction) {
+    std::vector<EntityItemID> due;
+    {
+        std::lock_guard<std::mutex> lock(_deferredModelMeshesLock);
+        for (auto itr = _deferredModelMeshes.begin(); itr != _deferredModelMeshes.end();) {
+            const auto& entry = itr->second;
+            glm::vec3 toCamera = _impostorLoadPosition - entry.center;
+            float distanceSq = glm::dot(toCamera, toCamera);
+            float radiusSq = entry.radius * entry.radius;
+            if (entry.wake || _impostorLoadHalfTanSq <= 0.0f || distanceSq <= radiusSq ||
+                radiusSq >= _impostorLoadHalfTanSq * distanceSq) {
+                due.push_back(itr->first);
+                itr = _deferredModelMeshes.erase(itr);
+            } else {
+                ++itr;
+            }
+        }
+    }
+    if (!due.empty()) {
+        qCDebug(entitiesrenderer) << "impostor stand-in:" << due.size() << "waiting meshes woken";
+    }
+    for (const auto& id : due) {
+        auto renderable = renderableForEntityId(id);
+        if (renderable) {
+            renderable->getEntity()->setNeedsRenderUpdate(true);
+            renderable->updateInScene(scene, transaction);
+        }
+    }
+}
+
 void EntityTreeRenderer::preUpdate() {
     if (_tree && !_shuttingDown) {
         _tree->preUpdate();
@@ -609,6 +672,7 @@ void EntityTreeRenderer::update(bool simulate) {
                 render::Transaction transaction;
                 addPendingEntities(scene, transaction);
                 updateChangedEntities(scene, transaction);
+                updateDeferredModelMeshes(scene, transaction);
                 scene->enqueueTransaction(transaction);
             }
         }
@@ -747,8 +811,11 @@ void EntityTreeRenderer::setZoneCullingSuspended(bool suspended) {
     _refreshAllRenderables = true;
 }
 
-void EntityTreeRenderer::evaluateZoneCullingStack() {  
-    if (_zoneCullingStack != _prevZoneCullingStack) QMetaObject::invokeMethod(qApp, "requeryOctree"); 
+void EntityTreeRenderer::evaluateZoneCullingStack() {
+    // Until 2026-10-19 a change of the zone stack also asked qApp for requeryOctree, whose new connection id made
+    // the entity server forget what this client holds and resend its whole view: once on every zone border crossed,
+    // and once about a second after every arrival, when the stack first fills (Tivoli's 14f41d044a). The client
+    // already holds what zone culling shows or hides; the recheck below is all a zone change needs.
     if (!_forceRecheckEntities && _zoneCullingStack == _prevZoneCullingStack) return; // stack hasn't changed
     _forceRecheckEntities = false;
     _zoneCullSkipList.clear();    
@@ -1215,6 +1282,7 @@ void EntityTreeRenderer::deletingEntity(const EntityItemID& entityID) {
     auto renderable = itr->second;
     _renderablesToUpdate.erase(renderable);
     _entitiesInScene.erase(itr);
+    undeferModelMesh(entityID);
 
     if (!renderable) {
         qCWarning(entitiesrenderer) << "EntityTreeRenderer::deletingEntity(), trying to remove non-renderable entity";

@@ -76,7 +76,7 @@ Flickable {
 
             HifiStylesUit.GraphikRegular {
                 id: uiControlsSubtitle
-                text: "You'll have to restart Interface after changing either of these settings. If you don't get any Toolbar apps back after restarting, run defaultScripts.js manually."
+                text: "You'll have to restart Darkride after changing either of these settings. If you don't get any Toolbar apps back after restarting, run defaultScripts.js manually."
                 Layout.preferredWidth: parent.width
                 height: paintedHeight
                 size: 16

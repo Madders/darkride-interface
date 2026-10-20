@@ -116,6 +116,9 @@ OriginalDesktop.Desktop {
         autoAdd = auto;
     }
 
+    // over everything while a hop or an arrival is under way, driven by scripts/system/worldLoading.js
+    WorldLoadingScreen { }
+
     // Create or fetch a toolbar with the given name
     function getToolbar(name) {
         var result = toolbars[name];

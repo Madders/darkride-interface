@@ -13,6 +13,7 @@
 #include "PhysicalEntitySimulation.h"
 
 #include "TrackSimulation.h"
+#include "VehicleSimulation.h"
 
 #include <Profile.h>
 
@@ -20,12 +21,56 @@
 #include "PhysicsLogging.h"
 #include "ShapeManager.h"
 
+#include <algorithm>
+#include <chrono>
+
+#include <NLPacket.h>
+#include <NodeList.h>
+#include <PortableHighResolutionClock.h>
+#include <VehicleState.h>
+
+namespace {
+    // The physics server drives a car on a track without its real shape: it collides with nothing this round and loads
+    // no models, so a model car would wait for a shape forever. It gets a box of its dimensions instead.
+    bool serverDrivesAsBox(const EntityItemPointer& entity) {
+        // the server loads no model hulls: a car on a track and a vehicle's chassis are boxes of their dimensions there
+        return Physics::isServerAuthority() && (!entity->getTrackID().isNull() || entity->isVehicle());
+    }
+
+    void computeEntityShape(const EntityItemPointer& entity, ShapeInfo& shapeInfo) {
+        if (serverDrivesAsBox(entity)) {
+            shapeInfo.setBox(0.5f * entity->getScaledDimensions());
+            return;
+        }
+        entity->computeShapeInfo(shapeInfo);
+        if (Physics::isServerAuthority() && shapeInfo.getPointCollection().empty()) {
+            // the server loads no assets: a hull, a compound or a mesh without its points gets no body here (such an
+            // entity is in the server's tree as the ancestor of something it simulates, for its transform)
+            switch (shapeInfo.getType()) {
+                case SHAPE_TYPE_SIMPLE_HULL:
+                case SHAPE_TYPE_SIMPLE_COMPOUND:
+                case SHAPE_TYPE_COMPOUND:
+                case SHAPE_TYPE_STATIC_MESH:
+                    shapeInfo.setParams(SHAPE_TYPE_NONE, shapeInfo.getHalfExtents());
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+}
+
 
 PhysicalEntitySimulation::PhysicalEntitySimulation() {
     _trackSimulation = std::make_unique<TrackSimulation>();
+    _vehicleSimulation = std::make_unique<VehicleSimulation>();
 }
 
 PhysicalEntitySimulation::~PhysicalEntitySimulation() {
+    if (_physicsEngine) {
+        _physicsEngine->setSubstepListener(nullptr);
+    }
+    _vehicleSimulation->clear();
 }
 
 void PhysicalEntitySimulation::init(
@@ -37,16 +82,65 @@ void PhysicalEntitySimulation::init(
 
     assert(physicsEngine);
     _physicsEngine = physicsEngine;
+    _vehicleSimulation->setEngine(physicsEngine.get());
+    physicsEngine->setSubstepListener(_vehicleSimulation.get());
 
     assert(packetSender);
     _entityPacketSender = packetSender;
+
+    // the physics server's state stream (PHYSICS.md round 9): a client hears the states, the server the requests
+    auto nodeList = DependencyManager::get<NodeList>();
+    if (nodeList && !_streamListenersRegistered) {
+        auto& packetReceiver = nodeList->getPacketReceiver();
+        packetReceiver.registerListener(PacketType::VehicleState, this, "handleVehicleStatePacket");
+        packetReceiver.registerListener(PacketType::VehicleStateRequest, this, "handleVehicleStateRequest");
+        _streamListenersRegistered = true;
+    }
+}
+
+void PhysicalEntitySimulation::handleVehicleStatePacket(QSharedPointer<ReceivedMessage> message, SharedNodePointer senderNode) {
+    if (!senderNode || senderNode->getType() != NodeType::PhysicsServer || !_vehicleSimulation) {
+        return;
+    }
+    std::vector<VehicleState> states;
+    if (!VehicleStatePacket::unpack(message->getMessage(), states)) {
+        qCWarning(physics) << "a vehicle state packet from" << senderNode->getUUID() << "could not be read";
+        return;
+    }
+    // when it arrived at the socket, on this clock (the receive time is on another clock; the wait since is the same)
+    quint64 arrival = usecTimestampNow();
+    if (message->getFirstPacketReceiveTime() > 0) {
+        qint64 nowReceiveClock = std::chrono::duration_cast<std::chrono::microseconds>(
+            p_high_resolution_clock::now().time_since_epoch()).count();
+        qint64 queued = nowReceiveClock - message->getFirstPacketReceiveTime();
+        if (queued > 0 && (quint64)queued < arrival) {
+            arrival -= (quint64)queued;
+        }
+    }
+    _vehicleSimulation->receiveStates(states, senderNode->getClockSkewUsec(), arrival);
+}
+
+void PhysicalEntitySimulation::handleVehicleStateRequest(QSharedPointer<ReceivedMessage> message, SharedNodePointer senderNode) {
+    if (!senderNode || !_vehicleSimulation) {
+        return;
+    }
+    std::vector<QUuid> ids;
+    if (!VehicleStateRequestPacket::unpack(message->getMessage(), ids)) {
+        qCWarning(physics) << "a vehicle state request from" << senderNode->getUUID() << "could not be read";
+        return;
+    }
+    _vehicleSimulation->receiveStateRequest(senderNode->getUUID(), ids);
+}
+
+uint8_t PhysicalEntitySimulation::regionOf(const EntityItemPointer& entity) const {
+    return _space ? _space->getRegion(entity->getSpaceIndex()) : (uint8_t)workload::Region::R1;
 }
 
 // begin EntitySimulation overrides
 void PhysicalEntitySimulation::addEntityToInternalLists(EntityItemPointer entity) {
     EntitySimulation::addEntityToInternalLists(entity);
     entity->deserializeActions(); // TODO: do this elsewhere
-    uint8_t region = _space->getRegion(entity->getSpaceIndex());
+    uint8_t region = regionOf(entity);
     bool maybeShouldBePhysical = (region < workload::Region::R3 || region == workload::Region::UNKNOWN) && entity->shouldBePhysical();
     bool canBeKinematic = region <= workload::Region::R4;
     if (maybeShouldBePhysical) {
@@ -120,7 +214,7 @@ void PhysicalEntitySimulation::processChangedEntity(const EntityItemPointer& ent
 
     // queue incoming changes: from external sources (script, EntityServer, etc) to physics engine
     EntityMotionState* motionState = static_cast<EntityMotionState*>(entity->getPhysicsInfo());
-    uint8_t region = _space->getRegion(entity->getSpaceIndex());
+    uint8_t region = regionOf(entity);
     bool shouldBePhysical = region < workload::Region::R3 && entity->shouldBePhysical();
     bool canBeKinematic = region <= workload::Region::R4;
     if (motionState) {
@@ -207,6 +301,7 @@ void PhysicalEntitySimulation::clearEntities() {
     // anyway, so maybe the simulation was already properly shutdown?  Cross our fingers...
 
     QMutexLocker lock(&_mutex);
+    _vehicleSimulation->clear();
     // remove the objects (aka MotionStates) from physics
     _physicsEngine->removeSetOfObjects(_physicalObjects);
 
@@ -230,6 +325,98 @@ void PhysicalEntitySimulation::clearEntities() {
     _entitiesToDeleteLater.clear();
 
     EntitySimulation::clearEntities();
+}
+
+QVariantMap PhysicalEntitySimulation::getVehicleStats() const {
+    const VehicleSimulation::Stats& stats = _vehicleSimulation->getStats();
+    QVariantMap map;
+    map["vehicles"] = stats.vehicles;
+    map["corrections"] = stats.corrections;
+    map["replaySteps"] = stats.replaySteps;
+    map["lastError"] = stats.lastError;
+    map["maxError"] = stats.maxError;
+    map["inputsSent"] = stats.inputsSent;
+    map["inputsReceived"] = stats.inputsReceived;
+    map["inputsDropped"] = stats.inputsDropped;
+    map["inputsStarved"] = stats.inputsStarved;
+    // the input buffer (round 10)
+    map["inputsLate"] = stats.inputsLate;
+    map["inputsEarly"] = stats.inputsEarly;
+    map["bufferRealigned"] = stats.bufferRealigned;
+    map["bufferMargin"] = stats.bufferMargin;
+    map["leadShifts"] = stats.leadShifts;
+    map["leadJumps"] = stats.leadJumps;
+    map["timeShiftMs"] = stats.timeShiftMs;
+    // the state stream (round 9)
+    map["streamStatesSent"] = stats.streamStatesSent;
+    map["streamStatesReceived"] = stats.streamStatesReceived;
+    map["streamExtrapolations"] = stats.streamExtrapolations;
+    map["streamSubscribers"] = stats.streamSubscribers;
+    map["rttMs"] = stats.rttMs;
+    map["delayMs"] = stats.delayMs;
+    map["streamIntervalMs"] = stats.streamIntervalMs;
+    map["streamJitterMs"] = stats.streamJitterMs;
+
+    VehicleSimulation::Telemetry live = _vehicleSimulation->getTelemetry();
+    if (live.valid) {
+        QVariantMap telemetry;
+        telemetry["engineRPM"] = live.engineRPM;
+        telemetry["gear"] = live.gear;
+        telemetry["clutch"] = live.clutch;
+        telemetry["forward"] = live.forward;
+        telemetry["right"] = live.right;
+        telemetry["brake"] = live.brake;
+        telemetry["handBrake"] = live.handBrake;
+        telemetry["speed"] = live.speed;
+        if (live.airship) {
+            telemetry["airship"] = true;
+            telemetry["altitude"] = live.altitude;
+            telemetry["airDensity"] = live.airDensity;
+            telemetry["buoyancy"] = live.buoyancy;
+            telemetry["ballastWeight"] = live.ballastWeight;
+            telemetry["thrust"] = live.thrust;
+            telemetry["verticalThrust"] = live.verticalThrust;
+            telemetry["airspeed"] = live.airspeed;
+            telemetry["sideslip"] = live.sideslip;
+            telemetry["incidence"] = live.incidence;
+            telemetry["climbRate"] = live.climbRate;
+            telemetry["ballast"] = live.ballast;
+            telemetry["fill"] = live.fill;
+            telemetry["pitch"] = live.pitch;
+            telemetry["lift"] = live.lift;
+            telemetry["trim"] = live.trim;
+        }
+        if (live.aircraft) {
+            telemetry["aircraft"] = true;
+            telemetry["altitude"] = live.altitude;
+            telemetry["airDensity"] = live.airDensity;
+            telemetry["thrust"] = live.thrust;
+            telemetry["tilt"] = live.tilt;
+            telemetry["airspeed"] = live.airspeed;
+            telemetry["angleOfAttack"] = live.angleOfAttack;
+            telemetry["sideslip"] = live.sideslip;
+            telemetry["climbRate"] = live.climbRate;
+            telemetry["wingLift"] = live.wingLift;
+            telemetry["wingDrag"] = live.wingDrag;
+            telemetry["liftCoefficient"] = live.liftCoefficient;
+            telemetry["pitch"] = live.pitch;
+            telemetry["lift"] = live.lift;
+            telemetry["trim"] = live.trim;
+        }
+        QVariantList wheelRPM, wheelSlip, suspension, contact;
+        for (size_t i = 0; i < live.wheelRPM.size(); ++i) {
+            wheelRPM << live.wheelRPM[i];
+            wheelSlip << live.wheelSlip[i];
+            suspension << live.suspension[i];
+            contact << (bool)live.contact[i];
+        }
+        telemetry["wheelRPM"] = wheelRPM;
+        telemetry["wheelSlip"] = wheelSlip;
+        telemetry["suspension"] = suspension;
+        telemetry["contact"] = contact;
+        map["live"] = telemetry;
+    }
+    return map;
 }
 
 void PhysicalEntitySimulation::queueEraseDomainEntity(const QUuid& id) const {
@@ -264,8 +451,12 @@ void PhysicalEntitySimulation::buildMotionStatesForEntitiesThatNeedThem() {
     auto buildMotionState = [&](const JPH::Shape* shape, EntityItemPointer entity) {
         EntityMotionState* motionState = new EntityMotionState(shape, entity);
         entity->setPhysicsInfo(static_cast<void*>(motionState));
-        motionState->setRegion(_space->getRegion(entity->getSpaceIndex()));
+        motionState->setRegion(regionOf(entity));
         motionState->setTrackSimulation(_trackSimulation.get());
+        motionState->setVehicleSimulation(_vehicleSimulation.get());
+        if (entity->isVehicle()) {
+            _vehicleSimulation->attach(motionState);
+        }
         _physicalObjects.insert(motionState);
         _incomingChanges.insert(motionState);
     };
@@ -292,7 +483,7 @@ void PhysicalEntitySimulation::buildMotionStatesForEntitiesThatNeedThem() {
                     // rebuild the ShapeInfo to verify hash because entity's desired shape may have changed
                     // TODO? is there a better way to do this?
                     ShapeInfo shapeInfo;
-                    entity->computeShapeInfo(shapeInfo);
+                    computeEntityShape(entity, shapeInfo);
 
                     if (shapeInfo.getType() == SHAPE_TYPE_NONE) {
                         requestItr = _shapeRequests.erase(requestItr);
@@ -354,7 +545,7 @@ void PhysicalEntitySimulation::buildMotionStatesForEntitiesThatNeedThem() {
             continue;
         }
 
-        uint8_t region = _space->getRegion(entity->getSpaceIndex());
+        uint8_t region = regionOf(entity);
         if (region == workload::Region::UNKNOWN) {
             // the workload hasn't categorized it yet --> skip for later
             ++entityItr;
@@ -365,14 +556,24 @@ void PhysicalEntitySimulation::buildMotionStatesForEntitiesThatNeedThem() {
             entityItr = _entitiesToAddToPhysics.erase(entityItr);
             continue;
         }
+        if (Physics::isServerAuthority() && !entity->getParentID().isNull() && !serverDrivesAsBox(entity)) {
+            // the server's tree has no ancestors: a child whose parent is not here (the rail of a deck the server does
+            // not hold, a part of a model) would stand at its local coordinates near the origin; it gets no body
+            bool parentHere = false;
+            entity->getParentPointer(parentHere);
+            if (!parentHere) {
+                entityItr = _entitiesToAddToPhysics.erase(entityItr);
+                continue;
+            }
+        }
 
-        if (entity->isReadyToComputeShape()) {
+        if (entity->isReadyToComputeShape() || serverDrivesAsBox(entity)) {
             ShapeRequest shapeRequest(entity);
             ShapeRequests::iterator  requestItr = _shapeRequests.find(shapeRequest);
             if (requestItr == _shapeRequests.end()) {
                 // not waiting for a shape (yet)
                 ShapeInfo shapeInfo;
-                entity->computeShapeInfo(shapeInfo);
+                computeEntityShape(entity, shapeInfo);
                 uint32_t requestCount = ObjectMotionState::getShapeManager()->getWorkRequestCount();
                 const JPH::Shape* shape = ObjectMotionState::getShapeManager()->getShape(shapeInfo);
                 if (shape) {
@@ -418,6 +619,12 @@ void PhysicalEntitySimulation::buildPhysicsTransaction(PhysicsEngine::Transactio
     // motionStates with changed entities: delete, add, or change
     for (auto& object : _incomingChanges) {
         uint32_t unhandledFlags = object->getIncomingDirtyFlags();
+        // an entity made a vehicle, or unmade (PHYSICS.md round 6)
+        if (object->_entity->isVehicle()) {
+            _vehicleSimulation->attach(object);
+        } else if (_vehicleSimulation->has(object)) {
+            _vehicleSimulation->detach(object);
+        }
 
         uint32_t handledFlags = EASY_DIRTY_PHYSICS_FLAGS;
         bool isInPhysicsSimulation = object->isInPhysicsSimulation();
@@ -435,7 +642,7 @@ void PhysicalEntitySimulation::buildPhysicsTransaction(PhysicsEngine::Transactio
                 ShapeRequests::iterator  requestItr = _shapeRequests.find(shapeRequest);
                 if (requestItr == _shapeRequests.end()) {
                     ShapeInfo shapeInfo;
-                    object->_entity->computeShapeInfo(shapeInfo);
+                    computeEntityShape(object->_entity, shapeInfo);
                     uint32_t requestCount = ObjectMotionState::getShapeManager()->getWorkRequestCount();
                     const JPH::Shape* shape = ObjectMotionState::getShapeManager()->getShape(shapeInfo);
                     if (shape) {
@@ -455,7 +662,7 @@ void PhysicalEntitySimulation::buildPhysicsTransaction(PhysicsEngine::Transactio
                 }
             } else {
                 ShapeInfo shapeInfo;
-                object->_entity->computeShapeInfo(shapeInfo);
+                computeEntityShape(object->_entity, shapeInfo);
                 const JPH::Shape* shape = ObjectMotionState::getShapeManager()->getShape(shapeInfo);
                 if (shape) {
                     object->setShape(shape);
@@ -493,10 +700,81 @@ void PhysicalEntitySimulation::buildPhysicsTransaction(PhysicsEngine::Transactio
     _incomingChanges.clear();
 }
 
+// A ball rolling off a trolley's edge on a ship's deck (the trolley a frame on the ship, a frame) has nothing under it
+// in the trolley's world: it belongs to the ship now, where the deck is. The frame that holds the entity's position
+// wins (the deepest of them, PhysicsEngine::frameContaining), and the entity leaves a frame at its volume's face, with
+// no margin, so a ball dropping off a floor's edge lands on the floor below at the right height. Only the owner moves
+// an entity between frames (serverless: everyone is); the move travels as the parent and the local pose in its next
+// update. A frame's own hull, a car on a track and anything static or kinematic stay where their parent puts them.
+void PhysicalEntitySimulation::updateFrameMembership(const VectorOfMotionStates& motionStates) {
+    if (!_physicsEngine) {
+        return;
+    }
+    bool serverless = getEntityTree() && getEntityTree()->isServerlessMode();
+    for (auto stateItr : motionStates) {
+        ObjectMotionState* state = &(*stateItr);
+        if (!state || state->getType() != MOTIONSTATE_TYPE_ENTITY || !state->getBody() || !state->getBody()->IsDynamic()) {
+            continue;
+        }
+        EntityMotionState* entityState = static_cast<EntityMotionState*>(state);
+        EntityItemPointer entity = entityState->getEntity();
+        if (!entity || entity->isFrame() || entityState->isTrackDriven() || !entity->getTrackID().isNull()
+                || !(serverless || entityState->isLocallyOwned())) {
+            continue;
+        }
+        QUuid currentFrame = entityState->getFrameID();
+        if (currentFrame.isNull() && !entity->getParentID().isNull()) {
+            continue;   // a child of something that is not a frame (a hand, a seat): a script's business
+        }
+        glm::vec3 worldPosition = entity->getWorldPosition();
+        QUuid targetFrame = _physicsEngine->frameContaining(worldPosition, currentFrame, false);
+        if (targetFrame == currentFrame) {
+            continue;
+        }
+        // the entity's motion in the domain, from the frame it is leaving
+        glm::quat worldRotation = entity->getWorldOrientation();
+        glm::vec3 worldVelocity = entity->getWorldVelocity();
+        glm::vec3 worldAngularVelocity = entity->getWorldAngularVelocity();
+        glm::vec3 framePosition, frameLinearVelocity, frameAngularVelocity;
+        glm::quat frameRotation;
+        if (!currentFrame.isNull() &&
+                _physicsEngine->getFrameTransform(currentFrame, framePosition, frameRotation, frameLinearVelocity, frameAngularVelocity)) {
+            worldVelocity = frameLinearVelocity + glm::cross(frameAngularVelocity, worldPosition - framePosition) +
+                frameRotation * entity->getLocalVelocity();
+            worldAngularVelocity = frameAngularVelocity + frameRotation * entity->getLocalAngularVelocity();
+        }
+        Transform local = entity->getLocalTransform();
+        if (targetFrame.isNull()) {
+            entity->setParentID(QUuid());
+            local.setTranslation(worldPosition);
+            local.setRotation(worldRotation);
+            entity->setLocalTransformAndVelocities(local, worldVelocity, worldAngularVelocity);
+        } else {
+            if (!_physicsEngine->getFrameTransform(targetFrame, framePosition, frameRotation, frameLinearVelocity, frameAngularVelocity)) {
+                continue;
+            }
+            glm::quat toFrame = glm::inverse(frameRotation);
+            glm::vec3 offset = worldPosition - framePosition;
+            entity->setParentID(targetFrame);
+            local.setTranslation(toFrame * offset);
+            local.setRotation(glm::normalize(toFrame * worldRotation));
+            entity->setLocalTransformAndVelocities(local, toFrame * (worldVelocity - frameLinearVelocity - glm::cross(frameAngularVelocity, offset)),
+                                                   toFrame * (worldAngularVelocity - frameAngularVelocity));
+        }
+        qCDebug(physics) << "entity" << entity->getName() << entity->getID() << "crossed from frame" << currentFrame << "to" << targetFrame;
+        // the body goes to the other world with the next transaction (buildPhysicsTransaction: the frame changed)
+        entity->markDirtyFlags(Simulation::DIRTY_TRANSFORM | Simulation::DIRTY_VELOCITIES);
+        _incomingChanges.insert(entityState);
+        _entitiesToSort.insert(entity);
+        entityState->setParentChanged();
+    }
+}
+
 void PhysicalEntitySimulation::handleProcessedPhysicsTransaction(PhysicsEngine::Transaction& transaction) {
     // things on objectsToRemove are ready for delete
     for (auto object : transaction.objectsToRemove) {
         EntityMotionState* entityState = static_cast<EntityMotionState*>(object);
+        _vehicleSimulation->detach(entityState);
         removeOwnershipData(entityState);
         _physicalObjects.remove(object);
         delete object;
@@ -563,20 +841,34 @@ void PhysicalEntitySimulation::handleChangedMotionStates(const VectorOfMotionSta
 
     // A car on a track needs a driver even while it stands still (a train at a station is not an active body, so it
     // is not among the changed states above): whoever is near and finds it unowned bids for it (PHYSICS.md 4.8).
+    // Likewise a vehicle the physics server holds while it sleeps (a car parked on its pad): it goes on the owned list,
+    // whose keep-alive holds it, rather than waiting to move (round 7).
     for (ObjectMotionState* state : _physicalObjects) {
         if (state->getType() == MOTIONSTATE_TYPE_ENTITY) {
             EntityMotionState* entityState = static_cast<EntityMotionState*>(state);
-            if (entityState->isTrackDriven() && entityState->getBody()
-                    && entityState->getOwnershipState() == EntityMotionState::OwnershipState::NotLocallyOwned
-                    && !entityState->isLocallyOwned() && entityState->shouldSendBid()) {
+            if (!entityState->getBody() || entityState->getOwnershipState() != EntityMotionState::OwnershipState::NotLocallyOwned) {
+                continue;
+            }
+            if (entityState->isTrackDriven() && !entityState->isLocallyOwned() && entityState->shouldSendBid()) {
                 addOwnershipBid(entityState);
+            } else if (entityState->serverTakes() && entityState->isLocallyOwned()) {
+                addOwnership(entityState);
             }
         }
     }
 
+    updateFrameMembership(motionStates);
+
+    // the vehicles' wheels follow the wheels, and a driver's inputs go to the physics server (PHYSICS.md round 6)
+    _vehicleSimulation->setServerless(getEntityTree()->isServerlessMode());
+    _vehicleSimulation->updateVisuals();
+
     uint32_t numSubsteps = _physicsEngine->getNumSubsteps();
     if (_lastStepSendPackets != numSubsteps) {
         _lastStepSendPackets = numSubsteps;
+        _vehicleSimulation->sendInputs();
+        _vehicleSimulation->sendStream();           // the physics server's states to its subscribers (round 9)
+        _vehicleSimulation->sendStateRequests();    // a client's subscription
 
         if (Physics::getSessionUUID().isNull()) {
             // usually don't get here, but if so clear all ownership
@@ -633,8 +925,11 @@ void PhysicalEntitySimulation::sendOwnershipBids(uint32_t numSubsteps) {
             } else {
                 if (now > _bids[i]->getNextBidExpiry()) {
                     _bids[i]->sendBid(_entityPacketSender, numSubsteps);
-                    _nextBidExpiry = glm::min(_nextBidExpiry, _bids[i]->getNextBidExpiry());
                 }
+                // every bid kept is looked at again by its expiry, resent or not: one whose expiry was pushed back (an
+                // owner's change does that) was forgotten, and when it then won, the win was never taken up, so the
+                // physics server held a car it never updated and lost it ten seconds later (round 7)
+                _nextBidExpiry = glm::min(_nextBidExpiry, _bids[i]->getNextBidExpiry());
                 ++i;
             }
         }

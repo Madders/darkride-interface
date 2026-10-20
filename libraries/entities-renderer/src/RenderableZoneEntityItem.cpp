@@ -12,6 +12,11 @@
 #include "RenderableZoneEntityItem.h"
 
 #include <gpu/Batch.h>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QUrl>
+#include <ResourceManager.h>
+#include <ResourceRequest.h>
 
 #include <graphics/Stage.h>
 
@@ -39,6 +44,7 @@ ZoneEntityRenderer::ZoneEntityRenderer(const EntityItemPointer& entity) : Parent
 }
 
 void ZoneEntityRenderer::onRemoveFromSceneTyped(const TypedEntityPointer& entity) {
+    dropProbeVolumeRequest();
     if (_stage) {
         if (!LightStage::isIndexInvalid(_sunIndex)) {
             _stage->removeLight(_sunIndex);
@@ -275,6 +281,7 @@ void ZoneEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& scen
 
     if (proceduralUserDataChanged) {
         _proceduralUserData = entity->getUserData();
+        updateProbeVolumeFromUserData();
     }
 
     updateKeyZoneItemFromEntity(entity);
@@ -586,4 +593,131 @@ void ZoneEntityRenderer::setSkyboxColor(const glm::vec3& color) {
 
 void ZoneEntityRenderer::setProceduralUserData(const QString& userData) {
     std::dynamic_pointer_cast<ProceduralSkybox>(editSkybox())->parse(userData);
+}
+
+// The zone's probe volume (LIGHTMAPS.md step 4): the entry "probeVolume" { "url", "intensity" } of the zone's
+// userData names a probe volume file (the Unity exporter's probes/ProbeVolume.bin), L2 spherical harmonics on a
+// uniform grid in world space, which the zone's ambient light carries as a 3D texture (graphics::Light::setProbeVolume)
+// and the shaders sample by world position for the ambient diffuse light of whatever has no lightmap. It rides with
+// the ambient light, so the zone's ambient light mode has to be enabled for it to count.
+void ZoneEntityRenderer::updateProbeVolumeFromUserData() {
+    QString url;
+    float intensity = 1.0f;
+    QJsonValue entry = QJsonDocument::fromJson(_proceduralUserData.toUtf8()).object().value("probeVolume");
+    if (entry.isObject()) {
+        url = entry.toObject().value("url").toString().trimmed();
+        intensity = (float)entry.toObject().value("intensity").toDouble(1.0);
+    }
+    if (url != _probeVolumeURL) {
+        _probeVolumeURL = url;
+        _probeVolumeTexture.reset();
+        _probeVolumeDims = glm::uvec3(0);
+        dropProbeVolumeRequest();
+        if (url.isEmpty()) {
+            applyProbeVolume();
+        } else {
+            fetchProbeVolume(url);
+        }
+    }
+    if (intensity != _probeVolumeIntensity) {
+        _probeVolumeIntensity = intensity;
+        applyProbeVolume();
+    }
+}
+
+void ZoneEntityRenderer::fetchProbeVolume(const QString& url) {
+    _probeVolumeRequest = DependencyManager::get<ResourceManager>()->createResourceRequest(this, QUrl(url), true, -1, "ZoneEntityRenderer::fetchProbeVolume");
+    if (!_probeVolumeRequest) {
+        qCWarning(entitiesrenderer) << "Probe volume" << url << "cannot be fetched: no request for that kind of URL";
+        return;
+    }
+    connect(_probeVolumeRequest, &ResourceRequest::finished, this, [this, url] {
+        ResourceRequest* request = _probeVolumeRequest;
+        _probeVolumeRequest = nullptr;
+        if (!request) {
+            return;
+        }
+        request->deleteLater();
+        if (url != _probeVolumeURL) {
+            return;
+        }
+        if (request->getResult() != ResourceRequest::Success) {
+            qCWarning(entitiesrenderer) << "Probe volume" << url << "could not be fetched:" << request->getResultString();
+            return;
+        }
+        QString error;
+        if (!loadProbeVolume(request->getData(), url, error)) {
+            qCWarning(entitiesrenderer) << "Probe volume" << url << "is not usable:" << error;
+            _probeVolumeTexture.reset();
+        }
+        applyProbeVolume();
+    });
+    _probeVolumeRequest->send();
+}
+
+void ZoneEntityRenderer::dropProbeVolumeRequest() {
+    if (_probeVolumeRequest) {
+        _probeVolumeRequest->disconnect(this);
+        _probeVolumeRequest->deleteLater();
+        _probeVolumeRequest = nullptr;
+    }
+}
+
+// The probe volume file: "DRPV", u32 version (1), u32 probes per axis W H D, f32 origin x y z (the world position
+// of probe 0, 0, 0), f32 spacing x y z, u32 coefficients (9), u32 format (1: RGBA halves), then the 3D texture's
+// texels, W by 9 H by D, x fastest, then the coefficient block and the probe row, then the slice: the nine
+// coefficients L00, L1m1, L10, L11, L2m2, L2m1, L20, L21, L22 of the engine's spherical harmonics, RGB, the alpha
+// of the first 1 for a probe Unity baked and 0 for one filled in from its neighbours
+bool ZoneEntityRenderer::loadProbeVolume(const QByteArray& data, const QString& url, QString& error) {
+    const int HEADER_SIZE = 52;
+    const uint32_t MAX_DIMENSION = 2048;   // the least a GL implementation allows a 3D texture
+    if (data.size() < HEADER_SIZE || memcmp(data.constData(), "DRPV", 4) != 0) {
+        error = "not a probe volume file";
+        return false;
+    }
+    uint32_t words[12];
+    memcpy(words, data.constData() + 4, sizeof(words));
+    float floats[6];
+    memcpy(floats, data.constData() + 20, sizeof(floats));
+    uint32_t version = words[0], width = words[1], height = words[2], depth = words[3];
+    uint32_t coefficients = words[10], format = words[11];
+    glm::vec3 origin(floats[0], floats[1], floats[2]);
+    glm::vec3 spacing(floats[3], floats[4], floats[5]);
+    if (version != 1 || coefficients != 9 || format != 1) {
+        error = QString("version %1, %2 coefficients, format %3 (the client reads version 1, 9 coefficients, format 1)").arg(version).arg(coefficients).arg(format);
+        return false;
+    }
+    if (width == 0 || height == 0 || depth == 0 || width > MAX_DIMENSION || 9 * height > MAX_DIMENSION || depth > MAX_DIMENSION) {
+        error = QString("%1 x %2 x %3 probes (the texture is at most %4 texels a side, 9 rows a probe along y)").arg(width).arg(height).arg(depth).arg(MAX_DIMENSION);
+        return false;
+    }
+    if (!(spacing.x > 0.0f && spacing.y > 0.0f && spacing.z > 0.0f)) {
+        error = "the spacing is not positive";
+        return false;
+    }
+    size_t texels = (size_t)width * 9 * height * depth;
+    size_t bytes = texels * 8;
+    if ((size_t)data.size() != HEADER_SIZE + bytes) {
+        error = QString("%1 bytes of texels, %2 expected for %3 x %4 x %5 probes").arg(data.size() - HEADER_SIZE).arg(bytes).arg(width).arg(height).arg(depth);
+        return false;
+    }
+    auto texture = gpu::Texture::create3D(gpu::Element::COLOR_RGBA16F, (uint16_t)width, (uint16_t)(9 * height), (uint16_t)depth, 1,
+                                          gpu::Sampler(gpu::Sampler::FILTER_MIN_MAG_LINEAR, gpu::Sampler::WRAP_CLAMP));
+    texture->setStoredMipFormat(gpu::Element::COLOR_RGBA16F);
+    texture->assignStoredMip(0, bytes, (const gpu::Byte*)data.constData() + HEADER_SIZE);
+    texture->setSource(url.toStdString());
+    _probeVolumeTexture = texture;
+    _probeVolumeOrigin = origin;
+    _probeVolumeSpacing = spacing;
+    _probeVolumeDims = glm::uvec3(width, height, depth);
+    qCDebug(entitiesrenderer) << "Probe volume" << url << ":" << width << "x" << height << "x" << depth << "probes at" << spacing.x << "m, origin" << origin.x << origin.y << origin.z;
+    return true;
+}
+
+void ZoneEntityRenderer::applyProbeVolume() {
+    if (_probeVolumeTexture) {
+        editAmbientLight()->setProbeVolume(_probeVolumeTexture, _probeVolumeOrigin, _probeVolumeSpacing, _probeVolumeDims, _probeVolumeIntensity);
+    } else {
+        editAmbientLight()->clearProbeVolume();
+    }
 }

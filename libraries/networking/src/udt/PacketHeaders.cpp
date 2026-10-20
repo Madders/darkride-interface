@@ -36,6 +36,13 @@ PacketVersion versionForPacketType(PacketType packetType) {
             return static_cast<PacketVersion>(EntityVersion::LAST_PACKET_TYPE);
         case PacketType::EntityQuery:
             return static_cast<PacketVersion>(EntityQueryPacketVersion::ConicalFrustums);
+        case PacketType::VehicleInput:
+            return 3;   // the sequence is the driver's tick, applied at the substep it names (PHYSICS.md round 10)
+        case PacketType::VehicleState:
+            return 2;   // the tick applied and the input buffer's margin (PHYSICS.md round 10)
+        case PacketType::VehicleStateRequest:
+            return 1;   // the physics server's state stream and its subscription (PHYSICS.md round 9)
+
         case PacketType::AvatarIdentity:
         case PacketType::AvatarData:
             return static_cast<PacketVersion>(AvatarMixerPacketVersion::ARKitBlendshapes);

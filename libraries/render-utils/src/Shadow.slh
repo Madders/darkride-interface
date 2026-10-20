@@ -76,7 +76,7 @@ ShadowSampleOffsets evalShadowFilterOffsets(vec4 position) {
 }
 
 float evalShadowAttenuationPCF(int cascadeIndex, ShadowSampleOffsets offsets, vec4 shadowTexcoord, float bias) {
-    shadowTexcoord.z -= bias;
+    shadowTexcoord.z += bias; // reversed-Z: toward the light is the greater depth
 #if SHADOW_DITHER
     float shadowAttenuation = 0.25 * (
         fetchShadow(cascadeIndex, shadowTexcoord.xyz + offsets.points[0]) +

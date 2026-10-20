@@ -70,12 +70,11 @@ export class HeaderComponent implements OnInit, OnDestroy {
 
 	onSearch(e: KeyboardEvent) {
 		if (e.key == "Enter") {
-			this.scriptService.emitEvent(
-				"explore",
-				"joinDomain",
-				(e.target as any).value,
-			);
-			this.scriptService.emitEvent("explore", "close");
+			const typed: string = (e.target as any).value.trim();
+			// a place's name shows on the loading screen; an address doesn't
+			const isAddress = /[:/]|^\d+\.\d+\.\d+\.\d+/.test(typed);
+			this.exploreService.hopStart(isAddress ? "" : typed);
+			this.scriptService.emitEvent("explore", "joinDomain", typed);
 
 			this.exploreService.search = "";
 			this.searchRef.nativeElement.value = "";

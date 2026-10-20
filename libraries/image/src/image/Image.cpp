@@ -108,7 +108,7 @@ Image Image::getScaled(glm::uvec2 dstSize, AspectRatioMode ratioMode, Transforma
         auto srcAlphaIt = reinterpret_cast<const float*>(surface.channel(3));
 
         if (_format == Format_RGBAF) {
-            Image output(_dims.x, _dims.y, _format);
+            Image output(dstSize.x, dstSize.y, _format);
             auto dstPixelIt = output._floatData.begin();
             auto dstPixelEnd = output._floatData.end();
 
@@ -183,7 +183,9 @@ Image Image::getConvertedToFormat(Format newFormat) const {
 
         switch (newFormat) {
             case Format_R11G11B10F:
-                convertToPackedFromFloat(newImage.editBits(), _dims.x, _dims.y, getBytesPerLineCount(), gpu::Element::COLOR_R11G11B10, _floatData.data(), _dims.x);
+                // the output's line stride (4 bytes a pixel), not this float image's (16): with the source's stride the
+                // writes ran past the output buffer (the first EXR cube map after LIGHTMAPS.md step 2 crashed here)
+                convertToPackedFromFloat(newImage.editBits(), _dims.x, _dims.y, newImage.getBytesPerLineCount(), gpu::Element::COLOR_R11G11B10, _floatData.data(), _dims.x);
                 break;
 
             default:

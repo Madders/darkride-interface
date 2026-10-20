@@ -39,7 +39,7 @@ namespace gr {
 }
 
 void initDeferredPipelines(ShapePlumber& plumber, const render::ShapePipeline::BatchSetter& batchSetter, const render::ShapePipeline::ItemSetter& itemSetter);
-void initForwardPipelines(ShapePlumber& plumber);
+void initForwardPipelines(ShapePlumber& plumber, const render::ShapePipeline::BatchSetter& batchSetter, const render::ShapePipeline::ItemSetter& itemSetter);
 void initZPassPipelines(ShapePlumber& plumber, gpu::StatePointer state, const render::ShapePipeline::BatchSetter& batchSetter, const render::ShapePipeline::ItemSetter& itemSetter);
 
 void addPlumberPipeline(ShapePlumber& plumber,
@@ -171,79 +171,84 @@ void initDeferredPipelines(render::ShapePlumber& plumber, const render::ShapePip
     }
 }
 
-void initForwardPipelines(ShapePlumber& plumber) {
+void initForwardPipelines(ShapePlumber& plumber, const render::ShapePipeline::BatchSetter& batchSetter, const render::ShapePipeline::ItemSetter& itemSetter) {
     using namespace shader::render_utils::program;
     using Key = render::ShapeKey;
     auto addPipelineBind = std::bind(&addPlumberPipeline, std::ref(plumber), _1, _2, _3, _4);
 
-    // Disable fade on the forward pipeline, all shaders get added twice, once with the fade key and once without
-    auto addPipeline = [&](const ShapeKey& key, int programId) {
+    // Every shader is added twice, once with the fade key and once without: a model's fade variant is its own program
+    // (the dissolve into or out of its impostor card, ImpostorSwitch, clips by it), the simple shapes' is the plain one
+    auto addPipeline = [&](const ShapeKey& key, int programId, int fadeProgramId) {
         addPipelineBind(key, programId, nullptr, nullptr);
-        addPipelineBind(Key::Builder(key).withFade(), programId, nullptr, nullptr);
+        if (fadeProgramId != programId) {
+            addPipelineBind(Key::Builder(key).withFade(), fadeProgramId, batchSetter, itemSetter);
+        } else {
+            addPipelineBind(Key::Builder(key).withFade(), programId, nullptr, nullptr);
+        }
     };
 
     // Forward pipelines need the lightBatchSetter for opaques and transparents
     forceLightBatchSetter = true;
 
     // TOOD: build this list algorithmically so we don't have to maintain it
-    std::vector<std::pair<render::ShapeKey::Builder, uint32_t>> pipelines = {
+    std::vector<std::tuple<render::ShapeKey::Builder, uint32_t, uint32_t>> pipelines = {
         // Simple
-        { Key::Builder(), simple_forward },
-        { Key::Builder().withTranslucent(), simple_translucent_forward },
-        { Key::Builder().withUnlit(), simple_unlit_forward },
-        { Key::Builder().withTranslucent().withUnlit(), simple_translucent_unlit_forward },
+        { Key::Builder(), simple_forward, simple_forward },
+        { Key::Builder().withTranslucent(), simple_translucent_forward, simple_translucent_forward },
+        { Key::Builder().withUnlit(), simple_unlit_forward, simple_unlit_forward },
+        { Key::Builder().withTranslucent().withUnlit(), simple_translucent_unlit_forward, simple_translucent_unlit_forward },
 
         // Unskinned
-        { Key::Builder().withMaterial(), model_forward },
-        { Key::Builder().withMaterial().withTangents(), model_normalmap_forward },
-        { Key::Builder().withMaterial().withTranslucent(), model_translucent_forward },
-        { Key::Builder().withMaterial().withTangents().withTranslucent(), model_normalmap_translucent_forward },
+        { Key::Builder().withMaterial(), model_forward, model_fade_forward },
+        { Key::Builder().withMaterial().withTangents(), model_normalmap_forward, model_normalmap_fade_forward },
+        { Key::Builder().withMaterial().withTranslucent(), model_translucent_forward, model_translucent_fade_forward },
+        { Key::Builder().withMaterial().withTangents().withTranslucent(), model_normalmap_translucent_forward, model_normalmap_translucent_fade_forward },
         // Unskinned Unlit
-        { Key::Builder().withMaterial().withUnlit(), model_unlit_forward },
-        { Key::Builder().withMaterial().withTangents().withUnlit(), model_normalmap_unlit_forward },
-        { Key::Builder().withMaterial().withTranslucent().withUnlit(), model_translucent_unlit_forward },
-        { Key::Builder().withMaterial().withTangents().withTranslucent().withUnlit(), model_normalmap_translucent_unlit_forward },
+        { Key::Builder().withMaterial().withUnlit(), model_unlit_forward, model_unlit_fade_forward },
+        { Key::Builder().withMaterial().withTangents().withUnlit(), model_normalmap_unlit_forward, model_normalmap_unlit_fade_forward },
+        { Key::Builder().withMaterial().withTranslucent().withUnlit(), model_translucent_unlit_forward, model_translucent_unlit_fade_forward },
+        { Key::Builder().withMaterial().withTangents().withTranslucent().withUnlit(), model_normalmap_translucent_unlit_forward, model_normalmap_translucent_unlit_fade_forward },
         // Unskinned Lightmapped
-        { Key::Builder().withMaterial().withLightMap(), model_lightmap_forward },
-        { Key::Builder().withMaterial().withTangents().withLightMap(), model_normalmap_lightmap_forward },
-        { Key::Builder().withMaterial().withTranslucent().withLightMap(), model_translucent_lightmap_forward },
-        { Key::Builder().withMaterial().withTangents().withTranslucent().withLightMap(), model_normalmap_translucent_lightmap_forward },
+        { Key::Builder().withMaterial().withLightMap(), model_lightmap_forward, model_lightmap_fade_forward },
+        { Key::Builder().withMaterial().withTangents().withLightMap(), model_normalmap_lightmap_forward, model_normalmap_lightmap_fade_forward },
+        { Key::Builder().withMaterial().withTranslucent().withLightMap(), model_translucent_lightmap_forward, model_translucent_lightmap_fade_forward },
+        { Key::Builder().withMaterial().withTangents().withTranslucent().withLightMap(), model_normalmap_translucent_lightmap_forward, model_normalmap_translucent_lightmap_fade_forward },
 
         // Matrix palette skinned
-        { Key::Builder().withMaterial().withDeformed(), model_forward_deformed },
-        { Key::Builder().withMaterial().withTangents().withDeformed(), model_normalmap_forward_deformed },
-        { Key::Builder().withMaterial().withTranslucent().withDeformed(), model_translucent_forward_deformed },
-        { Key::Builder().withMaterial().withTangents().withTranslucent().withDeformed(), model_normalmap_translucent_forward_deformed },
+        { Key::Builder().withMaterial().withDeformed(), model_forward_deformed, model_fade_forward_deformed },
+        { Key::Builder().withMaterial().withTangents().withDeformed(), model_normalmap_forward_deformed, model_normalmap_fade_forward_deformed },
+        { Key::Builder().withMaterial().withTranslucent().withDeformed(), model_translucent_forward_deformed, model_translucent_fade_forward_deformed },
+        { Key::Builder().withMaterial().withTangents().withTranslucent().withDeformed(), model_normalmap_translucent_forward_deformed, model_normalmap_translucent_fade_forward_deformed },
         // Matrix palette skinned Unlit
-        { Key::Builder().withMaterial().withUnlit().withDeformed(), model_unlit_forward_deformed },
-        { Key::Builder().withMaterial().withTangents().withUnlit().withDeformed(), model_normalmap_unlit_forward_deformed },
-        { Key::Builder().withMaterial().withTranslucent().withUnlit().withDeformed(), model_translucent_unlit_forward_deformed },
-        { Key::Builder().withMaterial().withTangents().withTranslucent().withUnlit().withDeformed(), model_normalmap_translucent_unlit_forward_deformed },
+        { Key::Builder().withMaterial().withUnlit().withDeformed(), model_unlit_forward_deformed, model_unlit_fade_forward_deformed },
+        { Key::Builder().withMaterial().withTangents().withUnlit().withDeformed(), model_normalmap_unlit_forward_deformed, model_normalmap_unlit_fade_forward_deformed },
+        { Key::Builder().withMaterial().withTranslucent().withUnlit().withDeformed(), model_translucent_unlit_forward_deformed, model_translucent_unlit_fade_forward_deformed },
+        { Key::Builder().withMaterial().withTangents().withTranslucent().withUnlit().withDeformed(), model_normalmap_translucent_unlit_forward_deformed, model_normalmap_translucent_unlit_fade_forward_deformed },
         // Matrix palette skinned Lightmapped
-        { Key::Builder().withMaterial().withLightMap().withDeformed(), model_lightmap_forward_deformed },
-        { Key::Builder().withMaterial().withTangents().withLightMap().withDeformed(), model_normalmap_lightmap_forward_deformed },
-        { Key::Builder().withMaterial().withTranslucent().withLightMap().withDeformed(), model_translucent_lightmap_forward_deformed },
-        { Key::Builder().withMaterial().withTangents().withTranslucent().withLightMap().withDeformed(), model_normalmap_translucent_lightmap_forward_deformed },
+        { Key::Builder().withMaterial().withLightMap().withDeformed(), model_lightmap_forward_deformed, model_lightmap_fade_forward_deformed },
+        { Key::Builder().withMaterial().withTangents().withLightMap().withDeformed(), model_normalmap_lightmap_forward_deformed, model_normalmap_lightmap_fade_forward_deformed },
+        { Key::Builder().withMaterial().withTranslucent().withLightMap().withDeformed(), model_translucent_lightmap_forward_deformed, model_translucent_lightmap_fade_forward_deformed },
+        { Key::Builder().withMaterial().withTangents().withTranslucent().withLightMap().withDeformed(), model_normalmap_translucent_lightmap_forward_deformed, model_normalmap_translucent_lightmap_fade_forward_deformed },
 
         // Dual quaternion skinned
-        { Key::Builder().withMaterial().withDeformed().withDualQuatSkinned(), model_forward_deformeddq },
-        { Key::Builder().withMaterial().withTangents().withDeformed().withDualQuatSkinned(), model_normalmap_forward_deformeddq },
-        { Key::Builder().withMaterial().withTranslucent().withDeformed().withDualQuatSkinned(), model_translucent_forward_deformeddq },
-        { Key::Builder().withMaterial().withTangents().withTranslucent().withDeformed().withDualQuatSkinned(), model_normalmap_translucent_forward_deformeddq },
+        { Key::Builder().withMaterial().withDeformed().withDualQuatSkinned(), model_forward_deformeddq, model_fade_forward_deformeddq },
+        { Key::Builder().withMaterial().withTangents().withDeformed().withDualQuatSkinned(), model_normalmap_forward_deformeddq, model_normalmap_fade_forward_deformeddq },
+        { Key::Builder().withMaterial().withTranslucent().withDeformed().withDualQuatSkinned(), model_translucent_forward_deformeddq, model_translucent_fade_forward_deformeddq },
+        { Key::Builder().withMaterial().withTangents().withTranslucent().withDeformed().withDualQuatSkinned(), model_normalmap_translucent_forward_deformeddq, model_normalmap_translucent_fade_forward_deformeddq },
         // Dual quaternion skinned Unlit
-        { Key::Builder().withMaterial().withUnlit().withDeformed().withDualQuatSkinned(), model_unlit_forward_deformeddq },
-        { Key::Builder().withMaterial().withTangents().withUnlit().withDeformed().withDualQuatSkinned(), model_normalmap_unlit_forward_deformeddq },
-        { Key::Builder().withMaterial().withTranslucent().withUnlit().withDeformed().withDualQuatSkinned(), model_translucent_unlit_forward_deformeddq },
-        { Key::Builder().withMaterial().withTangents().withTranslucent().withUnlit().withDeformed().withDualQuatSkinned(), model_normalmap_translucent_unlit_forward_deformeddq },
+        { Key::Builder().withMaterial().withUnlit().withDeformed().withDualQuatSkinned(), model_unlit_forward_deformeddq, model_unlit_fade_forward_deformeddq },
+        { Key::Builder().withMaterial().withTangents().withUnlit().withDeformed().withDualQuatSkinned(), model_normalmap_unlit_forward_deformeddq, model_normalmap_unlit_fade_forward_deformeddq },
+        { Key::Builder().withMaterial().withTranslucent().withUnlit().withDeformed().withDualQuatSkinned(), model_translucent_unlit_forward_deformeddq, model_translucent_unlit_fade_forward_deformeddq },
+        { Key::Builder().withMaterial().withTangents().withTranslucent().withUnlit().withDeformed().withDualQuatSkinned(), model_normalmap_translucent_unlit_forward_deformeddq, model_normalmap_translucent_unlit_fade_forward_deformeddq },
         // Dual quaternion skinned Lightmapped
-        { Key::Builder().withMaterial().withLightMap().withDeformed().withDualQuatSkinned(), model_lightmap_forward_deformeddq },
-        { Key::Builder().withMaterial().withTangents().withLightMap().withDeformed().withDualQuatSkinned(), model_normalmap_lightmap_forward_deformeddq },
-        { Key::Builder().withMaterial().withTranslucent().withLightMap().withDeformed().withDualQuatSkinned(), model_translucent_lightmap_forward_deformeddq },
-        { Key::Builder().withMaterial().withTangents().withTranslucent().withLightMap().withDeformed().withDualQuatSkinned(), model_normalmap_translucent_lightmap_forward_deformeddq },
+        { Key::Builder().withMaterial().withLightMap().withDeformed().withDualQuatSkinned(), model_lightmap_forward_deformeddq, model_lightmap_fade_forward_deformeddq },
+        { Key::Builder().withMaterial().withTangents().withLightMap().withDeformed().withDualQuatSkinned(), model_normalmap_lightmap_forward_deformeddq, model_normalmap_lightmap_fade_forward_deformeddq },
+        { Key::Builder().withMaterial().withTranslucent().withLightMap().withDeformed().withDualQuatSkinned(), model_translucent_lightmap_forward_deformeddq, model_translucent_lightmap_fade_forward_deformeddq },
+        { Key::Builder().withMaterial().withTangents().withTranslucent().withLightMap().withDeformed().withDualQuatSkinned(), model_normalmap_translucent_lightmap_forward_deformeddq, model_normalmap_translucent_lightmap_fade_forward_deformeddq },
     };
 
     for (auto& pipeline : pipelines) {
-        addPipeline(pipeline.first, pipeline.second);
+        addPipeline(std::get<0>(pipeline), std::get<1>(pipeline), std::get<2>(pipeline));
     }
 
     forceLightBatchSetter = false;
@@ -267,7 +272,7 @@ void addPlumberPipeline(ShapePlumber& plumber,
             key.isTranslucent() ? PrepareStencil::testMask(*state) : PrepareStencil::testMaskDrawShape(*state);
 
             // Depth test depends on transparency
-            state->setDepthTest(true, !key.isTranslucent(), gpu::LESS_EQUAL);
+            state->setDepthTest(true, !key.isTranslucent(), gpu::GREATER_EQUAL);
             state->setBlendFunction(key.isTranslucent(),
                     gpu::State::SRC_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::INV_SRC_ALPHA,
                     gpu::State::FACTOR_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::ONE);
@@ -281,8 +286,8 @@ void addPlumberPipeline(ShapePlumber& plumber,
             }
             if (isBiased) {
                 builder.withDepthBias();
-                state->setDepthBias(1.0f);
-                state->setDepthBiasSlopeScale(1.0f);
+                state->setDepthBias(-1.0f); // reversed-Z: away from the viewer is the smaller depth
+                state->setDepthBiasSlopeScale(-1.0f);
             }
 
             auto baseBatchSetter = (forceLightBatchSetter || key.isTranslucent()) ? &lightBatchSetter : &batchSetter;
@@ -338,7 +343,11 @@ void lightBatchSetter(const ShapePipeline& pipeline, gpu::Batch& batch, RenderAr
 
     // Set the light
     if (pipeline.locations->keyLightBufferUnit) {
-        DependencyManager::get<DeferredLightingEffect>()->setupKeyLightBatch(args, batch);
+        auto deferredLightingEffect = DependencyManager::get<DeferredLightingEffect>();
+        deferredLightingEffect->setupKeyLightBatch(args, batch);
+        // and the frame's local lights and shadows, which the forward shaders light with: bound again at every
+        // pipeline change, since a program drawn in between may have its own maps and buffers at the same slots
+        deferredLightingEffect->setupFrameLightingBatch(batch, args);
     }
 }
 
@@ -391,7 +400,8 @@ void RenderPipelines::updateMultiMaterial(graphics::MultiMaterial& multiMaterial
                     i != graphics::MaterialKey::OPACITY_TRANSLUCENT_MAP_BIT &&
                     i != graphics::MaterialKey::OPACITY_MAP_MODE_BIT &&
                     i != graphics::MaterialKey::ROUGHNESS_FROM_SMOOTHNESS_BIT &&
-                    i != graphics::MaterialKey::OCCLUSION_TEXCOORD0_BIT) {
+                    i != graphics::MaterialKey::OCCLUSION_TEXCOORD0_BIT &&
+                    i != graphics::MaterialKey::LIGHTMAP_FULL_BIT) {
                 allFlags.insert(i);
             }
         }
@@ -451,7 +461,11 @@ void RenderPipelines::updateMultiMaterial(graphics::MultiMaterial& multiMaterial
                     }
                     break;
                 case graphics::MaterialKey::GLOSSY_VAL_BIT:
-                    if (materialKey.isRough() || materialKey.isGlossy()) {
+                    // a material that set its roughness (the glossy bit, set even for a roughness of 1 so that a
+                    // glTF factor comes through) says it; one that never did is rough only if it does not fall
+                    // through, so a layer with no roughness of its own (the lightmap's, a material entity's) leaves
+                    // the model's: every lightmapped model used to render at the default roughness of 1
+                    if (materialKey.isGlossy() || (!fallthrough && materialKey.isRough())) {
                         schema._roughness = material->getRoughness();
                         schemaKey.setGlossy(materialKey.isGlossy());
                         wasSet = true;
@@ -586,13 +600,29 @@ void RenderPipelines::updateMultiMaterial(graphics::MultiMaterial& multiMaterial
                         schemaKey.setScatteringMap(true);
                     }
                     break;
+                case graphics::MaterialKey::LIGHTMAP_DIRECTION_MAP_BIT:
+                    // the lightmap's direction map (LIGHTMAPS.md §3.4): the key bit is set only once the picture is
+                    // there, since a stand-in would shade wrongly; until then the lightmap is used without it
+                    if (materialKey.isLightmapDirectionMap()) {
+                        auto itr = textureMaps.find(graphics::MaterialKey::LIGHTMAP_DIRECTION_MAP);
+                        if (itr != textureMaps.end() && itr->second->isDefined()) {
+                            drawMaterialTextures->setTexture(gr::Texture::MaterialLightmapDirection, itr->second->getTextureView());
+                            schemaKey.setLightmapDirectionMap(true);
+                            wasSet = true;
+                        } else {
+                            if (itr != textureMaps.end()) {
+                                multiMaterial.setTexturesLoading(true);
+                            }
+                            forceDefault = true;
+                        }
+                    }
+                    break;
                 case graphics::MaterialKey::EMISSIVE_MAP_BIT:
-                    // Lightmap takes precendence over emissive map for legacy reasons
-                    if (materialKey.isEmissiveMap() && !materialKey.isLightMap()) {
+                    if (materialKey.isEmissiveMap()) {
                         auto itr = textureMaps.find(graphics::MaterialKey::EMISSIVE_MAP);
                         if (itr != textureMaps.end()) {
                             if (itr->second->isDefined()) {
-                                drawMaterialTextures->setTexture(gr::Texture::MaterialEmissiveLightmap, itr->second->getTextureView());
+                                drawMaterialTextures->setTexture(gr::Texture::MaterialEmissive, itr->second->getTextureView());
                                 wasSet = true;
                             } else {
                                 multiMaterial.setTexturesLoading(true);
@@ -602,17 +632,15 @@ void RenderPipelines::updateMultiMaterial(graphics::MultiMaterial& multiMaterial
                             forceDefault = true;
                         }
                         schemaKey.setEmissiveMap(true);
-                    } else if (materialKey.isLightMap()) {
-                        // We'll set this later when we check the lightmap
-                        wasSet = true;
                     }
                     break;
                 case graphics::MaterialKey::LIGHT_MAP_BIT:
+                    // the lightmap has a slot of its own (LIGHTMAPS.md); its mode comes with it
                     if (materialKey.isLightMap()) {
                         auto itr = textureMaps.find(graphics::MaterialKey::LIGHT_MAP);
                         if (itr != textureMaps.end()) {
                             if (itr->second->isDefined()) {
-                                drawMaterialTextures->setTexture(gr::Texture::MaterialEmissiveLightmap, itr->second->getTextureView());
+                                drawMaterialTextures->setTexture(gr::Texture::MaterialLightmap, itr->second->getTextureView());
                                 wasSet = true;
                             } else {
                                 multiMaterial.setTexturesLoading(true);
@@ -622,6 +650,7 @@ void RenderPipelines::updateMultiMaterial(graphics::MultiMaterial& multiMaterial
                             forceDefault = true;
                         }
                         schemaKey.setLightMap(true);
+                        schemaKey.setLightmapFull(materialKey.isLightmapFull());
                     }
                     break;
                 case graphics::Material::TEXCOORDTRANSFORM0:
@@ -728,14 +757,18 @@ void RenderPipelines::updateMultiMaterial(graphics::MultiMaterial& multiMaterial
                     drawMaterialTextures->setTexture(gr::Texture::MaterialScattering, textureCache->getWhiteTexture());
                 }
                 break;
+            case graphics::MaterialKey::LIGHTMAP_DIRECTION_MAP_BIT:
+                // bound whatever the key says, so that the sampler is complete; the shader reads it only with the bit
+                drawMaterialTextures->setTexture(gr::Texture::MaterialLightmapDirection, textureCache->getGrayTexture());
+                break;
             case graphics::MaterialKey::EMISSIVE_MAP_BIT:
-                if (schemaKey.isEmissiveMap() && !schemaKey.isLightMap()) {
-                    drawMaterialTextures->setTexture(gr::Texture::MaterialEmissiveLightmap, textureCache->getGrayTexture());
+                if (schemaKey.isEmissiveMap()) {
+                    drawMaterialTextures->setTexture(gr::Texture::MaterialEmissive, textureCache->getGrayTexture());
                 }
                 break;
             case graphics::MaterialKey::LIGHT_MAP_BIT:
                 if (schemaKey.isLightMap()) {
-                    drawMaterialTextures->setTexture(gr::Texture::MaterialEmissiveLightmap, textureCache->getBlackTexture());
+                    drawMaterialTextures->setTexture(gr::Texture::MaterialLightmap, textureCache->getBlackTexture());
                 }
                 break;
             default:
@@ -770,7 +803,9 @@ bool RenderPipelines::bindMaterials(graphics::MultiMaterial& multiMaterial, gpu:
         defaultMaterialTextures->setTexture(gr::Texture::MaterialNormal, textureCache->getBlueTexture());
         defaultMaterialTextures->setTexture(gr::Texture::MaterialOcclusion, textureCache->getWhiteTexture());
         defaultMaterialTextures->setTexture(gr::Texture::MaterialScattering, textureCache->getWhiteTexture());
-        // MaterialEmissiveLightmap has to be set later
+        defaultMaterialTextures->setTexture(gr::Texture::MaterialEmissive, textureCache->getGrayTexture());
+        defaultMaterialTextures->setTexture(gr::Texture::MaterialLightmap, textureCache->getBlackTexture());
+        defaultMaterialTextures->setTexture(gr::Texture::MaterialLightmapDirection, textureCache->getGrayTexture());
     });
 
     // For shadows, we only need opacity mask information
@@ -781,15 +816,14 @@ bool RenderPipelines::bindMaterials(graphics::MultiMaterial& multiMaterial, gpu:
         if (enableTextures) {
             batch.setResourceTextureTable(multiMaterial.getTextureTable());
         } else {
-            if (renderMode != render::Args::RenderMode::SHADOW_RENDER_MODE) {
-                if (key.isLightMap()) {
-                    defaultMaterialTextures->setTexture(gr::Texture::MaterialEmissiveLightmap, textureCache->getBlackTexture());
-                } else if (key.isEmissiveMap()) {
-                    defaultMaterialTextures->setTexture(gr::Texture::MaterialEmissiveLightmap, textureCache->getGrayTexture());
-                }
-            }
-
             batch.setResourceTextureTable(defaultMaterialTextures);
+        }
+        // The table's nine entries take texture units 0 to 8, the scattering map's among them, which is also the
+        // probe volume's unit in the forward and translucent programs (LightAmbient.slh): the table just unbound the
+        // volume, so it goes back, and every material lit by the zone's probes keeps its ambient diffuse. Only the
+        // deferred opaque programs of a material with a scattering map read that unit as the map, so those keep it.
+        if (renderMode != render::Args::RenderMode::SHADOW_RENDER_MODE && !key.isScatteringMap()) {
+            batch.setResourceTexture(ru::Texture::ProbeVolume, DeferredLightingEffect::getFrameProbeVolume());
         }
         return true;
     } else {

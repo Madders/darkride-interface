@@ -9,11 +9,12 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
-
+//  The lights the culling hands a fragment: the bits of its tile that are in its depth bin too, as a heat ramp
+//  (green one, red twelve or more), the tiles' edges drawn in; what the light loop iterates before it clips each
+//  light to its volume (lightClusters_drawClusterContent shows the count after that)
 
 // Everything about deferred buffer
 <@include DeferredBufferRead.slh@>
-
 
 <@include LightClusterGrid.slh@>
 
@@ -29,43 +30,24 @@ void main(void) {
     // Grab the fragment data from the uv
     vec2 texCoord = varTexCoord0.st;
 
-    vec4 fragEyePos = unpackDeferredPositionFromZdb(texCoord);
+    vec4 fragEyePos = unpackDeferredPositionFromZeye(texCoord);
     vec4 fragWorldPos = getViewInverse() * fragEyePos;
-    
-    // From frag world pos find the cluster
-    vec4 clusterEyePos = frustumGrid_worldToEye(fragWorldPos);
-    ivec3 clusterPos = frustumGrid_eyeToClusterPos(clusterEyePos.xyz);
 
+    <$fetchClusterInfo(fragWorldPos)$>;
+    int numLights = 0;
+    if (hasLocalLights(cluster)) {
+        for (int word = cluster.wordMin; word <= cluster.wordMax; word++) {
+            numLights += bitCount(lightCluster_word(cluster, word));
+        }
+    }
 
-    ivec3 cluster = clusterGrid_getCluster(frustumGrid_clusterToIndex(clusterPos));
-    int numLights = cluster.x + cluster.y;
-    float numLightsScale = clamp(float(numLights) * 0.05, 0.01, 1.0);
+    // the tile's edges
+    int eye = int(lightClusterParams.counts.w > 0 && gl_FragCoord.x >= lightClusterParams.viewports[1].x);
+    vec2 tilePos = fract((gl_FragCoord.xy - lightClusterParams.viewports[eye].xy) * lightClusterParams.tileInfo.xy);
+    vec2 tileSize = 1.0 / lightClusterParams.tileInfo.xy;
+    float edge = float(any(lessThan(tilePos * tileSize, vec2(1.0))));
 
-
-   ivec3 dims = frustumGrid.dims.xyz;
-   dims.z +=1;
-   ivec3 summedDims = ivec3(dims.x * dims.y, dims.x, 1);
-   
-   if (clusterPos.x < 0 || clusterPos.x >= dims.x) {
-       _fragColor = vec4(0.0);
-       return;
-   }
-   
-   if (clusterPos.y < 0 || clusterPos.y >= dims.y) {
-       _fragColor = vec4(0.0);
-       return;
-   }
-   if (clusterPos.z < 0 || clusterPos.z > dims.z) {
-       _fragColor = vec4(0.0);
-       return;
-   }
-   
-   float relClusterId = float(clusterPos.z * summedDims.x + clusterPos.y * summedDims.y + clusterPos.x) / float(frustumGrid_numClusters());
-   
-   _fragColor = mix(mix(vec4(colorWheel(fract(relClusterId)), float(numLights > 0) * (0.05 + 0.95 * numLightsScale)),
-                        vec4(vec3(1.0), 0.2),
-                        float(relClusterId >= 1.0)),
-                    vec4(0.0),
-                    float(relClusterId < 0.0));
+    const float MAX_SHOWN = 12.0;
+    vec3 color = colorRamp(1.0 - min(float(numLights), MAX_SHOWN) / MAX_SHOWN);
+    _fragColor = vec4(mix(color, vec3(1.0), 0.5 * edge), max(float(numLights > 0) * 0.5, 0.35 * edge));
 }
-

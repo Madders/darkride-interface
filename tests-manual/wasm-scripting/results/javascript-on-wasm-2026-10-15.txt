@@ -1,0 +1,23 @@
+peak resident memory: 1299 MB
+engine: ES2015 or later
+js-arithmetic: 2000000 in 182 ms, 0.09 us each (check 1)
+js-objects: 300000 in 88 ms, 0.29 us each (check 134999550000)
+js-strings: 100000 in 24 ms, 0.24 us each (check 1388890)
+js-arrays: 200000 in 186 ms, 0.93 us each (check 999)
+js-function-calls: 1000000 in 64 ms, 0.06 us each (check 3500000)
+js-json: 2000 in 44 ms, 22.00 us each (check 296000)
+host-Vec3.sum: 100000 in 943 ms, 9.43 us each (check 300067)
+host-Vec3.length: 100000 in 532 ms, 5.32 us each (check 1300000)
+host-Quat.multiply: 50000 in 622 ms, 12.44 us each (check -940)
+host-Uuid.generate: 50000 in 337 ms, 6.74 us each (check 1900000)
+host-MyAvatar.position-get: 100000 in 377 ms, 3.77 us each (check 101326)
+host-MyAvatar.position-set: 10000 in 55 ms, 5.50 us each (check 0)
+host-Entities.getEntityProperties-all: 2000 in 711 ms, 355.50 us each (check 2000)
+host-Entities.getEntityProperties-position: 20000 in 2046 ms, 102.30 us each (check 40000)
+host-Entities.editEntity-position: 5000 in 456 ms, 91.20 us each (check 0)
+host-JSON.stringify-entity: 1000 in 107 ms, 107.00 us each (check 3262)
+host-Script.resolvePath: 20000 in 527 ms, 26.35 us each (check 1840000)
+update: 600 frames, dt mean 16.64 ms sd 0.88 min 0.03 max 18.13; wall mean 16.64 ms sd 0.94 max 19.0
+setTimeout(10): 50 timers, actual mean 11.08 ms min 10 max 12
+done
+peak resident memory: 1299 MB

@@ -28,6 +28,7 @@
 
 #include <shared/QtHelpers.h>
 #include <Gzip.h>
+#include <HostInterface.h>
 
 #include <future>
 
@@ -525,6 +526,10 @@ void AssetScriptingInterface::loadFromCache(QScriptValue options, QScriptValue s
 bool AssetScriptingInterface::canWriteCacheValue(const QUrl& url) {
     auto scriptEngine = qobject_cast<ScriptEngine*>(engine());
     if (!scriptEngine) {
+        // not a call from a QtScript script (a module's, on the WebAssembly engine): the engine this object is part of
+        scriptEngine = qobject_cast<ScriptEngine*>(parent());
+    }
+    if (!scriptEngine) {
         return false;
     }
     // allow cache writes only from Client, EntityServer and Agent scripts
@@ -575,3 +580,412 @@ void AssetScriptingInterface::saveToCache(const QUrl& rawURL, const QByteArray& 
 
     jsPromiseReady(Parent::saveToCache(url, data, metadata), scope, callback);
 }
+
+// --- the WebAssembly script engine's forms of the methods -----------------------------------------------------------
+// Each mirrors the QtScript form above it in the file: the same checks, the same requests, the same arguments to the
+// callback. Options come as a QVariant (the text of a URL, or a map); the callback is posted to the module, so it runs
+// after the call returns, as a script's does.
+
+namespace {
+
+// A check that fails: what jsVerify throws in a script, as an error record the module's call raises.
+QVariant verifyFailed(const QString& error) {
+    return HostInterface::errorRecord("Error", error);
+}
+
+// The first argument a callback gets: null when there is no error (jsCallback's !error.toBool()).
+QVariant errorOrNull(const QString& error) {
+    return error.isEmpty() ? QVariant::fromValue(nullptr) : QVariant(error);
+}
+
+// An option as QScriptValue::toBool() reads it: JavaScript's truthiness.
+bool truthy(const QVariant& value) {
+    switch (value.userType()) {
+        case QMetaType::UnknownType:
+        case QMetaType::Nullptr:
+            return false;
+        case QMetaType::QString:
+            return !value.toString().isEmpty();
+        case QMetaType::Bool:
+            return value.toBool();
+        case QMetaType::QVariantMap:
+        case QMetaType::QVariantList:
+        case QMetaType::QByteArray:
+            return true;
+        default: {
+            bool isNumber = false;
+            double number = value.toDouble(&isNumber);
+            return isNumber ? (number != 0.0 && number == number) : value.isValid();
+        }
+    }
+}
+
+// Data as ArrayBufferClass::fromScriptValue reads it: text as UTF-8, bytes as they are, a list of numbers as bytes.
+QByteArray bytesOf(const QVariant& value) {
+    switch (value.userType()) {
+        case QMetaType::QString:
+            return value.toString().toUtf8();
+        case QMetaType::QByteArray:
+            return value.toByteArray();
+        case QMetaType::QVariantList: {
+            QByteArray bytes;
+            for (const QVariant& item : value.toList()) {
+                bytes.append(char(uint8_t(item.toInt())));
+            }
+            return bytes;
+        }
+        default:
+            return QByteArray();
+    }
+}
+
+// The URL in options given as the URL itself or as {url}.
+QString urlOf(const QVariant& options) {
+    return options.userType() == QMetaType::QString ? options.toString() : options.toMap().value("url").toString();
+}
+
+const QString NO_CALLBACK = "expected a callback function";
+
+} // namespace
+
+AssetScriptingInterface::Promise AssetScriptingInterface::callbackReady(Promise promise, const ScriptCallback& callback) {
+    return promise->ready([callback](QString error, QVariantMap result) {
+        callback.post({ errorOrNull(error), result });
+    });
+}
+
+QVariant AssetScriptingInterface::uploadData(const QString& data, const ScriptCallback& callback) {
+    if (!callback.isValid()) {
+        return verifyFailed(NO_CALLBACK);
+    }
+    auto upload = DependencyManager::get<AssetClient>()->createUpload(data.toUtf8());
+    Promise deferred = makePromise(__FUNCTION__);
+    deferred->ready([callback](QString error, QVariantMap result) {
+        // the QtScript form calls back with (url, hash)
+        callback.post({ result.value("url").toString(), result.value("hash").toString() });
+    });
+    connect(upload, &AssetUpload::finished, upload, [deferred](AssetUpload* upload, const QString& hash) {
+        deferred->resolve({
+            { "url", "atp:" + hash },
+            { "hash", hash },
+        });
+        upload->deleteLater();
+    });
+    upload->start();
+    return QVariant();
+}
+
+QVariant AssetScriptingInterface::setMapping(const QString& path, const QString& hash, const ScriptCallback& callback) {
+    if (!callback.isValid()) {
+        return verifyFailed(NO_CALLBACK);
+    }
+    auto setMappingRequest = assetClient()->createSetMappingRequest(path, hash);
+    Promise deferred = makePromise(__FUNCTION__);
+    callbackReady(deferred, callback);
+    connect(setMappingRequest, &SetMappingRequest::finished, setMappingRequest, [deferred](SetMappingRequest* request) {
+        QString error = request->getErrorString();
+        deferred->handle(error, { { "error", request->getError() } });
+        request->deleteLater();
+    });
+    setMappingRequest->start();
+    return QVariant();
+}
+
+QVariant AssetScriptingInterface::downloadData(const QString& urlString, const ScriptCallback& callback) {
+    if (!urlString.startsWith(ATP_SCHEME)) {
+        qCDebug(scriptengine) << "AssetScriptingInterface::downloadData url must be of form atp:<hash-value>";
+        return QVariant();
+    }
+    if (!callback.isValid()) {
+        return verifyFailed(NO_CALLBACK);
+    }
+    QString hash = AssetUtils::extractAssetHash(urlString);
+    auto assetRequest = DependencyManager::get<AssetClient>()->createRequest(hash);
+    Promise deferred = makePromise(__FUNCTION__);
+    deferred->ready([callback](QString error, QVariantMap result) {
+        // the QtScript form calls back with (data, { errorMessage })
+        callback.post({ errorOrNull(result.value("data").toString()), QVariantMap { { "errorMessage", error } } });
+    });
+    connect(assetRequest, &AssetRequest::finished, assetRequest, [deferred](AssetRequest* request) {
+        if (request->getError() == AssetRequest::Error::NoError) {
+            deferred->resolve({ { "data", QString::fromUtf8(request->getData()) } });
+        } else {
+            qCDebug(scriptengine) << "AssetScriptingInterface::downloadData ERROR: " << request->getErrorString();
+        }
+        request->deleteLater();
+    });
+    assetRequest->start();
+    return QVariant();
+}
+
+QVariant AssetScriptingInterface::setBakingEnabled(const QString& path, bool enabled, const ScriptCallback& callback) {
+    if (!callback.isValid()) {
+        return verifyFailed(NO_CALLBACK);
+    }
+    auto setBakingEnabledRequest = DependencyManager::get<AssetClient>()->createSetBakingEnabledRequest({ path }, enabled);
+    Promise deferred = callbackReady(makePromise(__FUNCTION__), callback);
+    connect(setBakingEnabledRequest, &SetBakingEnabledRequest::finished, setBakingEnabledRequest, [deferred](SetBakingEnabledRequest* request) {
+        deferred->handle(request->getErrorString(), {});
+        request->deleteLater();
+    });
+    setBakingEnabledRequest->start();
+    return QVariant();
+}
+
+QVariant AssetScriptingInterface::getMapping(const QString& asset, const ScriptCallback& callback) {
+    auto path = AssetUtils::getATPUrl(asset).path();
+    if (!AssetUtils::isValidFilePath(path)) {
+        return verifyFailed("invalid ATP file path: " + asset + "(path:" + path + ")");
+    }
+    if (!callback.isValid()) {
+        return verifyFailed("expected second parameter to be a callback function");
+    }
+    getAssetInfo(path)->ready([callback](QString error, QVariantMap result) {
+        // the QtScript form calls back with (error, hash)
+        callback.post({ errorOrNull(error), result.value("hash").toString() });
+    });
+    return QVariant();
+}
+
+QVariant AssetScriptingInterface::deleteAsset(const QVariant& options, const ScriptCallback& callback) {
+    Q_UNUSED(options);
+    Q_UNUSED(callback);
+    return verifyFailed("TODO: deleteAsset API");
+}
+
+QVariant AssetScriptingInterface::getAsset(const QVariant& options, const ScriptCallback& callback) {
+    const bool isText = options.userType() == QMetaType::QString;
+    if (!isText && options.userType() != QMetaType::QVariantMap) {
+        return verifyFailed("expected request options Object or URL as first parameter");
+    }
+    const QVariantMap map = options.toMap();
+    const bool decompress = truthy(map.value("decompress")) || truthy(map.value("compressed"));
+    QString responseType = map.value("responseType").toString().toLower();
+    if (responseType.isEmpty()) {
+        responseType = "text";
+    }
+    const QString url = urlOf(options);
+    auto asset = AssetUtils::getATPUrl(url).path();
+    if (!AssetUtils::isValidHash(asset) && !AssetUtils::isValidFilePath(asset)) {
+        return verifyFailed(QString("Invalid ATP url '%1'").arg(url));
+    }
+    if (!RESPONSE_TYPES.contains(responseType)) {
+        return verifyFailed(QString("Invalid responseType: '%1' (expected: %2)").arg(responseType).arg(RESPONSE_TYPES.join(" | ")));
+    }
+    if (!callback.isValid()) {
+        return verifyFailed(NO_CALLBACK);
+    }
+    Promise fetched = callbackReady(makePromise("fetched"), callback);
+    Promise mapped = makePromise("mapped");
+    mapped->fail(fetched);
+    mapped->then([=](QVariantMap result) {
+        QString hash = result.value("hash").toString();
+        QString mappedUrl = result.value("url").toString();
+        if (!AssetUtils::isValidHash(hash)) {
+            fetched->reject("internal hash error: " + hash, result);
+        } else {
+            Promise promise = loadAsset(hash, decompress, responseType);
+            promise->mixin(result);
+            promise->ready([=](QString error, QVariantMap loadResult) {
+                loadResult["url"] = mappedUrl;  // the mapped .url, as the QtScript form keeps it
+                fetched->handle(error, loadResult);
+            });
+        }
+    });
+    if (AssetUtils::isValidHash(asset)) {
+        mapped->resolve({
+            { "hash", asset },
+            { "url", url },
+        });
+    } else {
+        getAssetInfo(asset)->ready(mapped);
+    }
+    return QVariant();
+}
+
+QVariant AssetScriptingInterface::resolveAsset(const QVariant& options, const ScriptCallback& callback) {
+    auto asset = AssetUtils::getATPUrl(urlOf(options)).path();
+    if (!AssetUtils::isValidFilePath(asset) && !AssetUtils::isValidHash(asset)) {
+        return verifyFailed("expected options to be an asset URL or request options containing .url property");
+    }
+    if (!callback.isValid()) {
+        return verifyFailed(NO_CALLBACK);
+    }
+    callbackReady(getAssetInfo(asset), callback);
+    return QVariant();
+}
+
+QVariant AssetScriptingInterface::decompressData(const QVariant& options, const ScriptCallback& callback) {
+    const QVariantMap map = options.toMap();
+    QByteArray dataByteArray = bytesOf(map.value("data"));
+    QString responseType = map.value("responseType").toString().toLower();
+    if (responseType.isEmpty()) {
+        responseType = "text";
+    }
+    if (!callback.isValid()) {
+        return verifyFailed(NO_CALLBACK);
+    }
+    Promise completed = callbackReady(makePromise(__FUNCTION__), callback);
+    Promise decompressed = decompressBytes(dataByteArray);
+    if (responseType == "arraybuffer") {
+        decompressed->ready(completed);
+    } else {
+        decompressed->ready([=](QString error, QVariantMap result) {
+            Promise converted = convertBytes(result.value("data").toByteArray(), responseType);
+            converted->mixin(result);
+            converted->ready(completed);
+        });
+    }
+    return QVariant();
+}
+
+QVariant AssetScriptingInterface::compressData(const QVariant& options, const ScriptCallback& callback) {
+    const QVariantMap map = options.toMap();
+    // the data is options.data when there is one, else the options themselves (text or bytes)
+    QVariant data = map.contains("data") ? map.value("data") : options;
+    QByteArray dataByteArray = bytesOf(data);
+    const QVariant levelValue = map.value("level");
+    bool isNumber = false;
+    double levelNumber = levelValue.toDouble(&isNumber);
+    isNumber = isNumber && levelValue.userType() != QMetaType::QString && levelValue.userType() != QMetaType::Bool;
+    int level = isNumber ? int(levelNumber) : DEFAULT_GZIP_COMPRESSION_LEVEL;
+    if (!callback.isValid()) {
+        return verifyFailed(NO_CALLBACK);
+    }
+    callbackReady(compressBytes(dataByteArray, level), callback);
+    return QVariant();
+}
+
+QVariant AssetScriptingInterface::putAsset(const QVariant& options, const ScriptCallback& callback) {
+    const bool isObject = options.userType() == QMetaType::QVariantMap;
+    const QVariantMap map = options.toMap();
+    const bool compress = truthy(map.value("compress")) || truthy(map.value("compressed"));
+    QVariant data = isObject ? map.value("data") : options;
+    QString rawPath = map.value("path").toString();
+    auto path = AssetUtils::getATPUrl(rawPath).path();
+    QByteArray dataByteArray = bytesOf(data);
+    if (!path.isEmpty() && !AssetUtils::isValidFilePath(path)) {
+        return verifyFailed(QString("expected valid ATP file path '%1' ('%2')").arg(rawPath).arg(path));
+    }
+    if (dataByteArray.size() <= 0) {
+        return verifyFailed(QString("expected non-zero .data (got %1 / #%2 bytes)").arg(data.typeName()).arg(dataByteArray.size()));
+    }
+    if (!callback.isValid()) {
+        return verifyFailed(NO_CALLBACK);
+    }
+    // [compressed] => uploaded to server => [mapped to path]
+    Promise prepared = makePromise("putAsset::prepared");
+    Promise uploaded = makePromise("putAsset::uploaded");
+    Promise completed = makePromise("putAsset::completed");
+    callbackReady(completed, callback);
+    if (compress) {
+        compressBytes(dataByteArray, DEFAULT_GZIP_COMPRESSION_LEVEL)->ready(prepared);
+    } else {
+        prepared->resolve({ { "data", dataByteArray } });
+    }
+    prepared->fail(completed);
+    prepared->then([=](QVariantMap result) {
+        Promise upload = uploadBytes(result.value("data").toByteArray());
+        upload->mixin(result);
+        upload->ready(uploaded);
+    });
+    uploaded->fail(completed);
+    if (path.isEmpty()) {
+        uploaded->then(completed);
+    } else {
+        uploaded->then([=](QVariantMap result) {
+            QString hash = result.value("hash").toString();
+            if (!AssetUtils::isValidHash(hash)) {
+                completed->reject("path mapping requested, but did not receive valid hash", result);
+            } else {
+                Promise link = symlinkAsset(hash, path);
+                link->mixin(result);
+                link->ready(completed);
+            }
+        });
+    }
+    return QVariant();
+}
+
+QVariant AssetScriptingInterface::getCacheStatus(const ScriptCallback& callback) {
+    if (!callback.isValid()) {
+        return verifyFailed(NO_CALLBACK);
+    }
+    callbackReady(Parent::getCacheStatus(), callback);
+    return QVariant();
+}
+
+QVariant AssetScriptingInterface::queryCacheMeta(const QVariant& options, const ScriptCallback& callback) {
+    QString url = urlOf(options);
+    if (!QUrl(url).isValid()) {
+        return verifyFailed(QString("Invalid URL '%1'").arg(url));
+    }
+    if (!callback.isValid()) {
+        return verifyFailed(NO_CALLBACK);
+    }
+    callbackReady(Parent::queryCacheMeta(url), callback);
+    return QVariant();
+}
+
+QVariant AssetScriptingInterface::loadFromCache(const QVariant& options, const ScriptCallback& callback) {
+    QString url = urlOf(options);
+    QString responseType = "text";
+    bool decompress = false;
+    if (options.userType() != QMetaType::QString) {
+        const QVariantMap map = options.toMap();
+        if (map.contains("responseType")) {
+            responseType = map.value("responseType").toString();
+        }
+        decompress = truthy(map.value("decompress")) || truthy(map.value("compressed"));
+    }
+    if (!QUrl(url).isValid()) {
+        return verifyFailed(QString("Invalid URL '%1'").arg(url));
+    }
+    if (!RESPONSE_TYPES.contains(responseType)) {
+        return verifyFailed(QString("Invalid responseType: '%1' (expected: %2)").arg(responseType).arg(RESPONSE_TYPES.join(" | ")));
+    }
+    if (!callback.isValid()) {
+        return verifyFailed(NO_CALLBACK);
+    }
+    callbackReady(Parent::loadFromCache(url, decompress, responseType), callback);
+    return QVariant();
+}
+
+QVariant AssetScriptingInterface::saveToCache(const QVariant& options, const ScriptCallback& callback) {
+    if (options.userType() != QMetaType::QVariantMap) {
+        return verifyFailed(QString("expected options object as first parameter not: %1").arg(options.typeName()));
+    }
+    const QVariantMap map = options.toMap();
+    return saveToCache(QUrl(map.value("url").toString()), bytesOf(map.value("data")), map.value("headers").toMap(), callback);
+}
+
+QVariant AssetScriptingInterface::saveToCache(const QUrl& rawURL, const QByteArray& data, const QVariantMap& metadata,
+                                              const ScriptCallback& callback) {
+    QUrl url = rawURL;
+    if (url.path().isEmpty() && !data.isEmpty()) {
+        // a valid ATP URL from the data, keeping any query or fragment
+        auto atpURL = AssetUtils::getATPUrl(hashDataHex(data));
+        atpURL.setQuery(url.query());
+        atpURL.setFragment(url.fragment());
+        url = atpURL;
+    }
+    auto hash = AssetUtils::extractAssetHash(url.toDisplayString());
+    if (!url.isValid()) {
+        return verifyFailed(QString("Invalid URL '%1'").arg(url.toString()));
+    }
+    if (!canWriteCacheValue(url)) {
+        return verifyFailed("Invalid cache write URL: " + url.toString());
+    }
+    if (url.scheme() != "atp" && url.scheme() != "cache") {
+        return verifyFailed("only 'atp' and 'cache' URL schemes supported");
+    }
+    if (!hash.isEmpty() && hash != hashDataHex(data)) {
+        return verifyFailed(QString("invalid checksum hash for atp:HASH style URL (%1 != %2)").arg(hash, hashDataHex(data)));
+    }
+    if (!callback.isValid()) {
+        return verifyFailed(NO_CALLBACK);
+    }
+    callbackReady(Parent::saveToCache(url, data, metadata), callback);
+    return QVariant();
+}
+

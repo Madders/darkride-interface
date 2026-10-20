@@ -121,14 +121,16 @@ public:
         WRITE_ALL = (WRITE_RED | WRITE_GREEN | WRITE_BLUE | WRITE_ALPHA),
     };
 
+    // Depth is reversed-Z (Backend::reversedZProjection in Context.h): the near plane is at depth 1, the far plane at 0,
+    // so a nearer fragment has the GREATER depth; the depth buffer is cleared to 0 and tested with GREATER / GREATER_EQUAL
     class DepthTest {
     public:
         uint8 writeMask{ true };
         uint8 enabled{ false };
-        ComparisonFunction function{ LESS };
+        ComparisonFunction function{ GREATER };
 
     public:
-        DepthTest(bool enabled = false, bool writeMask = true, ComparisonFunction func = LESS) :
+        DepthTest(bool enabled = false, bool writeMask = true, ComparisonFunction func = GREATER) :
             writeMask(writeMask), enabled(enabled), function(func) {}
 
         bool isEnabled() const { return enabled != 0; }

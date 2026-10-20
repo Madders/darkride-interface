@@ -103,6 +103,9 @@ public:
     // the gpu::Backend state with the true gl state which has probably been messed up by these ugly naked gl calls
     // Let's try to avoid to do that as much as possible!
     void syncCache() final override;
+    void initPipelineStateCache();
+    // Clip-space depth 0..1 by clip control (GL 4.5), see Backend::reversedZProjection; GL 4.1 and ES keep -1..1
+    virtual bool isDepthClipZeroToOne() const { return false; }
 
     void syncProgram(const gpu::ShaderPointer& program) override;
 

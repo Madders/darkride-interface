@@ -221,25 +221,43 @@ void AssimpSerializer::processMaterials() {
 
         // colors
 
+        // glTF's colour factors are linear by its specification (UnityGLTF, for one, writes the linear value of the
+        // material's colour), the other formats' colours sRGB, and an unlit colour is never converted. Converting a
+        // glTF factor as sRGB darkened every tinted material by the factor's own sRGB-to-linear ratio: Rainbow_Room's
+        // floor, factor 0.67, rendered at 0.67 x Unity's brightness, its walls at 0.85 x (LIGHTMAPS.md, the tone pass)
+        bool colorsAreSRGB = !unlit && !isGltf;
+
+        // whether the factor's alpha means anything: glTF's OPAQUE (the default) ignores it by the specification and
+        // MASK cuts by the texture's alpha against the cutoff; only BLEND blends by it. The engine took any alpha
+        // below 1 as translucency, so Unity's opaque rainbow floor (alpha 0.8) blended over the floor beneath it.
+        bool alphaCounts = true;
+        if (isGltf) {
+            aiString gltfAlphaMode;
+            alphaCounts = mMaterial->Get(AI_MATKEY_GLTF_ALPHAMODE, gltfAlphaMode) == AI_SUCCESS &&
+                          QString(gltfAlphaMode.C_Str()) == "BLEND";
+        }
+
         aiColor3D diffuse;
         if (mMaterial->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse) == AI_SUCCESS) {
-            modelMaterial->setAlbedo(asVec3(diffuse), !unlit);
+            modelMaterial->setAlbedo(asVec3(diffuse), colorsAreSRGB);
         }
 
         float opacity;
-        if (mMaterial->Get(AI_MATKEY_OPACITY, opacity) == AI_SUCCESS) {
+        if (alphaCounts && mMaterial->Get(AI_MATKEY_OPACITY, opacity) == AI_SUCCESS) {
             modelMaterial->setOpacity(opacity);
         }
 
         aiColor3D emissive;
         if (mMaterial->Get(AI_MATKEY_COLOR_EMISSIVE, emissive) == AI_SUCCESS) {
-            modelMaterial->setEmissive(asVec3(emissive));
+            modelMaterial->setEmissive(asVec3(emissive), colorsAreSRGB);
         }
 
         aiColor4D baseColor;
         if (mMaterial->Get(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_BASE_COLOR_FACTOR, baseColor) == AI_SUCCESS) {
-            modelMaterial->setAlbedo(glm::vec3(baseColor.r, baseColor.g, baseColor.b), !unlit);
-            modelMaterial->setOpacity(baseColor.a);
+            modelMaterial->setAlbedo(glm::vec3(baseColor.r, baseColor.g, baseColor.b), colorsAreSRGB);
+            if (alphaCounts) {
+                modelMaterial->setOpacity(baseColor.a);
+            }
         }
 
         float roughnessFactor;

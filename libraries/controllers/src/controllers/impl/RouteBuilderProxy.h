@@ -10,6 +10,7 @@
 #define hifi_Controllers_Impl_RouteBuilderProxy_h
 
 #include <QtCore/QObject>
+#include <QtCore/QVariant>
 
 #include "Filter.h"
 #include "Route.h"
@@ -115,7 +116,10 @@ class RouteBuilderProxy : public QObject {
          *     Controller.disableMapping(MAPPING_NAME);
          * });
          */
-        Q_INVOKABLE void to(const QScriptValue& destination);
+        /// To a plain value, for the WebAssembly engine (an action id, a script callback, or a list of those); its own
+    /// name, because QtScript finds a same-named QVariant overload ambiguous with the QScriptValue one.
+    Q_INVOKABLE void toValue(const QVariant& destination);
+    Q_INVOKABLE void to(const QScriptValue& destination);
 
         /**jsdoc
          * Enables or disables writing debug information for a route to the program log.
@@ -193,7 +197,8 @@ class RouteBuilderProxy : public QObject {
          *     Controller.disableMapping(MAPPING_NAME);
          * });
          */
-        Q_INVOKABLE QObject* when(const QScriptValue& expression);
+        Q_INVOKABLE QObject* whenValue(const QVariant& expression);
+    Q_INVOKABLE QObject* when(const QScriptValue& expression);
 
         /**jsdoc
          * Filters numeric route values to lie between two values; values outside this range are not passed on through the 

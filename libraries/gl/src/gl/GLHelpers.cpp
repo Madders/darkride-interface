@@ -15,6 +15,10 @@
 #include <QtGui/QOpenGLContext>
 #include <QtGui/QOpenGLDebugLogger>
 
+#ifdef Q_OS_MACOS
+#include <dispatch/dispatch.h>
+#endif
+
 #include "Context.h"
 
 size_t evalGLFormatSwapchainPixelSize(const QSurfaceFormat& format) {
@@ -84,6 +88,8 @@ static int _viewChangeDepth { 0 };
 static std::atomic<int64_t> _presentationPausedUntil { 0 };
 // how the app puts pending window changes in place at once (main thread only)
 static std::function<void()> _viewChangeFlush;
+// a guard has ended since the presenting thread last looked (takeViewChanged)
+static std::atomic<bool> _viewChanged { false };
 // the pause after a change: a frame's margin once it is in place; with no way to put it in place at once, long enough
 // for it to settle by itself at the end of the main thread's loop pass
 static const int64_t PAUSE_AFTER_FLUSH_MS = 20;
@@ -117,8 +123,29 @@ gl::ViewChangeGuard::~ViewChangeGuard() {
     }
     if (--_viewChangeDepth == 0) {
         _presentationPausedUntil = steadyMilliseconds() + (_viewChangeFlush ? PAUSE_AFTER_FLUSH_MS : PAUSE_WITHOUT_FLUSH_MS);
+        _viewChanged = true;
         globalRelease(false);   // the main thread has no context of its own to finish
     }
+}
+
+bool gl::takeViewChanged() {
+    return _viewChanged.exchange(false);
+}
+
+void gl::waitForMainQueue(int milliseconds) {
+#ifdef Q_OS_MACOS
+    // a marker behind what is queued: the queue runs in order, so its signal means all before it has run. The block
+    // holds its own reference to the semaphore, so a wait that times out leaves it nothing freed to signal.
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    dispatch_retain(done);
+    dispatch_async_f(dispatch_get_main_queue(), done, [](void* context) {
+        auto semaphore = (dispatch_semaphore_t)context;
+        dispatch_semaphore_signal(semaphore);
+        dispatch_release(semaphore);
+    });
+    dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)milliseconds * (int64_t)NSEC_PER_MSEC));
+    dispatch_release(done);
+#endif
 }
 
 

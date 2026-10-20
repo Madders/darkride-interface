@@ -592,6 +592,8 @@ void Stats::setRenderDetails(const render::RenderDetails& details) {
         STAT_UPDATE(localShadowMaps, details._localShadowMaps);
         STAT_UPDATE(localShadowMapsDrawn, details._localShadowMapsDrawn);
         STAT_UPDATE(localShadowStaticMapsDrawn, details._localShadowStaticMapsDrawn);
+        STAT_UPDATE(mirrorsDrawn, details._mirrorsDrawn);
+        STAT_UPDATE(mirrorPixels, details._mirrorPixels);
     }
 }
 

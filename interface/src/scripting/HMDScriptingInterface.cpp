@@ -173,6 +173,22 @@ QScriptValue HMDScriptingInterface::getHUDLookAtPosition3D(QScriptContext* conte
     return QScriptValue::NullValue;
 }
 
+QVariant HMDScriptingInterface::getHUDLookAtPosition2DValue() const {
+    glm::vec3 hudIntersection;
+    if (getHUDLookAtPosition3D(hudIntersection)) {
+        return QVariant::fromValue(qApp->getApplicationCompositor().overlayFromSphereSurface(hudIntersection));
+    }
+    return QVariant::fromValue(nullptr);
+}
+
+QVariant HMDScriptingInterface::getHUDLookAtPosition3DValue() const {
+    glm::vec3 result;
+    if (getHUDLookAtPosition3D(result)) {
+        return QVariant::fromValue(result);
+    }
+    return QVariant::fromValue(nullptr);
+}
+
 bool HMDScriptingInterface::getHUDLookAtPosition3D(glm::vec3& result) const {
     const Camera& camera = qApp->getCamera();
     glm::vec3 position = camera.getPosition();

@@ -27,7 +27,9 @@
 // How a property is edited. The QVariant carried for each kind:
 //   Bool: bool  Int, Float, Slider: double  Degrees: double degrees (stored in radians)
 //   String, Url, Json, Image (the picture's URL), UserData (the whole text), Enum (the value name),
-//   CollisionMask (the comma list): QString
+//   CollisionMask (the comma list): QString   TerrainLayers: the property's text, unused (the layers live in the
+//   terrain file on this client, which the editor reads and sets directly)   Impostor: the entry's JSON, empty for
+//   none (setting it empty removes the entry; the bake itself goes through the ImpostorBaker)
 //   Color, FloatColor: QColor  Vec2, Polar (elevation and azimuth in degrees): QVector2D
 //   Vec3, Euler (degrees): QVector3D  Rect: QRect
 enum class PropertyKind {
@@ -49,7 +51,12 @@ enum class PropertyKind {
     Polar,
     Rect,
     Enum,
-    CollisionMask
+    CollisionMask,
+    TerrainLayers,  // a Terrain's material layers: the list, with the selected layer's settings (TerrainLayersEditor)
+    TerrainCaps,    // a Terrain's closed box: a checkbox read and set through the Terrain tool, not a property (TerrainCapsEditor)
+    Impostor,       // an entity's impostor card (IMPOSTORS.md): the entry's summary and atlases, Bake and Remove (ImpostorEditor)
+    VehicleWheels,  // a vehicle's wheels, a JSON list of Unity WheelCollider-like objects, as a list with the selected wheel's fields (VehiclePartsEditor)
+    VehicleSeats    // a vehicle's seats, a JSON list, the same way
 };
 
 struct PropertySpec {

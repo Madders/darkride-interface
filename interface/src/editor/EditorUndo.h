@@ -24,10 +24,15 @@
 #include <QtWidgets/QUndoStack>
 
 #include <EntityItemProperties.h>
+#include <terrain/Layers.h>
+#include <terrain/PaintMap.h>
 #include <terrain/VoxelGrid.h>
 
-// the chunks of a terrain's grid as they were, or will be: what a sculpt stroke records
-using TerrainChunks = std::map<glm::ivec3, terrain::Chunk, terrain::IVec3Less>;
+// the chunks of a terrain's grid as they were, or will be, by level and coordinates: what a sculpt stroke records.
+// A stroke that split a chunk records the one chunk before and the eight after; a step puts back whole places
+using TerrainChunks = std::map<terrain::ChunkKey, terrain::Chunk>;
+// the blocks of a terrain's paint map (one per chunk column) as they were, or will be: what a paint stroke records
+using TerrainPaintBlocks = std::map<glm::ivec2, terrain::PaintBlock, terrain::IVec2Less>;
 
 class EditorUndo : public QObject {
     Q_OBJECT
@@ -74,6 +79,25 @@ public:
     // puts chunks into a terrain entity's grid, and has the collision shape follow; false when the entity is
     // not a terrain on this client
     bool applyTerrainChunks(const QUuid& id, const TerrainChunks& chunks);
+    // a paint stroke on a terrain, already applied: the blocks of its paint map it touched before and after
+    void pushTerrainPaint(const QString& text, const QUuid& id, const TerrainPaintBlocks& before, const TerrainPaintBlocks& after);
+    // puts blocks into a terrain entity's paint map; false when the entity is not a terrain on this client
+    bool applyTerrainPaint(const QUuid& id, const TerrainPaintBlocks& blocks);
+    // a change to a terrain's layer stack (the Inspector's Layers section), already applied: the stack before and after
+    void pushTerrainLayers(const QString& text, const QUuid& id, const terrain::LayerStack& before, const terrain::LayerStack& after);
+    // replaces a terrain entity's layer stack; false when the entity is not a terrain on this client
+    bool applyTerrainLayers(const QUuid& id, const terrain::LayerStack& layers);
+    // a change to which faces of a terrain's box are closed (the Inspector's Closed Box row): the step applies it
+    // when pushed, and on undo and redo
+    void pushTerrainCaps(const QString& text, const QUuid& id, uint8_t before, uint8_t after);
+    // sets a terrain entity's closed faces; false when the entity is not a terrain on this client
+    bool applyTerrainCaps(const QUuid& id, uint8_t caps);
+    // a terrain resampled to another voxel count, already applied: the whole grid and paint map before and after
+    // (a resample changes every chunk, so the step keeps both wholesale)
+    void pushTerrainResample(const QString& text, const QUuid& id, const terrain::VoxelGrid& gridBefore,
+        const terrain::PaintMap& paintBefore, const terrain::VoxelGrid& gridAfter, const terrain::PaintMap& paintAfter);
+    // replaces a terrain entity's grid and paint map; false when the entity is not a terrain on this client
+    bool applyTerrainGrid(const QUuid& id, const terrain::VoxelGrid& grid, const terrain::PaintMap& paint);
 
     // a change made to a created entity since, which a redo of its creation should make too (a new model's own
     // size, once it has loaded): the dimensions and position in `changes` replace the recorded ones

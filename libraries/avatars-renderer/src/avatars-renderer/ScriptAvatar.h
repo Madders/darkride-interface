@@ -55,6 +55,9 @@
  *     removed.</span>
  * @property {boolean} lookAtSnappingEnabled - <code>true</code> if the avatar's eyes snap to look at another avatar's eyes
  *     when the other avatar is in the line of sight and also has <code>lookAtSnappingEnabled == true</code>.
+ * @property {string} gazeStyle - How the avatar's eyes behave, as its owner chose: <code>"calm"</code>,
+ *     <code>"excited"</code>, <code>"shy"</code>, <code>"sleepy"</code> or <code>"intent"</code>. See
+ *     {@link MyAvatar.getGazeStyles}.
  *
  * @property {string} skeletonModelURL - The avatar's FST file.
  * @property {AttachmentData[]} attachmentData - Information on the avatar's attachments.
@@ -175,6 +178,15 @@ public slots:
      * @returns {SkeletonJoint[]} Information about each joint in the avatar's skeleton.
      */
     QVariantList getSkeleton() const;
+
+    /**jsdoc
+     * Gets one of the avatar's menu parameters as this client has it: what the avatar's owner picked in its menu, for an
+     * avatar imported with one. See {@link MyAvatar.getAvatarParameter}.
+     * @function ScriptAvatar.getAvatarParameter
+     * @param {string} name - The parameter's name.
+     * @returns {number} Its value, or <code>0</code> if the avatar has no such parameter or avatar data aren't available.
+     */
+    float getAvatarParameter(const QString& name) const;
 
 
     /**jsdoc

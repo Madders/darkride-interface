@@ -11,6 +11,8 @@
 
 #include "SkeletonModel.h"
 
+#include <BlendshapeConstants.h>
+
 #include <glm/gtx/transform.hpp>
 #include <QMultiMap>
 
@@ -135,7 +137,7 @@ void SkeletonModel::updateRig(float deltaTime, glm::mat4 parentTransform) {
 
     Rig::EyeParameters eyeParams;
     eyeParams.eyeLookAt = lookAt;
-    eyeParams.eyeSaccade = glm::vec3(0.0f);
+    eyeParams.eyeSaccade = head->getSaccade();  // this client's own darts for someone else's eyes
     eyeParams.modelRotation = getRotation();
     eyeParams.modelTranslation = getTranslation();
     eyeParams.leftEyeJointIndex = _rig.indexOfJoint("LeftEye");
@@ -154,7 +156,24 @@ void SkeletonModel::updateAttitude(const glm::quat& orientation) {
 // but just before head has been simulated.
 void SkeletonModel::simulate(float deltaTime, bool fullUpdate) {
     updateAttitude(_owningAvatar->getWorldOrientation());
-    setBlendshapeCoefficients(_owningAvatar->getHead()->getSummedBlendshapeCoefficients());
+    QVector<float> coefficients = _owningAvatar->getHead()->getSummedBlendshapeCoefficients();
+    if (isLoaded()) {
+        // The model's own blend shapes (HFM.h ownBlendshapeNames) follow the standard ones, at their starting weights.
+        const HFMModel& model = getHFMModel();
+        if (!model.ownBlendshapeNames.isEmpty()) {
+            const int standard = (int)Blendshapes::BlendshapeCount;
+            coefficients.resize(standard + model.ownBlendshapeNames.size());
+            for (int i = 0; i < model.ownBlendshapeDefaults.size(); i++) {
+                coefficients[standard + i] = model.ownBlendshapeDefaults[i];
+            }
+            for (auto it = _ownBlendshapeOverrides.begin(); it != _ownBlendshapeOverrides.end(); ++it) {
+                if (it.key() >= 0 && standard + it.key() < coefficients.size()) {
+                    coefficients[standard + it.key()] = it.value();
+                }
+            }
+        }
+    }
+    setBlendshapeCoefficients(coefficients);
 
     if (fullUpdate) {
 

@@ -17,4 +17,23 @@ vec3 evalFrontOrBackFaceNormal(vec3 normal) {
     return (2.0 * float(gl_FrontFacing) - 1.0) * normal;
 }
 
+// A unit normal from an interpolated one, turned to face the viewer as above, or where the interpolation is
+// degenerate (a face whose vertex normals cancel, a zero normal, a NaN out of a zero tangent in the normal map's
+// frame) the surface's own slope from the position's screen derivatives, which faces the viewer whatever the face's
+// winding. normalize alone gives NaN there: the forward path keeps a NaN in its float colour and the bloom spreads it
+// into a block; the deferred path's G-buffer only turned it to zero
+vec3 evalSafeFrontOrBackFaceNormal(vec3 normal, vec3 worldPos) {
+    vec3 faceNormal = cross(dFdx(worldPos), dFdy(worldPos));
+    float len = length(normal);
+    float faceLen = length(faceNormal);
+    vec3 fallback = (faceLen > 0.0) ? faceNormal / faceLen : vec3(0.0, 1.0, 0.0);
+    return (len > 1.0e-6) ? evalFrontOrBackFaceNormal(normal / len) : fallback;
+}
+
+// the same where no position is at hand to take the slope from: a degenerate normal points up
+vec3 evalSafeFrontOrBackFaceNormal(vec3 normal) {
+    float len = length(normal);
+    return (len > 1.0e-6) ? evalFrontOrBackFaceNormal(normal / len) : vec3(0.0, 1.0, 0.0);
+}
+
 <@endif@>

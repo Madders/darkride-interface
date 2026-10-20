@@ -53,6 +53,14 @@ void RayPickScriptingInterface::setIncludeItems(unsigned int uid, const QScriptV
     DependencyManager::get<PickManager>()->setIncludeItems(uid, qVectorQUuidFromScriptValue(includeItems));
 }
 
+void RayPickScriptingInterface::setIgnoreItemsVector(unsigned int uid, const QVector<QUuid>& ignoreItems) {
+    DependencyManager::get<PickManager>()->setIgnoreItems(uid, ignoreItems);
+}
+
+void RayPickScriptingInterface::setIncludeItemsVector(unsigned int uid, const QVector<QUuid>& includeItems) {
+    DependencyManager::get<PickManager>()->setIncludeItems(uid, includeItems);
+}
+
 bool RayPickScriptingInterface::isLeftHand(unsigned int uid) {
     return DependencyManager::get<PickManager>()->isLeftHand(uid);
 }

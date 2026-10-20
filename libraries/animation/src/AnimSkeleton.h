@@ -68,6 +68,13 @@ public:
     void dump(const AnimPoseVec& poses) const;
 
     std::vector<int> lookUpJointIndices(const std::vector<QString>& jointNames) const;
+
+    // Whether animations reach this skeleton's humanoid joints through T-pose frames (Humanoid.h);
+    // set by "retarget = humanoid" in the avatar's .fst.
+    bool getHumanoidRetarget() const { return _humanoid.retarget; }
+    // Unity's humanoid frames for this skeleton ("humanoid = {...}" in the .fst), for muscle clips.
+    const QVariantMap& getHumanoidMuscleFrames() const { return _humanoid.muscleFrames; }
+    const QVariantList& getRotationConstraints() const { return _humanoid.rotationConstraints; }
     const HFMCluster getClusterBindMatricesOriginalValues(int skinDeformerIndex, int clusterIndex) const { return _clusterBindMatrixOriginalValues[skinDeformerIndex][clusterIndex]; }
 
 protected:
@@ -86,6 +93,7 @@ protected:
     QHash<QString, int> _jointIndicesByName;
     std::vector<std::vector<HFMCluster>> _clusterBindMatrixOriginalValues;
     glm::mat4 _geometryOffset;
+    hfm::HumanoidSettings _humanoid;
 
     // no copies
     AnimSkeleton(const AnimSkeleton&) = delete;

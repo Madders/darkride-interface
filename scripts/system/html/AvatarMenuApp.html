@@ -1,0 +1,202 @@
+<!--
+//  AvatarMenuApp.html
+//
+//  The Avatar Menu app's page: an imported avatar's menu, its submenus one at a time with a path back up.
+//  Toggles show whether their parameter has their value; buttons hold their value while pressed; radial controls
+//  are sliders. Talks to scripts/system/avatarMenu.js over the tablet's event bridge.
+//
+//  Created on 2026-10-14 for Darkride's import of avatars from Unity packages.
+//
+//  Distributed under the MIT License.
+//  See the accompanying file LICENSE-MIT or https://opensource.org/licenses/MIT
+-->
+<html>
+<head>
+    <title>Avatar Menu</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { margin: 0; font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; color: #f2f2f2;
+               background: #1d1f24; }
+        .top { position: fixed; top: 0; left: 0; right: 0; height: 64px; padding: 0 18px; display: flex;
+               align-items: center; gap: 12px; background: #15171b; border-bottom: 1px solid #2c2f36; z-index: 1; }
+        .top h1 { font-size: 20px; margin: 0; font-weight: 600; }
+        .path { font-size: 14px; color: #9aa0aa; }
+        .path span { cursor: pointer; text-decoration: underline; }
+        .back { background: #2c2f36; border: 0; color: #f2f2f2; font-size: 18px; width: 40px; height: 40px;
+                border-radius: 8px; cursor: pointer; }
+        .grid { margin-top: 76px; padding: 12px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        .control { background: #262930; border: 2px solid #2c2f36; border-radius: 12px; min-height: 120px;
+                   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+                   padding: 10px; cursor: pointer; user-select: none; text-align: center; font-size: 15px; }
+        .control img { width: 56px; height: 56px; object-fit: contain; }
+        .control .glyph { font-size: 34px; line-height: 56px; height: 56px; color: #9aa0aa; }
+        .control.on { border-color: #4caf50; background: #24402a; }
+        .control.disabled { opacity: 0.4; cursor: default; }
+        .control .kind { font-size: 11px; color: #9aa0aa; text-transform: uppercase; letter-spacing: 0.05em; }
+        .control input[type=range] { width: 90%; }
+        .empty { margin: 100px 24px; color: #9aa0aa; font-size: 16px; }
+        .note { padding: 6px 18px 18px; color: #7d838d; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="top">
+        <button class="back" id="back" title="Back">&#8592;</button>
+        <div>
+            <h1 id="title">Avatar Menu</h1>
+            <div class="path" id="path"></div>
+        </div>
+    </div>
+    <div class="grid" id="grid"></div>
+    <div class="note" id="note"></div>
+    <script>
+        var state = { menu: null, parameters: {}, folder: "" };
+        var stack = [];  // the submenus opened, from the top
+
+        function send(message) {
+            message.app = "avatarMenu";
+            EventBridge.emitWebEvent(JSON.stringify(message));
+        }
+
+        function setParameter(name, value) {
+            if (name) {
+                state.parameters[name] = value;
+                send({ type: "set", name: name, value: value });
+            }
+        }
+
+        function currentControls() {
+            var controls = state.menu && state.menu.controls ? state.menu.controls : [];
+            stack.forEach(function (index) {
+                controls = (controls[index] && controls[index].controls) || [];
+            });
+            return controls;
+        }
+
+        function label(text) {
+            return String(text || "").replace(/\\n/g, "\n");
+        }
+
+        function render() {
+            var grid = document.getElementById("grid");
+            grid.innerHTML = "";
+            var controls = currentControls();
+            var names = [];
+            var level = state.menu && state.menu.controls ? state.menu.controls : [];
+            stack.forEach(function (index) {
+                names.push(level[index] ? label(level[index].name).replace(/\n/g, " ") : "?");
+                level = (level[index] && level[index].controls) || [];
+            });
+            document.getElementById("title").textContent = names.length ? names[names.length - 1] : "Avatar Menu";
+            var path = document.getElementById("path");
+            path.innerHTML = "";
+            if (names.length) {
+                var top = document.createElement("span");
+                top.textContent = "Avatar Menu";
+                top.onclick = function () { stack = []; render(); };
+                path.appendChild(top);
+                names.slice(0, -1).forEach(function (name, i) {
+                    path.appendChild(document.createTextNode(" / "));
+                    var link = document.createElement("span");
+                    link.textContent = name;
+                    link.onclick = function () { stack = stack.slice(0, i + 1); render(); };
+                    path.appendChild(link);
+                });
+            }
+            document.getElementById("back").style.visibility = stack.length ? "visible" : "hidden";
+            if (!controls.length) {
+                grid.innerHTML = '<div class="empty">This avatar has no menu.</div>';
+                return;
+            }
+            controls.forEach(function (control, index) {
+                var tile = document.createElement("div");
+                tile.className = "control";
+                var known = control.type === "toggle" || control.type === "button" || control.type === "submenu" ||
+                    control.type === "radial";
+                if (control.icon) {
+                    var img = document.createElement("img");
+                    img.src = state.folder + encodeURI(control.icon);
+                    tile.appendChild(img);
+                } else {
+                    var glyph = document.createElement("div");
+                    glyph.className = "glyph";
+                    glyph.textContent = control.type === "submenu" ? "▸" : control.type === "toggle" ? "◉" :
+                        control.type === "button" ? "●" : "◐";
+                    tile.appendChild(glyph);
+                }
+                var name = document.createElement("div");
+                name.style.whiteSpace = "pre-line";
+                name.textContent = label(control.name);
+                tile.appendChild(name);
+                var kind = document.createElement("div");
+                kind.className = "kind";
+                kind.textContent = known ? control.type : control.type + " (not yet)";
+                tile.appendChild(kind);
+                var value = state.parameters[control.parameter];
+                if (control.type === "toggle") {
+                    if (value === control.value) {
+                        tile.className += " on";
+                    }
+                    tile.onclick = function () {
+                        // a menu toggle: on sets its value, off puts the parameter back to 0
+                        setParameter(control.parameter, state.parameters[control.parameter] === control.value ? 0 : control.value);
+                        render();
+                    };
+                } else if (control.type === "button") {
+                    var release = function () {
+                        if (tile.className.indexOf(" on") !== -1) {
+                            tile.className = "control";
+                            setParameter(control.parameter, 0);
+                        }
+                    };
+                    tile.onmousedown = function () {
+                        tile.className = "control on";
+                        setParameter(control.parameter, control.value);
+                    };
+                    tile.onmouseup = release;
+                    tile.onmouseleave = release;
+                } else if (control.type === "submenu") {
+                    tile.onclick = function () { stack.push(index); render(); };
+                } else if (control.type === "radial") {
+                    var target = (control.subParameters && control.subParameters[0]) || control.parameter;
+                    var slider = document.createElement("input");
+                    slider.type = "range";
+                    slider.min = 0;
+                    slider.max = 1;
+                    slider.step = 0.01;
+                    slider.value = state.parameters[target] || 0;
+                    slider.oninput = function () { setParameter(target, parseFloat(slider.value)); };
+                    tile.appendChild(slider);
+                } else {
+                    tile.className += " disabled";
+                }
+                grid.appendChild(tile);
+            });
+        }
+
+        document.getElementById("back").onclick = function () { stack.pop(); render(); };
+
+        window.addEventListener("load", function () {
+            EventBridge.scriptEventReceived.connect(function (data) {
+                var message;
+                try {
+                    message = JSON.parse(data);
+                } catch (e) {
+                    return;
+                }
+                if (message.app !== "avatarMenu" || message.type !== "avatarMenu") {
+                    return;
+                }
+                state.menu = message.menu;
+                state.folder = message.folder;
+                state.parameters = {};
+                (message.parameters || []).forEach(function (p) { state.parameters[p.name] = p.value; });
+                document.getElementById("note").textContent =
+                    "Emotes and other body animations from the avatar's animator are not playing yet.";
+                render();
+            });
+            send({ type: "ready" });
+        });
+    </script>
+</body>
+</html>

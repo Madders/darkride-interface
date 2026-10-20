@@ -85,6 +85,22 @@ export class ExploreService {
 	// the world whose instance chooser is open, so the other worlds can step back
 	chooserWorldId: string = null;
 
+	// the world being hopped into (its instance starting, or the client on its way there), so the other
+	// worlds step back and take no clicks meanwhile
+	hoppingWorldId: string = null;
+	private hoppingTimer: ReturnType<typeof setTimeout> = null;
+
+	setHopping(worldId: string | null) {
+		this.hoppingWorldId = worldId;
+		clearTimeout(this.hoppingTimer);
+		// a hop that never lands (the Explore left open) frees the list again after a while
+		if (worldId != null) {
+			this.hoppingTimer = setTimeout(() => {
+				this.hoppingWorldId = null;
+			}, 30000);
+		}
+	}
+
 	worlds: World[] = [];
 	type: "popular" | "liked" | "private" = "popular";
 	search = "";
@@ -194,7 +210,25 @@ export class ExploreService {
 		);
 	}
 
+	// A hop takes the screen at the click: the loading screen (scripts/system/worldLoading.js, on the local
+	// "Darkride-Hop" channel) comes up and Explore closes, so it isn't there on arrival. If the hop fails before
+	// the client leaves, the screen lifts and Explore comes back to say why.
+	// world: the name the screen shows big ("" when there's no name to show); its author and its picture, when known
+	hopStart(world: string, author = "", worldId: string = null) {
+		const picture =
+			worldId != null
+				? this.scriptService.metaverseUrl + "/api/domain/" + worldId + "/image"
+				: "";
+		this.scriptService.emitEvent("explore", "hopStart", { world, author, picture });
+		this.scriptService.emitEvent("explore", "close");
+	}
+
+	hopFailed() {
+		this.scriptService.emitEvent("explore", "hopCancel");
+	}
+
 	joinInstance(instance: Instance) {
+		this.setHopping(instance.world);
 		this.scriptService.emitEvent("explore", "joinDomain", instance.address);
 		this.scriptService.emitEvent("explore", "close");
 	}

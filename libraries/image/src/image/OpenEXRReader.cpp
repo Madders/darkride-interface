@@ -74,19 +74,17 @@ image::Image image::readOpenEXR(QIODevice& content, const std::string& filename)
         file.setFrameBuffer(&pixels[0][0] - viewport.min.x - viewport.min.y * width, 1, width);
         file.readPixels(viewport.min.y, viewport.max.y);
 
-        Image image{ width, height, Image::Format_PACKED_FLOAT };
-        auto packHDRPixel = getHDRPackingFunction();
-        
+        // the pixels as floats, every channel kept: a lightmap stays at half precision from here to the GPU
+        // (LIGHTMAPS.md); the cubemap path packs them to R11G11B10 itself, as this reader used to
+        Image image{ width, height, Image::Format_RGBAF };
+
         for (int y = 0; y < height; y++) {
             const auto srcScanline = pixels[y];
-            gpu::uint32* dstScanline = (gpu::uint32*) image.editScanLine(y);
+            glm::vec4* dstScanline = (glm::vec4*) image.editScanLine(y);
 
             for (int x = 0; x < width; x++) {
                 const auto& srcPixel = srcScanline[x];
-                auto& dstPixel = dstScanline[x];
-                glm::vec3 floatPixel{ srcPixel.r, srcPixel.g, srcPixel.b };
-
-                dstPixel = packHDRPixel(floatPixel);
+                dstScanline[x] = glm::vec4((float)srcPixel.r, (float)srcPixel.g, (float)srcPixel.b, (float)srcPixel.a);
             }
         }
         return image;

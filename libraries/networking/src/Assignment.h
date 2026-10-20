@@ -36,7 +36,8 @@ public:
         MessagesMixerType = 4,
         EntityScriptServerType = 5,
         EntityServerType = 6,
-        AllTypes = 7
+        PhysicsServerType = 7,
+        AllTypes = 8
     };
 
     enum Command {

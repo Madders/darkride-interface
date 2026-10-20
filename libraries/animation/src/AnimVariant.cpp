@@ -68,6 +68,95 @@ QScriptValue AnimVariantMap::animVariantMapToScriptValue(QScriptEngine* engine, 
     return target;
 }
 
+QVariantMap AnimVariantMap::animVariantMapToVariantMap(const QStringList& names, bool useNames) const {
+    QVariantMap target;
+    auto setOne = [&](const QString& name, const AnimVariant& value) {
+        switch (value.getType()) {
+            case AnimVariant::Type::Bool:
+                target[name] = value.getBool();
+                break;
+            case AnimVariant::Type::Int:
+                target[name] = value.getInt();
+                break;
+            case AnimVariant::Type::Float:
+                target[name] = value.getFloat();
+                break;
+            case AnimVariant::Type::String:
+                target[name] = value.getString();
+                break;
+            case AnimVariant::Type::Vec3:
+                target[name] = vec3toVariant(value.getVec3());
+                break;
+            case AnimVariant::Type::Quat:
+                target[name] = quatToVariant(value.getQuat());
+                break;
+            default:
+                assert(QString("AnimVariant::Type") == QString("valid"));
+        }
+    };
+    if (useNames) {  // only the requested names
+        for (const QString& name : names) {
+            auto search = _map.find(name);
+            if (search != _map.end()) {
+                setOne(name, search->second);
+            } else if (_triggers.count(name) == 1) {
+                target[name] = true;
+            }
+        }
+    } else {
+        for (auto& pair : _map) {
+            setOne(pair.first, pair.second);
+        }
+    }
+    return target;
+}
+
+void AnimVariantMap::animVariantMapFromVariantMap(const QVariantMap& source) {
+    for (auto it = source.constBegin(); it != source.constEnd(); ++it) {
+        const QVariant& value = it.value();
+        switch (value.type()) {
+            case QVariant::Bool:
+                set(it.key(), value.toBool());
+                break;
+            case QVariant::String:
+                set(it.key(), value.toString());
+                break;
+            case QVariant::Int:
+            case QVariant::UInt:
+            case QVariant::LongLong:
+            case QVariant::ULongLong:
+                set(it.key(), value.toInt());
+                break;
+            case QVariant::Double: {
+                float asFloat = value.toFloat();
+                int asInteger = int(asFloat);
+                if (asInteger == asFloat) {
+                    set(it.key(), asInteger);
+                } else {
+                    set(it.key(), asFloat);
+                }
+                break;
+            }
+            case QVariant::Map: {
+                QVariantMap map = value.toMap();
+                if (map.contains("x") && map.contains("y") && map.contains("z")) {
+                    if (map.contains("w")) {
+                        set(it.key(), glm::quat(map["w"].toFloat(), map["x"].toFloat(), map["y"].toFloat(), map["z"].toFloat()));
+                    } else {
+                        set(it.key(), glm::vec3(map["x"].toFloat(), map["y"].toFloat(), map["z"].toFloat()));
+                    }
+                    break;
+                }
+                qCWarning(animation) << "Ignoring unrecognized data" << value << "for animation property" << it.key();
+                break;
+            }
+            default:
+                qCWarning(animation) << "Ignoring unrecognized data" << value << "for animation property" << it.key();
+                break;
+        }
+    }
+}
+
 void AnimVariantMap::copyVariantsFrom(const AnimVariantMap& other) {
     for (auto& pair : other._map) {
         _map[pair.first] = pair.second;

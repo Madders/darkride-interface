@@ -177,6 +177,8 @@ void GeometryReader::run() {
 
         // Do processing on the model
         baker::Baker modelBaker(hfmModel, _mapping.second, _mapping.first);
+        // the client draws a model's simplified versions at a distance (AUTOMATIC-LODS.md)
+        modelBaker.getConfiguration()->getJobConfig("BuildMeshLods")->setEnabled(true);
         modelBaker.run();
 
         auto processedHFMModel = modelBaker.getHFMModel();

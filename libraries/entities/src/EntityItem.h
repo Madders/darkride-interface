@@ -38,6 +38,7 @@
 #include "SimulationOwner.h"
 #include "EntityDynamicInterface.h"
 #include "GrabPropertyGroup.h"
+#include "VehiclePropertyGroup.h"
 #include "EntityPriority.h"
 
 class EntitySimulation;
@@ -169,6 +170,9 @@ public:
     // perform linear extrapolation for SimpleEntitySimulation
     void simulate(const quint64& now);
     bool stepKinematicMotion(float timeElapsed); // return 'true' if moving
+    // the same integration on a state the caller holds (a local transform and velocities in the parent's
+    // rotation), leaving the entity as it is: the physics integrates its keyframed bodies with this
+    void integrateKinematicMotion(Transform& transform, glm::vec3& linearVelocity, glm::vec3& angularVelocity, float timeElapsed) const;
 
     virtual bool needsToCallUpdate() const { return false; }
 
@@ -362,6 +366,14 @@ public:
     bool isFrame() const { return _frame || _isFrame; }
     // the box named in userData inside which something belongs to this frame, in the entity's coordinates; false when none
     bool getFrameVolume(glm::vec3& minCorner, glm::vec3& maxCorner) const;
+    // the sphere of this entity's impostor card (the "impostor" entry of its userData, IMPOSTORS.md 2.1) in world
+    // space: the entry's radius on the entity's query cube's centre; false without a valid entry. The radius is
+    // parsed once when the userData changes, never per traversal: the entity server sizes a carded entity by it for
+    // a client that draws cards (ENTITY-STREAMING.md 3.3)
+    bool getImpostorCardSphere(glm::vec3& center, float& radius) const;
+    // the card this entity shows as from afar: its own, or else the nearest ancestor's (a group's models draw as the
+    // group's card, and wait behind it), inherited then true; false without either
+    bool findImpostorCardSphere(glm::vec3& center, float& radius, bool& inherited) const;
     virtual void setUserData(const QString& value); // FIXME: This is suspicious(?)
 
     QString getPrivateUserData() const;
@@ -501,6 +513,10 @@ public:
     bool dynamicDataNeedsTransmit() const { return _dynamicDataNeedsTransmit; }
     void setTransitingWithAvatar(bool value) { _transitingWithAvatar = value; }
     bool getTransitingWithAvatar() { return _transitingWithAvatar; }
+    // the local physics places this entity itself (a car on a track, driven from the train's state), so the
+    // transform and velocities in a network update are not applied, as when this client owns the simulation
+    void setTransformDrivenLocally(bool value) { _transformDrivenLocally = value; }
+    bool getTransformDrivenLocally() const { return _transformDrivenLocally; }
 
     bool shouldSuppressLocationEdits() const;
 
@@ -595,6 +611,54 @@ public:
     void setVisuallyReady(bool visuallyReady) { _visuallyReady = visuallyReady; }
 
     const GrabPropertyGroup& getGrabProperties() const { return _grabProperties; }
+    const VehiclePropertyGroup& getVehicleProperties() const { return _vehicleProperties; }
+    bool isVehicle() const { return _vehicleProperties.isVehicle(); }
+    bool isWheel() const { return _vehicleProperties.isWheel(); }
+    bool isAirship() const { return _vehicleProperties.isAirship(); }
+    bool isAircraft() const { return _vehicleProperties.isAircraft(); }
+    // a vehicle's definition changed (the version the simulation built from is stale)
+    uint32_t getVehicleDefinitionVersion() const { return _vehicleDefinitionVersion; }
+
+    // The driver's controls, set by the local script (Entities.setVehicleControls) and read by the local physics every
+    // substep; never sent as properties (the inputs travel in VehicleInput packets, the applied ones in the state).
+    struct VehicleControls {
+        float throttle { 0.0f };    // -1 reverse .. 1 forward
+        float steering { 0.0f };    // -1 left .. 1 right
+        float brake { 0.0f };       // 0 .. 1
+        float handBrake { 0.0f };   // 0 .. 1
+        float pitch { 0.0f };       // an airship's elevator, -1 nose down .. 1 nose up (PHYSICS.md round 7)
+        float lift { 0.0f };        // its vertical thruster, -1 down .. 1 up
+        float trim { 0.0f };        // ballast dropped (1) or gas vented (-1)
+    };
+    void setLocalVehicleControls(const VehicleControls& controls) { withWriteLock([&] { _localVehicleControls = controls; _hasLocalVehicleControls = true; }); }
+    void clearLocalVehicleControls() { withWriteLock([&] { _hasLocalVehicleControls = false; _localVehicleControls = VehicleControls(); }); }
+    bool getLocalVehicleControls(VehicleControls& controls) const { return resultWithReadLock<bool>([&] { controls = _localVehicleControls; return _hasLocalVehicleControls; }); }
+
+    // The last transform and velocities the network sent while the local physics was driving this entity's transform
+    // (setTransformDrivenLocally): kept here instead of being applied, for the simulation to adopt as a correction.
+    struct NetworkPose {
+        glm::vec3 position { 0.0f };
+        glm::quat rotation;
+        glm::vec3 velocity { 0.0f };
+        glm::vec3 angularVelocity { 0.0f };
+        quint64 lastEdited { 0 };   // the sender's stamp on the update
+        uint32_t version { 0 };     // bumps with every update that carried a position
+        bool teleport { false };    // received while this process drives the transform as its owner and last edited by
+                                    // someone else: an explicit edit, which the simulation adopts as a teleport (round 7),
+                                    // or an edit of another property carrying the pose this process sent
+        QUuid editedBy;             // the entity's lastEditedBy as the update had it
+    };
+    NetworkPose getNetworkPose() const { return resultWithReadLock<NetworkPose>([&] { return _networkPose; }); }
+
+    // On the entity server: a teleport it let through (an explicit edit of what the physics server holds, round 7), held
+    // against the owner's updates that were on their way before the owner heard of it, until one arrives at it.
+    struct PendingTeleport {
+        glm::vec3 position { 0.0f };   // local, as the network carries it
+        glm::quat rotation;
+        quint64 expiry { 0 };          // 0: none
+    };
+    PendingTeleport getPendingTeleport() const { return resultWithReadLock<PendingTeleport>([&] { return _pendingTeleport; }); }
+    void setPendingTeleport(const PendingTeleport& teleport) { withWriteLock([&] { _pendingTeleport = teleport; }); }
 
     void prepareForSimulationOwnershipBid(EntityItemProperties& properties, uint64_t now, uint8_t priority);
 
@@ -697,6 +761,7 @@ protected:
     bool _hasFrameVolume { false };
     glm::vec3 _frameVolumeMin { 0.0f };
     glm::vec3 _frameVolumeMax { 0.0f };
+    float _impostorCardRadius { 0.0f }; // the userData "impostor" entry's sphere radius in metres, 0 for no card (getImpostorCardSphere)
     QString _privateUserData{ ENTITY_ITEM_DEFAULT_PRIVATE_USER_DATA };
     SimulationOwner _simulationOwner;
     bool _shouldHighlight { false };
@@ -765,6 +830,7 @@ protected:
 
     entity::HostType _hostType { entity::HostType::DOMAIN };
     bool _transitingWithAvatar{ false };
+    bool _transformDrivenLocally { false };
     QUuid _owningAvatarID;
 
     // physics related changes from the network to suppress any duplicates and make
@@ -807,6 +873,12 @@ protected:
     QVector<QUuid> _cloneIDs;
 
     GrabPropertyGroup _grabProperties;
+    VehiclePropertyGroup _vehicleProperties;
+    uint32_t _vehicleDefinitionVersion { 0 };
+    VehicleControls _localVehicleControls;
+    bool _hasLocalVehicleControls { false };
+    NetworkPose _networkPose;
+    PendingTeleport _pendingTeleport;
 
     QHash<QUuid, EntityDynamicPointer> _grabActions;
 

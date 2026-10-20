@@ -120,6 +120,9 @@ public:
     float getAvatarSimulationTime() const { return _avatarSimulationTime; }
 
     void updateMyAvatar(float deltaTime);
+
+    // every avatar's contact receivers against everyone's senders (Avatar::updateContacts)
+    void updateContacts();
     void updateOtherAvatars(float deltaTime);
 
     void setMyAvatarDataPacketsPaused(bool puase);
@@ -231,6 +234,9 @@ public:
      * @deprecated This function is deprecated and will be removed.
      */
     Q_INVOKABLE void setAvatarSortCoefficient(const QString& name, const QScriptValue& value);
+    // the same with the value as a number, for the WebAssembly script engine (a name of its own: QtScript would find a
+    // same-named overload ambiguous with the QScriptValue one)
+    Q_INVOKABLE void setAvatarSortCoefficientValue(const QString& name, float value);
 
     /**jsdoc
      * Gets PAL (People Access List) data for one or more avatars. Using this method is faster than iterating over each avatar 

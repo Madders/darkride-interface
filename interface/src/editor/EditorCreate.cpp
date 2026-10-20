@@ -66,11 +66,12 @@ namespace {
         return p;
     }
 
-    QString safeFileName(const QString& name) {
-        QString s = name;
-        s.replace(QRegularExpression("[^A-Za-z0-9._-]+"), "_");
-        return s;
-    }
+}
+
+QString EditorUpload::safeFileName(const QString& name) {
+    QString s = name;
+    s.replace(QRegularExpression("[^A-Za-z0-9._-]+"), "_");
+    return s;
 }
 
 const QVector<EditorCreate::Item>& EditorCreate::items() {
@@ -78,6 +79,7 @@ const QVector<EditorCreate::Item>& EditorCreate::items() {
         { "empty", "Empty", "", EntityTypes::Shape },
         { "model", "Model…", "", EntityTypes::Model, true },
         { "cube", "Cube", "Shape", EntityTypes::Shape, true },
+        { "mirror", "Mirror", "Shape", EntityTypes::Shape },
         { "sphere", "Sphere", "Shape", EntityTypes::Shape },
         { "cylinder", "Cylinder", "Shape", EntityTypes::Shape },
         { "cone", "Cone", "Shape", EntityTypes::Shape },
@@ -88,6 +90,7 @@ const QVector<EditorCreate::Item>& EditorCreate::items() {
         { "icosahedron", "Icosahedron", "Shape", EntityTypes::Shape },
         { "point", "Point Light", "Light", EntityTypes::Light },
         { "spot", "Spot Light", "Light", EntityTypes::Light },
+        { "probe", "Reflection Probe", "Light", EntityTypes::Shape },
         { "text", "Text", "", EntityTypes::Text, true },
         { "image", "Image", "", EntityTypes::Image },
         { "web", "Web Page", "", EntityTypes::Web },
@@ -121,6 +124,18 @@ EntityItemProperties EditorCreate::properties(const QString& key, const glm::vec
         p.setCollisionless(true);
         return p;
     }
+    if (key == "probe") {
+        // a reflection probe (LIGHTMAPS.md §7): an invisible, collisionless box, the region whose surfaces reflect
+        // the probe's cube map (userData "reflectionProbe": the shape renderer and ReflectionProbeStage); a room's
+        // worth to start with, the probe at the entity's position
+        auto p = shape("Cube", position);
+        p.setName("Reflection Probe");
+        p.setDimensions(glm::vec3(5.0f, 3.0f, 5.0f));
+        p.setVisible(false);
+        p.setCollisionless(true);
+        p.setUserData("{\"reflectionProbe\": {\"intensity\": 1, \"blendDistance\": 1, \"boxProjection\": true}}");
+        return p;
+    }
     if (key == "cube") { return shape("Cube", position); }
     if (key == "sphere") { return shape("Sphere", position); }
     if (key == "cylinder") { return shape("Cylinder", position); }
@@ -128,6 +143,16 @@ EntityItemProperties EditorCreate::properties(const QString& key, const glm::vec
     if (key == "hexagon") { return shape("Hexagon", position); }
     if (key == "octahedron") { return shape("Octahedron", position); }
     if (key == "icosahedron") { return shape("Icosahedron", position); }
+    if (key == "mirror") {
+        // a thin dark slab facing the camera, its front the glass (userData "mirror": the shape renderer and Mirrors.h)
+        auto p = shape("Cube", position);
+        p.setName("Mirror");
+        p.setDimensions(glm::vec3(1.0f, 2.0f, 0.02f));
+        p.setColor(glm::u8vec3(40, 44, 48));
+        p.setUserData("{\"mirror\": \"screen\"}");
+        p.setRotation(facing(cameraYaw));
+        return p;
+    }
     if (key == "quad" || key == "circle") {
         auto p = shape(key == "quad" ? "Quad" : "Circle", position);
         p.setDimensions(FLAT_DIMENSIONS);   // 1 x 1 m, lying flat (a 1 x 1 m upright panel came out as a line)

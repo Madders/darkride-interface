@@ -14,6 +14,7 @@
 
 #include "render-utils/ShaderConstants.h"
 
+#include <FrameDiag.h>
 #include <TBBHelpers.h>
 
 gpu::TexturePointer LightingModel::_ambientFresnelLUT;
@@ -282,6 +283,22 @@ void LightingModel::setShadow(bool enable) {
 bool LightingModel::isShadowEnabled() const {
     return (bool)_parametersBuffer.get<Parameters>().enableShadow;
 }
+void LightingModel::setReflectionProbes(bool enable) {
+    if (enable != isReflectionProbesEnabled()) {
+        _parametersBuffer.edit<Parameters>().enableReflectionProbes = (float)enable;
+    }
+}
+bool LightingModel::isReflectionProbesEnabled() const {
+    return (bool)_parametersBuffer.get<Parameters>().enableReflectionProbes;
+}
+void LightingModel::setProbeVolume(bool enable) {
+    if (enable != isProbeVolumeEnabled()) {
+        _parametersBuffer.edit<Parameters>().enableProbeVolume = (float)enable;
+    }
+}
+bool LightingModel::isProbeVolumeEnabled() const {
+    return (bool)_parametersBuffer.get<Parameters>().enableProbeVolume;
+}
 
 MakeLightingModel::MakeLightingModel() {
     _lightingModel = std::make_shared<LightingModel>();
@@ -291,6 +308,8 @@ void MakeLightingModel::configure(const Config& config) {
     _lightingModel->setUnlit(config.enableUnlit);
     _lightingModel->setEmissive(config.enableEmissive);
     _lightingModel->setLightmap(config.enableLightmap);
+    _lightingModel->setReflectionProbes(config.enableReflectionProbes);
+    _lightingModel->setProbeVolume(config.enableProbeVolume);
     _lightingModel->setBackground(config.enableBackground);
     _lightingModel->setHaze(config.enableHaze);
     _lightingModel->setBloom(config.enableBloom);
@@ -322,6 +341,18 @@ void MakeLightingModel::configure(const Config& config) {
 void MakeLightingModel::run(const render::RenderContextPointer& renderContext, LightingModelPointer& lightingModel) {
 
     lightingModel = _lightingModel;
+
+    if (renderContext->args->_renderMode == RenderArgs::RenderMode::DEFAULT_RENDER_MODE) {
+        const auto& m = *_lightingModel;
+        unsigned flags = (m.isAmbientLightEnabled() << 0) | (m.isDirectionalLightEnabled() << 1) | (m.isPointLightEnabled() << 2) |
+                         (m.isSpotLightEnabled() << 3) | (m.isAlbedoEnabled() << 4) | (m.isEmissiveEnabled() << 5) |
+                         (m.isLightmapEnabled() << 6) | (m.isBackgroundEnabled() << 7) | (m.isObscuranceEnabled() << 8) |
+                         (m.isDiffuseEnabled() << 9) | (m.isSpecularEnabled() << 10) | (m.isMaterialTexturingEnabled() << 11) |
+                         (m.isUnlitEnabled() << 12) | (m.isHazeEnabled() << 13) | (m.isBloomEnabled() << 14) |
+                         (m.isWireframeEnabled() << 15) | (m.isShadowEnabled() << 16) | (m.isReflectionProbesEnabled() << 17) |
+                         (m.isProbeVolumeEnabled() << 18);
+        FrameDiag::lightingFlags() = flags;
+    }
 
     // make sure the enableTexturing flag of the render ARgs is in sync
     renderContext->args->_enableTexturing = _lightingModel->isMaterialTexturingEnabled();

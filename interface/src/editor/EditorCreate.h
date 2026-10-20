@@ -61,6 +61,8 @@ public:
     bool startData(const QByteArray& data, const QString& fileName, const QString& remoteFolder, const QString& mimeType,
                    QString& error);
     QString fileName() const { return _fileName; }
+    // the name a file is stored under: letters, digits, dot, dash and underscore; anything else becomes "_"
+    static QString safeFileName(const QString& name);
 
 signals:
     void progress(qint64 sent, qint64 total);

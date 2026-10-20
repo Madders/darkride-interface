@@ -56,6 +56,7 @@ class ScriptAvatarData : public QObject {
     Q_PROPERTY(QString sessionDisplayName READ getSessionDisplayName NOTIFY sessionDisplayNameChanged)
     Q_PROPERTY(bool isReplicated READ getIsReplicated)
     Q_PROPERTY(bool lookAtSnappingEnabled READ getLookAtSnappingEnabled NOTIFY lookAtSnappingChanged)
+    Q_PROPERTY(QString gazeStyle READ getGazeStyle)
 
     //
     // ATTACHMENT AND JOINT PROPERTIES
@@ -119,6 +120,7 @@ public:
     QString getSessionDisplayName() const;
     bool getIsReplicated() const;
     bool getLookAtSnappingEnabled() const;
+    QString getGazeStyle() const;
 
     //
     // ATTACHMENT AND JOINT PROPERTIES

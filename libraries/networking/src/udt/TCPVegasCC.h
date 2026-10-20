@@ -14,6 +14,7 @@
 #ifndef hifi_TCPVegasCC_h
 #define hifi_TCPVegasCC_h
 
+#include <algorithm>
 #include <map>
 
 #include "CongestionControl.h"
@@ -24,6 +25,19 @@ namespace udt {
 
 class TCPVegasCC : public CongestionControl {
 public:
+    // PHYSICS.md round 10: the retransmission timeout never falls below this (Linux TCP's floor, 200 ms); before, it was
+    // the smoothed round trip plus four deviations with no floor, tens of microseconds on this machine, so one
+    // acknowledgement later than that (a busy receiver, a public address reached through the router) retransmitted
+    // every packet in flight, which made every later acknowledgement a duplicate and Karn's rule left the round-trip
+    // estimate empty, for ever: the congestion window sat at two, every packet went out six to twenty-seven times
+    static const int MIN_RTO_USECS = 200000;
+    // round trips under a millisecond are scheduling noise, not queueing: Vegas's comparison of the round trip with
+    // its base is made with both floored to this
+    static const int VEGAS_RTT_FLOOR_USECS = 1000;
+    // the base round trip is the least seen over a sliding window (two buckets of this length), as BBR's min_rtt
+    // is, not the least ever: a receiver that answers slower than it once did is not a queue
+    static const int BASE_RTT_BUCKET_USECS = 5000000;
+
     TCPVegasCC();
 
     virtual bool onACK(SequenceNumber ackNum, p_high_resolution_clock::time_point receiveTime) override;
@@ -64,8 +78,13 @@ private:
 
     int _numACKSinceFastRetransmit { 3 }; // Number of ACKs received since fast re-transmit, default avoids immediate re-transmit
 
+    int baseRTT() const { return std::min(_baseBucketMin[0], _baseBucketMin[1]); }
+    void resetBaseRTT();
+    void noteBaseRTT(int rtt, p_high_resolution_clock::time_point now);
+
     int _currentMinRTT; // Current min RTT during last RTT (since last congestion avoidance check), in microseconds
-    int _baseRTT; // Lowest RTT during connection, in microseconds
+    int _baseBucketMin[2]; // Lowest RTT in the current and the previous bucket of the sliding window, in microseconds
+    p_high_resolution_clock::time_point _baseBucketStart;
     int _ewmaRTT { -1 }; // Exponential weighted moving average RTT
     int _rttVariance { 0 }; // Variance in collected RTT values
 
@@ -75,6 +94,12 @@ private:
     int _duplicateACKCount { 0 }; // Counter for duplicate ACKs received
 
     int _slowStartOddAdjust { 0 }; // Marker for every window adjustment every other RTT in slow-start
+
+    // the trace (TIVOLI_UDT_TRACE)
+    int _traceCount { 0 };
+    int _traceLastSample { -1 };
+    int _traceBaseRTT { -1 };
+    int _traceSinceSend { -1 };
 };
 
 }

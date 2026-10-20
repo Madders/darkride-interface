@@ -99,6 +99,17 @@ input[type=button].naked:active {
     color: white;
     text-shadow: 2px 2px 3px #000000;
 }
+
+/* where a snap went: My Files, or this computer and why */
+.snapStored {
+    width: 95%;
+    margin: 0 auto 5px auto;
+    font-family: Roboto-Regular;
+    font-size: 13px;
+    color: #afafaf;
+    text-align: center;
+    overflow-wrap: break-word;
+}
 /*
 // END styling of snapshot pane and its contents
 */

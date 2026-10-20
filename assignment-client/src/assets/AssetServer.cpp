@@ -441,7 +441,9 @@ void AssetServer::completeSetup() {
             cleanupBakedFilesForDeletedAssets();
         }
 
-        nodeList->addSetOfNodeTypesToNodeInterestSet({ NodeType::Agent, NodeType::EntityScriptServer });
+        // the physics server too: it fetches a world's terrain at an atp: URL, and a node the asset server isn't told
+        // about can't complete its handshake (its packets come from an unknown node and are dropped)
+        nodeList->addSetOfNodeTypesToNodeInterestSet({ NodeType::Agent, NodeType::EntityScriptServer, NodeType::PhysicsServer });
 
         bakeAssets();
     } else {
