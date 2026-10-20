@@ -33,6 +33,8 @@ public class SettingsFragment extends PreferenceFragment implements SharedPrefer
     private static final String PREFERENCE_KEY_FRAME_RATE = "graphics_frame_rate";
     private static final String PREFERENCE_KEY_WORLD_DETAIL = "graphics_world_detail";
     private static final String PREFERENCE_KEY_DRAW_DISTANCE = "graphics_draw_distance";
+    private static final String PREFERENCE_KEY_TOUCH_TURN_SPEED = "touch_turn_speed";
+    private static final String HIFI_SETTINGS_TOUCH_TURN_SPEED_KEY = "touchTurnSpeed";
     // a preset is put in place on the engine's thread: the switches it sets are read back after this
     private static final int PRESET_APPLY_DELAY_MSECS = 300;
 
@@ -180,6 +182,10 @@ public class SettingsFragment extends PreferenceFragment implements SharedPrefer
                 if (!mLoadingGraphicsSettings) {
                     nativeSetWorldDetail(Integer.parseInt(sharedPreferences.getString(key, "1")));
                 }
+                break;
+            case PREFERENCE_KEY_TOUCH_TURN_SPEED:
+                HifiUtils.getInstance().updateHifiSettingString(HIFI_SETTINGS_ANDROID_GROUP, HIFI_SETTINGS_TOUCH_TURN_SPEED_KEY,
+                        sharedPreferences.getString(key, "1.5"));
                 break;
             case PREFERENCE_KEY_DRAW_DISTANCE:
                 if (!mLoadingGraphicsSettings) {

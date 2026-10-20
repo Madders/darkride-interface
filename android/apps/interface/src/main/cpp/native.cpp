@@ -23,7 +23,10 @@
 #include <shared/Storage.h>
 #include <QObject>
 
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
 #include <AddressManager.h>
+#include <MessagesClient.h>
 #include "AndroidHelper.h"
 #include <udt/PacketHeaders.h>
 #include <SettingHandle.h>
@@ -256,10 +259,33 @@ JNIEXPORT void Java_io_highfidelity_hifiinterface_InterfaceActivity_nativeOnDest
 
 }
 
+// Joins a world with the loading screen over the way in (scripts/system/worldLoading.js, which the desktop's Explore
+// starts the same way): the world's name, author and picture as Places knows them, "" for what it doesn't
+static void gotoWorld(const QString& url, const QString& name, const QString& author, const QString& picture) {
+    QJsonObject hop {
+        { "type", "start" },
+        { "world", name },
+        { "author", author },
+        { "picture", picture }
+    };
+    DependencyManager::get<MessagesClient>()->sendLocalMessage("Darkride-Hop",
+        QString::fromUtf8(QJsonDocument(hop).toJson(QJsonDocument::Compact)));
+    DependencyManager::get<AddressManager>()->loadSettings(url);
+    AndroidHelper::instance().muteMic();
+}
+
 JNIEXPORT void Java_io_highfidelity_hifiinterface_InterfaceActivity_nativeGotoUrl(JNIEnv* env, jobject obj, jstring url) {
     QAndroidJniObject jniUrl("java/lang/String", "(Ljava/lang/String;)V", url);
-    DependencyManager::get<AddressManager>()->loadSettings(jniUrl.toString());
-    AndroidHelper::instance().muteMic();
+    gotoWorld(jniUrl.toString(), QString(), QString(), QString());
+}
+
+JNIEXPORT void Java_io_highfidelity_hifiinterface_InterfaceActivity_nativeGotoWorld(JNIEnv* env, jobject obj, jstring url,
+                                                                                   jstring name, jstring author,
+                                                                                   jstring picture) {
+    auto string = [](jstring value) {
+        return QAndroidJniObject("java/lang/String", "(Ljava/lang/String;)V", value).toString();
+    };
+    gotoWorld(string(url), string(name), string(author), string(picture));
 }
 
 JNIEXPORT void Java_io_highfidelity_hifiinterface_InterfaceActivity_nativeGoToUser(JNIEnv* env, jobject obj, jstring username) {

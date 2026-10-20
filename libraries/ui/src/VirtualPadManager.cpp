@@ -8,6 +8,9 @@
 
 #include "VirtualPadManager.h"
 
+#include <glm/glm.hpp>
+#include <SettingHandle.h>
+
 namespace VirtualPad {
 
     bool Instance::isBeingTouched() {
@@ -54,6 +57,14 @@ namespace VirtualPad {
 
     void Manager::enable(bool enable) {
         _enabled = enable;
+    }
+
+    float Manager::touchTurnSpeed() {
+        static const float DEFAULT_TOUCH_TURN_SPEED = 1.5f;
+        Setting::Handle<QString> setting { QStringList() << "Android" << "touchTurnSpeed", QString() };
+        bool valid = false;
+        float speed = setting.get().toFloat(&valid);
+        return valid ? glm::clamp(speed, 0.25f, 4.0f) : DEFAULT_TOUCH_TURN_SPEED;
     }
 
     bool Manager::isEnabled() {

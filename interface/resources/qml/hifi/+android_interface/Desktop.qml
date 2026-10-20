@@ -25,6 +25,9 @@ OriginalDesktop.Desktop {
     }
 
 
+    // Darkride's loading screen over the way into a world, as on the desktop (scripts/system/worldLoading.js drives it)
+    WorldLoadingScreen { }
+
     Component { id: toolbarBuilder; Toolbar { } }
     // This used to create sysToolbar dynamically with a call to getToolbar() within onCompleted.
     // Beginning with QT 5.6, this stopped working, as anything added to toolbars too early got

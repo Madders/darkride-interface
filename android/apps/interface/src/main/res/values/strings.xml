@@ -219,4 +219,21 @@
         <item>400</item>
         <item>16384</item>
     </string-array>
+    <string name="settings_controls">Touch controls</string>
+    <string name="touch_turn_speed">Turn speed</string>
+    <string-array name="touch_turn_speed_names">
+        <item>Slow</item>
+        <item>Steady</item>
+        <item>Normal</item>
+        <item>Fast</item>
+        <item>Very fast</item>
+    </string-array>
+    <!-- multiples of the drag's old turn: 1.5 is the default (VirtualPad::Manager::touchTurnSpeed) -->
+    <string-array name="touch_turn_speed_values" translatable="false">
+        <item>0.75</item>
+        <item>1.0</item>
+        <item>1.5</item>
+        <item>2.0</item>
+        <item>3.0</item>
+    </string-array>
 </resources>

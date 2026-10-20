@@ -158,9 +158,9 @@ void TouchscreenVirtualPadDevice::processInputDeviceForView() {
     // Using the average instead of the full deltaX and deltaY, makes deltaTime in MyAvatar dont't accelerate rotation when there is a low touchUpdate rate (heavier domains).
     // (Because it multiplies this input value by deltaTime (with a coefficient)).
     _inputDevice->_axisStateMap[controller::RX].value = 
-        _viewTouchUpdateCount == 0 ? 0 : (_viewCurrentTouchPoint.x - _viewRefTouchPoint.x) / _viewTouchUpdateCount;
+        _viewTouchUpdateCount == 0 ? 0 : _viewTurnSpeed * (_viewCurrentTouchPoint.x - _viewRefTouchPoint.x) / _viewTouchUpdateCount;
     _inputDevice->_axisStateMap[controller::RY].value = 
-        _viewTouchUpdateCount == 0 ? 0 : (_viewCurrentTouchPoint.y - _viewRefTouchPoint.y) / _viewTouchUpdateCount;
+        _viewTouchUpdateCount == 0 ? 0 : _viewTurnSpeed * (_viewCurrentTouchPoint.y - _viewRefTouchPoint.y) / _viewTouchUpdateCount;
 
     // after use, save last touch point as ref
     _viewRefTouchPoint = _viewCurrentTouchPoint;
@@ -425,6 +425,7 @@ void TouchscreenVirtualPadDevice::viewTouchBegin(glm::vec2 touchPoint) {
         _viewCurrentTouchPoint = touchPoint;
         _viewTouchUpdateCount++;
         _viewHasValidTouch = true;
+        _viewTurnSpeed = virtualPadManager.touchTurnSpeed();
     }
 }
 

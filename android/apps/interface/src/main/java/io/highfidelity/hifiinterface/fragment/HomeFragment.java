@@ -102,7 +102,7 @@ public class HomeFragment extends Fragment {
         mDomainAdapter.setClickListener((view, position, domain) -> {
             new Handler(getActivity().getMainLooper()).postDelayed(() -> {
                 if (mListener != null) {
-                    mListener.onSelectedDomain(domain.url);
+                    mListener.onSelectedWorld(domain.url, domain.name, domain.author, domain.thumbnail);
                 }
             }, 400); // a delay so the ripple effect can be seen
         });
@@ -176,7 +176,9 @@ public class HomeFragment extends Fragment {
         mBookmarkAdapter = new BookmarkAdapter(theme, new BookmarkAdapter.Listener() {
             @Override
             public void onBookmarkClicked(Bookmarks.Bookmark bookmark) {
-                goToAddress(bookmark.address);
+                if (mListener != null) {
+                    mListener.onSelectedWorld(HifiUtils.getInstance().sanitizeHifiUrl(bookmark.address), bookmark.name, "", "");
+                }
             }
 
             @Override
@@ -452,6 +454,11 @@ public class HomeFragment extends Fragment {
 
     public interface OnHomeInteractionListener {
         void onSelectedDomain(String domainUrl);
+
+        // A world from the list, with what the loading screen shows of it while it loads
+        default void onSelectedWorld(String domainUrl, String name, String author, String picture) {
+            onSelectedDomain(domainUrl);
+        }
     }
 
     public void onSearchClear(View view) {

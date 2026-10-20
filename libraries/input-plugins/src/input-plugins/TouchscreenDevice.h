@@ -76,6 +76,8 @@ protected:
     qreal _screenDPI;
     glm::vec2 _screenDPIScale;
     glm::vec2 _firstTouchVec;
+    // the Settings' touch turn speed, taken up as each touch begins
+    float _turnSpeed { 1.0f };
     glm::vec2 _currentTouchVec;
     int _touchPointCount;
     std::shared_ptr<InputDevice> _inputDevice { std::make_shared<InputDevice>() };

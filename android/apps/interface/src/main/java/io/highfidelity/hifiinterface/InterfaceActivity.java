@@ -64,6 +64,10 @@ import com.google.vr.ndk.base.GvrApi;*/
 public class InterfaceActivity extends QtActivity implements WebViewFragment.OnWebViewInteractionListener {
 
     public static final String DOMAIN_URL = "url";
+    // what the loading screen shows of the world being joined, when it's known (Places)
+    public static final String DOMAIN_NAME = "world";
+    public static final String DOMAIN_AUTHOR = "author";
+    public static final String DOMAIN_PICTURE = "picture";
     public static final String EXTRA_GOTO_USERNAME = "gotousername";
     private static final String TAG = "Interface";
     public static final String EXTRA_ARGS = "args";
@@ -79,6 +83,8 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
     private native void nativeSyncWindowSize(int width, int height);
     private native void nativeOnDestroy();
     private native void nativeGotoUrl(String url);
+    // joins a world with the loading screen up over the way in, showing its name, author and picture ("" if unknown)
+    private native void nativeGotoWorld(String url, String name, String author, String picture);
     private native void nativeGoToUser(String username);
     private native void nativeBeforeEnterBackground();
     private native void nativeEnterBackground();
@@ -105,6 +111,7 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
     private boolean mStartInDomain;
     // a world to join once the app has loaded (a hifi:// link that started it)
     private String mPendingDomainUrl;
+    private Intent mPendingDomainIntent;
     private boolean isLoading;
 //    private GvrApi gvrApi;
     // Opaque native pointer to the Application C++ object.
@@ -126,6 +133,7 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
             // (--url isn't acted on at startup: the world is joined once the app has loaded, and the splash goes
             // straight to it, not to Places)
             mPendingDomainUrl = intent.getStringExtra(DOMAIN_URL);
+            mPendingDomainIntent = intent;
             mStartInDomain = true;
         } else if (intent.hasExtra(EXTRA_ARGS)) {
             String args = intent.getStringExtra(EXTRA_ARGS);
@@ -422,7 +430,7 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
         super.onNewIntent(intent);
         if (intent.hasExtra(DOMAIN_URL)) {
             hideWebDrawer();
-            nativeGotoUrl(intent.getStringExtra(DOMAIN_URL));
+            gotoWorld(intent, intent.getStringExtra(DOMAIN_URL));
         } else if (intent.hasExtra(EXTRA_GOTO_USERNAME)) {
             hideWebDrawer();
             nativeGoToUser(intent.getStringExtra(EXTRA_GOTO_USERNAME));
@@ -515,6 +523,15 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
         }
     }
 
+    private void gotoWorld(Intent intent, String url) {
+        nativeGotoWorld(url, extra(intent, DOMAIN_NAME), extra(intent, DOMAIN_AUTHOR), extra(intent, DOMAIN_PICTURE));
+    }
+
+    private static String extra(Intent intent, String name) {
+        String value = intent != null ? intent.getStringExtra(name) : null;
+        return value != null ? value : "";
+    }
+
     public void onAppLoadedComplete() {
         isLoading = false;
         if (nativeEnterBackgroundCallEnqueued) {
@@ -523,8 +540,9 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
         runOnUiThread(() -> {
             nativeInitAfterAppLoaded();
             if (mPendingDomainUrl != null) {
-                nativeGotoUrl(mPendingDomainUrl);
+                gotoWorld(mPendingDomainIntent, mPendingDomainUrl);
                 mPendingDomainUrl = null;
+                mPendingDomainIntent = null;
             }
         });
     }

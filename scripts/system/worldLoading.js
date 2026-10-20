@@ -36,6 +36,8 @@
     var STATUS_LOADING = "Loading world…";
     var TIME_LIMIT = 90;          // s: a way in that never arrives lifts the screen anyway
     var AVATAR_GRACE = 10;        // s after physics: an avatar that has not loaded by then no longer holds the screen
+    var SAME_WORLD_WAIT = 8;      // s: a hop that hasn't left a world it's still in, physics on, went nowhere new
+                                  // (the world it was in, or another place in it): the screen lifts
     var LAUNCH_RELEASE_DELAY = 600;   // ms: the desktop screen's fade-in, after which it covers the launch screen
     var TICK = 50;                // ms
     // the headset card on a desktop as well (for testing, or a client without the desktop screen)
@@ -176,7 +178,8 @@
 
         // arrived: in the new world with its physics on, and the avatar's own model in (or waited for long enough)
         var arrived = !loading.active && landed && (avatarLoaded() || now - way.physicsOnAt > AVATAR_GRACE * 1000);
-        if (arrived || (!loading.active && now - way.started > TIME_LIMIT * 1000)) {
+        var stayed = way.kind === "hop" && !way.left && connected && physics && now - way.started > SAME_WORLD_WAIT * 1000;
+        if (arrived || stayed || (!loading.active && now - way.started > TIME_LIMIT * 1000)) {
             end();
             return;
         }

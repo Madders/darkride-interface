@@ -154,6 +154,8 @@ protected:
 
     bool _viewHasValidTouch;
     glm::vec2 _viewRefTouchPoint;
+    // the Settings' touch turn speed, taken up as each turning touch begins
+    float _viewTurnSpeed { 1.0f };
     glm::vec2 _viewCurrentTouchPoint;
     int _viewCurrentTouchId;
 

@@ -12,6 +12,7 @@
 //
 
 var DEFAULT_SCRIPTS_COMBINED = [
+    "system/worldLoading.js", // the loading screen over the way into a world, as on the desktop
     "system/progress.js",
     "system/+android_interface/touchscreenvirtualpad.js",
     "system/+android_interface/actionbar.js",

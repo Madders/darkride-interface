@@ -50,6 +50,18 @@
             android:entryValues="@array/graphics_resolution_values"
             android:defaultValue="1.0" />
     </PreferenceCategory>
+    <!-- how dragging on the screen turns the view (the engine reads Android/touchTurnSpeed as each drag begins) -->
+    <PreferenceCategory
+        android:title="@string/settings_controls"
+        android:key="pref_key_controls">
+        <ListPreference
+            android:key="touch_turn_speed"
+            android:title="@string/touch_turn_speed"
+            android:summary="%s"
+            android:entries="@array/touch_turn_speed_names"
+            android:entryValues="@array/touch_turn_speed_values"
+            android:defaultValue="1.5" />
+    </PreferenceCategory>
     <!-- the app's own settings (MenuOrientation); not shown over the world -->
     <PreferenceCategory
         android:title="@string/settings_app"

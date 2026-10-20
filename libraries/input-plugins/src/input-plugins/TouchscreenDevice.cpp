@@ -22,6 +22,7 @@
 #include <controllers/UserInputMapper.h>
 #include <PathUtils.h>
 #include <NumericalConstants.h>
+#include "VirtualPadManager.h"
 
 const char* TouchscreenDevice::NAME = "Touchscreen";
 
@@ -40,21 +41,29 @@ void TouchscreenDevice::pluginUpdate(float deltaTime, const controller::InputCal
         _inputDevice->update(deltaTime, inputCalibrationData);
     });
 
+    // While the virtual pad's joystick is held (moving), the pad has the other finger too, for turning: two fingers
+    // aren't a pinch then (it zoomed instead of turning), and one isn't a drag
+    auto& virtualPadManager = VirtualPad::Manager::instance();
+    if (virtualPadManager.isEnabled() && virtualPadManager.getLeftVirtualPad()->isBeingTouched()) {
+        _lastPinchScale = _pinchScale;
+        return;
+    }
+
     float distanceScaleX, distanceScaleY;
     if (_touchPointCount == 1) {
         if (_firstTouchVec.x < _currentTouchVec.x) {
-            distanceScaleX = (_currentTouchVec.x - _firstTouchVec.x) / _screenDPIScale.x;
+            distanceScaleX = _turnSpeed * (_currentTouchVec.x - _firstTouchVec.x) / _screenDPIScale.x;
             _inputDevice->_axisStateMap[_inputDevice->makeInput(TOUCH_AXIS_X_POS).getChannel()].value = distanceScaleX;
         } else if (_firstTouchVec.x > _currentTouchVec.x) {
-            distanceScaleX = (_firstTouchVec.x - _currentTouchVec.x) / _screenDPIScale.x;
+            distanceScaleX = _turnSpeed * (_firstTouchVec.x - _currentTouchVec.x) / _screenDPIScale.x;
             _inputDevice->_axisStateMap[_inputDevice->makeInput(TOUCH_AXIS_X_NEG).getChannel()].value = distanceScaleX;
         }
         // Y axis is inverted, positive is pointing up the screen
         if (_firstTouchVec.y > _currentTouchVec.y) {
-            distanceScaleY = (_firstTouchVec.y - _currentTouchVec.y) / _screenDPIScale.y;
+            distanceScaleY = _turnSpeed * (_firstTouchVec.y - _currentTouchVec.y) / _screenDPIScale.y;
             _inputDevice->_axisStateMap[_inputDevice->makeInput(TOUCH_AXIS_Y_POS).getChannel()].value = distanceScaleY;
         } else if (_firstTouchVec.y < _currentTouchVec.y) {
-            distanceScaleY = (_currentTouchVec.y - _firstTouchVec.y) / _screenDPIScale.y;
+            distanceScaleY = _turnSpeed * (_currentTouchVec.y - _firstTouchVec.y) / _screenDPIScale.y;
             _inputDevice->_axisStateMap[_inputDevice->makeInput(TOUCH_AXIS_Y_NEG).getChannel()].value = distanceScaleY;
         }
     } else  if (_touchPointCount == 2) {
@@ -79,6 +88,7 @@ void TouchscreenDevice::InputDevice::focusOutEvent() {
 void TouchscreenDevice::touchBeginEvent(const QTouchEvent* event) {
     const QTouchEvent::TouchPoint& point = event->touchPoints().at(0);
     _firstTouchVec = glm::vec2(point.pos().x(), point.pos().y());
+    _turnSpeed = VirtualPad::Manager::touchTurnSpeed();
     KeyboardMouseDevice::enableTouch(false);
     QScreen* eventScreen = event->window()->screen();
     if (_screenDPI != eventScreen->physicalDotsPerInch()) {

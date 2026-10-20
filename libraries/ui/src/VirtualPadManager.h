@@ -55,6 +55,9 @@ namespace VirtualPad {
 
         void requestHapticFeedback(int duration);
 
+        // How far a drag on the screen turns the view: the app's Settings > Touch turn speed (1 the old speed)
+        static float touchTurnSpeed();
+
         static const float DPI;
         static const float BASE_DIAMETER_PIXELS;
         static const float BASE_MARGIN_PIXELS;

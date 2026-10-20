@@ -420,6 +420,21 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         goToDomain(domainUrl);
     }
 
+    @Override
+    public void onSelectedWorld(String domainUrl, String name, String author, String picture) {
+        Intent intent = new Intent(this, InterfaceActivity.class);
+        intent.putExtra(InterfaceActivity.DOMAIN_URL, domainUrl);
+        intent.putExtra(InterfaceActivity.DOMAIN_NAME, name == null ? "" : name);
+        intent.putExtra(InterfaceActivity.DOMAIN_AUTHOR, author == null ? "" : author);
+        // (the loading screen loads a picture from the web; the app's own placeholder isn't one)
+        boolean webPicture = picture != null && (picture.startsWith("http://") || picture.startsWith("https://"));
+        intent.putExtra(InterfaceActivity.DOMAIN_PICTURE, webPicture ? picture : "");
+        finish();
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        startActivity(intent);
+        rabbitHole();
+    }
+
     private void goToLastLocation() {
         goToDomain(backToUrl != null? backToUrl : "");
     }
