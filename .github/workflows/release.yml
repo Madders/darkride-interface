@@ -501,6 +501,12 @@ jobs:
           pre=""
           case "$v" in *-*) pre="--prerelease" ;; esac
           {
+            # every release says what these builds are, first
+            echo "> [!WARNING]"
+            echo "> **Unofficial build.** These are my own builds of Darkride, not official releases of the Darkride project."
+            echo "> They can include experimental features and changes that aren't in Darkride yet, so expect rough edges."
+            echo "> For official Darkride, see [caitlynmeeks/darkride-interface](https://github.com/caitlynmeeks/darkride-interface)."
+            echo
             echo "## Windows"
             echo
             echo "- **Darkride-$v-windows-x64-setup.exe** installs Darkride for you (or for everyone on the PC), with Start menu and optional desktop shortcuts."
