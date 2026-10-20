@@ -13,6 +13,46 @@ export class WebEventHandler {
 	// one a world opens), and those pages reach the same event bridge. The button manager keeps this up to date.
 	trusted = false;
 
+	// The functions and properties the frontend calls through rpc (tivoli-scripts/frontend), and only those
+	static readonly RPC_ALLOWED = [
+		"AccountServices.username",
+		"Clipboard.importEntities()",
+		"DiskCache.cacheDirectory",
+		"DiskCache.clearCache()",
+		"DiskCache.maximumCacheSize",
+		"DiskCache.restoreDefaultCacheDirectory()",
+		"DiskCache.restoreDefaultMaximumCacheSize()",
+		"DiskCache.usedCacheSize",
+		"LODManager.worldDetailQuality",
+		"MyAvatar.getAvatarPreviewImageURL()",
+		"MyAvatar.scale",
+		"MyAvatar.skeletonModelURL",
+		"MyAvatar.useFullAvatarURL()",
+		"Performance.getPerformancePresetNames()",
+		"Performance.getRefreshRateProfileNames()",
+		"Performance.performancePreset",
+		"Performance.refreshRateProfile",
+		"Render.ambientOcclusionEnabled",
+		"Render.antialiasingMethod",
+		"Render.farClip",
+		"Render.fieldOfView",
+		"Render.getAntialiasingMethodNames()",
+		"Render.maximumTextureMemory",
+		"Render.nametagsEnabled",
+		"Render.nametagsShowSelf",
+		"Render.renderMethod",
+		"Render.shadowsEnabled",
+		"Render.viewportResolutionScale",
+		"ScriptDiscoveryService.getRunning()",
+		"ScriptDiscoveryService.loadScript()",
+		"ScriptDiscoveryService.stopScript()",
+		"Window.copyToClipboard",
+		"Window.location",
+		"Window.location.href",
+		"Window.openUrl()",
+		"Window.protocolSignature()",
+	];
+
 	private panel: PanelPair;
 
 	constructor(
@@ -38,6 +78,12 @@ export class WebEventHandler {
 		if (data.args != null && Array.isArray(data.args) == false)
 			return finish();
 		if (data.args == null) data.args = [];
+
+		// only what the frontend uses (add a name here when it uses another)
+		if (WebEventHandler.RPC_ALLOWED.indexOf(data.fn) == -1) {
+			console.warn("Refused an rpc call the frontend doesn't make: " + data.fn);
+			return finish();
+		}
 
 		// find function or variable
 
