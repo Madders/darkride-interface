@@ -16,9 +16,9 @@ export function initNametags(showSelf) {
 	// the resident's word and its host (AI-FIRST-CLIENT.md §10.2)
 	function nametagURL(nametag, glyph) {
 		return AccountServices.metaverseServerURL+"/api/user/"+
-			nametag.username+
-			"/nametag?"+ (glyph > 0 ? nametag.stamp + "." + (nametag.frameTry || 0) : nametag.stamp) +
-			"&glyph="+ glyph +
+			encodeURIComponent(nametag.username)+
+			"/nametag?"+ encodeURIComponent(glyph > 0 ? nametag.stamp + "." + (nametag.frameTry || 0) : nametag.stamp) +
+			"&glyph="+ encodeURIComponent(glyph) +
 			(nametag.admin?"&admin":"")+
 			(nametag.connection=="friend"?"&friend":"");
 	}
