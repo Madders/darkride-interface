@@ -185,6 +185,7 @@ public:
 
     const OctreePacketProcessor& getOctreePacketProcessor() const { return _octreeProcessor; }
     QSharedPointer<EntityTreeRenderer> getEntities() const { return DependencyManager::get<EntityTreeRenderer>(); }
+    GraphicsEngine& getGraphicsEngine() { return _graphicsEngine; }
     MainWindow* getWindow() const { return _window; }
     EntityTreePointer getEntityClipboard() const { return _entityClipboard; }
     EntityEditPacketSender* getEntityEditPacketSender() { return &_entityEditSender; }

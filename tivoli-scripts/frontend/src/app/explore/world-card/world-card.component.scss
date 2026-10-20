@@ -33,6 +33,51 @@
 	}
 }
 
+// a world only its author and admins can see (its instance access is "private"): unmissable, so a curator's view is
+// never mistaken for what visitors see. Stripes over the picture, a stamp across it, a dashed orange edge.
+.world-card.hidden-world {
+	border: 2px dashed #ff8a1f;
+
+	.thumbnail::after {
+		content: "";
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		pointer-events: none;
+		background: repeating-linear-gradient(
+			-45deg,
+			rgba(255, 138, 31, 0.22) 0 14px,
+			rgba(0, 0, 0, 0.3) 14px 28px
+		);
+	}
+
+	// above the stripes
+	.chips,
+	.label,
+	.hop-hint,
+	.hidden-stamp {
+		z-index: 1;
+	}
+}
+
+.hidden-stamp {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%) rotate(-10deg);
+	padding: 2px 16px;
+	border: 3px solid #ff8a1f;
+	border-radius: 6px;
+	color: #ff8a1f;
+	background: rgba(9, 16, 35, 0.8);
+	font-size: 26px;
+	font-weight: 800;
+	letter-spacing: 6px;
+	pointer-events: none;
+}
+
 // while a chooser is open, the other worlds step back
 :host-context(.choosing) .world-card:not(.selected) {
 	opacity: 0.35;
@@ -103,6 +148,18 @@
 
 		&.warn {
 			background: rgba(204, 61, 61, 0.9);
+		}
+
+		&.hidden-chip {
+			color: #1a0d00;
+			background: #ff8a1f;
+			font-weight: 700;
+			text-transform: uppercase;
+			letter-spacing: 0.5px;
+		}
+
+		&.friends-only {
+			background: rgba(0, 120, 200, 0.9);
 		}
 
 		.dot {

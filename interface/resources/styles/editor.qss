@@ -362,6 +362,31 @@ QToolBar#EditorTerrainBar QLabel#EditorHint {
     border-radius: 3px;
 }
 
+/* the Inspector's vehicle wheel and seat lists (VehiclePartsEditor), the same way */
+#EditorVehicleList::item {
+    height: 22px;
+}
+#EditorVehicleList::item:hover {
+    background: #404040;
+}
+#EditorVehicleList::item:selected {
+    background: #2c5d87;
+}
+#EditorVehicleRow[selected="true"] {
+    background: #2c5d87;
+    border-radius: 3px;
+}
+#EditorVehicleRow QLabel#EditorVehicleSummary {
+    color: #8f8f8f;
+}
+#EditorVehicleRow[selected="true"] QLabel#EditorVehicleName {
+    color: #ffffff;
+    font-weight: bold;
+}
+#EditorVehicleRow[selected="true"] QLabel#EditorVehicleSummary {
+    color: #d0e0ee;
+}
+
 /* the Assets panel along the bottom: My Files as a folder tree beside a grid of the folder's contents */
 #EditorAssets {
     background: #383838;

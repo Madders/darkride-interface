@@ -39,8 +39,11 @@
 #include "EditorBounds.h"
 #include "EditorCamera.h"
 #include "EditorClipboard.h"
+#include <QtGui/QPixmap>
+
 #include "EditorGizmo.h"
 #include "EditorLightGizmos.h"
+#include "EditorVehicleGizmos.h"
 #include "EditorGrid.h"
 #include "EditorSelection.h"
 #include "EditorTerrain.h"
@@ -125,9 +128,14 @@ public:
 
     Q_INVOKABLE void viewFromAxis(int axis, int sign);
 
+    // the whole Inspector as drawn, scrolled or not (a scripted test's picture of it, Test.saveInspectorPicture)
+    QPixmap inspectorPicture() const;
+
 public slots:
     void setActive(bool active);
     void toggleActive() { setActive(!_active); }
+    // selects these entities, turning build mode on first (a scripted test, Test.selectInEditor)
+    void select(const QList<QUuid>& ids);
     void setGridVisible(bool visible);
     void setTool(EditorToolBar::Tool tool);
     void setLocalSpace(bool local);
@@ -262,6 +270,8 @@ private:
 
     // the lights' icons, and the handles of a light selected on its own (see EditorLightGizmos.h)
     void updateLightGizmos();
+    // a selected vehicle's wheels, seats and force points, the part chosen in the Inspector bright (EditorVehicleGizmos.h)
+    void updateVehicleGizmos();
     void setGizmosVisible(bool visible);
     // what a click there selects: a light's icon, or else the surface under it
     QUuid pickAt(const QPoint& viewportPos) const;
@@ -354,6 +364,9 @@ private:
     EditorBounds _bounds;
     std::vector<EditorBoundsShape> _boundsShapes;
     EditorLightGizmos _lightGizmos;
+    EditorVehicleGizmos _vehicleGizmos;
+    std::vector<EditorVehicleGizmoVehicle> _vehicleGizmoVehicles;
+    QHash<QString, int> _vehiclePartChosen;   // the row selected in each of the Inspector's vehicle lists, by key ("vehicle.wheels")
     EditorTerrain _terrain;             // the Terrain tool: its brushes, strokes and outline
     bool _stableLinksPending { false };  // Use Stable Links waits for the listing of My Files
     bool _gizmosVisible { true };       // every light's icon, not only the selected ones'

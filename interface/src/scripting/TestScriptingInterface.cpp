@@ -22,6 +22,12 @@
 #include <Trace.h>
 
 #include "Application.h"
+#include <QtGui/QPixmap>
+
+#include "editor/Editor.h"
+#include "graphics/GraphicsEngine.h"
+#include <EntityTreeRenderer.h>
+#include <RenderableEntityItem.h>
 
 Q_LOGGING_CATEGORY(trace_test, "trace.test")
 
@@ -250,4 +256,75 @@ bool TestScriptingInterface::isTextureLoadingComplete() {
     bool result;
     QMetaObject::invokeMethod(qApp, "gpuTextureMemSizeStable", Qt::DirectConnection, Q_RETURN_ARG(bool, result));
     return result;
+}
+
+void TestScriptingInterface::selectInEditor(const QStringList& ids) {
+    if (QThread::currentThread() != thread()) {
+        BLOCKING_INVOKE_METHOD(this, "selectInEditor", Q_ARG(QStringList, ids));
+        return;
+    }
+    QList<QUuid> uuids;
+    for (const QString& id : ids) {
+        uuids << QUuid(id);
+    }
+    DependencyManager::get<Editor>()->select(uuids);
+}
+
+void TestScriptingInterface::frameEditorSelection() {
+    if (QThread::currentThread() != thread()) {
+        BLOCKING_INVOKE_METHOD(this, "frameEditorSelection");
+        return;
+    }
+    DependencyManager::get<Editor>()->frameSelection();
+}
+
+bool TestScriptingInterface::saveInspectorPicture(const QString& path) {
+    if (QThread::currentThread() != thread()) {
+        bool result = false;
+        BLOCKING_INVOKE_METHOD(this, "saveInspectorPicture", Q_RETURN_ARG(bool, result), Q_ARG(QString, path));
+        return result;
+    }
+    QPixmap picture = DependencyManager::get<Editor>()->inspectorPicture();
+    return !picture.isNull() && picture.save(path);
+}
+
+bool TestScriptingInterface::saveWindowPicture(const QString& path) {
+    if (QThread::currentThread() != thread()) {
+        bool result = false;
+        BLOCKING_INVOKE_METHOD(this, "saveWindowPicture", Q_RETURN_ARG(bool, result), Q_ARG(QString, path));
+        return result;
+    }
+    auto window = qApp->getWindow();
+    if (!window) {
+        return false;
+    }
+    QPixmap picture = window->grab();
+    return !picture.isNull() && picture.save(path);
+}
+
+bool TestScriptingInterface::traceRenderedEntity(const QUuid& entityID) {
+    if (QThread::currentThread() != thread()) {
+        bool result = false;
+        BLOCKING_INVOKE_METHOD(this, "traceRenderedEntity", Q_RETURN_ARG(bool, result), Q_ARG(QUuid, entityID));
+        return result;
+    }
+    render::ItemID item = render::Item::INVALID_ITEM_ID;
+    if (!entityID.isNull()) {
+        auto renderable = qApp->getEntities()->renderableForEntityId(entityID);
+        if (!renderable) {
+            return false;
+        }
+        item = renderable->getRenderItemID();
+    }
+    qApp->getGraphicsEngine().setRenderTraceItem(item);
+    return render::Item::isValidID(item);
+}
+
+QVariantList TestScriptingInterface::takeRenderTrace() {
+    QVariantList list;
+    for (const auto& sample : qApp->getGraphicsEngine().takeRenderTrace()) {
+        list << QVariant(QVariantList { (double)sample.time * 1.0e-3, (double)sample.camera.x, (double)sample.camera.y, (double)sample.camera.z,
+                                        (double)sample.item.x, (double)sample.item.y, (double)sample.item.z });
+    }
+    return list;
 }

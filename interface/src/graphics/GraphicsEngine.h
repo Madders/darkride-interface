@@ -12,6 +12,10 @@
 
 #include <gl/OffscreenGLCanvas.h>
 #include <gl/GLWidget.h>
+#include <atomic>
+#include <mutex>
+#include <vector>
+
 #include <qmutex.h>
 
 #include <render/Engine.h>
@@ -44,6 +48,17 @@ using RenderArgsEditor = std::function <void(AppRenderArgs&)>;
 
 class GraphicsEngine {
 public:
+    // a scripted test's trace of one render item against the camera, one sample per rendered frame, taken on the render
+    // thread after the scene's transactions are applied (Test.traceRenderedEntity / Test.takeRenderTrace)
+    struct TraceSample {
+        uint64_t time;        // usecs
+        glm::vec3 camera;     // the frame's view position
+        glm::vec3 item;       // the centre of the item's bound as drawn
+    };
+    void setRenderTraceItem(render::ItemID id);
+    std::vector<TraceSample> takeRenderTrace();
+
+public:
     GraphicsEngine();
     ~GraphicsEngine();
 
@@ -75,6 +90,9 @@ protected:
 
     mutable QMutex _renderArgsMutex{ QMutex::Recursive };
     AppRenderArgs _appRenderArgs;
+    std::atomic<render::ItemID> _traceItem { render::Item::INVALID_ITEM_ID };
+    std::mutex _traceMutex;
+    std::vector<TraceSample> _traceSamples;
 
     RateCounter<500> _renderLoopCounter;
 
