@@ -107,15 +107,26 @@ image::Image image::readTGA(QIODevice& content) {
     char alphaMask = header.imageDescriptor.attributeBitsPerPixel == 8 ? 0x00 : 0xFF;
     int bytesPerPixel = header.pixelDepth / 8;
 
+    // no bigger than the largest texture Darkride uses, so a size can't overflow or exhaust memory
+    constexpr int MAX_TGA_DIMENSION = 16384;
+    if (header.width <= 0 || header.height <= 0 || header.width > MAX_TGA_DIMENSION || header.height > MAX_TGA_DIMENSION) {
+        qWarning(imagelogging) << "TGA - Unsupported size" << header.width << header.height;
+        return QImage();
+    }
+
     content.skip(header.idLength);
     if (header.imageType == TGAImageType::UncompressedTrueColor) {
-        qint64 minimumSize = header.width * header.height * bytesPerPixel;
+        qint64 minimumSize = (qint64)header.width * (qint64)header.height * bytesPerPixel;
         if (content.bytesAvailable() < minimumSize) {
             qWarning(imagelogging) << "TGA - Unexpectedly reached end of file";
             return QImage();
         }
 
         QImage image{ header.width, header.height, QImage::Format_ARGB32 };
+        if (image.isNull()) {
+            qWarning(imagelogging) << "TGA - Couldn't allocate the image";
+            return QImage();
+        }
         char* line;
         for (int y = 0; y < header.height; ++y) {
             if (header.imageDescriptor.orientation == ORIENTATION_BOTTOM_LEFT) {
@@ -133,6 +144,10 @@ image::Image image::readTGA(QIODevice& content) {
         return image;
     } else if (header.imageType == TGAImageType::RunLengthEncodedTrueColor) {
         QImage image{ header.width, header.height, QImage::Format_ARGB32 };
+        if (image.isNull()) {
+            qWarning(imagelogging) << "TGA - Couldn't allocate the image";
+            return QImage();
+        }
 
         for (int y = 0; y < header.height; ++y) {
             char* line;
@@ -155,6 +170,12 @@ image::Image image::readTGA(QIODevice& content) {
                 // The length in `repetition` is always 1 less than the number of following pixels,
                 // so we need to increment it by 1. Because of this, the length is never 0.
                 int length = (repetition & LENGTH_MASK) + 1;
+
+                // a run stays within its row
+                if (length > header.width - col) {
+                    qWarning(imagelogging) << "TGA - A run goes past the end of a row";
+                    return QImage();
+                }
 
                 if (isRepetition) {
                     // Read into temporary buffer
