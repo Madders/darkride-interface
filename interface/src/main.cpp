@@ -59,7 +59,7 @@ int main(int argc, const char* argv[]) {
 #if defined(Q_OS_WIN) 
     // Check the minimum version of 
     if (gl::getAvailableVersion() < gl::getRequiredVersion()) {
-        MessageBoxA(nullptr, "Interface requires OpenGL 4.1 or higher", "Unsupported", MB_OK);
+        MessageBoxA(nullptr, "Darkride requires OpenGL 4.1 or higher", "Unsupported", MB_OK);
         return -1;
     }
 #endif
@@ -72,7 +72,7 @@ int main(int argc, const char* argv[]) {
     }
 
     QCommandLineParser parser;
-    parser.setApplicationDescription("Tivoli Cloud VR");
+    parser.setApplicationDescription("Darkride");
     QCommandLineOption versionOption = parser.addVersionOption();
     QCommandLineOption helpOption = parser.addHelpOption();
 

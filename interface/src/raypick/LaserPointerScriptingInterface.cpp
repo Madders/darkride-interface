@@ -22,6 +22,14 @@ void LaserPointerScriptingInterface::setIncludeItems(unsigned int uid, const QSc
     DependencyManager::get<PointerManager>()->setIncludeItems(uid, qVectorQUuidFromScriptValue(includeItems));
 }
 
+void LaserPointerScriptingInterface::setIgnoreItemsVector(unsigned int uid, const QVector<QUuid>& ignoreItems) const {
+    DependencyManager::get<PointerManager>()->setIgnoreItems(uid, ignoreItems);
+}
+
+void LaserPointerScriptingInterface::setIncludeItemsVector(unsigned int uid, const QVector<QUuid>& includeItems) const {
+    DependencyManager::get<PointerManager>()->setIncludeItems(uid, includeItems);
+}
+
 unsigned int LaserPointerScriptingInterface::createLaserPointer(const QVariant& properties) const {
     return DependencyManager::get<PointerScriptingInterface>()->createPointer(PickQuery::PickType::Ray, properties);
 }

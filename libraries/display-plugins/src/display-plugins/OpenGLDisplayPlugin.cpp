@@ -24,7 +24,9 @@
 
 #include <NumericalConstants.h>
 #include <DependencyManager.h>
+#include <FrameDiag.h>
 #include <GLMHelpers.h>
+#include <SharedUtil.h>
 
 #include <gl/QOpenGLContextWrapper.h>
 #include <gl/GLWidget.h>
@@ -206,6 +208,17 @@ public:
             }
 #if defined(Q_OS_MACOS)
             _context->makeCurrent();
+            // After a change of the view, making the context current on this thread has Qt queue the context's update
+            // for the main thread (QCocoaGLContext::update), which there attaches the view's new surface: drawing
+            // meanwhile crashed in Apple's GL driver (10-18). The lock is let go while the main thread runs it, and the
+            // next pass draws.
+            if (gl::takeViewChanged()) {
+                _context->doneCurrent();
+                gl::globalRelease(false);
+                const int VIEW_UPDATE_WAIT_MS = 100;
+                gl::waitForMainQueue(VIEW_UPDATE_WAIT_MS);
+                continue;
+            }
 #endif
             // Execute the frame and present it to the display device.
             {
@@ -612,10 +625,30 @@ void OpenGLDisplayPlugin::updateFrameData() {
 
         _gpuContext->processProgramsToSync();
 
+        int queued = (int)_newFrameQueue.size();
         while (!_newFrameQueue.empty()) {
             _currentFrame = _newFrameQueue.front();
             _newFrameQueue.pop();
             _gpuContext->consumeFrameUpdates(_currentFrame);
+        }
+
+        if (FrameDiag::enabled()) {
+            static gpu::Frame* lastLogged = nullptr;
+            bool changed = _currentFrame.get() != lastLogged;
+            lastLogged = _currentFrame.get();
+            glm::uvec2 scene(0);
+            void* scenePointer = nullptr;
+            if (_currentFrame && _currentFrame->framebuffer) {
+                scene = _currentFrame->framebuffer->getSize();
+                scenePointer = _currentFrame->framebuffer.get();
+            }
+            glm::uvec2 composite(0);
+            if (_compositeFramebuffer) {
+                composite = _compositeFramebuffer->getSize();
+            }
+            FrameDiag::log("P %llu f=%u new=%d queued=%d scene=%ux%u@%p comp=%ux%u", (unsigned long long)usecTimestampNow(),
+                           (unsigned)(_currentFrame ? _currentFrame->frameIndex : 0), changed ? 1 : 0, queued, scene.x,
+                           scene.y, scenePointer, composite.x, composite.y);
         }
     });
 }
@@ -755,6 +788,34 @@ void OpenGLDisplayPlugin::present(const std::shared_ptr<RefreshRateController>& 
         {
             PROFILE_RANGE_EX(render, "composite", 0xff00ffff, frameId)
             compositeLayers();
+        }
+
+        if (FrameDiag::enabled()) {
+            // the black-frame hunt: the brightness of the presented picture's centre (a read-back, so a GPU sync a
+            // frame), and what the GPU did executing this frame
+            gpu::ContextStats stats;
+            _gpuContext->getFrameStats(stats);
+            auto size = _compositeFramebuffer->getSize();
+            const int SAMPLE = 32;
+            QImage sample(SAMPLE, SAMPLE, QImage::Format_ARGB32);
+            getGLBackend()->downloadFramebuffer(_compositeFramebuffer,
+                ivec4((int)size.x / 2 - SAMPLE / 2, (int)size.y / 2 - SAMPLE / 2, SAMPLE, SAMPLE), sample);
+            uint64_t sum = 0;
+            for (int y = 0; y < SAMPLE; ++y) {
+                const QRgb* row = reinterpret_cast<const QRgb*>(sample.constScanLine(y));
+                for (int x = 0; x < SAMPLE; ++x) {
+                    sum += qRed(row[x]) + 2 * qGreen(row[x]) + qBlue(row[x]);
+                }
+            }
+            gpu::ContextStats total;
+            _gpuContext->getStats(total);
+            std::string pipelines = FrameDiag::takePipelines(total._DSNumDrawcalls);
+            FrameDiag::log("C %llu f=%u centre=%llu draws=%u tris=%u pipelines=%u texBound=%u texGPU=%u texMem=%llu pending=%u pipes=%s",
+                           (unsigned long long)usecTimestampNow(), (unsigned)_currentFrame->frameIndex,
+                           (unsigned long long)(sum / (4 * SAMPLE * SAMPLE)), stats._DSNumDrawcalls, stats._DSNumTriangles,
+                           stats._PSNumSetPipelines, stats._RSNumTextureBounded, gpu::Context::getTextureGPUCount(),
+                           (unsigned long long)gpu::Context::getTextureGPUMemSize(),
+                           gpu::Context::getTexturePendingGPUTransferCount(), pipelines.c_str());
         }
 
         { // If we have any snapshots this frame, handle them

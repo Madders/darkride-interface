@@ -128,7 +128,7 @@ Agent::Agent(ReceivedMessage& message) :
         { PacketType::MixedAudio, PacketType::SilentAudioFrame },
         this, "handleAudioPacket");
     packetReceiver.registerListenerForTypes(
-        { PacketType::OctreeStats, PacketType::EntityData, PacketType::EntityErase },
+        { PacketType::OctreeStats, PacketType::EntityData, PacketType::EntityErase, PacketType::EntityQueryInitialResultsComplete },
         this, "handleOctreePacket");
     packetReceiver.registerListener(PacketType::SelectedAudioFormat, this, "handleSelectedAudioFormat");
 
@@ -180,8 +180,11 @@ void Agent::handleOctreePacket(QSharedPointer<ReceivedMessage> message, SharedNo
         _entityViewer.processDatagram(*message, senderNode);
     } else if (packetType == PacketType::EntityErase) {
         _entityViewer.processEraseMessage(*message, senderNode);
+    } else if (packetType == PacketType::EntityQueryInitialResultsComplete) {
+        _entityViewer.handleInitialResultsComplete(message, senderNode);
     }
 }
+
 
 void Agent::handleAudioPacket(QSharedPointer<ReceivedMessage> message) {
     _receivedAudioStream.parseData(*message);

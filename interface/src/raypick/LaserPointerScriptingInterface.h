@@ -124,6 +124,11 @@ public:
      */
     Q_INVOKABLE void setIncludeItems(unsigned int uid, const QScriptValue& includeEntities) const;
 
+    // setIgnoreItems and setIncludeItems with the IDs as a list, for the WebAssembly script engine (names of their own,
+    // as findRayIntersectionVector has: QtScript would find a same-named overload ambiguous with the QScriptValue one)
+    Q_INVOKABLE void setIgnoreItemsVector(unsigned int uid, const QVector<QUuid>& ignoreEntities) const;
+    Q_INVOKABLE void setIncludeItemsVector(unsigned int uid, const QVector<QUuid>& includeEntities) const;
+
 
     /**jsdoc
      * Locks a pointer onto a specific entity or avatar.

@@ -17,10 +17,11 @@
 
 std::string LightStage::_stageName { "LIGHT_STAGE"};
 // The bias matrix goes from homogeneous coordinates to UV coords (see http://www.opengl-tutorial.org/intermediate-tutorials/tutorial-16-shadow-mapping/#basic-shader)
+// and to the reversed-Z depth the map stores (1 at the near plane, 0 at the far one)
 const glm::mat4 LightStage::Shadow::_biasMatrix {
     0.5, 0.0, 0.0, 0.0,
     0.0, 0.5, 0.0, 0.0,
-    0.0, 0.0, 0.5, 0.0,
+    0.0, 0.0, -0.5, 0.0,
     0.5, 0.5, 0.5, 1.0 };
 // TODO: Change MAP_SIZE based on your performance settings. 
 const int LightStage::Shadow::MAP_SIZE = 2048;
@@ -133,11 +134,11 @@ LightStage::Shadow::Shadow(graphics::LightPointer light, unsigned int cascadeCou
     auto depthFormat = gpu::Element(gpu::SCALAR, gpu::FLOAT, gpu::DEPTH);  // Depth32 texel format
     map = gpu::TexturePointer(gpu::Texture::createRenderBufferArray(depthFormat, MAP_SIZE, MAP_SIZE, cascadeCount));
     gpu::Sampler::Desc samplerDesc;
-    samplerDesc._borderColor = glm::vec4(1.0f);
+    samplerDesc._borderColor = glm::vec4(0.0f); // reversed-Z: the far plane is depth 0, so outside the map is lit
     samplerDesc._wrapModeU = gpu::Sampler::WRAP_BORDER;
     samplerDesc._wrapModeV = gpu::Sampler::WRAP_BORDER;
     samplerDesc._filter = gpu::Sampler::FILTER_MIN_MAG_LINEAR;
-    samplerDesc._comparisonFunc = gpu::LESS;
+    samplerDesc._comparisonFunc = gpu::GREATER; // lit where the fragment is nearer the light than the map's depth
 
     map->setSampler(gpu::Sampler(samplerDesc));
 

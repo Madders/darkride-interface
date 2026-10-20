@@ -442,6 +442,12 @@ Item {
                             ", static redrawn: " + root.localShadowStaticMapsDrawn;
                     }
                     StatText {
+                        visible: root.expanded;
+                        text: "Mirrors drawn: " + root.mirrorsDrawn + ", pixels: " +
+                            (root.mirrorPixels >= 1000000 ? (root.mirrorPixels / 1000000).toFixed(2) + " M"
+                                                          : Math.round(root.mirrorPixels / 1000) + " k");
+                    }
+                    StatText {
                         visible: root.expanded
                         text: "LOD: " + root.lodStatus;
                     }

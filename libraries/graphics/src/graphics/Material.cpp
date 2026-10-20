@@ -137,6 +137,32 @@ void Material::setAlbedo(const glm::vec3& albedo, bool isSRGB) {
     _albedo = (isSRGB ? ColorUtils::sRGBToLinearVec3(albedo) : albedo);
 }
 
+std::string MaterialKey::getLightmapModeName(LightmapMode mode) {
+    const std::string names[NUM_LIGHTMAP_MODES] = { "indirect", "full" };
+    return names[mode];
+}
+
+bool MaterialKey::getLightmapModeFromName(const std::string& modeName, LightmapMode& mode) {
+    for (int i = 0; i < NUM_LIGHTMAP_MODES; i++) {
+        mode = (LightmapMode)i;
+        if (modeName == getLightmapModeName(mode)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+const MaterialKey::LightmapMode Material::DEFAULT_LIGHTMAP_MODE = MaterialKey::LIGHTMAP_INDIRECT;
+
+void Material::setLightmapParams(const glm::vec2& params) {
+    _lightmapParams = params;
+    auto map = getTextureMap(MaterialKey::LIGHT_MAP);
+    if (map) {
+        // kept on the map too, which is where setTextureMap reads them from
+        map->setLightmapOffsetScale(params.x, params.y);
+    }
+}
+
 void Material::setRoughness(float roughness) {
     roughness = std::min(1.0f, std::max(roughness, 0.0f));
     // _key.setGlossy(roughness < 1.0f);

@@ -205,3 +205,23 @@ void Light::setTransform(const glm::mat4& transform) {
     }
 }
 
+void Light::setProbeVolume(const gpu::TexturePointer& volume, const glm::vec3& origin, const glm::vec3& spacing, const glm::uvec3& dims, float intensity) {
+    if (!volume || dims.x == 0 || dims.y == 0 || dims.z == 0 || spacing.x <= 0.0f || spacing.y <= 0.0f || spacing.z <= 0.0f) {
+        clearProbeVolume();
+        return;
+    }
+    _probeVolume = volume;
+    auto& schema = _ambientSchemaBuffer.edit();
+    schema.volumeOrigin = glm::vec4(origin, intensity);
+    schema.volumeInvSpacing = glm::vec4(1.0f / spacing, 1.0f);
+    schema.volumeDims = glm::vec4(glm::vec3(dims), 0.0f);
+}
+
+void Light::clearProbeVolume() {
+    _probeVolume.reset();
+    auto& schema = _ambientSchemaBuffer.edit();
+    schema.volumeOrigin = glm::vec4(0.0f);
+    schema.volumeInvSpacing = glm::vec4(0.0f);
+    schema.volumeDims = glm::vec4(0.0f);
+}
+

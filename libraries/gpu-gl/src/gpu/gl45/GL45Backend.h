@@ -50,6 +50,7 @@ public:
 
     static const std::string GL45_VERSION;
     const std::string& getVersion() const override { return GL45_VERSION; }
+    bool isDepthClipZeroToOne() const override { return true; }
 
     bool supportedTextureFormat(const gpu::Element& format) override;
 

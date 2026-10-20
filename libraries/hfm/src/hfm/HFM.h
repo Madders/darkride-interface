@@ -12,8 +12,11 @@
 #ifndef hifi_HFM_h_
 #define hifi_HFM_h_
 
+#include <QJsonObject>
 #include <QMetaType>
 #include <QSet>
+#include <QStringList>
+#include <QVariantMap>
 #include <QVector>
 
 #include <glm/glm.hpp>
@@ -213,7 +216,10 @@ public:
     Texture occlusionTexture;
     Texture scatteringTexture;
     Texture lightmapTexture;
+    Texture lightmapDirectionTexture;   // the lightmap's direction map (Unity's directional lightmap)
     glm::vec2 lightmapParams { 0.0f, 1.0f };
+    // what the lightmap holds (LIGHTMAPS.md): Unity's Baked Indirect unless the reader says full (FBX bakes)
+    graphics::MaterialKey::LightmapMode lightmapMode { graphics::MaterialKey::LIGHTMAP_INDIRECT };
 
 
     bool isPBSMaterial { false };
@@ -332,6 +338,34 @@ public:
     uint32_t skinDeformer { UNDEFINED_KEY };
 };
 
+/// How animations reach a humanoid model, from its .fst: "retarget = humanoid" turns humanoid joints through T-pose
+/// frames instead of copying each joint's rotation, and "humanoid = {...}" gives Unity's humanoid frames for the model
+/// (per bone: pre and post rotations, limit signs and limits, in the engine's coordinates), with which muscle clips
+/// play exactly as Unity plays them.
+class HumanoidSettings {
+public:
+    bool retarget { false };
+    QVariantMap muscleFrames;
+    // Rotation constraints, as avatars from Unity packages turn their twist bones (constraint components that behave as
+    // Unity's RotationConstraint), from "rotationConstraint = <joint> = {...}" lines: one map per constraint, with "joint"
+    // added (animation/src/RotationConstraints.h has the fields).
+    QVariantList rotationConstraints;
+    // The avatar's menu, its parameters and the effects layer's state machines, from "avatarMenu = {...}"
+    // (avatars-renderer's AvatarMenu runs them; unity-import's AvatarMenuImport.h has the format).
+    QJsonObject avatarMenu;
+};
+
+/// A humanoid muscle clip, as the avatar importer writes it from a Unity clip (".muscles.json"): per frame, the values
+/// of the muscles it moves, out of Unity's 95; the avatar's humanoid frames turn them into joint rotations.
+class MuscleClip {
+public:
+    float frameRate { 30.0f };
+    bool loop { false };
+    std::vector<int> muscles;
+    std::vector<std::vector<float>> frames;  // frames[f][i] is muscles[i]'s value
+    bool isValid() const { return !frames.empty() && !muscles.empty(); }
+};
+
 /// The runtime model format.
 class Model {
 public:
@@ -385,6 +419,15 @@ public:
     QMap<int, glm::quat> jointRotationOffsets;
     std::vector<ShapeVertices> shapeVertices;
     FlowData flowData;
+    // How animations reach a humanoid model, from its .fst (animation/src/Humanoid.h).
+    HumanoidSettings humanoid;
+    // A humanoid muscle clip, when the model was read from one (".muscles.json").
+    MuscleClip muscleClip;
+    // The model's own blend shapes, kept beside the standard ones when the .fst asks ("ownBlendshapes = true", or
+    // "blendshapeDefault = <name> = <weight>" lines): a mesh's blendshape slot BlendshapeCount + i holds
+    // ownBlendshapeNames[i], which starts at ownBlendshapeDefaults[i] (0 to 1).
+    QStringList ownBlendshapeNames;
+    QVector<float> ownBlendshapeDefaults;
 
     void debugDump() const;
 };

@@ -134,7 +134,9 @@ protected:
 class DrawHighlight {
 public:
 
-    using Inputs = render::VaryingSet5<DeferredFrameTransformPointer, HighlightResourcesPointer, DeferredFramebufferPointer, glm::ivec4, gpu::FramebufferPointer>;
+    // the frame transform, the highlight's resources, the highlighted rectangle, and the framebuffer drawn into, whose
+    // depth-stencil buffer is the scene's depth (deferred's lighting framebuffer, or the forward path's resolved one)
+    using Inputs = render::VaryingSet4<DeferredFrameTransformPointer, HighlightResourcesPointer, glm::ivec4, gpu::FramebufferPointer>;
     using Config = render::Job::Config;
     using JobModel = render::Job::ModelI<DrawHighlight, Inputs, Config>;
 
@@ -195,7 +197,9 @@ private:
 class DrawHighlightTask {
 public:
 
-    using Inputs = render::VaryingSet5<RenderFetchCullSortTask::BucketList, DeferredFramebufferPointer, gpu::FramebufferPointer, DeferredFrameTransformPointer, glm::vec2>;
+    // the items, the framebuffer to draw into (its depth-stencil buffer the scene's depth, single-sampled: deferred's
+    // lighting framebuffer, or the forward path's resolved one), the frame transform and the jitter
+    using Inputs = render::VaryingSet4<RenderFetchCullSortTask::BucketList, gpu::FramebufferPointer, DeferredFrameTransformPointer, glm::vec2>;
     using Config = render::Task::Config;
     using JobModel = render::Task::ModelI<DrawHighlightTask, Inputs, Config>;
 

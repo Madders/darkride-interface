@@ -257,6 +257,11 @@ public:
      */
     Q_INVOKABLE void setIncludeItems(unsigned int uid, const QScriptValue& includeItems);
 
+    // setIgnoreItems and setIncludeItems with the IDs as a list, for the WebAssembly script engine (names of their own,
+    // as findRayIntersectionVector has: QtScript would find a same-named overload ambiguous with the QScriptValue one)
+    Q_INVOKABLE void setIgnoreItemsVector(unsigned int uid, const QVector<QUuid>& ignoreItems);
+    Q_INVOKABLE void setIncludeItemsVector(unsigned int uid, const QVector<QUuid>& includeItems);
+
     /**jsdoc
      * Checks if a pick is associated with the left hand: a ray or parabola pick with <code>joint</code> property set to 
      * <code>"_CONTROLLER_LEFTHAND"</code> or <code>"_CAMERA_RELATIVE_CONTROLLER_LEFTHAND"</code>, or a stylus pick with 

@@ -17,11 +17,16 @@
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/MotionProperties.h>
 #include <Jolt/Physics/Collision/Shape/Shape.h>
+#include <Jolt/Physics/Collision/Shape/CompoundShape.h>
+#include <Jolt/Physics/Collision/Shape/DecoratedShape.h>
+#include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 
 #include <EntityItem.h>
 
 #include "JoltUtil.h"
 #include "PhysicsEngine.h"
+#include <GLMHelpers.h>
+#include <PhysicsHelpers.h>
 #include "PhysicsWorld.h"
 #include "PhysicsHelpers.h"
 #include "PhysicsLogging.h"
@@ -45,8 +50,38 @@ void ObjectMotionState::setLeftoverTime(float seconds) {
 }
 
 // static
+bool _interpolatePresentation(true);
+
+void ObjectMotionState::setInterpolatePresentation(bool interpolate) {
+    _interpolatePresentation = interpolate;
+}
+
+bool ObjectMotionState::getInterpolatePresentation() {
+    return _interpolatePresentation;
+}
+
+float ObjectMotionState::getPresentationLag() {
+    return _interpolatePresentation ? PHYSICS_ENGINE_FIXED_SUBSTEP : 0.0f;
+}
+
+float ObjectMotionState::getPresentationAlpha() {
+    return _interpolatePresentation ? glm::clamp(_leftoverTime / PHYSICS_ENGINE_FIXED_SUBSTEP, 0.0f, 1.0f) : 1.0f;
+}
+
 float ObjectMotionState::getLeftoverTime() {
     return _leftoverTime;
+}
+
+uint64_t _substepTime(0);
+
+// static
+void ObjectMotionState::setSubstepTime(uint64_t usecs) {
+    _substepTime = usecs;
+}
+
+// static
+uint64_t ObjectMotionState::getSubstepTime() {
+    return _substepTime;
 }
 
 static bool isFrameEntity(const SpatiallyNestablePointer& object) {
@@ -78,7 +113,7 @@ SpatiallyNestablePointer ObjectMotionState::findFrameAncestor(const SpatiallyNes
 // Walks from the object's parent up to its frame, composing local transforms and velocities (each local
 // velocity is in its parent's rotation; angular motion of the chain is left out, as SpatiallyNestable does).
 bool ObjectMotionState::getParentTransformInFrame(const SpatiallyNestablePointer& object, Transform& transform,
-                                                  glm::vec3& linearVelocity, glm::vec3& angularVelocity) {
+                                                  glm::vec3& linearVelocity, glm::vec3& angularVelocity, bool asSimulated) {
     transform = Transform();
     linearVelocity = glm::vec3(0.0f);
     angularVelocity = glm::vec3(0.0f);
@@ -101,9 +136,23 @@ bool ObjectMotionState::getParentTransformInFrame(const SpatiallyNestablePointer
                 glm::quat rotationSoFar = transform.getRotation();
                 linearVelocity += rotationSoFar * node->getLocalVelocity();
                 angularVelocity += rotationSoFar * node->getLocalAngularVelocity();
-                Transform composed;
-                Transform::mult(composed, transform, node->getLocalTransform());
-                transform = composed;
+                ObjectMotionState* nodeState = nullptr;
+                if (asSimulated && node->getNestableType() == NestableType::Entity) {
+                    nodeState = static_cast<ObjectMotionState*>(std::static_pointer_cast<EntityItem>(node)->getPhysicsInfo());
+                }
+                if (nodeState && nodeState->getBody() && !nodeState->getBody()->IsStatic()) {
+                    // inside the step the node is where its body is (its record presents a substep behind)
+                    glm::vec3 position;
+                    glm::quat rotation;
+                    nodeState->getBodyTransform(position, rotation);
+                    transform = Transform();
+                    transform.setTranslation(position);
+                    transform.setRotation(rotation);
+                } else {
+                    Transform composed;
+                    Transform::mult(composed, transform, node->getLocalTransform());
+                    transform = composed;
+                }
             }
             return true;
         }
@@ -268,7 +317,7 @@ void ObjectMotionState::updateCCDConfiguration() {
     bodyInterface()->SetMotionQuality(_body->GetID(), wantsCCD ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete);
 }
 
-bool ObjectMotionState::getFrameTransformInDomain(glm::vec3& position, glm::quat& rotation, glm::vec3& linearVelocity, glm::vec3& angularVelocity) const {
+bool ObjectMotionState::getFrameTransformInDomain(glm::vec3& position, glm::quat& rotation, glm::vec3& linearVelocity, glm::vec3& angularVelocity, bool asSimulated) const {
     if (!isFrame()) {
         return false;
     }
@@ -293,7 +342,7 @@ void ObjectMotionState::setBody(JPH::Body* body, PhysicsWorld* world) {
         _world = body ? world : nullptr;
         if (_body) {
             _body->SetUserData((JPH::uint64)(uintptr_t)this);
-            assert(_body->GetShape() == _shape);
+            assert(_body->GetShape() == getBodyShape());
             updateCCDConfiguration();
         }
     }
@@ -305,22 +354,119 @@ void ObjectMotionState::setShape(const JPH::Shape* shape) {
             getShapeManager()->releaseShape(_shape);
         }
         _shape = shape;
-        if (_body) {
-            assert(_shape);
-            bodyInterface()->SetShape(_body->GetID(), _shape, false, JPH::EActivation::DontActivate);
-            updateCCDConfiguration();
-        }
+        // an interior copy was built on the old shape; the engine rebuilds it when the body is reinserted
+        _interiorShape = nullptr;
+        _interiorParts.clear();
+        refreshBodyShape(false);
     } else if (shape) {
         // we need to release unused reference to shape
         getShapeManager()->releaseShape(shape);
     }
 }
 
+void ObjectMotionState::setInteriorShape(const JPH::Shape* compound, std::vector<ObjectMotionState*>&& parts) {
+    if (_interiorShape.GetPtr() == compound) {
+        _interiorParts = std::move(parts);
+        return;
+    }
+    _interiorShape = compound;
+    _interiorParts = compound ? std::move(parts) : std::vector<ObjectMotionState*>();
+    refreshBodyShape(false);
+}
+
+void ObjectMotionState::setCenterOfMassOffset(const glm::vec3& offset) {
+    if (offset == _centerOfMassOffset) {
+        return;
+    }
+    _centerOfMassOffset = offset;
+    refreshBodyShape(true);
+}
+
+// private
+void ObjectMotionState::refreshBodyShape(bool activate) {
+    JPH::RefConst<JPH::Shape> worn = _interiorShape ? _interiorShape : JPH::RefConst<JPH::Shape>(_shape);
+    if (worn && glm::length2(_centerOfMassOffset) > 1.0e-8f) {
+        worn = new JPH::OffsetCenterOfMassShape(worn, glmToJolt(_centerOfMassOffset));
+    }
+    _bodyShape = (worn.GetPtr() == _shape) ? nullptr : worn;
+    if (_body) {
+        assert(getBodyShape());
+        bodyInterface()->SetShape(_body->GetID(), getBodyShape(), false, activate ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+        updateCCDConfiguration();
+        updateBodyMassProperties();
+    }
+}
+
+JPH::MassProperties ObjectMotionState::getOwnMassProperties() const {
+    JPH::MassProperties massProperties;
+    if (_shape) {
+        massProperties = _shape->GetMassProperties();
+        if (glm::length2(_centerOfMassOffset) > 1.0e-8f) {
+            massProperties.Translate(glmToJolt(_centerOfMassOffset));   // as OffsetCenterOfMassShape computes it
+        }
+    }
+    return massProperties;
+}
+
+// The compound's sub-shape user data numbers the parts from 1 (0 is the own shape); a decorated shape (the centre
+// offset) passes sub-shape IDs through to the compound unchanged.
+ObjectMotionState* ObjectMotionState::interiorPartAt(const JPH::SubShapeID& subShapeID) const {
+    if (!_interiorShape || !_body || _interiorParts.empty()) {
+        return nullptr;
+    }
+    const JPH::Shape* shape = _body->GetShape();
+    while (shape && shape->GetType() == JPH::EShapeType::Decorated) {
+        shape = static_cast<const JPH::DecoratedShape*>(shape)->GetInnerShape();
+    }
+    if (shape != _interiorShape.GetPtr() || shape->GetType() != JPH::EShapeType::Compound) {
+        return nullptr;
+    }
+    const JPH::CompoundShape* compound = static_cast<const JPH::CompoundShape*>(shape);
+    JPH::SubShapeID remainder;
+    uint32_t index = compound->GetSubShapeIndexFromID(subShapeID, remainder);
+    if (index >= compound->GetNumSubShapes()) {
+        return nullptr;
+    }
+    uint32_t partNumber = compound->GetCompoundUserData(index);
+    return (partNumber > 0 && partNumber <= _interiorParts.size()) ? _interiorParts[partNumber - 1] : nullptr;
+}
+
 void ObjectMotionState::setBodyTransform(const glm::vec3& position, const glm::quat& rotation, bool activate) {
     if (_body && bodyInterface()) {
+        if (_body->IsStatic()) {
+            // a wall that moved makes the frame's copy of it (round 8) stale; a wall placed where it already is
+            // (a child's transform is pushed again whenever its parent moves) does not
+            glm::vec3 bodyPosition;
+            glm::quat bodyRotation;
+            getBodyTransform(bodyPosition, bodyRotation);
+            if (glm::distance2(bodyPosition, position) > 1.0e-10f || fabsf(glm::dot(bodyRotation, rotation)) < 1.0f - 1.0e-7f) {
+                _world->markInteriorChanged();
+            }
+        }
         bodyInterface()->SetPositionAndRotation(_body->GetID(), glmToJoltR(position), glmToJolt(rotation),
                                                activate ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+        // placed: it is where it is, with no blend from where it was
+        _substepStartStep = 0;
     }
+}
+
+void ObjectMotionState::rememberSubstepStart() {
+    if (_body) {
+        _substepStartPosition = joltToGLM(_body->GetPosition());
+        _substepStartRotation = joltToGLM(_body->GetRotation());
+        _substepStartStep = getWorldSimulationStep();
+    }
+}
+
+void ObjectMotionState::getPresentedBodyTransform(glm::vec3& position, glm::quat& rotation) const {
+    getBodyTransform(position, rotation);
+    if (!_body || !_interpolatePresentation || _substepStartStep != getWorldSimulationStep()) {
+        // no substep moved it lately: it is where it is
+        return;
+    }
+    float alpha = getPresentationAlpha();
+    position = glm::mix(_substepStartPosition, position, alpha);
+    rotation = glm::normalize(safeMix(_substepStartRotation, rotation, alpha));
 }
 
 void ObjectMotionState::getBodyTransform(glm::vec3& position, glm::quat& rotation) const {
@@ -444,7 +590,6 @@ void ObjectMotionState::updateLastKinematicStep() {
     // one substep of motion on the first push. (Starting a step earlier gave two, and that doubled velocity
     // was then read back from the body into the entity.)
     _lastKinematicStep = ObjectMotionState::getWorldSimulationStep();
-    _extrapolatedTime = 0.0f;
 }
 
 void ObjectMotionState::updateBodyMassProperties() {
@@ -460,7 +605,7 @@ void ObjectMotionState::updateBodyMassProperties() {
     if (mass != mass || mass < MIN_DYNAMIC_MASS) {
         mass = MIN_DYNAMIC_MASS;
     }
-    JPH::MassProperties massProperties = _shape->GetMassProperties();
+    JPH::MassProperties massProperties = getOwnMassProperties();
     massProperties.ScaleToMass(mass);
     motion->SetMassProperties(motion->GetAllowedDOFs(), massProperties);
 }

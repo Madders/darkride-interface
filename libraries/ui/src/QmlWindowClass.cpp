@@ -61,20 +61,19 @@ QVariantMap QmlWindowClass::parseArguments(QScriptContext* context) {
         properties = context->argument(0).toVariant().toMap();
     }
 
+    return normalizeProperties(properties);
+}
+
+QVariantMap QmlWindowClass::normalizeProperties(QVariantMap properties) {
     QUrl url { properties[SOURCE_PROPERTY].toString() };
     // If the passed URL doesn't correspond to a known scheme, assume it's a local file path
     if (!KNOWN_SCHEMES.contains(url.scheme(), Qt::CaseInsensitive)) {
         properties[SOURCE_PROPERTY] = QUrl::fromLocalFile(url.toString()).toString();
     }
-
     return properties;
 }
 
-
-
-// Method called by Qt scripts to create a new web window in the overlay
-QScriptValue QmlWindowClass::internal_constructor(QScriptContext* context, QScriptEngine* engine, bool restricted) {
-    auto properties = parseArguments(context);
+QmlWindowClass* QmlWindowClass::createWindow(QVariantMap properties, bool restricted) {
     auto offscreenUi = DependencyManager::get<OffscreenUi>();
     QmlWindowClass* retVal = new QmlWindowClass(restricted);
     Q_ASSERT(retVal);
@@ -84,6 +83,11 @@ QScriptValue QmlWindowClass::internal_constructor(QScriptContext* context, QScri
     } else {
         retVal->initQml(properties);
     }
+    return retVal;
+}
+
+QScriptValue QmlWindowClass::internal_constructor(QScriptContext* context, QScriptEngine* engine, bool restricted) {
+    QmlWindowClass* retVal = createWindow(parseArguments(context), restricted);
     connect(engine, &QScriptEngine::destroyed, retVal, &QmlWindowClass::deleteLater);
     return engine->newQObject(retVal);
 }

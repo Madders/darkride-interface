@@ -113,7 +113,13 @@ int ClientTraitsHandler::sendChangedTraitsToMixer() {
         }
 
         auto instancedIt = traitStatusesCopy.instancedCBegin();
+        decltype(&*instancedIt) menuParameters = nullptr;
         while (instancedIt != traitStatusesCopy.instancedCEnd()) {
+            if (instancedIt->traitType == AvatarTraits::AvatarMenuParameters) {
+                menuParameters = &*instancedIt;  // sent below, in a packet of its own
+                ++instancedIt;
+                continue;
+            }
             for (auto& instanceIDValuePair : instancedIt->instances) {
                 if ((initialSend && instanceIDValuePair.value != Deleted)
                     || instanceIDValuePair.value == Updated) {
@@ -132,7 +138,32 @@ int ClientTraitsHandler::sendChangedTraitsToMixer() {
             ++instancedIt;
         }
 
-        nodeList->sendPacketList(std::move(traitsPacketList), *avatarMixer);
+        if (bytesWritten > 0 || initialSend || !menuParameters) {
+            nodeList->sendPacketList(std::move(traitsPacketList), *avatarMixer);
+        }
+
+        // The avatar's menu parameters go in a traits packet of their own: an avatar mixer that doesn't know the kind
+        // stops reading a traits packet there, and would lose whatever came after it.
+        if (menuParameters) {
+            auto menuPacketList = NLPacketList::create(PacketType::SetAvatarTraits, QByteArray(), true, true);
+            lock.lock();
+            menuPacketList->writePrimitive(++_currentTraitVersion);
+            lock.unlock();
+            int menuBytesWritten = 0;
+            for (auto& instanceIDValuePair : menuParameters->instances) {
+                if ((initialSend && instanceIDValuePair.value != Deleted) || instanceIDValuePair.value == Updated) {
+                    menuBytesWritten += AvatarTraits::packTraitInstance(menuParameters->traitType, instanceIDValuePair.id,
+                                                                        *menuPacketList, *_owningAvatar);
+                } else if (!initialSend && instanceIDValuePair.value == Deleted) {
+                    menuBytesWritten += AvatarTraits::packInstancedTraitDelete(menuParameters->traitType,
+                                                                               instanceIDValuePair.id, *menuPacketList);
+                }
+            }
+            if (menuBytesWritten > 0) {
+                nodeList->sendPacketList(std::move(menuPacketList), *avatarMixer);
+                bytesWritten += menuBytesWritten;
+            }
+        }
     }
 
     return bytesWritten;

@@ -48,6 +48,9 @@ namespace render {
         int _localShadowMaps = 0;
         int _localShadowMapsDrawn = 0;
         int _localShadowStaticMapsDrawn = 0;
+        // mirrors drawn this frame (a view each, render-utils Mirrors.h) and the pixels their pictures add up to
+        int _mirrorsDrawn = 0;
+        int _mirrorPixels = 0;
 
         Item _item;
         Item _shadow;
@@ -123,6 +126,20 @@ namespace render {
         int _boundaryLevelAdjust { 0 };
         float _lodAngleHalfTan{ 0.1f };
         float _lodAngleHalfTanSq{ _lodAngleHalfTan  * _lodAngleHalfTan };
+        // the impostor switch (IMPOSTORS.md 2.4, ImpostorSwitch): an entity whose bounding sphere subtends less than
+        // this (the square of the angle's half tangent, as _lodAngleHalfTanSq) is drawn as its card; 0 shows no card
+        float _impostorAngleHalfTanSq{ 0.0f };
+        // the impostor card's debug view (LODManager.impostorDebug, impostor.slf): 0 draws the card, other values paint
+        // what the shader reads
+        int _impostorDebug{ 0 };
+        // the impostor cross-fade forced to a share (LODManager.impostorCrossfade, a test hook): below 0 the switch
+        // times its own; 0 draws the model alone, 1 the card alone, between them both, dissolved
+        float _impostorCrossfade{ -1.0f };
+        // automatic LODs (AUTOMATIC-LODS.md 3.3, LODManager.meshLodErrorPixels): a model's part draws the coarsest level
+        // of its mesh whose error looks no bigger than this many pixels from the view's camera; 0 draws every mesh in full
+        float _meshLodErrorPixels{ 0.0f };
+        // a level every mesh draws (LODManager.meshLodForceLevel, a test hook): below 0 the error decides; 0 is full
+        int _meshLodForceLevel{ -1 };
 
         RenderMode _renderMode { DEFAULT_RENDER_MODE };
         DisplayMode _displayMode { MONO };

@@ -165,6 +165,19 @@ public:
     void deleteEntity(const EntityItemID& id) const;
     void onEntityChanged(const EntityItemID& id);
 
+    // Model meshes waiting behind their impostor cards (ENTITY-STREAMING.md 3.1): a model's renderer puts its entity
+    // here, with the sphere of the card it waits behind, while the sphere looks smaller than the load angle from the
+    // main camera; each update, the ones that have come to look bigger (or that physics wants the mesh of, or all of
+    // them when the angle is 0) update, and fetch it. Main thread, but for wakeDeferredModelMesh.
+    void deferModelMesh(const EntityItemID& id, const glm::vec3& centerWS, float radius);
+    void undeferModelMesh(const EntityItemID& id);
+    void wakeDeferredModelMesh(const EntityItemID& id);
+    // the main camera's position and the load angle, as the squared tangent of half of it (0: no mesh waits), set by
+    // the application each frame
+    void setImpostorLoadView(const glm::vec3& cameraPosition, float loadHalfTanSq);
+    const glm::vec3& getImpostorLoadPosition() const { return _impostorLoadPosition; }
+    float getImpostorLoadHalfTanSq() const { return _impostorLoadHalfTanSq; }
+
     // Access the workload Space
     workload::SpacePointer getWorkloadSpace() const { return _space; }
 
@@ -257,6 +270,17 @@ private:
     bool _displayModelBounds;
 
     bool _shuttingDown { false };
+
+    void updateDeferredModelMeshes(const render::ScenePointer& scene, render::Transaction& transaction);
+    struct DeferredModelMesh {
+        glm::vec3 center;
+        float radius;
+        bool wake;
+    };
+    mutable std::mutex _deferredModelMeshesLock;
+    std::unordered_map<EntityItemID, DeferredModelMesh> _deferredModelMeshes;
+    glm::vec3 _impostorLoadPosition { 0.0f };
+    float _impostorLoadHalfTanSq { 0.0f };
 
     QMultiMap<QUrl, EntityItemID> _waitingOnPreload;
 

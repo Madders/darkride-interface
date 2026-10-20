@@ -81,6 +81,7 @@
 #include <VirtualPadManager.h>
 #include <DebugDraw.h>
 #include <DeferredLightingEffect.h>
+#include <EntityNodeData.h>
 #include <EntityScriptClient.h>
 #include <EntityScriptServerLogClient.h>
 #include <EntityScriptingInterface.h>
@@ -196,6 +197,7 @@
 #include "scripting/RatesScriptingInterface.h"
 #include "scripting/SelectionScriptingInterface.h"
 #include "editor/Editor.h"
+#include "editor/ImpostorBaker.h"
 #include "editor/ui/ViewportContainer.h"
 #include "scripting/WalletScriptingInterface.h"
 #include "scripting/TTSScriptingInterface.h"
@@ -940,6 +942,7 @@ bool setupEssentials(int& argc, char** argv, bool runningMarkerExisted) {
     DependencyManager::set<ResourceManager>();
     DependencyManager::set<SelectionScriptingInterface>();
     DependencyManager::set<Editor>();
+    DependencyManager::set<ImpostorBaker>();
     DependencyManager::set<Ledger>();
     DependencyManager::set<Wallet>();
     DependencyManager::set<WalletScriptingInterface>();
@@ -1036,6 +1039,7 @@ Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bo
     _previousScriptLocation("LastScriptLocation", DESKTOP_LOCATION),
     _fieldOfView("fieldOfView", DEFAULT_FIELD_OF_VIEW_DEGREES),
     _farClip("farClip", DEFAULT_FAR_CLIP),
+    _nearClip("nearClip", DEFAULT_NEAR_CLIP),
     _hmdTabletScale("hmdTabletScale", DEFAULT_HMD_TABLET_SCALE_PERCENT),
     _desktopTabletScale("desktopTabletScale", DEFAULT_DESKTOP_TABLET_SCALE_PERCENT),
     _firstRun(Settings::firstRun, true),
@@ -1063,7 +1067,7 @@ Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bo
 {
     
 #if defined(Q_OS_LINUX)
-    _window->setWindowIcon(QIcon(PathUtils::resourcesPath() + "images/tivoli-logo.svg"));
+    _window->setWindowIcon(QIcon(PathUtils::resourcesPath() + "images/darkride-logo.png"));
 #endif
 
     auto steamClient = PluginManager::getInstance()->getSteamClientPlugin();
@@ -1165,7 +1169,7 @@ Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bo
 
     QFontDatabase::addApplicationFont(PathUtils::resourcesPath() + "styles/Inconsolata.otf");
     
-    _window->setWindowTitle("Tivoli Cloud VR");
+    _window->setWindowTitle("Darkride");
 
     Model::setAbstractViewStateInterface(this); // The model class will sometimes need to know view state details from us
 
@@ -1342,8 +1346,13 @@ Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bo
 
     auto discoverabilityManager = DependencyManager::get<DiscoverabilityManager>();
     connect(&locationUpdateTimer, &QTimer::timeout, discoverabilityManager.data(), &DiscoverabilityManager::updateLocation);
-    connect(&locationUpdateTimer, &QTimer::timeout,
-        DependencyManager::get<AddressManager>().data(), &AddressManager::storeCurrentAddress);
+    connect(&locationUpdateTimer, &QTimer::timeout, this, [this] {
+        // nothing to remember while the sign-in screen is up, since no world is joined until someone signs in
+        // (pauseUntilLoginDetermined); the last place stays saved for after
+        if (!getLoginDialogPoppedUp()) {
+            DependencyManager::get<AddressManager>()->storeCurrentAddress();
+        }
+    });
     locationUpdateTimer.start(DATA_SERVER_LOCATION_CHANGE_UPDATE_MSECS);
 
     // if we get a domain change, immediately attempt update location in metaverse server
@@ -1445,6 +1454,10 @@ Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bo
         if (!_physicsEnabled) {
             // when we arrive somewhere without physics enabled --> startSafeLanding
             _octreeProcessor.startSafeLanding();
+            // and query the entity server at once: the restarted landing completes on the server's next report of the
+            // initial scene, which it makes on the next query that asks for it; left to the periodic query that was
+            // up to 3 s of waiting for nothing (WORLD-LOADING.md, the arrival gate)
+            _queryExpiry = SteadyClock::now();
         }
     }, Qt::QueuedConnection);
 
@@ -1487,7 +1500,8 @@ Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bo
 
     // tell the NodeList instance who to tell the domain server we care about
     nodeList->addSetOfNodeTypesToNodeInterestSet(NodeSet() << NodeType::AudioMixer << NodeType::AvatarMixer
-        << NodeType::EntityServer << NodeType::AssetServer << NodeType::MessagesMixer << NodeType::EntityScriptServer);
+        << NodeType::EntityServer << NodeType::AssetServer << NodeType::MessagesMixer << NodeType::EntityScriptServer
+        << NodeType::PhysicsServer);
 
     // connect to the packet sent signal of the _entityEditSender
     connect(&_entityEditSender, &EntityEditPacketSender::packetSent, this, &Application::packetSent);
@@ -1525,6 +1539,10 @@ Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bo
 
     _window->restoreGeometry();
     _window->setVisible(true);
+    // the window has been seen to end up at Qt's bare 640 x 480 after the start on macOS (2026-10-18), cause unknown:
+    // where it is is logged once it has been shown and a little later, and a shrunk window is put back
+    QTimer::singleShot(0, _window, [this] { _window->checkStartGeometry(); });
+    QTimer::singleShot(3000, _window, [this] { _window->checkStartGeometry(); });
 
     _glWidget->setFocusPolicy(Qt::StrongFocus);
     _glWidget->setFocus();
@@ -1599,21 +1617,34 @@ Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bo
     });
 
     connect(offscreenUi.data(), &OffscreenUi::keyboardFocusActive, [this]() {
-// #if !defined(Q_OS_ANDROID) && !defined(DISABLE_QML)
-//         // Do not show login dialog if requested not to on the command line
-//         // QString hifiNoLoginCommandLineKey = QString("--").append(HIFI_NO_LOGIN_COMMAND_LINE_KEY);
-//         // int index = arguments().indexOf(hifiNoLoginCommandLineKey);
+#if !defined(Q_OS_ANDROID) && !defined(DISABLE_QML)
+        // Darkride starts on the sign-in screen: until someone signs in, or continues as the remembered account, the
+        // avatar is hidden, no world is joined and no scripts run (pauseUntilLoginDetermined), and the screen covers
+        // the window. A launcher passing --tokens has signed in for us.
+        if (arguments().indexOf("--tokens") != -1) {
+            resumeAfterLoginDialogActionTaken();
+            return;
+        }
 
-//         if (arguments().indexOf("--tokens") != -1) {
-//             resumeAfterLoginDialogActionTaken();
-//             return;
-//         }
-
-//         showLoginScreen();
-// #else
+        showLoginScreen();
+#else
         resumeAfterLoginDialogActionTaken();
-// #endif
+#endif
     });
+
+#if !defined(Q_OS_ANDROID) && !defined(DISABLE_QML)
+    // Signing out of a running viewer goes back to the sign-in screen, as at the start: out of the world, the avatar
+    // hidden, until someone signs in, and then on as at the start (resumeAfterLoginDialogActionTaken).
+    if (arguments().indexOf("--tokens") == -1) {
+        connect(DependencyManager::get<AccountManager>().data(), &AccountManager::logoutComplete, this, [this]() {
+            if (getLoginDialogPoppedUp()) {
+                return;
+            }
+            pauseUntilLoginDetermined();
+            showLoginScreen();
+        }, Qt::QueuedConnection);
+    }
+#endif
 
     // Initialize the user interface and menu system
     // Needs to happen AFTER the render engine initialization to access its configuration
@@ -2684,7 +2715,7 @@ QString Application::getUserAgent() {
     }
 
     QString userAgent = (
-        "TivoliCloudVR/" + 
+        "Darkride/" + 
         (BuildInfo::BUILD_TYPE == BuildInfo::BuildType::Stable ? BuildInfo::VERSION : "dev")
     );
 
@@ -3255,25 +3286,21 @@ static void addDisplayPluginToMenu(const DisplayPluginPointer& displayPlugin, in
 
 void Application::showLoginScreen() {
 #if !defined(DISABLE_QML)
-    auto accountManager = DependencyManager::get<AccountManager>();
+    // Signed in or not, the sign-in screen comes first: a remembered account ("Remember me") gets "Continue as <name>"
+    // there (LoginDialog/ContinueBody.qml), and goes in from it.
     auto dialogsManager = DependencyManager::get<DialogsManager>();
-    if (!accountManager->isLoggedIn()) {
-        if (!isHMDMode()) {
-            auto toolbar =  DependencyManager::get<ToolbarScriptingInterface>()->getToolbar("com.highfidelity.interface.toolbar.system");
-            toolbar->writeProperty("visible", false);
-        }
-        _loginDialogPoppedUp = true;
-        dialogsManager->showLoginDialog();
-        emit loginDialogFocusEnabled();
-        QJsonObject loginData = {};
-        loginData["action"] = "login dialog popped up";
-        UserActivityLogger::getInstance().logAction("encourageLoginDialog", loginData);
-        _window->setWindowTitle("Tivoli Cloud VR");
-    } else {
-        resumeAfterLoginDialogActionTaken();
+    if (!isHMDMode()) {
+        auto toolbar =  DependencyManager::get<ToolbarScriptingInterface>()->getToolbar("com.highfidelity.interface.toolbar.system");
+        toolbar->writeProperty("visible", false);
     }
-    _loginDialogPoppedUp = !accountManager->isLoggedIn();
+    _loginDialogPoppedUp = true;
     loginDialogPoppedUp.set(_loginDialogPoppedUp);
+    dialogsManager->showLoginDialog();
+    emit loginDialogFocusEnabled();
+    QJsonObject loginData = {};
+    loginData["action"] = "login dialog popped up";
+    UserActivityLogger::getInstance().logAction("encourageLoginDialog", loginData);
+    _window->setWindowTitle("Darkride");
 #else
     resumeAfterLoginDialogActionTaken();
 #endif
@@ -3855,6 +3882,13 @@ void Application::setFarClip(float farClip) {
     }
 }
 
+void Application::setNearClip(float nearClip) {
+    if (nearClip != _nearClip.get()) {
+        _nearClip.set(nearClip);
+        resizeGL();   // the projection is rebuilt there
+    }
+}
+
 void Application::setHMDTabletScale(float hmdTabletScale) {
     _hmdTabletScale.set(hmdTabletScale);
 }
@@ -3994,7 +4028,7 @@ void Application::resizeGL() {
     float fovY = verticalFieldOfView(_fieldOfView.get(), aspectRatio);
     _myCamera.setProjection(
         glm::perspective(
-            glm::radians(fovY), aspectRatio, DEFAULT_NEAR_CLIP, getFarClip()
+            glm::radians(fovY), aspectRatio, getNearClip(), getFarClip()
         )
     );
     // Possible change in aspect ratio
@@ -5099,7 +5133,7 @@ bool Application::acceptSnapshot(const QString& urlString) {
         }
     } else {
         OffscreenUi::asyncWarning("", "No location details were found in the file\n" +
-                             snapshotPath + "\nTry dragging in an authentic Hifi snapshot.");
+                             snapshotPath + "\nTry dragging in a Darkride Snap saved on this computer.");
     }
     return true;
 }
@@ -5792,6 +5826,8 @@ void Application::pauseUntilLoginDetermined() {
         return;
     }
 
+    _signInPending = true;
+
     auto myAvatar = getMyAvatar();
     _previousAvatarTargetScale = myAvatar->getTargetScale();
     _previousAvatarSkeletonModel = myAvatar->getSkeletonModelURL().toString();
@@ -5922,6 +5958,7 @@ void Application::resumeAfterLoginDialogActionTaken() {
     cameraModeChanged();
     _startUpFinished = true;
     getRefreshRateManager().setRefreshRateRegime(RefreshRateManager::RefreshRateRegime::FOCUS_ACTIVE);
+    _signInPending = false;
 }
 
 void Application::loadAvatarScripts(const QVector<QString>& urls) {
@@ -6393,8 +6430,14 @@ void Application::updateSecondaryCameraViewFrustum() {
 
 static bool domainLoadingInProgress = false;
 
+void Application::setArrivalWaitsForNearby(bool wait) {
+    _arrivalWaitsForNearby = wait;
+    _octreeProcessor.setSafeLandingWaitsForVisuals(wait);
+}
+
 void Application::tryToEnablePhysics() {
-    bool enableInterstitial = DependencyManager::get<NodeList>()->getDomainHandler().getInterstitialModeEnabled();
+    bool enableInterstitial = DependencyManager::get<NodeList>()->getDomainHandler().getInterstitialModeEnabled() ||
+        _arrivalWaitsForNearby;
     if (gpuTextureMemSizeStable() || !enableInterstitial) {
         _fullSceneCounterAtLastPhysicsCheck = _fullSceneReceivedCounter;
         _lastQueriedViews.clear();  // Force new view.
@@ -6403,14 +6446,22 @@ void Application::tryToEnablePhysics() {
         // scene is ready to compute its collision shape.
         auto myAvatar = getMyAvatar();
         if (myAvatar->isReadyForPhysics()) {
+            bool safeLandingComplete = _octreeProcessor.safeLandingIsComplete();   // read before the reset below clears it
             myAvatar->getCharacterController()->setPhysicsEngine(_physicsEngine);
             _octreeProcessor.resetSafeLanding();
             _physicsEnabled = true;
             setIsInterstitialMode(false);
             myAvatar->updateMotionBehaviorFromMenu();
-            qDebug() << "Physics enabled";
+            qDebug() << "Physics enabled" << "(ghosting" << DependencyManager::get<EntityTreeRenderer>()->getGhostingAllowed()
+                << "arrival waits for nearby" << _arrivalWaitsForNearby << "interstitial"
+                << DependencyManager::get<NodeList>()->getDomainHandler().getInterstitialModeEnabled()
+                << "safe landing complete" << safeLandingComplete << "full scenes" << _fullSceneReceivedCounter << ")";
             DependencyManager::get<EntityTreeRenderer>()->setSceneIsReady(true);
-            requeryOctree(); // hit it with a quick refresh to make sure everything is drawn
+            // the renderer rechecks zone culling now that the scene is ready. Until 2026-10-19 this was
+            // requeryOctree, whose new connection id made the entity server resend the whole view it had just sent
+            // (Tivoli's 14f41d044a: "hit it with a quick refresh to make sure everything is drawn"); the query with
+            // the real views goes out from the update loop as before
+            DependencyManager::get<EntityTreeRenderer>()->forceRecheckEntities();
         }
     }
 }
@@ -6441,8 +6492,9 @@ void Application::update(float deltaTime) {
         } else {
             _octreeProcessor.updateSafeLanding();
             
-            if (DependencyManager::get<EntityTreeRenderer>()->getGhostingAllowed() 
-             || _octreeProcessor.safeLandingIsComplete()) { 
+            // ghosting lets the avatar move before the world near it is in, unless a loading screen waits for that
+            bool ghosting = DependencyManager::get<EntityTreeRenderer>()->getGhostingAllowed() && !_arrivalWaitsForNearby;
+            if (ghosting || _octreeProcessor.safeLandingIsComplete()) {
                 tryToEnablePhysics();
             }
         }
@@ -6811,6 +6863,9 @@ void Application::update(float deltaTime) {
     {
         QMutexLocker viewLocker(&_viewMutex);
         _myCamera.loadViewFrustum(_viewFrustum);
+        // where a model shown as its impostor card fetches its mesh (ENTITY-STREAMING.md 3.1)
+        getEntities()->setImpostorLoadView(_viewFrustum.getPosition(),
+                                           DependencyManager::get<LODManager>()->getImpostorLoadHalfTanSq());
 
         _conicalViews.clear();
         _conicalViews.push_back(_viewFrustum);
@@ -6845,10 +6900,18 @@ void Application::update(float deltaTime) {
         static const std::chrono::seconds MIN_PERIOD_BETWEEN_QUERIES { 2 };
         auto now = SteadyClock::now();
 
+        // The periodic query keeps its connection. Until 2026-10-19 it went through requeryOctree, whose new connection
+        // id makes the entity server forget what this client holds and resend its whole view: every 3 s, for as long
+        // as the client ran (Tivoli's 14f41d044a of 2020, "Fix entities intermittently not rendering"; measured 26
+        // full sends, 2.6 MB, in 97 s over a still field of 200 entities). The renderer's recheck of zone culling
+        // from that fix stays periodic. requeryOctree, with its new connection id, remains for the explicit
+        // refreshes: Redraw (Ctrl+Shift+T), a reload of the caches, physics coming up.
         bool enoughTimePassed = now > _queryExpiry;
-        if (enoughTimePassed) requeryOctree();
+        if (enoughTimePassed) {
+            DependencyManager::get<EntityTreeRenderer>()->forceRecheckEntities();
+        }
 
-        if (viewIsDifferentEnough) {            
+        if (enoughTimePassed || viewIsDifferentEnough) {            
             if (DependencyManager::get<SceneScriptingInterface>()
             ->shouldRenderEntities()
             ) {
@@ -6954,11 +7017,13 @@ void Application::updateRenderArgs(float deltaTime) {
             PROFILE_RANGE(render, "/buildFrustrumAndArgs");
             {
                 QMutexLocker viewLocker(&_viewMutex);
-                // adjust near clip plane to account for sensor scaling.
+                // adjust near clip plane to account for sensor scaling. This is rebuilt every frame, so the near
+                // clip setting (Render.nearClip, desktop only: an HMD keeps the short one for the hands) is read here
                 float aspectRatio = getActiveDisplayPlugin()->getRecommendedAspectRatio();
                 float fovY = verticalFieldOfView(_fieldOfView.get(), aspectRatio);
+                float nearClip = isHMDMode() ? DEFAULT_NEAR_CLIP : getNearClip();
                 auto adjustedProjection = glm::perspective(
-                    glm::radians(fovY), aspectRatio, DEFAULT_NEAR_CLIP * sensorToWorldScale, getFarClip()
+                    glm::radians(fovY), aspectRatio, nearClip * sensorToWorldScale, getFarClip()
                 );
                 _viewFrustum.setProjection(adjustedProjection);
                 _viewFrustum.calculate();
@@ -6967,6 +7032,11 @@ void Application::updateRenderArgs(float deltaTime) {
                 lodManager->getBoundaryLevelAdjust(), lodManager->getLODHalfAngleTan(), RenderArgs::DEFAULT_RENDER_MODE,
                 RenderArgs::MONO, RenderArgs::DEFERRED, RenderArgs::RENDER_DEBUG_NONE);
             appRenderArgs._renderArgs._scene = getMain3DScene();
+            appRenderArgs._renderArgs._impostorAngleHalfTanSq = lodManager->getImpostorAngleHalfTanSq();
+            appRenderArgs._renderArgs._impostorDebug = lodManager->getImpostorDebug();
+            appRenderArgs._renderArgs._impostorCrossfade = lodManager->getImpostorCrossfade();
+            appRenderArgs._renderArgs._meshLodErrorPixels = lodManager->getMeshLodErrorPixelsInEffect();
+            appRenderArgs._renderArgs._meshLodForceLevel = lodManager->getMeshLodForceLevel();
 
             {
                 QMutexLocker viewLocker(&_viewMutex);
@@ -7159,9 +7229,12 @@ void Application::queryOctree(
         // bool interstitialModeEnabled = DependencyManager::get<NodeList>()->getDomainHandler().getInterstitialModeEnabled();
 
         ConicalViewFrustum sphericalView;
-        AABox box = getMyAvatar()->getGlobalBoundingBox();
+        // the sphere is centred on where the avatar is now, not on the global bounding box: that box follows
+        // _globalPosition, refreshed in simulateAttachments, so the query sent in the frame of a teleport (the
+        // arrival's own path lookup) still asked around the old place, and the restarted landing had nothing of the
+        // new place to wait for (WORLD-LOADING.md, the arrival gate)
         float radius = INITIAL_QUERY_RADIUS; //glm::max(INITIAL_QUERY_RADIUS, 350);//0.5 * glm::length(box.getDimensions())); 
-        sphericalView.setPositionAndSimpleRadius(box.calcCenter(), radius);
+        sphericalView.setPositionAndSimpleRadius(getMyAvatar()->getWorldPosition(), radius);
 
         //if (interstitialModeEnabled) {
         auto menu = Menu::getInstance(); 
@@ -7195,6 +7268,21 @@ void Application::queryOctree(
         _octreeQuery.setOctreeSizeScale(lodManager->getOctreeSizeScale());
         _octreeQuery.setBoundaryLevelAdjust(lodManager->getBoundaryLevelAdjust());
     }
+    // ENTITY-STREAMING.md 3.3: this client draws impostor cards, so the entity server sizes a carded entity, and the
+    // models under it, by its card and sends them out to where the card is drawn. One flag among the query's JSON
+    // flags, kept whatever the paths above set (only the whole-tree option writes the JSON); a server that does not
+    // know it sends as before. TIVOLI_NO_IMPOSTOR_CARDS in the environment leaves the flag out, to measure an older
+    // client's stream against the same server (launch-editor.sh EDITOR_NO_IMPOSTOR_CARDS=1).
+    static const bool SEND_IMPOSTOR_CARDS = !QProcessEnvironment::systemEnvironment().contains("TIVOLI_NO_IMPOSTOR_CARDS");
+    if (SEND_IMPOSTOR_CARDS) {
+        QJsonObject parameters = _octreeQuery.getJSONParameters();
+        QJsonObject flags = parameters[EntityJSONQueryProperties::FLAGS_PROPERTY].toObject();
+        if (!flags[EntityJSONQueryProperties::IMPOSTOR_CARDS_PROPERTY].toBool()) {
+            flags[EntityJSONQueryProperties::IMPOSTOR_CARDS_PROPERTY] = true;
+            parameters[EntityJSONQueryProperties::FLAGS_PROPERTY] = flags;
+            _octreeQuery.setJSONParameters(parameters);
+        }
+    }
     _octreeQuery.setReportInitialCompletion(isModifiedQuery);
 
 
@@ -7213,6 +7301,25 @@ void Application::queryOctree(
         auto packetData = reinterpret_cast<unsigned char*>(queryPacket->getPayload());
         int packetSize = _octreeQuery.getBroadcastData(packetData);
         queryPacket->setPayloadSize(packetSize);
+
+        // TIVOLI_QUERY_DIAG in the environment: a log line per entity query sent, with the views it carries (the hunt
+        // for entities that never reach a client, KNOWN-ISSUES.md). Off by default: nothing is formatted.
+        static const bool QUERY_DIAG = QProcessEnvironment::systemEnvironment().contains("TIVOLI_QUERY_DIAG");
+        if (QUERY_DIAG && serverType == NodeType::EntityServer) {
+            QString views;
+            for (const auto& view : _conicalViews) {
+                const auto& p = view.getPosition();
+                const auto& d = view.getDirection();
+                views += QString(" [pos %1 %2 %3 dir %4 %5 %6 angle %7 far %8 radius %9]")
+                    .arg(p.x, 0, 'f', 2).arg(p.y, 0, 'f', 2).arg(p.z, 0, 'f', 2)
+                    .arg(d.x, 0, 'f', 3).arg(d.y, 0, 'f', 3).arg(d.z, 0, 'f', 3)
+                    .arg(glm::degrees(view.getAngle()), 0, 'f', 1).arg(view.getFarClip(), 0, 'f', 0).arg(view.getRadius(), 0, 'f', 2);
+            }
+            qCDebug(interfaceapp).noquote() << "entity query:" << (isModifiedQuery ? "initial-sphere" : "views")
+                << "views" << _conicalViews.size() << views
+                << "lodAdjust" << _octreeQuery.getBoundaryLevelAdjust() << "sizeScale" << _octreeQuery.getOctreeSizeScale()
+                << "pps" << _octreeQuery.getMaxQueryPacketsPerSecond() << "bytes" << packetSize;
+        }
 
         // make sure we still have an active socket
         nodeList->sendUnreliablePacket(*queryPacket, *node);
@@ -7323,71 +7430,36 @@ void Application::updateWindowTitle() const {
     const auto nodeList = DependencyManager::get<NodeList>();
     const auto accountManager = DependencyManager::get<AccountManager>();
     const auto addressManager = DependencyManager::get<AddressManager>();
-    const auto isInErrorState = nodeList->getDomainHandler().isInErrorState();
 
-    // with several branches built on one machine, the title says which one this client is (interagent.md)
-    const QString branchLabel = BuildInfo::BUILD_BRANCH.isEmpty() ? QString()
-        : (" " + BuildInfo::BUILD_BRANCH + (BuildInfo::BUILD_COMMIT.isEmpty() ? QString() : " " + BuildInfo::BUILD_COMMIT));
-    const QString buildVersion = (
-        QString() +
-        (BuildInfo::BUILD_TYPE == BuildInfo::BuildType::Stable ? "" : "Build ") +
-        applicationVersion() +
-        branchLabel
-    );
+    setCrashAnnotation("sentry[user][username]", accountManager->getAccountInfo().getUsername().toStdString());
 
-    const QString loginStatus = accountManager->isLoggedIn() ? "" : "Not logged in";
-
-    const QString connectionStatus = 
-        isInErrorState ? 
-            "Error connecting" :
-            nodeList->getDomainHandler().isConnected() ? "" : "Not connected";
-
-    const QString username = accountManager->getAccountInfo().getUsername();
-
-    setCrashAnnotation("sentry[user][username]", username.toStdString());
-
-    QString currentWorldName;
-    if (isServerlessMode()) {
-        if (isInErrorState) {
-            currentWorldName = nodeList->getDomainHandler().getErrorDomainURL().toString();
-        } else {
-            currentWorldName = addressManager->getDomainURL().toString();
-        }
-    } else {
-        // currentPlaceName = addressManager->getDomainURL().host();
-        const QString worldName = addressManager->getDomainLabel();
-
-        if (worldName.isEmpty()) {
-            currentWorldName = nodeList->getDomainHandler().getHostname();
-        } else {
-            const QString worldAuthor = addressManager->getDomainAuthor();
-            const QString worldRestriction = addressManager->getDomainRestriction();
-
-            currentWorldName = (
-                (worldRestriction == "acl" ? "🔒 " : "") +
-                worldName + 
-                (!worldAuthor.isEmpty() ? " (" + worldAuthor + ")": "")
-            );
+    // Like a Mac document window, the title names what you're looking at: the world you're in, by its name, or
+    // Darkride when you're in none or it has no name to show (an address is not a name). The account is in its
+    // menu, the build in About and in the log line below, and a connection problem is shown in the window itself.
+    QString title = "Darkride";
+    auto& domainHandler = nodeList->getDomainHandler();
+    if (!isServerlessMode() && domainHandler.isConnected() && !domainHandler.isInErrorState()) {
+        const QString worldName = addressManager->getDomainLabel().trimmed();
+        if (!worldName.isEmpty()) {
+            title = worldName;
         }
     }
-    
-    // Not connected, Not logged in - Maki @ Cutelab (Maki) - Tivoli Cloud VR 0.7.2
-
-    QStringList statusList = { connectionStatus, loginStatus };
-    statusList.removeAll(QString(""));
-    const QString status = statusList.join(", ").trimmed();
-
-    const QString title = (
-        (status.isEmpty() ? "" : status + " - ") +
-        username +
-        (username.isEmpty() || currentWorldName.isEmpty() ? "" : " @ ")  +
-        currentWorldName + " - " +
-        "Tivoli Cloud VR " + buildVersion
-    );
+    // a build's client label first, when the build has one (cmake -DCLIENT_LABEL=...): with several sessions' clients
+    // on one machine, it tells them apart at a glance (Caity, 2026-10-19)
+    if (!BuildInfo::CLIENT_LABEL.isEmpty()) {
+        title = BuildInfo::CLIENT_LABEL + " | " + title;
+    }
+    // With several branches built on this machine, one per session, the title says which build this client is
+    // ("Darkride - physics-net"), so the right window gets closed. Dev builds only; a release shows no branch.
+    if (BuildInfo::BUILD_TYPE == BuildInfo::Dev && !BuildInfo::BUILD_BRANCH.isEmpty() && BuildInfo::BUILD_BRANCH != "HEAD") {
+        title += " - " + BuildInfo::BUILD_BRANCH;
+    }
 
 #ifndef WIN32
     // crashes with vs2013/win32
-    qCDebug(interfaceapp, "Application title set to: %s", title.toStdString().c_str());
+    qCDebug(interfaceapp, "Application title set to: %s (build %s %s %s)", title.toStdString().c_str(),
+            applicationVersion().toStdString().c_str(), BuildInfo::BUILD_BRANCH.toStdString().c_str(),
+            BuildInfo::BUILD_COMMIT.toStdString().c_str());
 #endif
     _window->setWindowTitle(title);
 
@@ -7759,6 +7831,7 @@ void Application::registerScriptEngineWithApplicationServices(const ScriptEngine
 
     scriptEngine->registerGlobalObject("Scene", DependencyManager::get<SceneScriptingInterface>().data());
     scriptEngine->registerGlobalObject("Render", RenderScriptingInterface::getInstance());
+    scriptEngine->registerGlobalObject("Impostors", DependencyManager::get<ImpostorBaker>().data());
     scriptEngine->registerGlobalObject("Workload", _gameWorkload._engine->getConfiguration().get());
 
     GraphicsScriptingInterface::registerMetaTypes(scriptEngine.data());

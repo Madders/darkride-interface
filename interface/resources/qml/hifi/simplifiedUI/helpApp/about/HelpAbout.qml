@@ -307,8 +307,8 @@ Flickable {
     }
 
     function buildPlatformInfoTextToCopy() {
-        var textToCopy = "**About Interface**\n";
-        textToCopy += "Interface Version: " + Window.checkVersion() + "\n";
+        var textToCopy = "**About Darkride**\n";
+        textToCopy += "Darkride Version: " + Window.checkVersion() + "\n";
         textToCopy += "\n**Platform Info**\n";
 
         var computer = JSON.parse(PlatformInfo.getComputer());

@@ -38,6 +38,7 @@
 // Must match define in Skinning.slh
 #define SKIN_DQ
 
+class ImpostorSwitch;
 class AbstractViewStateInterface;
 class QScriptEngine;
 
@@ -112,6 +113,21 @@ public:
 
     bool isCauterized() const { return _cauterized; }
     void setCauterized(bool value, const render::ScenePointer& scene);
+
+    // the switch between this model and an impostor card that stands in for it at a distance (ImpostorSwitch,
+    // IMPOSTORS.md 2.4): the parts ask it per view whether to draw; null, the usual case, draws them always
+    const std::shared_ptr<ImpostorSwitch>& getImpostorSwitch() const { return _impostorSwitch; }
+    void setImpostorSwitch(const std::shared_ptr<ImpostorSwitch>& impostorSwitch, const render::ScenePointer& scene);
+
+    // the automatic LODs of each render item (mesh part, AUTOMATIC-LODS.md): its triangles in full and at each level,
+    // and the level the main view draws now (0 for full detail); main thread
+    class PartLods {
+    public:
+        int full { 0 };
+        std::vector<int> levels;
+        int shown { 0 };
+    };
+    std::vector<PartLods> getPartLods() const;
 
     void setPrimitiveMode(PrimitiveMode primitiveMode);
     PrimitiveMode getPrimitiveMode() const { return _primitiveMode; }
@@ -503,6 +519,7 @@ protected:
     //               For this to work, a Meta RI must exists and knows about the RIs of this Model.
     //  
     render::ItemKey _renderItemKeyGlobalFlags;
+    std::shared_ptr<ImpostorSwitch> _impostorSwitch;
     bool _cauterized { false };
     bool _cullWithParent { false };
 

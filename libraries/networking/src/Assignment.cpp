@@ -37,6 +37,8 @@ Assignment::Type Assignment::typeForNodeType(NodeType_t nodeType) {
             return Assignment::MessagesMixerType;
         case NodeType::EntityScriptServer:
             return Assignment::EntityScriptServerType;
+        case NodeType::PhysicsServer:
+            return Assignment::PhysicsServerType;
         default:
             return Assignment::AllTypes;
     }
@@ -147,6 +149,8 @@ const char* Assignment::typeToString(Assignment::Type type) {
             return "messages-mixer";
         case Assignment::EntityScriptServerType:
             return "entity-script-server";
+        case Assignment::PhysicsServerType:
+            return "physics-server";
         default:
             return "unknown";
     }

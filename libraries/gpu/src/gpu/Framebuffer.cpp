@@ -58,11 +58,11 @@ Framebuffer* Framebuffer::createShadowmap(uint16 width) {
     auto depthFormat = Element(gpu::SCALAR, gpu::FLOAT, gpu::DEPTH); // Depth32 texel format
     auto depthTexture = TexturePointer(Texture::createRenderBuffer(depthFormat, width, width));
     Sampler::Desc samplerDesc;
-    samplerDesc._borderColor = glm::vec4(1.0f);
+    samplerDesc._borderColor = glm::vec4(0.0f); // reversed-Z: the far plane is depth 0, so outside the map is lit
     samplerDesc._wrapModeU = Sampler::WRAP_BORDER;
     samplerDesc._wrapModeV = Sampler::WRAP_BORDER;
     samplerDesc._filter = Sampler::FILTER_MIN_MAG_LINEAR;
-    samplerDesc._comparisonFunc = LESS;
+    samplerDesc._comparisonFunc = GREATER;
 
     depthTexture->setSampler(Sampler(samplerDesc));
     framebuffer->setDepthStencilBuffer(depthTexture, depthFormat);

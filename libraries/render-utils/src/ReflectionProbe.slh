@@ -1,0 +1,75 @@
+<!
+//  ReflectionProbe.slh
+//
+//  The reflection probes of a fragment (LIGHTMAPS.md §7): the probes in view are in the frame's light culling
+//  (LightClusterGrid.slh), one bit each after the lights', and their cube maps are the layers of one cube map array.
+//  A fragment inside a probe's box takes its ambient specular (its reflection of the surroundings) from the probe's
+//  cube map in place of the zone's ambient map: box-projected, the reflection ray is cut at the box and the cube map
+//  looked up toward the hit point from the probe's position, so a floor reflects the ceiling from the right place.
+//  The probe's weight grows from 0 at the box's faces to 1 at the blend distance inside, and several probes blend in
+//  the order of their bits (the most important first, then the smallest), each taking what weight is left, as
+//  Unity's; what is left after the last goes to the zone's map.
+!>
+<@if not REFLECTION_PROBE_SLH@>
+<@def REFLECTION_PROBE_SLH@>
+
+<@include render-utils/ShaderConstants.h@>
+<@include LightClusterGrid.slh@>
+
+<@func declareReflectionProbes()@>
+
+<@if REFLECTION_PROBES_DEFERRED@>
+LAYOUT(binding=RENDER_UTILS_TEXTURE_REFLECTION_PROBES_DEFERRED) uniform samplerCubeArray reflectionProbeArray;
+<@else@>
+LAYOUT(binding=RENDER_UTILS_TEXTURE_REFLECTION_PROBES) uniform samplerCubeArray reflectionProbeArray;
+<@endif@>
+
+// the mips the probes' cube map array has, for the roughness lod
+float getReflectionProbeNumMips() {
+    return float(lightClusterParams.probeCounts.z);
+}
+
+// The light the fragment's probes reflect along reflectDirWS (the world-space reflection of the eye direction) at the
+// cube map lod the roughness asks for, and in a the share left to the zone's ambient map (1 with no probe)
+vec4 evalReflectionProbes(LightCluster cluster, vec3 fragPositionWS, vec3 reflectDirWS, float lod) {
+    vec3 light = vec3(0.0);
+    float totalWeight = 0.0;
+    int firstEntry = lightClusterParams.probeCounts.x;
+    for (int word = cluster.probeWordMin; word <= cluster.probeWordMax && totalWeight < 1.0; word++) {
+        uint bits = lightCluster_word(cluster, word);
+        while (bits != 0u && totalWeight < 1.0) {
+            int bit = findLSB(bits);
+            bits &= bits - 1u;
+            ReflectionProbe probe = lightClusterParams.probes[(word << 5) + bit - firstEntry];
+
+            // in the probe's frame: how far inside the box, in the nearest direction, over the blend distance
+            vec3 probePos = (probe.worldToProbe * vec4(fragPositionWS, 1.0)).xyz;
+            vec3 inset = min(probePos - probe.boxMin.xyz, probe.boxMax.xyz - probePos);
+            float weight = clamp(min(inset.x, min(inset.y, inset.z)) / max(probe.boxMin.w, 1.0e-4), 0.0, 1.0);
+            weight = min(weight, 1.0 - totalWeight);
+            if (weight <= 0.0) {
+                continue;
+            }
+
+            mat3 worldToProbeRotation = mat3(probe.worldToProbe);
+            vec3 dir = worldToProbeRotation * reflectDirWS;
+            if (probe.boxMax.w > 0.0) {
+                // box projection: the ray from the fragment meets the box where the nearest face plane along it is,
+                // and the cube map is read toward that point from the probe's position (the frame's origin)
+                vec3 safeDir = mix(dir, vec3(1.0e-6), lessThan(abs(dir), vec3(1.0e-6)));
+                vec3 bounds = mix(probe.boxMin.xyz, probe.boxMax.xyz, step(0.0, safeDir));
+                vec3 factors = (bounds - probePos) / safeDir;
+                dir = probePos + safeDir * min(factors.x, min(factors.y, factors.z));
+            }
+            // back to the world's axes, the cube map's (a rotation's inverse is its transpose)
+            dir = dir * worldToProbeRotation;
+            light += weight * probe.params.x * textureLod(reflectionProbeArray, vec4(dir, probe.position.w), lod).rgb;
+            totalWeight += weight;
+        }
+    }
+    return vec4(light, 1.0 - totalWeight);
+}
+
+<@endfunc@>
+
+<@endif@>

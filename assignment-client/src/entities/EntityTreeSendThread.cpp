@@ -11,9 +11,12 @@
 
 #include "EntityTreeSendThread.h"
 
+#include <QtCore/QProcessEnvironment>
+
 #include <EntityNodeData.h>
 #include <EntityTypes.h>
 #include <OctreeUtils.h>
+#include <UUID.h>
 
 #include "EntityServer.h"
 
@@ -110,8 +113,47 @@ bool EntityTreeSendThread::traverseTreeAndSendContents(SharedNodePointer node, O
 
         int32_t lodLevelOffset = nodeData->getBoundaryLevelAdjust() + (viewFrustumChanged ? LOW_RES_MOVING_ADJUST : NO_BOUNDARY_ADJUST);
         newView.lodScaleFactor = powf(2.0f, lodLevelOffset);
-        
-        startNewTraversal(newView, root, isFullScene);
+
+        // a client that draws impostor cards says so among its query's JSON flags (ENTITY-STREAMING.md 3.3): carded
+        // entities are then sized by their cards. Read once per traversal, like the LOD above; an older client sends
+        // no such flag and gets the stream as before
+        auto queryFlags = nodeData->getJSONParameters()[EntityJSONQueryProperties::FLAGS_PROPERTY].toObject();
+        newView.impostorCards = queryFlags[EntityJSONQueryProperties::IMPOSTOR_CARDS_PROPERTY].toBool();
+
+        DiffTraversal::Type type = startNewTraversal(newView, root, isFullScene);
+
+        // TIVOLI_STREAM_DIAG in the environment: a log line per traversal started other than a Repeat, and one per
+        // second with what went out (the hunt for entities that never reach a client, KNOWN-ISSUES.md). Off by
+        // default: nothing is formatted.
+        static const bool STREAM_DIAG = QProcessEnvironment::systemEnvironment().contains("TIVOLI_STREAM_DIAG");
+        if (STREAM_DIAG) {
+            quint64 now = usecTimestampNow();
+            bool periodic = now - _diagLastLog > USECS_PER_SECOND;
+            if (type != DiffTraversal::Repeat || periodic) {
+                QString views;
+                for (const auto& view : newView.viewFrustums) {
+                    const auto& p = view.getPosition();
+                    const auto& d = view.getDirection();
+                    views += QString(" [pos %1 %2 %3 dir %4 %5 %6 angle %7 far %8 radius %9]")
+                        .arg(p.x, 0, 'f', 2).arg(p.y, 0, 'f', 2).arg(p.z, 0, 'f', 2)
+                        .arg(d.x, 0, 'f', 3).arg(d.y, 0, 'f', 3).arg(d.z, 0, 'f', 3)
+                        .arg(glm::degrees(view.getAngle()), 0, 'f', 1).arg(view.getFarClip(), 0, 'f', 0).arg(view.getRadius(), 0, 'f', 2);
+                }
+                qCDebug(entities).noquote() << "stream" << _nodeUuid.toString().mid(1, 8)
+                    << (type == DiffTraversal::First ? "FIRST" : type == DiffTraversal::Differential ? "DIFFERENTIAL" : "repeat")
+                    << "viewChanged" << viewFrustumChanged << "fullScene" << isFullScene
+                    << "views" << newView.viewFrustums.size() << views
+                    << "lodScale" << newView.lodScaleFactor << "cards" << newView.impostorCards
+                    << "queue" << _sendQueue.size() << "known" << _knownState.size()
+                    << "sentSinceLast" << _diagSentSinceLog;
+                _diagLastLog = now;
+                _diagSentSinceLog = 0;
+            }
+        }
+        // round 10/11 diagnostics: when this traversal began and what it has sent since (the completion line below)
+        _traversalStartTime = usecTimestampNow();
+        _packetsSentSinceMark = 0;
+        _entitiesSinceMark = 0;
 
         // When the viewFrustum changed the sort order may be incorrect, so we re-sort
         // and also use the opportunity to cull anything no longer in view
@@ -160,6 +202,16 @@ bool EntityTreeSendThread::traverseTreeAndSendContents(SharedNodePointer node, O
     if (sendComplete && nodeData->wantReportInitialCompletion() && _traversal.finished()) {
         // Dealt with all nearby entities.
         nodeData->setReportInitialCompletion(false);
+        // a line per completion reported that sent something, else one in ten seconds (a headless viewer asks for the
+        // completion with every query): the sequence number the client will wait up to, and what this traversal sent
+        quint64 now = usecTimestampNow();
+        if (_packetsSentSinceMark > 0 || now - _lastCompletionLog > 10 * USECS_PER_SECOND) {
+            _lastCompletionLog = now;
+            qCDebug(entities) << "initial scene complete for" << uuidStringWithoutCurlyBraces(_nodeUuid) << ": sequence"
+                << nodeData->getSequenceNumber() << "," << _packetsSentSinceMark << "packets (" << _entitiesSinceMark
+                << "entities) in" << (now - _traversalStartTime) / 1000 << "ms since the traversal began, known"
+                << _knownState.size() << "entities";
+        }
         // initial stats and entity packets are reliable until the initial query is complete
         // to guarantee all entity data is available for safe landing/physics start.  Afterwards
         // the packets are unreliable for performance.
@@ -225,8 +277,8 @@ bool EntityTreeSendThread::addDescendantsToExtraFlaggedEntities(const QUuid& fil
     return hasNewChild || hasNewDescendants;
 }
 
-void EntityTreeSendThread::startNewTraversal(const DiffTraversal::View& view, EntityTreeElementPointer root,
-                                             bool forceFirstPass) {
+DiffTraversal::Type EntityTreeSendThread::startNewTraversal(const DiffTraversal::View& view, EntityTreeElementPointer root,
+                                                            bool forceFirstPass) {
 
     DiffTraversal::Type type = _traversal.prepareNewTraversal(view, root, forceFirstPass);
     // there are three types of traversal:
@@ -240,6 +292,8 @@ void EntityTreeSendThread::startNewTraversal(const DiffTraversal::View& view, En
     switch (type) {
         case DiffTraversal::First:
             // When we get to a First traversal, clear the _knownState
+            qCDebug(entities) << "first traversal for" << uuidStringWithoutCurlyBraces(_nodeUuid) << ": forgetting" << _knownState.size()
+                << "known entities (forced" << forceFirstPass << "), views" << view.viewFrustums.size() << ", lod scale" << view.lodScaleFactor;
             _knownState.clear();
             _traversal.setScanCallback([this](DiffTraversal::VisibleElement& next) {
                 next.element->forEachEntity([&](EntityItemPointer entity) {
@@ -315,6 +369,7 @@ void EntityTreeSendThread::startNewTraversal(const DiffTraversal::View& view, En
             });
             break;
     }
+    return type;
 }
 
 bool EntityTreeSendThread::traverseTreeAndBuildNextPacketPayload(EncodeBitstreamParams& params, const QJsonObject& jsonFilters) {
@@ -391,11 +446,13 @@ bool EntityTreeSendThread::traverseTreeAndBuildNextPacketPayload(EncodeBitstream
                     entityNodeData->removeSentFilteredEntity(entityID);
                 }
                 ++_numEntities;
+                ++_entitiesSinceMark;
             }
             if (queuedItem.shouldForceRemove()) {
                 _knownState.erase(entity.get());
             } else {
                 _knownState[entity.get()] = sendTime;
+                ++_diagSentSinceLog;
             }
         }
         _sendQueue.pop();

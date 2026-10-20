@@ -26,7 +26,9 @@
     var CABIN_Y = CABIN_TOP - 0.25;
     var ABOARD_X = 1.0;           // where to stop inside the cabin, in its coordinates: through the side door
     var LIFETIME = 600;           // s; on a domain the test's entities expire on their own
-    var TIMEOUT = 170;            // s, the whole run
+    var TIMEOUT = 170;            // s, from the cabin's creation (the world can take 90 s to load on a cold cache)
+    var MAX_WAIT = 300;           // s, for the world to arrive at all
+    var cabinT0 = -1;
 
     // the loop: straights of 60 m along z at x = 0 (the station side) and x = -30, half circles of 15 m at the ends;
     // the cabin runs toward -z on the station side; stations at points 2 (the platform) and 10 (the far side). A
@@ -108,6 +110,10 @@
     }
 
     function spawn() {
+        // leftovers of an earlier run (their lifetimes have not run out yet) would confuse everyone's search by name
+        ["baseline-cabin", "baseline-track", "baseline-platform", "baseline-wall"].forEach(function (name) {
+            Entities.findEntitiesByName(name, { x: 0, y: 0, z: 0 }, 1000).forEach(function (id) { Entities.deleteEntity(id); });
+        });
         ensureWorld();
         track = Entities.addEntity({
             type: "Track", name: "baseline-track", lifetime: LIFETIME,
@@ -211,7 +217,7 @@
         var tt = now() - modeT0;
         var c, local;
         if (mode === "boot") {
-            if (tt > 8) { spawn(); setMode("boarding"); }
+            if (tt > 8) { spawn(); cabinT0 = now(); setMode("boarding"); }
         } else if (mode === "boarding") {
             if (tt > 1 && Vec3.length(MyAvatar.motorVelocity) === 0) {
                 MyAvatar.motorReferenceFrame = "world";
@@ -279,12 +285,12 @@
         // round a loop, where the mean of the vectors says nothing)
         var lengths = deltas.map(function (d) { return Vec3.length(d); });
         var lengthMean = lengths.reduce(function (a, b) { return a + b; }, 0) / lengths.length;
-        var lengthDev = 0, lengthMax = 0;
-        lengths.forEach(function (l) { lengthDev += (l - lengthMean) * (l - lengthMean); if (l > lengthMax) { lengthMax = l; } });
+        var lengthDev = 0, lengthMax = 0, over = 0;
+        lengths.forEach(function (l) { lengthDev += (l - lengthMean) * (l - lengthMean); if (l > lengthMax) { lengthMax = l; } if (l > 2 * lengthMean) { over++; } });
         return { n: deltas.length, meanStepMm: 1000 * Vec3.length(mean),
             rmsMm: 1000 * Math.sqrt(sumH / deltas.length), maxMm: 1000 * maxH,
             verticalRmsMm: 1000 * Math.sqrt(sumV / deltas.length), verticalMaxMm: 1000 * maxV,
-            stepMeanMm: 1000 * lengthMean, stepDevMm: 1000 * Math.sqrt(lengthDev / lengths.length), stepMaxMm: 1000 * lengthMax };
+            stepMeanMm: 1000 * lengthMean, stepDevMm: 1000 * Math.sqrt(lengthDev / lengths.length), stepMaxMm: 1000 * lengthMax, stepsOverTwiceMean: over };
     }
 
     function stats(label, rows) {
@@ -312,7 +318,7 @@
 
     function fmtStep(j) {
         return j ? ("mean " + j.stepMeanMm.toFixed(1) + " mm, rms deviation " + j.stepDevMm.toFixed(1) + " mm, max " +
-            j.stepMaxMm.toFixed(1) + " mm over " + j.n + " frames") : "n/a";
+            j.stepMaxMm.toFixed(1) + " mm, " + j.stepsOverTwiceMean + " over twice the mean, over " + j.n + " frames") : "n/a";
     }
 
     // the frames at which the avatar's parent changed and the largest world-position step at and just after each (the
@@ -385,9 +391,36 @@
         Script.setTimeout(function () { Test.quit(); }, 1000);
     }
 
+    // who drives the cabin: its simulation owner, logged whenever it changes (round 5: the physics server takes it at
+    // priority 255 from this client, the creator), and the track's train state as the server publishes it
+    var ownerSeen = "";
+    var lastOwnerPoll = 0;
+    function watchOwner() {
+        if (!cabin || now() - lastOwnerPoll < 1) { return; }
+        lastOwnerPoll = now();
+        var p = Entities.getEntityProperties(cabin, ["simulationOwner"]);
+        var owner = p.simulationOwner ? (p.simulationOwner.ownerID + " at priority " + p.simulationOwner.priority) : "none";
+        var tp = Entities.getEntityProperties(track, ["trainDistance", "trainSpeed", "trainStation", "trainDwell", "trainTime"]);
+        var state = "distance " + (tp.trainDistance || 0).toFixed(2) + " m, speed " + (tp.trainSpeed || 0).toFixed(2) + ", station " +
+            tp.trainStation + ", dwell " + (tp.trainDwell || 0).toFixed(1) + ", time " + tp.trainTime;
+        trainStates.push({ t: now(), state: state });
+        if (owner !== ownerSeen) {
+            ownerSeen = owner;
+            var me = p.simulationOwner && p.simulationOwner.ownerID == MyAvatar.sessionUUID ? " (me)" : "";
+            events.push({ t: now(), owner: owner });
+            log("cabin owner " + owner + me + " at " + now().toFixed(2) + " s; train state: " + state);
+        } else if (state !== lastState) {
+            log("train state at " + now().toFixed(2) + " s: " + state);
+        }
+        lastState = state;
+    }
+    var trainStates = [];
+    var lastState = "";
+
     function onUpdate(dt) {
-        if (now() > TIMEOUT) { finish("timeout"); return; }
+        if (now() > (cabinT0 >= 0 ? cabinT0 + TIMEOUT : MAX_WAIT)) { finish("timeout"); return; }
         if (cabin && !sample(dt)) { finish("cabin gone"); return; }
+        watchOwner();
         drive();
     }
 

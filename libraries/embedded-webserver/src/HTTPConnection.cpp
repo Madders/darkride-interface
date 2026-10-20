@@ -196,8 +196,10 @@ QList<FormData> HTTPConnection::parseFormData() const {
                         qWarning() << "Missing end boundary." << _address;
                         return data;
                     }
-                    datum.second = QByteArray::fromRawData(_requestContent->content().data() + buffer.pos(),
-                                                           idx - buffer.pos());
+                    // a copy, not a view: the request's buffer is freed after the request, and a datum kept
+                    // beyond it (an agent script posted to the domain-server) read freed memory
+                    datum.second = QByteArray(_requestContent->content().data() + buffer.pos(),
+                                              idx - buffer.pos());
                     data.append(datum);
                     buffer.seek(idx + end.length());
 

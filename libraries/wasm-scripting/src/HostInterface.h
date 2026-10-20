@@ -1,0 +1,171 @@
+//
+//  HostInterface.h
+//  libraries/wasm-scripting/src
+//
+//  The functions a module imports from the host (module name "darkride"), and the calls the host makes into
+//  a module. The host side is reflection: an object's methods, properties and signals are reached by name
+//  through its QMetaObject, with the values crossing as CBOR (ValueCodec), the objects as handles
+//  (ObjectTable) and the signals through a relay (SignalRelay). Nothing here knows which objects exist.
+//
+//  The ABI (version 1). Every pointer is an offset in the module's exported memory; a byte range is a CBOR
+//  item. A host function that returns bytes has the guest allocate them (the guest's exported
+//  `alloc(size) -> ptr`) and returns `(ptr << 32) | len` as an i64; the guest frees them when done.
+//
+//    imports, module "darkride":
+//      version() -> i32                                  this ABI's version
+//      globals() -> i64                                  the registered globals, a map of name to handle
+//      describe(ptr, len) -> i64                         a global's name or a handle record -> its description
+//      call(object, name_ptr, name_len, args_ptr, args_len) -> i64
+//                                                        invoke a method: the result, or {"@error": {type, message}}
+//      get(object, name_ptr, name_len) -> i64            read a property: the value, or an error record
+//      set(object, name_ptr, name_len, value_ptr, value_len) -> i64
+//                                                        write a property: null, or an error record
+//      connect(object, signal_ptr, signal_len) -> i32    subscribe: the connection id, 0 on failure (logged)
+//      disconnect(connection)
+//      release(object)                                   forget a handle
+//      log(level, text_ptr, text_len)                    0 print, 1 info, 2 warning, 3 error, 4 debug
+//
+//    exports the host calls:
+//      alloc(size) -> ptr, free(ptr, size)
+//      script_start(), script_stop()
+//      on_signal(connection, args_ptr, args_len)         a subscribed signal fired
+//      on_callback(callback, args_ptr, args_len)         a guest function the host was given is called
+//      call_callback(callback, args_ptr, args_len) -> i64
+//                                                        the same, with the function's result returned packed
+//                                                        (optional; the host frees the result through free)
+//    (the arguments are placed through the guest's alloc and are the guest's to free)
+//
+//    the entity-script contract, exported by a module that hosts entity scripts (optional; each takes one
+//    CBOR map placed through alloc, the module's to free):
+//      entity_load(ptr, len) -> i64       {"entity": id, "url": url, "source": text or absent}; null, or an
+//                                         error record, packed (the host frees it through free)
+//      entity_unload(ptr, len)            {"entity": id}
+//      entity_has(ptr, len) -> i32        {"entity": id, "method": name}: 1 when the method exists
+//      entity_call(ptr, len) -> i64       {"entity": id, "method": name, "args": [...], "remoteCallerID"?: id};
+//                                         the method's result packed, or 0
+//
+//  A method is named by its name ("getEntityProperties"; the overloads are tried in order, the first whose
+//  arguments convert wins), its signature ("add(int,int)") or its index from the description ("#12").
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//
+
+#ifndef hifi_HostInterface_h
+#define hifi_HostInterface_h
+
+#include <cstdint>
+#include <functional>
+
+#include <QtCore/QByteArray>
+#include <QtCore/QHash>
+#include <QtCore/QMetaMethod>
+#include <QtCore/QString>
+#include <QtCore/QVariant>
+#include <QtCore/QVariantList>
+#include <QtCore/QVector>
+
+#include "ObjectTable.h"
+
+class QMetaObject;
+class SignalRelay;
+class ValueCodec;
+class WasmInstance;
+
+class HostInterface {
+public:
+    static const int32_t ABI_VERSION = 1;
+    static const QString MODULE_NAME;  // "darkride"
+    static const QString ERROR_KEY;    // "@error"
+
+    enum LogLevel { Print = 0, Info = 1, Warning = 2, Error = 3, Debug = 4 };
+
+    using Logger = std::function<void(int level, const QString& text)>;
+    /// Told when a call into the module fails (a trap, a time limit, a missing export): the entry that failed
+    /// and the error. The engine decides what to do with the script.
+    using FailureHandler = std::function<void(const QString& entry, const QString& error)>;
+
+    /// The relay must live on the thread the instance is used from.
+    HostInterface(WasmInstance& instance, ObjectTable& objects, ValueCodec& codec, SignalRelay& relay);
+    ~HostInterface();
+
+    void setLogger(Logger logger) { _logger = std::move(logger); }
+    void setFailureHandler(FailureHandler handler) { _failureHandler = std::move(handler); }
+
+    /// Defines the imports on the instance. Before instantiate().
+    void install();
+
+    // --- the host's calls into the module (after instantiate) ---------------------------------------------
+    bool hasGuestExport(const QString& name) const;
+    /// script_start / script_stop; true when the export exists and returned normally.
+    bool callScriptStart(QString& error);
+    bool callScriptStop(QString& error);
+    /// on_signal and on_callback. Failures also reach the failure handler.
+    bool deliverSignal(int connection, const QVariantList& arguments, QString& error);
+    bool deliverCallback(int32_t callback, const QVariantList& arguments, QString& error);
+    /// on_callback with the function's result, through the module's call_callback export when it has one
+    /// (the result is undefined otherwise).
+    bool callCallback(int32_t callback, const QVariantList& arguments, QVariant& result, QString& error);
+    /// An export taking (id, ptr, len): the payload encoded, allocated in the guest, the call made.
+    bool callGuest(const QString& name, int32_t id, const QVariant& payload, QString& error);
+    /// An export taking (ptr, len) and returning a packed result (an i64, 0 for none) or an i32 or nothing:
+    /// the payload placed through alloc (the guest's to free), the call made, a packed result read back,
+    /// freed through the guest's free and decoded into `result` (invalid when there is none; an i32 result
+    /// is given as an int). Failures reach the failure handler.
+    bool callWithPayload(const QString& name, const QVariant& payload, QVariant& result, QString& error);
+
+    // --- the operations behind the imports, also usable from C++ ------------------------------------------
+    /// The registered globals: name to handle.
+    QVariantMap globals() const;
+    /// By a global's name or a handle; an invalid QVariant when there is no such object.
+    QVariant describe(const QVariant& target) const;
+    QVariant call(ObjectTable::Handle object, const QString& method, const QVariantList& arguments, QString& error);
+    QVariant get(ObjectTable::Handle object, const QString& property, QString& error) const;
+    bool set(ObjectTable::Handle object, const QString& property, const QVariant& value, QString& error);
+    int connect(ObjectTable::Handle object, const QString& signal, QString& error);
+    bool disconnect(int connection);
+    void release(ObjectTable::Handle object);
+
+    /// An error as the guest receives it: {"@error": {"type": type, "message": message}}.
+    static QVariantMap errorRecord(const QString& type, const QString& message);
+    static bool isErrorRecord(const QVariant& value);
+
+    struct Statistics {
+        uint64_t calls { 0 };
+        uint64_t gets { 0 };
+        uint64_t sets { 0 };
+        uint64_t signalsDelivered { 0 };
+        uint64_t callbacksDelivered { 0 };
+        uint64_t bytesToGuest { 0 };
+        uint64_t bytesFromGuest { 0 };
+    };
+    const Statistics& statistics() const { return _statistics; }
+
+private:
+    struct MethodCandidates {
+        QVector<int> indices;
+    };
+
+    QByteArray readBytes(int32_t pointer, int32_t length, QString& error);
+    /// Encodes and places the bytes in the guest's memory through its alloc; 0 with the error when it cannot.
+    int64_t writeToGuest(const QVariant& value, QString& error);
+    int64_t writeResult(const QVariant& value);
+    void log(int level, const QString& text) const;
+    void fail(const QString& entry, const QString& error);
+
+    const QVector<int>& candidates(const QMetaObject* meta, const QByteArray& name);
+    bool convertArguments(const QMetaMethod& method, const QVariantList& arguments, QVariantList& converted, int& cost,
+                          QString& error);
+    QVariant invoke(QObject* object, int methodIndex, QVariantList& converted, QString& error);
+
+    WasmInstance& _instance;
+    ObjectTable& _objects;
+    ValueCodec& _codec;
+    SignalRelay& _relay;
+    Logger _logger;
+    FailureHandler _failureHandler;
+    QHash<QPair<const QMetaObject*, QByteArray>, QVector<int>> _candidates;
+    Statistics _statistics;
+};
+
+#endif // hifi_HostInterface_h

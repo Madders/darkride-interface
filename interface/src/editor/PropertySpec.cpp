@@ -11,6 +11,7 @@
 #include <cmath>
 #include <functional>
 
+#include <QtCore/QDateTime>
 #include <QtCore/QHash>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
@@ -317,6 +318,67 @@ namespace {
         P_INT("terrainVersion", TerrainVersion, uint32_t);
         P_STR("terrainLayers", TerrainLayers);
 
+        // vehicle (PHYSICS.md 4.8): the group's definition, which the simulator rebuilds the vehicle from whenever it
+        // changes, and the state the simulator writes (shown read-only)
+#define G_VEC3(key, G, N)   add(key, [](const EP& p) { return QVariant(toQ(p.G().get##N())); }, [](EP& p, const QVariant& v) { p.G().set##N(fromQ(v.value<QVector3D>())); })
+#define G_INT(key, G, N, T) add(key, [](const EP& p) { return QVariant((int)p.G().get##N()); }, [](EP& p, const QVariant& v) { p.G().set##N((T)v.toInt()); })
+        G_STR("vehicle.type", getVehicle, Type);
+        G_FLOAT("vehicle.mass", getVehicle, Mass);
+        G_VEC3("vehicle.centerOfMass", getVehicle, CenterOfMass);
+        G_STR("vehicle.wheels", getVehicle, Wheels);
+        G_STR("vehicle.seats", getVehicle, Seats);
+        G_FLOAT("vehicle.maxSteerAngle", getVehicle, MaxSteerAngle);
+        G_FLOAT("vehicle.maxTorque", getVehicle, MaxTorque);
+        G_FLOAT("vehicle.minRPM", getVehicle, MinRPM);
+        G_FLOAT("vehicle.maxRPM", getVehicle, MaxRPM);
+        G_STR("vehicle.gearRatios", getVehicle, GearRatios);
+        G_FLOAT("vehicle.reverseGearRatio", getVehicle, ReverseGearRatio);
+        G_FLOAT("vehicle.finalDriveRatio", getVehicle, FinalDriveRatio);
+        G_FLOAT("vehicle.maxBrakeTorque", getVehicle, MaxBrakeTorque);
+        G_FLOAT("vehicle.maxHandBrakeTorque", getVehicle, MaxHandBrakeTorque);
+        G_STR("vehicle.driveType", getVehicle, DriveType);
+        G_FLOAT("vehicle.suspensionFrequency", getVehicle, SuspensionFrequency);
+        G_FLOAT("vehicle.suspensionDamping", getVehicle, SuspensionDamping);
+        G_STR("vehicle.wheel", getVehicle, Wheel);
+        G_STR("vehicle.axle", getVehicle, Axle);
+        add("vehicle.driver", [](const EP& p) { return QVariant(p.getVehicle().getDriver().toString(QUuid::WithoutBraces)); },
+            [](EP& p, const QVariant& v) { p.getVehicle().setDriver(QUuid(v.toString())); });
+        G_INT("vehicle.inputSequence", getVehicle, InputSequence, quint32);
+        G_FLOAT("vehicle.throttle", getVehicle, Throttle);
+        G_FLOAT("vehicle.steering", getVehicle, Steering);
+        G_FLOAT("vehicle.brake", getVehicle, Brake);
+        G_FLOAT("vehicle.handBrake", getVehicle, HandBrake);
+        G_FLOAT("vehicle.engineRPM", getVehicle, EngineRPM);
+        G_INT("vehicle.gear", getVehicle, Gear, int);
+        // the domain time of the state (microseconds since the epoch) as a clock time; the simulator's to write
+        add("vehicle.stateTime", [](const EP& p) {
+                quint64 time = p.getVehicle().getStateTime();
+                return QVariant(time == 0 ? QString() : QDateTime::fromMSecsSinceEpoch((qint64)(time / 1000)).toString("HH:mm:ss.zzz"));
+            }, [](EP&, const QVariant&) {});
+        G_FLOAT("vehicle.envelopeVolume", getVehicle, EnvelopeVolume);
+        G_VEC3("vehicle.centerOfBuoyancy", getVehicle, CenterOfBuoyancy);
+        G_FLOAT("vehicle.gasDensity", getVehicle, GasDensity);
+        G_FLOAT("vehicle.maxThrust", getVehicle, MaxThrust);
+        G_FLOAT("vehicle.maxVerticalThrust", getVehicle, MaxVerticalThrust);
+        G_VEC3("vehicle.thrustPoint", getVehicle, ThrustPoint);
+        G_VEC3("vehicle.dragArea", getVehicle, DragArea);
+        G_VEC3("vehicle.angularDragArea", getVehicle, AngularDragArea);
+        G_FLOAT("vehicle.rudderArea", getVehicle, RudderArea);
+        G_FLOAT("vehicle.elevatorArea", getVehicle, ElevatorArea);
+        G_VEC3("vehicle.finPoint", getVehicle, FinPoint);
+        G_FLOAT("vehicle.maxFinAngle", getVehicle, MaxFinAngle);
+        G_FLOAT("vehicle.ballastRate", getVehicle, BallastRate);
+        G_FLOAT("vehicle.ventRate", getVehicle, VentRate);
+        G_FLOAT("vehicle.pitch", getVehicle, Pitch);
+        G_FLOAT("vehicle.lift", getVehicle, Lift);
+        G_FLOAT("vehicle.trim", getVehicle, Trim);
+        G_FLOAT("vehicle.ballast", getVehicle, Ballast);
+        G_FLOAT("vehicle.fill", getVehicle, Fill);
+        G_FLOAT("vehicle.wingArea", getVehicle, WingArea);
+        G_FLOAT("vehicle.wingSpan", getVehicle, WingSpan);
+        G_VEC3("vehicle.wingPoint", getVehicle, WingPoint);
+        G_FLOAT("vehicle.tilt", getVehicle, Tilt);
+
         // particles
         P_BOOL("isEmitting", IsEmitting);
         P_FLOAT("lifespan", Lifespan);
@@ -433,6 +495,264 @@ namespace {
                 [=](EP& p, const QVariant& v) { setUserDataEntry(p, name, v.toString()); }
             });
         }
+        // a shape's Mirror: the entry "mirror", "picture" (a picture of the reflection mapped onto the face; true
+        // and "true" mean the same) or "screen" (the reflection drawn pixel for pixel where the face is on screen);
+        // Off removes the entry (Mirrors.h)
+        a.insert(QStringLiteral("userData:mirror"), Accessor {
+            [=](const EP& p) {
+                QJsonValue entry = QJsonDocument::fromJson(p.getUserData().toUtf8()).object().value("mirror");
+                QString text = entry.toBool() ? QStringLiteral("picture") : entry.toString().toLower();
+                return QVariant(text == "screen" ? "screen" : (text == "picture" || text == "true") ? "picture" : "off");
+            },
+            [=](EP& p, const QVariant& v) {
+                QString mode = v.toString();
+                setUserDataEntry(p, "mirror", mode == "off" ? QString() : mode);
+            }
+        });
+        // a shape's reflection probe (LIGHTMAPS.md §7), the entry "reflectionProbe": { "url", "boxOffset": [x, y, z],
+        // "intensity", "importance", "blendDistance", "boxProjection" }; the Reflection Probe field makes or removes
+        // the entry, the others are its fields
+        auto probeEntry = [](const EP& p) {
+            return QJsonDocument::fromJson(p.getUserData().toUtf8()).object().value("reflectionProbe");
+        };
+        auto setProbeEntry = [](EP& p, const QJsonValue& probe) {
+            QString text = p.getUserData();
+            QJsonDocument document = QJsonDocument::fromJson(text.toUtf8());
+            if (!text.trimmed().isEmpty() && !document.isObject()) {
+                return;
+            }
+            QJsonObject object = document.object();
+            if (probe.isUndefined() || probe.isNull()) {
+                object.remove("reflectionProbe");
+            } else {
+                object.insert("reflectionProbe", probe);
+            }
+            p.setUserData(object.isEmpty() ? QString() : JsonOrder::write(object, JsonOrder::scan(text)));
+        };
+        auto probeObject = [=](const EP& p) {
+            QJsonValue entry = probeEntry(p);
+            return entry.isObject() ? entry.toObject() : QJsonObject();
+        };
+        add("userData:reflectionProbe",
+            [=](const EP& p) { QJsonValue entry = probeEntry(p); return QVariant(entry.isObject() || entry.toBool()); },
+            [=](EP& p, const QVariant& v) {
+                if (!v.toBool()) {
+                    setProbeEntry(p, QJsonValue());
+                } else if (!probeEntry(p).isObject()) {
+                    setProbeEntry(p, QJsonObject { { "intensity", 1.0 }, { "blendDistance", 1.0 }, { "boxProjection", true } });
+                }
+            });
+        add("userData:reflectionProbe:url",
+            [=](const EP& p) { return QVariant(probeObject(p).value("url").toString()); },
+            [=](EP& p, const QVariant& v) {
+                QJsonObject probe = probeObject(p);
+                QString url = v.toString().trimmed();
+                if (url.isEmpty()) {
+                    probe.remove("url");
+                } else {
+                    probe.insert("url", url);
+                }
+                setProbeEntry(p, probe);
+            });
+        add("userData:reflectionProbe:intensity",
+            [=](const EP& p) { return QVariant(probeObject(p).value("intensity").toDouble(1.0)); },
+            [=](EP& p, const QVariant& v) {
+                QJsonObject probe = probeObject(p);
+                probe.insert("intensity", std::round(v.toDouble() * 10000.0) / 10000.0);
+                setProbeEntry(p, probe);
+            });
+        add("userData:reflectionProbe:importance",
+            [=](const EP& p) { return QVariant(probeObject(p).value("importance").toInt(0)); },
+            [=](EP& p, const QVariant& v) {
+                QJsonObject probe = probeObject(p);
+                probe.insert("importance", v.toInt());
+                setProbeEntry(p, probe);
+            });
+        add("userData:reflectionProbe:blendDistance",
+            [=](const EP& p) { return QVariant(probeObject(p).value("blendDistance").toDouble(1.0)); },
+            [=](EP& p, const QVariant& v) {
+                QJsonObject probe = probeObject(p);
+                probe.insert("blendDistance", std::round(std::max(0.0, v.toDouble()) * 10000.0) / 10000.0);
+                setProbeEntry(p, probe);
+            });
+        add("userData:reflectionProbe:boxProjection",
+            [=](const EP& p) { return QVariant(probeObject(p).value("boxProjection").toBool(true)); },
+            [=](EP& p, const QVariant& v) {
+                QJsonObject probe = probeObject(p);
+                probe.insert("boxProjection", v.toBool());
+                setProbeEntry(p, probe);
+            });
+        add("userData:reflectionProbe:boxOffset",
+            [=](const EP& p) {
+                QJsonArray offset = probeObject(p).value("boxOffset").toArray();
+                return QVariant(toQ(offset.size() == 3 ? glm::vec3(offset[0].toDouble(), offset[1].toDouble(), offset[2].toDouble()) : glm::vec3(0.0f)));
+            },
+            [=](EP& p, const QVariant& v) {
+                QJsonObject probe = probeObject(p);
+                glm::vec3 offset = fromQ(v.value<QVector3D>());
+                auto rounded = [](float x) { return std::round(x * 10000.0) / 10000.0; };
+                if (offset == glm::vec3(0.0f)) {
+                    probe.remove("boxOffset");
+                } else {
+                    probe.insert("boxOffset", QJsonArray { rounded(offset.x), rounded(offset.y), rounded(offset.z) });
+                }
+                setProbeEntry(p, probe);
+            });
+        // a zone's probe volume (LIGHTMAPS.md step 4), the entry "probeVolume": { "url", "intensity" }; clearing the
+        // file removes the entry
+        auto volumeObject = [](const EP& p) {
+            QJsonValue entry = QJsonDocument::fromJson(p.getUserData().toUtf8()).object().value("probeVolume");
+            return entry.isObject() ? entry.toObject() : QJsonObject();
+        };
+        auto setVolumeEntry = [](EP& p, const QJsonObject& volume) {
+            QString text = p.getUserData();
+            QJsonDocument document = QJsonDocument::fromJson(text.toUtf8());
+            if (!text.trimmed().isEmpty() && !document.isObject()) {
+                return;
+            }
+            QJsonObject object = document.object();
+            if (volume.value("url").toString().isEmpty()) {
+                object.remove("probeVolume");
+            } else {
+                object.insert("probeVolume", volume);
+            }
+            p.setUserData(object.isEmpty() ? QString() : JsonOrder::write(object, JsonOrder::scan(text)));
+        };
+        add("userData:probeVolume:url",
+            [=](const EP& p) { return QVariant(volumeObject(p).value("url").toString()); },
+            [=](EP& p, const QVariant& v) {
+                QJsonObject volume = volumeObject(p);
+                QString url = v.toString().trimmed();
+                if (url.isEmpty()) {
+                    volume.remove("url");
+                } else {
+                    volume.insert("url", url);
+                }
+                setVolumeEntry(p, volume);
+            });
+        add("userData:probeVolume:intensity",
+            [=](const EP& p) { return QVariant(volumeObject(p).value("intensity").toDouble(1.0)); },
+            [=](EP& p, const QVariant& v) {
+                QJsonObject volume = volumeObject(p);
+                volume.insert("intensity", std::round(v.toDouble() * 10000.0) / 10000.0);
+                setVolumeEntry(p, volume);
+            });
+        // an entity's impostor card (IMPOSTORS.md), the entry "impostor" the baker writes, as one value: its JSON,
+        // shown by the Impostor section's own editor; an empty value takes the entry off (Remove), nothing else is
+        // written through here (the bake writes the entry itself)
+        add("userData:impostor",
+            [](const EP& p) {
+                QJsonValue entry = QJsonDocument::fromJson(p.getUserData().toUtf8()).object().value("impostor");
+                return QVariant(entry.isObject() ? QString::fromUtf8(QJsonDocument(entry.toObject()).toJson(QJsonDocument::Compact)) : QString());
+            },
+            [](EP& p, const QVariant& v) {
+                QString text = p.getUserData();
+                QJsonDocument document = QJsonDocument::fromJson(text.toUtf8());
+                if (!text.trimmed().isEmpty() && !document.isObject()) {
+                    return;
+                }
+                QJsonObject object = document.object();
+                QJsonDocument entry = QJsonDocument::fromJson(v.toString().toUtf8());
+                if (entry.isObject() && !entry.object().isEmpty()) {
+                    object.insert("impostor", entry.object());
+                } else {
+                    object.remove("impostor");
+                }
+                p.setUserData(object.isEmpty() ? QString() : JsonOrder::write(object, JsonOrder::scan(text)));
+            });
+        // a model's lightmap, the entry "lightmap" (LIGHTMAPS.md §3.2): { "url", "scaleOffset": [sx, sy, ox, oy],
+        // "mode": "indirect" | "full", "params": [offset, scale] }, shown as the Lightmap section's fields; clearing
+        // the picture removes the entry
+        auto lightmapEntry = [](const EP& p) {
+            return QJsonDocument::fromJson(p.getUserData().toUtf8()).object().value("lightmap").toObject();
+        };
+        auto setLightmapEntry = [](EP& p, const QJsonObject& lightmap) {
+            QString text = p.getUserData();
+            QJsonDocument document = QJsonDocument::fromJson(text.toUtf8());
+            if (!text.trimmed().isEmpty() && !document.isObject()) {
+                return;
+            }
+            QJsonObject object = document.object();
+            if (lightmap.isEmpty()) {
+                object.remove("lightmap");
+            } else {
+                object.insert("lightmap", lightmap);
+            }
+            p.setUserData(object.isEmpty() ? QString() : JsonOrder::write(object, JsonOrder::scan(text)));
+        };
+        auto lightmapScaleOffset = [](const QJsonObject& lightmap) {
+            QJsonArray array = lightmap.value("scaleOffset").toArray();
+            return array.size() == 4 ? glm::vec4(array[0].toDouble(), array[1].toDouble(), array[2].toDouble(), array[3].toDouble())
+                                     : glm::vec4(1.0f, 1.0f, 0.0f, 0.0f);
+        };
+        auto setLightmapScaleOffset = [=](EP& p, const glm::vec4& scaleOffset) {
+            QJsonObject lightmap = lightmapEntry(p);
+            auto number = [](double c) { return std::round(c * 10000.0) / 10000.0; };
+            lightmap.insert("scaleOffset", QJsonArray { number(scaleOffset.x), number(scaleOffset.y), number(scaleOffset.z), number(scaleOffset.w) });
+            setLightmapEntry(p, lightmap);
+        };
+        add("userData:lightmap:url",
+            [=](const EP& p) { return QVariant(lightmapEntry(p).value("url").toString()); },
+            [=](EP& p, const QVariant& v) {
+                QJsonObject lightmap = lightmapEntry(p);
+                QString url = v.toString();
+                if (url.isEmpty()) {
+                    setLightmapEntry(p, QJsonObject());
+                } else {
+                    lightmap.insert("url", url);
+                    setLightmapEntry(p, lightmap);
+                }
+            });
+        add("userData:lightmap:scale",
+            [=](const EP& p) { glm::vec4 so = lightmapScaleOffset(lightmapEntry(p)); return QVariant(toQ(glm::vec2(so.x, so.y))); },
+            [=](EP& p, const QVariant& v) {
+                glm::vec4 so = lightmapScaleOffset(lightmapEntry(p));
+                glm::vec2 scale = fromQ(v.value<QVector2D>());
+                setLightmapScaleOffset(p, glm::vec4(scale.x, scale.y, so.z, so.w));
+            });
+        add("userData:lightmap:offset",
+            [=](const EP& p) { glm::vec4 so = lightmapScaleOffset(lightmapEntry(p)); return QVariant(toQ(glm::vec2(so.z, so.w))); },
+            [=](EP& p, const QVariant& v) {
+                glm::vec4 so = lightmapScaleOffset(lightmapEntry(p));
+                glm::vec2 offset = fromQ(v.value<QVector2D>());
+                setLightmapScaleOffset(p, glm::vec4(so.x, so.y, offset.x, offset.y));
+            });
+        add("userData:lightmap:directionalUrl",
+            [=](const EP& p) { return QVariant(lightmapEntry(p).value("directionalUrl").toString()); },
+            [=](EP& p, const QVariant& v) {
+                QJsonObject lightmap = lightmapEntry(p);
+                QString url = v.toString();
+                if (url.isEmpty()) {
+                    lightmap.remove("directionalUrl");
+                } else {
+                    lightmap.insert("directionalUrl", url);
+                }
+                setLightmapEntry(p, lightmap);
+            });
+        add("userData:lightmap:mode",
+            [=](const EP& p) { return QVariant(lightmapEntry(p).value("mode").toString() == "full" ? "full" : "indirect"); },
+            [=](EP& p, const QVariant& v) {
+                QJsonObject lightmap = lightmapEntry(p);
+                if (v.toString() == "full") {
+                    lightmap.insert("mode", "full");
+                } else {
+                    lightmap.remove("mode");
+                }
+                setLightmapEntry(p, lightmap);
+            });
+        // the params' scale (light = offset + scale * map); the offset stays in the JSON
+        add("userData:lightmap:brightness",
+            [=](const EP& p) {
+                QJsonArray params = lightmapEntry(p).value("params").toArray();
+                return QVariant(params.size() == 2 && params[1].isDouble() ? params[1].toDouble() : 1.0);
+            },
+            [=](EP& p, const QVariant& v) {
+                QJsonObject lightmap = lightmapEntry(p);
+                QJsonArray params = lightmap.value("params").toArray();
+                double offset = params.size() == 2 && params[0].isDouble() ? params[0].toDouble() : 0.0;
+                lightmap.insert("params", QJsonArray { offset, std::round(v.toDouble() * 10000.0) / 10000.0 });
+                setLightmapEntry(p, lightmap);
+            });
         // a light's Shadows: Off is Cast Shadows off; Normal and Important cast, and Important, the entry "shadows"
         // set to "important", goes before the other lights when more cast shadows than there are maps
         a.insert(SHADOWS_KEY, Accessor {
@@ -518,6 +838,9 @@ namespace {
             { "emissiveMap", Entry::Text, "", false },
             // no emission, or with an Emission Map, the map as it is
             { "emissive", Entry::Color, QJsonArray { 0.0, 0.0, 0.0 }, false, "emissiveMap", QJsonArray { 1.0, 1.0, 1.0 } },
+            { "lightMap", Entry::Text, "", false },
+            { "lightMapDirection", Entry::Text, "", false },
+            { "lightmapMode", Entry::Text, "indirect", false },
             { "opacity", Entry::Number, graphics::Material::DEFAULT_OPACITY, false },
             { "opacityCutoff", Entry::Number, graphics::Material::DEFAULT_OPACITY_CUTOFF, false }
         };
@@ -613,6 +936,19 @@ namespace {
         add("materialData:alphaClipping",
             [=](const EP& p) { return QVariant(isClipping(modeOf(p))); },
             [=](EP& p, const QVariant& v) { setMode(p, isTransparent(modeOf(p)), v.toBool()); });
+        // the light map's scale, lightmapParams[1] (light = offset + scale * map); the offset stays in the JSON
+        add("materialData:lightmapScale",
+            [=](const EP& p) {
+                QJsonArray params = firstMaterial(p).value("lightmapParams").toArray();
+                return QVariant(params.size() == 2 && params[1].isDouble() ? params[1].toDouble() : 1.0);
+            },
+            [=](EP& p, const QVariant& v) {
+                editMaterials(p, false, [&](QJsonObject& material) {
+                    QJsonArray params = material.value("lightmapParams").toArray();
+                    double offset = params.size() == 2 && params[0].isDouble() ? params[0].toDouble() : 0.0;
+                    material.insert("lightmapParams", QJsonArray { offset, std::round(v.toDouble() * 10000.0) / 10000.0 });
+                });
+            });
         return a;
     }
 
@@ -694,6 +1030,24 @@ namespace {
             "Cylinder:Cylinder", "Cone:Cone", "Circle:Circle", "Quad:Quad" }, "visible=true");
         with(add(spec("color", "Color", K::Color, "shape")), "visible=true");
         with(range(add(spec("alpha", "Alpha", K::Float, "shape")), 0, 1, 0.01, 2), "visible=true");
+        // the shape's +Z face shows what the viewer would see reflected in it (a few mirrors a frame, the biggest
+        // on screen first); its colour shows while it waits for a turn. Picture maps a picture of the reflection
+        // onto the face; Screen draws the reflection pixel for pixel where the face is on screen
+        en("userData:mirror", "Mirror", "shape", { "off:Off", "picture:Picture", "screen:Screen" });
+
+        // a reflection probe (LIGHTMAPS.md §7): the shape is the box inside which surfaces reflect the probe's cube
+        // map (a 1:6 strip, as the zone's ambient map) instead of the zone's, the probe at the shape's position
+        // (Acts as Probe: the shape is a probe, which is not the same as the shape being lit by one);
+        // Importance orders probes that overlap, Blend Distance fades the probe in from the box's faces, Box
+        // Projection reflects the box's faces from the right place (off: the cube map at infinity), Box Offset
+        // moves the box from the probe
+        add(spec("userData:reflectionProbe", "Acts as Probe", K::Bool, "reflectionProbe"));
+        with(add(spec("userData:reflectionProbe:url", "Cube Map", K::Image, "reflectionProbe")), "userData:reflectionProbe=true");
+        with(range(add(spec("userData:reflectionProbe:intensity", "Intensity", K::Float, "reflectionProbe")), 0, 16, 0.01, 2), "userData:reflectionProbe=true");
+        with(stepping(add(spec("userData:reflectionProbe:importance", "Importance", K::Int, "reflectionProbe")), 1, 0), "userData:reflectionProbe=true");
+        with(range(add(spec("userData:reflectionProbe:blendDistance", "Blend Distance", K::Float, "reflectionProbe")), 0, 100, 0.1, 2, "m"), "userData:reflectionProbe=true");
+        with(add(spec("userData:reflectionProbe:boxProjection", "Box Projection", K::Bool, "reflectionProbe")), "userData:reflectionProbe=true");
+        with(stepping(add(spec("userData:reflectionProbe:boxOffset", "Box Offset", K::Vec3, "reflectionProbe")), 0.1, 2, "m"), "userData:reflectionProbe=true");
 
         // text
         add(spec("text", "Text", K::String, "text"));
@@ -732,6 +1086,11 @@ namespace {
         en("ambientLightMode", "Ambient Light", "zone", MODE_VALUES);
         with(range(add(spec("ambientLight.ambientIntensity", "Ambient Intensity", K::Float, "zone")), 0, 200, 0.1, 2), "ambientLightMode=enabled");
         with(add(spec("ambientLight.ambientURL", "Ambient Source", K::Url, "zone")), "ambientLightMode=enabled");
+        // the zone's probe volume (LIGHTMAPS.md step 4): the file the Unity exporter writes (probes/ProbeVolume.bin),
+        // light probes on a grid, sampled by position for the ambient diffuse light of whatever has no lightmap
+        // (avatars, things that move) in place of the ambient source's one sphere; it rides with the ambient light
+        with(add(spec("userData:probeVolume:url", "Probe Volume", K::Url, "zone")), "ambientLightMode=enabled");
+        with(range(add(spec("userData:probeVolume:intensity", "Probe Volume Intensity", K::Float, "zone")), 0, 16, 0.01, 2), "ambientLightMode=enabled");
         en("hazeMode", "Haze", "zone", MODE_VALUES);
         with(range(add(spec("haze.hazeRange", "Haze Range", K::Float, "zone")), 1, 10000, 1, 0, "m"), "hazeMode=enabled");
         with(add(spec("haze.hazeAltitudeEffect", "Use Altitude", K::Bool, "zone")), "hazeMode=enabled");
@@ -766,7 +1125,22 @@ namespace {
         stepping(add(spec("animation.lastFrame", "Last Frame", K::Float, "model")), 1, 0);
         stepping(add(spec("animation.fps", "FPS", K::Float, "model")), 1, 1);
         add(spec("textures", "Textures", K::Json, "model"));
+
+        // a model's lightmap (LIGHTMAPS.md §3.2): the picture, the second texture coordinates' scale and offset (Unity's
+        // lightmapScaleOffset), how it lights, and a brightness (the params' scale)
+        add(spec("userData:lightmap:url", "Lightmap", K::Image, "lightmap"));
+        with(add(spec("userData:lightmap:directionalUrl", "Direction Map", K::Image, "lightmap")), "userData:lightmap:url!=");
+        with(stepping(add(spec("userData:lightmap:scale", "Scale", K::Vec2, "lightmap")), 0.01, 4), "userData:lightmap:url!=");
+        with(stepping(add(spec("userData:lightmap:offset", "Offset", K::Vec2, "lightmap")), 0.01, 4), "userData:lightmap:url!=");
+        en("userData:lightmap:mode", "Mode", "lightmap", { "indirect:Indirect (Baked Indirect)", "full:Full Bake" },
+            "userData:lightmap:url!=");
+        with(range(add(spec("userData:lightmap:brightness", "Brightness", K::Float, "lightmap")), 0, 16, 0.01, 2),
+            "userData:lightmap:url!=");
         add(spec("groupCulled", "Group Culled", K::Bool, "model"));
+
+        // the entity's impostor card (IMPOSTORS.md): a Model's, or a Shape's that groups models (a Unity export's
+        // empty parent); the section's editor shows the bake and runs it
+        add(spec("userData:impostor", "Impostor", K::Impostor, "impostor"));
 
         // image
         add(spec("imageURL", "Image", K::Url, "image"));
@@ -863,6 +1237,15 @@ namespace {
         input("materialData:emissiveMap", "Emission Map", K::Image, OWN_DATA);
         input("materialData:emissive", "Emission Color", K::Color, OWN_DATA);
         input("materialData:opacity", "Opacity", K::Slider, OWN_DATA);
+        // a baked lightmap over the second texture coordinates (LIGHTMAPS.md): Indirect is Unity's Baked Indirect (the
+        // baked light in place of the ambient, the lights as usual), Full Bake High Fidelity's (the whole lighting)
+        input("materialData:lightMap", "Lightmap", K::Image, OWN_DATA);
+        // Unity's directional lightmap: the baked light's direction, which lets the normal map shape it
+        input("materialData:lightMapDirection", "Direction Map", K::Image, OWN_DATA " and materialData:lightMap!=");
+        en("materialData:lightmapMode", "Lightmap Mode", "material_inputs", { "indirect:Indirect (Baked Indirect)",
+            "full:Full Bake" }, OWN_DATA " and materialData:lightMap!=");
+        with(range(add(spec("materialData:lightmapScale", "Lightmap Scale", K::Float, "material_inputs")), 0, 16, 0.01, 2),
+            OWN_DATA " and materialData:lightMap!=");
 #undef OWN_DATA
 #undef PACKING_KEY
         // all of it as JSON, for scripters and for what has no field of its own
@@ -878,7 +1261,81 @@ namespace {
         range(add(spec("voxelSize", "Voxel Size", K::Float, "terrain")), 0.05, 16, 0.05, 2, "m");
         add(spec("terrainURL", "Terrain File", K::Url, "terrain"));
         add(spec("terrainVersion", "Version", K::Int, "terrain")).readOnly = true;
-        add(spec("terrainLayers", "Layers", K::Json, "terrain"));
+        add(spec("terrainClosedBox", "Closed Box", K::TerrainCaps, "terrain"));
+        add(spec("terrainLayers", "Layers", K::TerrainLayers, "terrain"));
+
+        // vehicle (PHYSICS.md 4.8): the entity is the chassis or hull, with the names Unity gives a Rigidbody and a
+        // WheelCollider where it has them and Jolt's for the engine and transmission; the simulator (the physics server,
+        // or the owning client) rebuilds the vehicle as any of these change, so they can be tuned while it drives.
+        // The state at the bottom is what the simulator last published: read it, the simulator writes it.
+        const char* ANY_VEHICLE = "vehicle.type in wheeled,airship,aircraft";
+        const char* WHEELED = "vehicle.type=wheeled";
+        const char* WHEEL = "vehicle.type=wheel";
+        const char* AIRSHIP = "vehicle.type=airship";
+        const char* AIRCRAFT = "vehicle.type=aircraft";
+        const char* FLYING = "vehicle.type in airship,aircraft";
+        en("vehicle.type", "Type", "vehicle", { "none:None", "wheeled:Wheeled", "wheel:Wheel (of the parent)", "airship:Airship",
+            "aircraft:Aircraft" });
+        with(range(add(spec("vehicle.mass", "Mass", K::Float, "vehicle")), 0, 10000000, 1, 1, "kg"), ANY_VEHICLE);
+        with(stepping(add(spec("vehicle.centerOfMass", "Center of Mass", K::Vec3, "vehicle")), 0.01, 3, "m"), ANY_VEHICLE);
+        // the wheels and seats take the whole width, under their own headings
+        with(add(spec("vehicle.wheels", "Wheels", K::VehicleWheels, "vehicle")), WHEELED);
+        with(add(spec("vehicle.seats", "Seats", K::VehicleSeats, "vehicle")), ANY_VEHICLE);
+        with(range(add(spec("vehicle.maxSteerAngle", "Steering Lock", K::Float, "vehicle")), 0, 80, 1, 1, "°"), WHEELED);
+        en("vehicle.driveType", "Drive", "vehicle", { "rear:Rear wheels", "front:Front wheels", "all:All wheels" }, WHEELED);
+        with(range(add(spec("vehicle.maxTorque", "Engine Torque", K::Float, "vehicle")), 0, 1000000, 10, 0, "N m"), WHEELED);
+        with(range(add(spec("vehicle.minRPM", "Idle RPM", K::Float, "vehicle")), 1, 50000, 100, 0), WHEELED);
+        with(range(add(spec("vehicle.maxRPM", "Red Line RPM", K::Float, "vehicle")), 2, 50000, 100, 0), WHEELED);
+        with(add(spec("vehicle.gearRatios", "Gear Ratios", K::String, "vehicle")), WHEELED);
+        with(range(add(spec("vehicle.reverseGearRatio", "Reverse Ratio", K::Float, "vehicle")), 0.01, 100, 0.01, 2), WHEELED);
+        with(range(add(spec("vehicle.finalDriveRatio", "Final Drive Ratio", K::Float, "vehicle")), 0.01, 100, 0.01, 2), WHEELED);
+        with(range(add(spec("vehicle.maxBrakeTorque", "Brake Torque", K::Float, "vehicle")), 0, 1000000, 10, 0, "N m"), WHEELED);
+        with(range(add(spec("vehicle.maxHandBrakeTorque", "Hand Brake Torque", K::Float, "vehicle")), 0, 1000000, 10, 0, "N m"), WHEELED);
+        with(range(add(spec("vehicle.suspensionFrequency", "Suspension Frequency", K::Slider, "vehicle")), 0.1, 5, 0.01, 2, "Hz"), WHEELED);
+        with(range(add(spec("vehicle.suspensionDamping", "Suspension Damping", K::Slider, "vehicle")), 0, 2, 0.01, 2), WHEELED);
+        // a wheel entity: a child of the chassis that shows one of its wheels
+        with(add(spec("vehicle.wheel", "Wheel Name", K::String, "vehicle")), WHEEL);
+        en("vehicle.axle", "Axle Axis", "vehicle", { "x:X (a model made for Unity)", "y:Y (a Cylinder shape)", "z:Z" }, WHEEL);
+        // an airship: a hull with buoyancy, propellers, fins and ballast
+        with(range(add(spec("vehicle.envelopeVolume", "Envelope Volume", K::Float, "vehicle")), 0, 10000000, 10, 1, "m³"), AIRSHIP);
+        with(stepping(add(spec("vehicle.centerOfBuoyancy", "Center of Buoyancy", K::Vec3, "vehicle")), 0.01, 3, "m"), AIRSHIP);
+        with(range(add(spec("vehicle.gasDensity", "Gas Density", K::Float, "vehicle")), 0, 2, 0.0001, 4, "kg/m³"), AIRSHIP);
+        with(range(add(spec("vehicle.maxThrust", "Thrust", K::Float, "vehicle")), 0, 10000000, 10, 0, "N"), FLYING);
+        with(range(add(spec("vehicle.maxVerticalThrust", "Vertical Thrust", K::Float, "vehicle")), 0, 10000000, 10, 0, "N"), AIRSHIP);
+        with(stepping(add(spec("vehicle.thrustPoint", "Thrust Point", K::Vec3, "vehicle")), 0.01, 3, "m"), FLYING);
+        // an aircraft: a wing, tilting engines and a tail
+        with(range(add(spec("vehicle.wingArea", "Wing Area", K::Float, "vehicle")), 0, 100000, 0.1, 2, "m²"), AIRCRAFT);
+        with(range(add(spec("vehicle.wingSpan", "Wing Span", K::Float, "vehicle")), 0, 1000, 0.1, 2, "m"), AIRCRAFT);
+        with(stepping(add(spec("vehicle.wingPoint", "Wing Point", K::Vec3, "vehicle")), 0.01, 3, "m"), AIRCRAFT);
+        with(range(add(spec("vehicle.rudderArea", "Rudder Area", K::Float, "vehicle")), 0, 100000, 0.1, 2, "m²"), FLYING);
+        with(range(add(spec("vehicle.elevatorArea", "Elevator Area", K::Float, "vehicle")), 0, 100000, 0.1, 2, "m²"), FLYING);
+        with(stepping(add(spec("vehicle.finPoint", "Fin Point", K::Vec3, "vehicle")), 0.01, 3, "m"), FLYING);
+        with(range(add(spec("vehicle.maxFinAngle", "Fin Deflection", K::Float, "vehicle")), 0, 90, 1, 1, "°"), FLYING);
+        with(stepping(add(spec("vehicle.dragArea", "Drag Area", K::Vec3, "vehicle")), 0.1, 2, "m²"), FLYING);
+        with(stepping(add(spec("vehicle.angularDragArea", "Angular Drag Area", K::Vec3, "vehicle")), 0.1, 2, "m⁵"), FLYING);
+        with(range(add(spec("vehicle.ballastRate", "Ballast Drop Rate", K::Float, "vehicle")), 0, 100000, 1, 1, "kg/s"), AIRSHIP);
+        with(range(add(spec("vehicle.ventRate", "Vent Rate", K::Float, "vehicle")), 0, 1, 0.001, 3, "/s"), AIRSHIP);
+        with(range(add(spec("vehicle.ballast", "Ballast", K::Float, "vehicle")), 0, 10000000, 1, 1, "kg"), AIRSHIP);
+        // the state, read-only
+        auto state = [&](const char* key, const char* label, const char* showWhen, double min, double max, int decimals, const char* unit = "") {
+            PropertySpec& s = with(range(add(spec(key, label, K::Float, "vehicle_state")), min, max, 0.01, decimals, unit), showWhen);
+            s.readOnly = true;
+            return &s;
+        };
+        with(add(spec("vehicle.driver", "Driver", K::String, "vehicle_state")), ANY_VEHICLE).readOnly = true;
+        state("vehicle.inputSequence", "Input Sequence", ANY_VEHICLE, 0, DBL_MAX, 0);
+        state("vehicle.throttle", "Throttle", ANY_VEHICLE, -1, 1, 2);
+        state("vehicle.steering", "Steering", ANY_VEHICLE, -1, 1, 2);
+        state("vehicle.brake", "Brake", WHEELED, 0, 1, 2);
+        state("vehicle.handBrake", "Hand Brake", WHEELED, 0, 1, 2);
+        state("vehicle.engineRPM", "Engine RPM", WHEELED, 0, DBL_MAX, 0);
+        state("vehicle.gear", "Gear", WHEELED, -1, 100, 0);
+        state("vehicle.pitch", "Pitch", FLYING, -1, 1, 2);
+        state("vehicle.lift", "Lift", FLYING, -1, 1, 2);
+        state("vehicle.trim", "Trim", AIRSHIP, -1, 1, 2);
+        state("vehicle.fill", "Fill", AIRSHIP, 0, 1, 3);
+        state("vehicle.tilt", "Tilt", AIRCRAFT, 0, 1, 2);
+        with(add(spec("vehicle.stateTime", "State Time", K::String, "vehicle_state")), ANY_VEHICLE).readOnly = true;
 
         // particles
         add(spec("isEmitting", "Emit", K::Bool, "particles"));
@@ -962,9 +1419,12 @@ namespace {
         { "base", "", false },
         { "spatial", "Transform", false },
         { "shape", "Shape", false },
+        { "reflectionProbe", "Reflection Probe", true },
         { "text", "Text", false },
         { "zone", "Zone", false },
         { "model", "Model", false },
+        { "lightmap", "Lightmap", true },
+        { "impostor", "Impostor", true },
         { "image", "Image", false },
         { "web", "Web", false },
         { "light", "Light", false },
@@ -985,6 +1445,8 @@ namespace {
         { "behavior", "Behavior", false },
         { "collision", "Collision", false },
         { "physics", "Physics", false },
+        { "vehicle", "Vehicle", false },
+        { "vehicle_state", "Vehicle State", true },
         { "userData", "User Data", false }
     };
 }
@@ -1033,13 +1495,13 @@ static QStringList typeSections(EntityTypes::EntityType type, bool multiple) {
         case EntityTypes::Box:
         case EntityTypes::Sphere:
         case EntityTypes::Shape:
-            return { "base", "spatial", "shape", "behavior", "collision", "physics" };
+            return { "base", "spatial", "shape", "reflectionProbe", "impostor", "behavior", "collision", "physics", "vehicle", "vehicle_state" };
         case EntityTypes::Text:
             return { "base", "spatial", "text", "behavior", "collision", "physics" };
         case EntityTypes::Zone:
             return { "base", "spatial", "zone", "behavior", "physics" };
         case EntityTypes::Model:
-            return { "base", "spatial", "model", "behavior", "collision", "physics" };
+            return { "base", "spatial", "model", "lightmap", "impostor", "behavior", "collision", "physics", "vehicle", "vehicle_state" };
         case EntityTypes::Image:
             return { "base", "spatial", "image", "behavior", "collision", "physics" };
         case EntityTypes::Web:

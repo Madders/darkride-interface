@@ -27,6 +27,8 @@
 
 #include "BloomStage.h"
 
+#include <FrameDiag.h>
+
 namespace ru {
     using render_utils::slot::texture::Texture;
     using render_utils::slot::buffer::Buffer;
@@ -73,6 +75,12 @@ void SetupZones::run(const RenderContextPointer& context, const Input& input) {
 
     // call render over the zones to grab their components in the correct order first...
     render::renderItems(context, input);
+
+    if (context->args->_renderMode == RenderArgs::RenderMode::DEFAULT_RENDER_MODE) {
+        FrameDiag::zones() = (int)input.size();
+        FrameDiag::sunLights() = (int)lightStage->_currentFrame._sunLights.size();
+        FrameDiag::ambientLights() = (int)lightStage->_currentFrame._ambientLights.size();
+    }
 
     // Finally add the default lights and background:
     lightStage->_currentFrame.pushSunLight(lightStage->getDefaultLight());

@@ -185,6 +185,7 @@ public:
 
     const OctreePacketProcessor& getOctreePacketProcessor() const { return _octreeProcessor; }
     QSharedPointer<EntityTreeRenderer> getEntities() const { return DependencyManager::get<EntityTreeRenderer>(); }
+    GraphicsEngine& getGraphicsEngine() { return _graphicsEngine; }
     MainWindow* getWindow() const { return _window; }
     EntityTreePointer getEntityClipboard() const { return _entityClipboard; }
     EntityEditPacketSender* getEntityEditPacketSender() { return &_entityEditSender; }
@@ -212,6 +213,10 @@ public:
 
     float getFarClip() { return _farClip.get(); }
     void setFarClip(float farClip);
+    // the desktop camera's near clip; the HMD keeps DEFAULT_NEAR_CLIP for the hands. A longer one gives the depth
+    // buffer precision in proportion (REVERSED-Z.md §2)
+    float getNearClip() { return _nearClip.get(); }
+    void setNearClip(float nearClip);
 
     float getHMDTabletScale() { return _hmdTabletScale.get(); }
     void setHMDTabletScale(float hmdTabletScale);
@@ -288,6 +293,10 @@ public:
 
     bool isAboutToQuit() const { return _aboutToQuit; }
     bool isPhysicsEnabled() const { return _physicsEnabled; }
+
+    // While a loading screen is up, the arrival in a world waits for what is near the avatar to be ready for physics
+    // and drawn (as interstitial mode does), even where the zone allows moving at once (ghosting).
+    void setArrivalWaitsForNearby(bool wait);
     PhysicsEnginePointer getPhysicsEngine() { return _physicsEngine; }
     bool isEditMode() const;
 
@@ -358,6 +367,9 @@ public:
     void setOtherAvatarsReplicaCount(int count) { DependencyManager::get<AvatarHashMap>()->setReplicaCount(count); }
 
     bool getLoginDialogPoppedUp() const { return _loginDialogPoppedUp; }
+    // From the start, and again after signing out, until the viewer goes in (resumeAfterLoginDialogActionTaken): the
+    // 3D view isn't drawn then, only Darkride's navy under the user interface (GraphicsEngine::render_performFrame)
+    bool isSignInPending() const { return _signInPending; }
     void createLoginDialog();
     void updateLoginDialogPosition();
 
@@ -703,6 +715,7 @@ private:
     Setting::Handle<QString> _previousScriptLocation;
     Setting::Handle<float> _fieldOfView;
     Setting::Handle<float> _farClip;
+    Setting::Handle<float> _nearClip;
     Setting::Handle<float> _hmdTabletScale;
     Setting::Handle<float> _desktopTabletScale;
     Setting::Handle<bool> _firstRun;
@@ -761,6 +774,7 @@ private:
     bool _interstitialModeEnabled{ false };
 
     bool _loginDialogPoppedUp{ false };
+    std::atomic<bool> _signInPending{ true };
     bool _desktopRootItemCreated{ false };
 
     bool _developerMenuVisible{ false };
@@ -789,6 +803,7 @@ private:
     bool _isForeground = true;  // starts out assumed to be in foreground
     bool _isGLInitialized{ false };
     bool _physicsEnabled{ false };
+    std::atomic<bool> _arrivalWaitsForNearby { false };
     bool _failedToConnectToEntityServer{ false };
 
     bool _reticleClickPressed{ false };

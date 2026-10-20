@@ -39,6 +39,9 @@ ModelEntityItem::ModelEntityItem(const EntityItemID& entityItemID) : EntityItem(
     _lastAnimated = usecTimestampNow();
     // set the last animated when interface (re)starts
     _type = EntityTypes::Model;
+    // a model is drawn once its renderer says so (model and textures loaded, or nothing to load); every other type is
+    // drawn as soon as it exists, which is what EntityItem's default says
+    _visuallyReady = false;
     _lastKnownCurrentFrame = -1;
     _visuallyReady = false;
 }

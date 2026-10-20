@@ -22,6 +22,10 @@ const uint8_t SCRIPT_POKE_SIMULATION_PRIORITY = SCRIPT_GRAB_SIMULATION_PRIORITY 
 const uint8_t PERSONAL_SIMULATION_PRIORITY = SCRIPT_GRAB_SIMULATION_PRIORITY;
 const uint8_t AVATAR_ENTITY_SIMULATION_PRIORITY = PERSONAL_SIMULATION_PRIORITY;
 
+// The physics server (PHYSICS.md 4.5) owns the frames it moves above any client: a grab or a poke never takes a
+// vehicle from it, and an edit of a server-moved entity's transform is a request the server adopts, not a claim.
+const uint8_t SERVER_SIMULATION_PRIORITY = 255;
+
 
 namespace Simulation {
     const uint32_t DIRTY_POSITION = 0x0001;

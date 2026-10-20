@@ -20,6 +20,8 @@
 #include <QtCore/QUrlQuery>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonArray>
+#include <QtCore/QMimeDatabase>
+#include <QtCore/QRandomGenerator>
 #include <QtNetwork/QHttpMultiPart>
 #include <QPainter>
 #include <QtConcurrent/QtConcurrentRun>
@@ -31,25 +33,42 @@
 #include <shared/FileUtils.h>
 #include <NodeList.h>
 #include <OffscreenUi.h>
+#include <PathUtils.h>
 #include <SharedUtil.h>
 #include <SecondaryCamera.h>
 #include <plugins/DisplayPlugin.h>
 
 #include "Application.h"
 #include "display-plugins/CompositorHelper.h"
+#include "editor/EditorCreate.h"
 #include "scripting/WindowScriptingInterface.h"
+#include "InterfaceLogging.h"
 #include "MainWindow.h"
 #include "Snapshot.h"
 #include "SnapshotUploader.h"
 
-// filename format: tivoli-snap-by-%username%-on-%date%_%time%_@-%location%.jpg
-// %1 <= username, %2 <= date and time, %3 <= current location
-const QString FILENAME_PATH_FORMAT = "tivoli-snap-by-%1-on-%2.jpg";
+// filename format: snap-%date%_%time%-%random%.jpg
+// %1 <= date and time, %2 <= six random letters and digits. A snapshot in the user's files can be read by anyone who has
+// its link; the random part keeps the link from being guessed from the user's name and the time.
+const QString FILENAME_PATH_FORMAT = "snap-%1-%2.jpg";
 const QString DATETIME_FORMAT = "yyyy-MM-dd_hh-mm-ss";
 const QString SNAPSHOTS_DIRECTORY = "Snapshots";
+static const int FILENAME_RANDOM_LENGTH = 6;
+// the folder in the user's files that snapshots go to, and the local folder a snapshot waits in for its upload
+const QString USER_FILES_SNAPSHOTS_FOLDER = "/Snapshots";
+const QString UPLOADS_DIRECTORY = "Snapshot uploads";
 const QString URL = "highfidelity_url";
 static const int SNAPSHOT_360_TIMER_INTERVAL = 350;
 static const QList<QString> SUPPORTED_IMAGE_FORMATS = { "jpg", "jpeg", "png" };
+
+static QString randomFilenamePart() {
+    static const QString CHARACTERS = "abcdefghijklmnopqrstuvwxyz0123456789";
+    QString part;
+    for (int i = 0; i < FILENAME_RANDOM_LENGTH; i++) {
+        part.append(CHARACTERS.at(QRandomGenerator::system()->bounded(CHARACTERS.length())));
+    }
+    return part;
+}
 
 Snapshot::Snapshot() {
     _snapshotTimer.setSingleShot(false);
@@ -94,7 +113,10 @@ SnapshotMetaData* Snapshot::parseSnapshotData(QString snapshotPath) {
 }
 
 QString Snapshot::saveSnapshot(QImage image, const QString& filename, const QString& pathname) {
-    QFile* snapshotFile = savedFileForSnapshot(image, false, filename, pathname);
+    // a snapshot with the default name and place (a Snap) goes to the user's files when someone is signed in
+    bool hasDefaultName = filename.isEmpty() && pathname.isEmpty();
+    bool forUserFiles = hasDefaultName && DependencyManager::get<AccountManager>()->isLoggedIn();
+    QFile* snapshotFile = savedFileForSnapshot(image, false, filename, pathname, forUserFiles);
 
     if (snapshotFile) {
         // we don't need the snapshot file, so close it, grab its filename and delete it
@@ -104,10 +126,96 @@ QString Snapshot::saveSnapshot(QImage image, const QString& filename, const QStr
 
         delete snapshotFile;
 
+        if (hasDefaultName) {
+            storeSnapshot(snapshotPath);
+        }
         return snapshotPath;
     }
 
     return "";
+}
+
+QString Snapshot::uploadsFolder() {
+    QString folder = PathUtils::getAppLocalDataFilePath(UPLOADS_DIRECTORY);
+    return QDir().mkpath(folder) ? folder : QString();
+}
+
+void Snapshot::storeSnapshot(const QString& takenPath) {
+    // queued, on this thread too, so that a script hears where a snapshot is after it hears that it was taken
+    QMetaObject::invokeMethod(this, [this, takenPath] {
+        keepLeftovers();
+        QString folder = PathUtils::getAppLocalDataFilePath(UPLOADS_DIRECTORY);
+        if (QDir::cleanPath(QFileInfo(takenPath).absolutePath()) == QDir::cleanPath(folder)) {
+            uploadToUserFiles(takenPath);
+        } else {
+            emit snapshotStored(takenPath, takenPath, false, QString());
+        }
+    }, Qt::QueuedConnection);
+}
+
+void Snapshot::uploadToUserFiles(const QString& takenPath) {
+    // read whole, so that the file is closed during the upload and can be deleted after it (Windows won't delete an
+    // open file)
+    QFile file(takenPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        keepOnThisComputer(takenPath, "cannot read " + takenPath);
+        return;
+    }
+    QByteArray data = file.readAll();
+    file.close();
+
+    auto upload = new EditorUpload(this);
+    connect(upload, &EditorUpload::finished, this, [this, upload, takenPath](const QString& url) {
+        upload->deleteLater();
+        // in the user's files now, so no copy stays on this computer
+        if (!QFile::remove(takenPath)) {
+            qCWarning(interfaceapp) << "snapshot uploaded to the user's files, but its local copy could not be deleted:"
+                                    << takenPath;
+        }
+        emit snapshotStored(takenPath, url, true, QString());
+    });
+    connect(upload, &EditorUpload::failed, this, [this, upload, takenPath](const QString& error) {
+        upload->deleteLater();
+        keepOnThisComputer(takenPath, error);
+    });
+    QString error;
+    if (!upload->startData(data, QFileInfo(takenPath).fileName(), USER_FILES_SNAPSHOTS_FOLDER,
+                           QMimeDatabase().mimeTypeForFile(takenPath).name(), error)) {
+        upload->deleteLater();
+        keepOnThisComputer(takenPath, error);
+    }
+}
+
+void Snapshot::keepLeftovers() {
+    if (_leftoversKept) {
+        return;
+    }
+    _leftoversKept = true;
+    QDir folder(PathUtils::getAppLocalDataFilePath(UPLOADS_DIRECTORY));
+    for (const QFileInfo& info : folder.entryInfoList(QDir::Files)) {
+        if (info.lastModified() < _sessionStart) {
+            keepOnThisComputer(info.absoluteFilePath(), "the viewer closed before the upload finished");
+        }
+    }
+}
+
+// A snapshot that didn't reach the user's files moves from the uploads folder to the snapshots location, or to the
+// Pictures folder when none is set; it stays in the uploads folder if it can't move.
+void Snapshot::keepOnThisComputer(const QString& takenPath, const QString& uploadError) {
+    QString folder = _snapshotsLocation.get();
+    if (folder.isEmpty()) {
+        folder = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+    }
+    QString keptPath = takenPath;
+    if (!folder.isEmpty() && QDir().mkpath(folder)) {
+        QString movedPath = QDir(folder).absoluteFilePath(QFileInfo(takenPath).fileName());
+        if (QFile::rename(takenPath, movedPath)) {
+            keptPath = movedPath;
+        }
+    }
+    qCWarning(interfaceapp) << "snapshot kept on this computer, at" << keptPath << "; the upload to the user's files failed:"
+                            << uploadError;
+    emit snapshotStored(takenPath, keptPath, false, uploadError);
 }
 
 static const float CUBEMAP_SIDE_PIXEL_DIMENSION = 2048.0f;
@@ -351,14 +459,15 @@ QTemporaryFile* Snapshot::saveTempSnapshot(QImage image) {
 QFile* Snapshot::savedFileForSnapshot(QImage& shot,
                                       bool isTemporary,
                                       const QString& userSelectedFilename,
-                                      const QString& userSelectedPathname) {
-    // adding URL to snapshot
-    QUrl currentURL = DependencyManager::get<AddressManager>()->currentPublicAddress();
-    shot.setText(URL, currentURL.toString());
-
-    QString username = DependencyManager::get<AccountManager>()->getAccountInfo().getUsername();
-    // normalize username, replace all non alphanumeric with '-'
-    username.replace(QRegExp("[^A-Za-z0-9_]"), "-");
+                                      const QString& userSelectedPathname,
+                                      bool forUserFiles) {
+    // A snapshot for the user's files, which anyone with its link can read, doesn't carry the address it was taken at
+    // (the world's, with the avatar's position).
+    if (!forUserFiles) {
+        // adding URL to snapshot
+        QUrl currentURL = DependencyManager::get<AddressManager>()->currentPublicAddress();
+        shot.setText(URL, currentURL.toString());
+    }
 
     QDateTime now = QDateTime::currentDateTime();
 
@@ -375,7 +484,7 @@ QFile* Snapshot::savedFileForSnapshot(QImage& shot,
     //     Save the snapshot in JPG format at "100" quality according to FILENAME_PATH_FORMAT
     int imageQuality = 100;
     QString filename;
-    if (!userSelectedFilename.isNull()) {
+    if (!userSelectedFilename.isEmpty()) {
         QFileInfo snapshotFileInfo(userSelectedFilename);
         QString userSelectedFilenameSuffix = snapshotFileInfo.suffix();
         userSelectedFilenameSuffix = userSelectedFilenameSuffix.toLower();
@@ -388,16 +497,19 @@ QFile* Snapshot::savedFileForSnapshot(QImage& shot,
             filename = userSelectedFilename + ".jpg";
         }
     } else {
-        filename = FILENAME_PATH_FORMAT.arg(username, now.toString(DATETIME_FORMAT));
+        filename = FILENAME_PATH_FORMAT.arg(now.toString(DATETIME_FORMAT), randomFilenamePart());
     }
 
     if (!isTemporary) {
-        // If user has requested specific path then use it, else use the application value
-        QString snapshotFullPath;
-        if (!userSelectedPathname.isNull()) {
-            snapshotFullPath = userSelectedPathname;
-        } else {
-            snapshotFullPath = _snapshotsLocation.get();
+        // A snapshot for the user's files waits in the uploads folder. Otherwise, if user has requested specific path
+        // then use it, else use the application value
+        QString snapshotFullPath = forUserFiles ? uploadsFolder() : QString();
+        if (snapshotFullPath.isEmpty()) {
+            if (!userSelectedPathname.isEmpty()) {
+                snapshotFullPath = userSelectedPathname;
+            } else {
+                snapshotFullPath = _snapshotsLocation.get();
+            }
         }
 
         if (snapshotFullPath.isEmpty()) {

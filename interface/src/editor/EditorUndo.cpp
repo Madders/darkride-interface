@@ -97,6 +97,114 @@ namespace {
         bool _skipFirstRedo { true };
     };
 
+    // A paint stroke on a terrain's paint map, with the blocks as they were.
+    class TerrainPaintCommand : public QUndoCommand {
+    public:
+        TerrainPaintCommand(EditorUndo* undo, const QString& text, const QUuid& id, const TerrainPaintBlocks& before,
+            const TerrainPaintBlocks& after) :
+            QUndoCommand(text), _undo(undo), _id(id), _before(before), _after(after) {
+        }
+        void redo() override {
+            if (_skipFirstRedo) {
+                _skipFirstRedo = false;
+                return;
+            }
+            qCDebug(entities) << "editor redo" << text() << "on" << _after.size() << "paint blocks";
+            _undo->applyTerrainPaint(_id, _after);
+        }
+        void undo() override {
+            qCDebug(entities) << "editor undo" << text() << "on" << _before.size() << "paint blocks";
+            _undo->applyTerrainPaint(_id, _before);
+        }
+    private:
+        EditorUndo* _undo;
+        QUuid _id;
+        TerrainPaintBlocks _before;
+        TerrainPaintBlocks _after;
+        bool _skipFirstRedo { true };
+    };
+
+    // A terrain's layer stack changed, with the stack as it was.
+    class TerrainLayersCommand : public QUndoCommand {
+    public:
+        TerrainLayersCommand(EditorUndo* undo, const QString& text, const QUuid& id, const terrain::LayerStack& before,
+            const terrain::LayerStack& after) :
+            QUndoCommand(text), _undo(undo), _id(id), _before(before), _after(after) {
+        }
+        void redo() override {
+            if (_skipFirstRedo) {
+                _skipFirstRedo = false;
+                return;
+            }
+            qCDebug(entities) << "editor redo" << text() << "on" << _after.layers.size() << "layers";
+            _undo->applyTerrainLayers(_id, _after);
+        }
+        void undo() override {
+            qCDebug(entities) << "editor undo" << text() << "on" << _before.layers.size() << "layers";
+            _undo->applyTerrainLayers(_id, _before);
+        }
+    private:
+        EditorUndo* _undo;
+        QUuid _id;
+        terrain::LayerStack _before;
+        terrain::LayerStack _after;
+        bool _skipFirstRedo { true };
+    };
+
+    // Which faces of a terrain's box are closed: applied by the push itself (its first redo), unlike the steps above,
+    // which record a change already made.
+    class TerrainCapsCommand : public QUndoCommand {
+    public:
+        TerrainCapsCommand(EditorUndo* undo, const QString& text, const QUuid& id, uint8_t before, uint8_t after) :
+            QUndoCommand(text), _undo(undo), _id(id), _before(before), _after(after) {
+        }
+        void redo() override {
+            qCDebug(entities) << "editor redo" << text() << "closed faces" << _after;
+            _undo->applyTerrainCaps(_id, _after);
+        }
+        void undo() override {
+            qCDebug(entities) << "editor undo" << text() << "closed faces" << _before;
+            _undo->applyTerrainCaps(_id, _before);
+        }
+    private:
+        EditorUndo* _undo;
+        QUuid _id;
+        uint8_t _before;
+        uint8_t _after;
+    };
+
+    // A terrain resampled to another voxel count, with the whole grid and paint map as they were.
+    class TerrainResampleCommand : public QUndoCommand {
+    public:
+        TerrainResampleCommand(EditorUndo* undo, const QString& text, const QUuid& id, const terrain::VoxelGrid& gridBefore,
+            const terrain::PaintMap& paintBefore, const terrain::VoxelGrid& gridAfter, const terrain::PaintMap& paintAfter) :
+            QUndoCommand(text), _undo(undo), _id(id), _gridBefore(gridBefore), _paintBefore(paintBefore), _gridAfter(gridAfter),
+            _paintAfter(paintAfter) {
+        }
+        void redo() override {
+            if (_skipFirstRedo) {
+                _skipFirstRedo = false;
+                return;
+            }
+            qCDebug(entities) << "editor redo" << text() << "to" << _gridAfter.getVoxelCount().x << "x" << _gridAfter.getVoxelCount().y
+                              << "x" << _gridAfter.getVoxelCount().z << "voxels";
+            _undo->applyTerrainGrid(_id, _gridAfter, _paintAfter);
+        }
+        void undo() override {
+            qCDebug(entities) << "editor undo" << text() << "to" << _gridBefore.getVoxelCount().x << "x" << _gridBefore.getVoxelCount().y
+                              << "x" << _gridBefore.getVoxelCount().z << "voxels";
+            _undo->applyTerrainGrid(_id, _gridBefore, _paintBefore);
+        }
+    private:
+        EditorUndo* _undo;
+        QUuid _id;
+        terrain::VoxelGrid _gridBefore;
+        terrain::PaintMap _paintBefore;
+        terrain::VoxelGrid _gridAfter;
+        terrain::PaintMap _paintAfter;
+        bool _skipFirstRedo { true };
+    };
+
     // Entities that were deleted; undo brings them back (with new ids, which the stack remaps).
     class DeleteEntitiesCommand : public QUndoCommand {
     public:
@@ -406,11 +514,98 @@ bool EditorUndo::applyTerrainChunks(const QUuid& id, const TerrainChunks& chunks
     terrain::VoxelGrid& grid = terrain->getGrid();
     for (const auto& pair : chunks) {
         if (grid.containsChunk(pair.first)) {
-            grid.setChunk(pair.first, pair.second);
+            // a step holds every chunk of the places it changed, so a coarser chunk split to make room is filled over
+            grid.placeChunk(pair.first, pair.second);
         }
     }
     terrain->markCollisionShapeStale();
     terrain->gridEdited();
+    emit terrainEdited(id);
+    return true;
+}
+
+void EditorUndo::pushTerrainPaint(const QString& text, const QUuid& id, const TerrainPaintBlocks& before, const TerrainPaintBlocks& after) {
+    if (before.empty() && after.empty()) {
+        return;
+    }
+    _stack.push(new TerrainPaintCommand(this, text, id, before, after));
+}
+
+void EditorUndo::pushTerrainLayers(const QString& text, const QUuid& id, const terrain::LayerStack& before, const terrain::LayerStack& after) {
+    if (before == after) {
+        return;
+    }
+    _stack.push(new TerrainLayersCommand(this, text, id, before, after));
+}
+
+bool EditorUndo::applyTerrainLayers(const QUuid& id, const terrain::LayerStack& layers) {
+    auto tree = entityTree();
+    if (!tree) {
+        return false;
+    }
+    auto terrain = std::dynamic_pointer_cast<RenderableTerrainEntityItem>(tree->findEntityByID(resolve(id)));
+    if (!terrain) {
+        return false;
+    }
+    terrain->setLayers(layers);
+    emit terrainEdited(id);
+    return true;
+}
+
+void EditorUndo::pushTerrainCaps(const QString& text, const QUuid& id, uint8_t before, uint8_t after) {
+    if (before == after) {
+        return;
+    }
+    _stack.push(new TerrainCapsCommand(this, text, id, before, after));
+}
+
+bool EditorUndo::applyTerrainCaps(const QUuid& id, uint8_t caps) {
+    auto tree = entityTree();
+    if (!tree) {
+        return false;
+    }
+    auto terrain = std::dynamic_pointer_cast<RenderableTerrainEntityItem>(tree->findEntityByID(resolve(id)));
+    if (!terrain) {
+        return false;
+    }
+    terrain->setCaps(caps);
+    emit terrainEdited(id);
+    return true;
+}
+
+void EditorUndo::pushTerrainResample(const QString& text, const QUuid& id, const terrain::VoxelGrid& gridBefore,
+        const terrain::PaintMap& paintBefore, const terrain::VoxelGrid& gridAfter, const terrain::PaintMap& paintAfter) {
+    _stack.push(new TerrainResampleCommand(this, text, id, gridBefore, paintBefore, gridAfter, paintAfter));
+}
+
+bool EditorUndo::applyTerrainGrid(const QUuid& id, const terrain::VoxelGrid& grid, const terrain::PaintMap& paint) {
+    auto tree = entityTree();
+    if (!tree) {
+        return false;
+    }
+    auto terrain = std::dynamic_pointer_cast<RenderableTerrainEntityItem>(tree->findEntityByID(resolve(id)));
+    if (!terrain) {
+        return false;
+    }
+    terrain->setGridAndPaint(grid, paint);
+    emit terrainEdited(id);
+    return true;
+}
+
+bool EditorUndo::applyTerrainPaint(const QUuid& id, const TerrainPaintBlocks& blocks) {
+    auto tree = entityTree();
+    if (!tree) {
+        return false;
+    }
+    auto terrain = std::dynamic_pointer_cast<RenderableTerrainEntityItem>(tree->findEntityByID(resolve(id)));
+    if (!terrain || !terrain->hasGrid()) {
+        return false;
+    }
+    terrain::PaintMap& paint = terrain->getPaint();
+    for (const auto& pair : blocks) {
+        paint.paste(pair.second);
+    }
+    terrain->paintEdited();
     emit terrainEdited(id);
     return true;
 }

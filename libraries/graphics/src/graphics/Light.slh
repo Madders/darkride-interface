@@ -38,6 +38,11 @@ struct LightAmbient {
     vec4 _ambient;
     SphericalHarmonics _ambientSphere;
     mat4 transform;
+    // the probe volume (graphics::Light::setProbeVolume): origin and intensity, 1 / spacing and whether there is
+    // one, the probes per axis
+    vec4 _volumeOrigin;
+    vec4 _volumeInvSpacing;
+    vec4 _volumeDims;
 };
 
 SphericalHarmonics getLightAmbientSphere(LightAmbient l) { return l._ambientSphere; }
@@ -46,6 +51,12 @@ SphericalHarmonics getLightAmbientSphere(LightAmbient l) { return l._ambientSphe
 float getLightAmbientIntensity(LightAmbient l) { return l._ambient.x; }
 bool getLightHasAmbientMap(LightAmbient l) { return l._ambient.y > 0.0; }
 float getLightAmbientMapNumMips(LightAmbient l) { return l._ambient.y; }
+
+bool getLightHasProbeVolume(LightAmbient l) { return l._volumeInvSpacing.w > 0.0; }
+float getLightProbeVolumeIntensity(LightAmbient l) { return l._volumeOrigin.w; }
+vec3 getLightProbeVolumeOrigin(LightAmbient l) { return l._volumeOrigin.xyz; }
+vec3 getLightProbeVolumeInvSpacing(LightAmbient l) { return l._volumeInvSpacing.xyz; }
+vec3 getLightProbeVolumeDims(LightAmbient l) { return l._volumeDims.xyz; }
 
 <@func declareLightBuffer(N)@>
 

@@ -161,6 +161,10 @@ public:
      *     mixer rather than Interface clients. The result is unique among all avatars present in the domain at the time.
      * @property {boolean} lookAtSnappingEnabled=true - <code>true</code> if the avatar's eyes snap to look at another avatar's
      *     eyes when the other avatar is in the line of sight and also has <code>lookAtSnappingEnabled == true</code>.
+     * @property {string} gazeStyle="calm" - How the avatar's eyes behave, for everyone to see: <code>"calm"</code>,
+     *     <code>"excited"</code>, <code>"shy"</code>, <code>"sleepy"</code> or <code>"intent"</code>. A style sets how often
+     *     and how far the eyes dart, where they rest and how much they meet other people's eyes, what the head does with
+     *     them, and how the lids blink.
      * @property {string} skeletonModelURL - The avatar's FST file.
      * @property {AttachmentData[]} attachmentData - Information on the avatar's attachments.
      *     <p class="important">Deprecated: This property is deprecated and will be removed. Use avatar entities instead.</p>
@@ -759,6 +763,34 @@ public:
     Q_INVOKABLE void restoreHandAnimation(bool isLeft);
 
     /**jsdoc
+     * Gets the avatar's menu: an imported avatar's menu, the parameters its menu and its animator use, each with its
+     * type, value and default, and the emotes its menu picks. All are empty when the avatar has none.
+     * @function MyAvatar.getAvatarMenu
+     * @returns {object} <code>{menu: {controls: [...]}, parameters: [{name, type, value, default, saved, synced,
+     *     builtin}], emotes: [{parameter, value, name, seated, loop, hold, own}]}</code>
+     */
+    Q_INVOKABLE QVariantMap getAvatarMenu() const;
+
+    /**jsdoc
+     * Sets one of the avatar's parameters (as the menu does), and the avatar follows: clothes shown or
+     * hidden, shape keys and bones set by its effects layer. Others see the change too, in worlds whose avatar
+     * mixer passes avatar menus on.
+     * @function MyAvatar.setAvatarParameter
+     * @param {string} name - The parameter's name.
+     * @param {number} value - Its value; a bool takes 0 or 1.
+     * @returns {boolean} <code>true</code> if the avatar has the parameter.
+     */
+    Q_INVOKABLE bool setAvatarParameter(const QString& name, float value);
+
+    /**jsdoc
+     * Gets one of the avatar's parameters.
+     * @function MyAvatar.getAvatarParameter
+     * @param {string} name - The parameter's name.
+     * @returns {number} Its value, 0 if the avatar has no such parameter.
+     */
+    Q_INVOKABLE float getAvatarParameter(const QString& name) const;
+
+    /**jsdoc
      * Gets the current animation roles.
      * <p>Each avatar has an avatar-animation.json file that defines which animations are used and how they are blended together 
      * with procedural data (such as look at vectors, hand sensors etc.). Each animation specified in the avatar-animation.json 
@@ -879,6 +911,14 @@ public:
      */
     // Removes a handler previously added by addAnimationStateHandler.
     Q_INVOKABLE void removeAnimationStateHandler(QScriptValue handler) { _skeletonModel->getRig().removeAnimationStateHandler(handler); }
+
+    // The same pair for a script on the WebAssembly engine (its functions cross as ScriptCallback values; the
+    // guest maps addAnimationStateHandler and removeAnimationStateHandler to these): the handler's id back.
+    Q_INVOKABLE int addAnimationStateCallback(const ScriptCallback& handler, const QVariant& propertiesList) {
+        const bool useNames = propertiesList.type() == QVariant::List || propertiesList.type() == QVariant::StringList;
+        return _skeletonModel->getRig().addAnimationStateCallback(handler, useNames ? propertiesList.toStringList() : QStringList(), useNames);
+    }
+    Q_INVOKABLE void removeAnimationStateCallback(int handler) { _skeletonModel->getRig().removeAnimationStateCallback(handler); }
 
 
     /**jsdoc
@@ -1392,6 +1432,14 @@ public:
     Q_INVOKABLE QUrl getFullAvatarURLFromPreferences() const { return _fullAvatarURLFromPreferences; }
 
     /**jsdoc
+     * Checks whether the avatar's own model has loaded, with its textures: until then others see, and the user sees in
+     * third person, the stand-in. The loading screen waits for it.
+     * @function MyAvatar.isSkeletonModelLoaded
+     * @returns {boolean} <code>true</code> if the avatar's model and its textures have loaded, <code>false</code> if not.
+     */
+    Q_INVOKABLE bool isSkeletonModelLoaded() const;
+
+    /**jsdoc
      * Gets the full avatar model name for the current avatar.
      * @function MyAvatar.getFullAvatarModelName
      * @returns {string} The full avatar model name.
@@ -1413,6 +1461,9 @@ public:
     // The moving reference frame the avatar is in (PHYSICS.md 4.1): its parent, when that is a frame entity;
     // null in the domain itself. The character then moves in that frame's physics world, in its coordinates.
     QUuid getFrameID() const;
+    // The frame's world orientation; identity outside a frame. The camera, the look-at yaw and the motors are world
+    // rotations, and the character in a frame moves in the frame's coordinates: the inverse takes them there.
+    glm::quat getFrameOrientation() const;
 
     const QString& getCollisionSoundURL() { return _collisionSoundURL; }
     void setCollisionSoundURL(const QString& url);
@@ -1995,6 +2046,14 @@ public:
      * @returns {MyAvatar.FlowData}
      */
     Q_INVOKABLE QVariantMap getFlowData();
+
+    /*@jsdoc
+     * Gets the state of the spring bones of an imported avatar (the .fst's springBones data): whether the solver is
+     * initialized and active, each chain's joint indices by its root joint's name, and the collider count.
+     * @function MyAvatar.getSpringBoneData
+     * @returns {object} The spring-bone state.
+     */
+    Q_INVOKABLE QVariantMap getSpringBoneData();
 
     /**jsdoc
      * Gets the indexes of currently colliding flow joints.
@@ -2717,6 +2776,7 @@ private:
 
     void simulate(float deltaTime, bool inView) override;
     void saveAvatarUrl();
+    void sendAvatarMenuParameters();
     virtual void render(RenderArgs* renderArgs) override;
     virtual bool shouldRenderHead(const RenderArgs* renderArgs) const override;
     void setShouldRenderLocally(bool shouldRender) { _shouldRender = shouldRender; setEnableMeshVisible(shouldRender); }
@@ -2762,6 +2822,8 @@ private:
     bool cameraInsideHead(const glm::vec3& cameraPosition) const;
 
     void updateEyeContactTarget(float deltaTime);
+    glm::vec3 restTheGaze(const glm::vec3& spot, float deltaTime);  // the gaze style's rests and glances
+    glm::vec3 styleHeadAim(const glm::vec3& aimVector, float deltaTime);  // its head lean, follow and nod
 
     // These are made private for MyAvatar so that you will use the "use" methods instead
     /**jsdoc
@@ -2824,10 +2886,21 @@ private:
     AvatarWeakPointer _lookAtTargetAvatar;
     glm::vec3 _targetAvatarPosition;
     bool _shouldRender { true };
+    quint64 _avatarMenuParametersSent { 0 };
     float _oculusYawOffset;
 
     eyeContactTarget _eyeContactTarget;
     float _eyeContactTargetTimer { 0.0f };
+    // the gaze style's rests and nods (restTheGaze, styleHeadAim)
+    glm::vec3 _gazeBase;  // the eyes' spot before the style's rest is added
+    QString _gazeStyleTimed;  // the style the looks and rests are timed for
+    bool _gazeAway { false };
+    float _gazeTimer { 0.0f };
+    float _gazeSide { 1.0f };
+    glm::vec3 _gazeShownDirection;
+    float _gazeShownDistance { 0.0f };
+    bool _gazeShownValid { false };
+    float _gazeNodPhase { 0.0f };
     ThreadSafeValueCache<glm::vec3> _eyesLookAtTarget { glm::vec3() };
     bool _scriptControlsEyesLookAt{ false };
     float _scriptEyesControlTimer{ 0.0f };
@@ -2837,6 +2910,10 @@ private:
     const float MAX_LOOK_AT_TIME_SCRIPT_CONTROL = 2.0f;
     glm::quat _lookAtPitch;
     glm::quat _lookAtYaw;
+    // the frame the look-at yaw was last turned with, and that frame's orientation then (PHYSICS.md 4.4: the camera is
+    // a member of the avatar's frame, so the look-at yaw turns with the frame's heading)
+    QUuid _lookAtFrameID;
+    glm::quat _lookAtFrameOrientation;
     float _lookAtYawSpeed { 0.0f };
     glm::vec3 _lookAtCameraTarget;
     glm::vec3 _lookAtScriptTarget;
@@ -2872,6 +2949,8 @@ private:
     void initHeadBones();
     void initAnimGraph();
     void initFlowFromFST();
+    // the spring bones of an imported avatar, from the .fst's springBones line (and its scale)
+    void initSpringBonesFromFST();
     void updateHeadLookAt(float deltaTime);
     void resetHeadLookAt();
     void resetLookAtRotation(const glm::vec3& avatarPosition, const glm::quat& avatarOrientation);

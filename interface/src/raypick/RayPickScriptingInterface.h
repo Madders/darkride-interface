@@ -132,6 +132,11 @@ public:
      */
     Q_INVOKABLE void setIncludeItems(unsigned int uid, const QScriptValue& includeEntities);
 
+    // setIgnoreItems and setIncludeItems with the IDs as a list, for the WebAssembly script engine (names of their own,
+    // as findRayIntersectionVector has: QtScript would find a same-named overload ambiguous with the QScriptValue one)
+    Q_INVOKABLE void setIgnoreItemsVector(unsigned int uid, const QVector<QUuid>& ignoreEntities);
+    Q_INVOKABLE void setIncludeItemsVector(unsigned int uid, const QVector<QUuid>& includeEntities);
+
 
     /**jsdoc
      * Checks if a pick is associated with the left hand: a ray or parabola pick with <code>joint</code> property set to

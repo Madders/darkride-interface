@@ -19,144 +19,90 @@
 <$declareLightingPoint(supportScattering)$>
 <$declareLightingSpot(supportScattering)$>
 
-// fragWorldPosDx and fragWorldPosDy: dFdx and dFdy of fragWorldPos, taken where control flow is uniform, for the
-// lights' cookies
-vec4 evalLocalLighting(ivec3 cluster, int numLights, vec3 fragWorldPos, vec3 fragWorldPosDx, vec3 fragWorldPosDy,
+// The point and spot lights reaching a fragment: those of its screen tile that are in its depth bin too
+// (LightClusterGrid.slh), each clipped to its volume (and a spot's cone), shadowed and masked by its cookie, then
+// shaded. fragWorldPosDx and fragWorldPosDy: dFdx and dFdy of fragWorldPos, taken where control flow is uniform, for
+// the lights' cookies
+vec4 evalLocalLighting(LightCluster cluster, vec3 fragWorldPos, vec3 fragWorldPosDx, vec3 fragWorldPosDy,
                        SurfaceData surface, float fragMetallic, vec3 fragFresnel, vec3 fragAlbedo, float fragScattering,
                        vec4 midNormalCurvature, vec4 lowNormalCurvature, float opacity) {
     vec4 fragColor = vec4(0.0);
     vec3 fragSpecular = vec3(0.0);
     vec3 fragDiffuse = vec3(0.0);
-    int lightClusterOffset = cluster.z;
 
     // Compute the rougness into gloss2 once:
     bool withScattering = (fragScattering * isScatteringEnabled() > 0.0);
 
-    int numLightTouching = 0;
-    for (int i = 0; i < cluster.x; i++) {
-        // Need the light now
-        int theLightIndex = clusterGrid_getClusterLightId(i, lightClusterOffset);
-        Light light = getLight(theLightIndex);
+    for (int word = cluster.wordMin; word <= cluster.wordMax; word++) {
+        uint bits = lightCluster_word(cluster, word);
+        while (bits != 0u) {
+            int bit = findLSB(bits);
+            bits &= bits - 1u;
+            int theLightIndex = lightCluster_lightIndex((word << 5) + bit);
+            Light light = getLight(theLightIndex);
 
-        // Clip againgst the light volume and Make the Light vector going from fragment to light center in world space
-        vec4 fragLightVecLen2;
-        vec4 fragLightDirLen;
+            // Clip againgst the light volume and Make the Light vector going from fragment to light center in world space
+            vec4 fragLightVecLen2;
+            vec4 fragLightDirLen;
 
-        if (!lightVolume_clipFragToLightVolumePoint(light.volume, fragWorldPos.xyz, fragLightVecLen2)) {
-            continue;
+            if (!lightVolume_clipFragToLightVolumePoint(light.volume, fragWorldPos.xyz, fragLightVecLen2)) {
+                continue;
+            }
+
+            // Allright we re in the light sphere volume
+            fragLightDirLen.w = length(fragLightVecLen2.xyz);
+            fragLightDirLen.xyz = fragLightVecLen2.xyz / fragLightDirLen.w;
+            if (dot(surface.normal, fragLightDirLen.xyz) < 0.0) {
+                continue;
+            }
+
+            // a spot light: its cone, and the falloff across it
+            float angularAttenuation = 1.0;
+            if (light_isSpot(light)) {
+                float cosSpotAngle;
+                if (!lightVolume_clipFragToLightVolumeSpotSide(light.volume, fragLightDirLen, cosSpotAngle)) {
+                    continue;
+                }
+                angularAttenuation = lightIrradiance_evalLightSpotAttenuation(light.irradiance, cosSpotAngle);
+            }
+
+            // the light's shadow (a point light's from the face of its cube the fragment lies in) and its cookie
+            float shadow = evalLocalShadow(theLightIndex, fragWorldPos, surface.normal, fragLightDirLen.xyz, fragLightDirLen.w);
+            if (shadow <= 0.0) {
+                continue;
+            }
+            vec3 cookie = evalLocalCookie(theLightIndex, fragWorldPos, fragWorldPosDx, fragWorldPosDy);
+            if (dot(cookie, vec3(1.0)) <= 0.0) {
+                continue;
+            }
+
+            vec3 diffuse = vec3(1.0);
+            vec3 specular = vec3(0.1);
+
+            // Allright we re valid in the volume
+            float fragLightDistance = fragLightDirLen.w;
+            vec3 fragLightDir = fragLightDirLen.xyz;
+
+            updateSurfaceDataWithLight(surface, fragLightDir);
+
+            // Eval attenuation
+            float radialAttenuation = lightIrradiance_evalLightAttenuation(light.irradiance, fragLightDistance);
+            vec3 lightEnergy = radialAttenuation * angularAttenuation * shadow * cookie * getLightIrradiance(light);
+
+            // Eval shading
+            if (withScattering) {
+                evalFragShadingScattering(diffuse, specular, fragMetallic, fragFresnel, surface, fragAlbedo,
+                                          fragScattering, midNormalCurvature, lowNormalCurvature );
+            } else {
+               evalFragShadingGloss(diffuse, specular, fragMetallic, fragFresnel, surface, fragAlbedo);
+            }
+
+            diffuse *= lightEnergy;
+            specular *= lightEnergy;
+
+            fragDiffuse.rgb += diffuse;
+            fragSpecular.rgb += specular;
         }
-
-        // Allright we re in the light sphere volume
-        fragLightDirLen.w = length(fragLightVecLen2.xyz);
-        fragLightDirLen.xyz = fragLightVecLen2.xyz / fragLightDirLen.w;
-        if (dot(surface.normal, fragLightDirLen.xyz) < 0.0) {
-            continue;
-        }
-
-        // the point light's shadow, from the face of its cube the fragment lies in, and its cookie, a panorama around it
-        float shadow = evalLocalShadow(theLightIndex, fragWorldPos, surface.normal, fragLightDirLen.xyz, fragLightDirLen.w);
-        if (shadow <= 0.0) {
-            continue;
-        }
-        vec3 cookie = evalLocalCookie(theLightIndex, fragWorldPos, fragWorldPosDx, fragWorldPosDy);
-        if (dot(cookie, vec3(1.0)) <= 0.0) {
-            continue;
-        }
-
-        numLightTouching++;
-
-        vec3 diffuse = vec3(1.0);
-        vec3 specular = vec3(0.1);
-
-        // Allright we re valid in the volume
-        float fragLightDistance = fragLightDirLen.w;
-        vec3 fragLightDir = fragLightDirLen.xyz;
-
-        updateSurfaceDataWithLight(surface, fragLightDir);
-
-        // Eval attenuation
-        float radialAttenuation = lightIrradiance_evalLightAttenuation(light.irradiance, fragLightDistance);
-        vec3 lightEnergy = radialAttenuation * shadow * cookie * getLightIrradiance(light);
-
-        // Eval shading
-        if (withScattering) {
-            evalFragShadingScattering(diffuse, specular, fragMetallic, fragFresnel, surface, fragAlbedo,
-                                      fragScattering, midNormalCurvature, lowNormalCurvature );
-        } else {
-           evalFragShadingGloss(diffuse, specular, fragMetallic, fragFresnel, surface, fragAlbedo);
-        }
-
-        diffuse *= lightEnergy;
-        specular *= lightEnergy;
-
-        fragDiffuse.rgb += diffuse;
-        fragSpecular.rgb += specular;
-    }
-
-    for (int i = cluster.x; i < numLights; i++) {
-        // Need the light now
-        int theLightIndex = clusterGrid_getClusterLightId(i, lightClusterOffset);
-        Light light = getLight(theLightIndex);
-
-        // Clip againgst the light volume and Make the Light vector going from fragment to light center in world space
-        vec4 fragLightVecLen2;
-        vec4 fragLightDirLen;
-        float cosSpotAngle;
-
-        if (!lightVolume_clipFragToLightVolumePoint(light.volume, fragWorldPos.xyz, fragLightVecLen2)) {
-            continue;
-        }
-
-        // Allright we re in the light sphere volume
-        fragLightDirLen.w = length(fragLightVecLen2.xyz);
-        fragLightDirLen.xyz = fragLightVecLen2.xyz / fragLightDirLen.w;
-        if (dot(surface.normal, fragLightDirLen.xyz) < 0.0) {
-            continue;
-        }
-
-        // Check spot
-        if (!lightVolume_clipFragToLightVolumeSpotSide(light.volume, fragLightDirLen, cosSpotAngle)) {
-            continue;
-        }
-
-        float shadow = evalLocalShadow(theLightIndex, fragWorldPos, surface.normal, fragLightDirLen.xyz, fragLightDirLen.w);
-        if (shadow <= 0.0) {
-            continue;
-        }
-        vec3 cookie = evalLocalCookie(theLightIndex, fragWorldPos, fragWorldPosDx, fragWorldPosDy);
-        if (dot(cookie, vec3(1.0)) <= 0.0) {
-            continue;
-        }
-
-        numLightTouching++;
-
-        vec3 diffuse = vec3(1.0);
-        vec3 specular = vec3(0.1);
-
-        // Allright we re valid in the volume
-        float fragLightDistance = fragLightDirLen.w;
-        vec3 fragLightDir = fragLightDirLen.xyz;
-
-        updateSurfaceDataWithLight(surface, fragLightDir);
-
-        // Eval attenuation
-        float radialAttenuation = lightIrradiance_evalLightAttenuation(light.irradiance, fragLightDistance);
-        float angularAttenuation = lightIrradiance_evalLightSpotAttenuation(light.irradiance, cosSpotAngle);
-        vec3 lightEnergy = radialAttenuation * angularAttenuation * shadow * cookie * getLightIrradiance(light);
-
-        // Eval shading
-        if (withScattering) {
-            evalFragShadingScattering(diffuse, specular, fragMetallic, fragFresnel, surface, fragAlbedo,
-                                      fragScattering, midNormalCurvature, lowNormalCurvature );
-        } else {
-           evalFragShadingGloss(diffuse, specular, fragMetallic, fragFresnel, surface, fragAlbedo);
-        }
-
-        diffuse *= lightEnergy;
-        specular *= lightEnergy;
-
-        fragDiffuse.rgb += diffuse;
-        fragSpecular.rgb += specular;
     }
 
     fragDiffuse *= isDiffuseEnabled();
@@ -166,4 +112,3 @@ vec4 evalLocalLighting(ivec3 cluster, int numLights, vec3 fragWorldPos, vec3 fra
     fragColor.rgb += evalSpecularWithOpacity(fragSpecular, opacity);
     return fragColor;
 }
-

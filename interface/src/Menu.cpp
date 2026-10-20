@@ -10,6 +10,10 @@
 //
 
 #include "Menu.h"
+
+#include <gpu/Context.h>
+
+#include <Mirrors.h>
 #include <QDesktopServices>
 #include <QFileDialog>
 #include <QMenuBar>
@@ -28,11 +32,15 @@
 #include <UserActivityLogger.h>
 #include <VrMenu.h>
 #include <ScriptEngines.h>
+#include <WasmScriptEngine.h>
 #include <MenuItemProperties.h>
 #include <ui/types/FileTypeProfile.h>
 #include <ui/types/TivoliWebEngineProfile.h>
 
 #include "Application.h"
+#include "LODManager.h"
+#include <RenderableModelEntityItem.h>
+#include <ToneMapAndResampleTask.h>
 #include "AccountManager.h"
 #include "assets/ATPAssetMigrator.h"
 #include "audio/AudioScope.h"
@@ -65,6 +73,8 @@
 extern bool DEV_DECIMATE_TEXTURES;
 
 Menu* Menu::getInstance() {
+    // At quit a script thread can still ask for the menu after the application object is gone: there is none then.
+    if (qApp == nullptr) return nullptr;
     MainWindow* window = qApp->getWindow();
     if (window == nullptr) return nullptr;
     QMenuBar* menuBar = window->menuBar();
@@ -300,6 +310,18 @@ Menu::Menu() {
         buildMenu->addSeparator();
         editor->addMenuAction(addActionToQMenuAndActionHash(buildMenu, MenuOption::BuildResetPanels, 0,
             editor.data(), SLOT(resetLayout())));
+        buildMenu->addSeparator();
+        // Build > Use Stable Links: the world's links to your files by path become their stable links (NATIVE-EDITOR.md 7.4)
+        editor->addMenuAction(addActionToQMenuAndActionHash(buildMenu, MenuOption::BuildUseStableLinks, 0,
+            editor.data(), SLOT(useStableLinks())));
+        // Build > Bake Impostor: the selected entities' replacement cards (IMPOSTORS.md 2.2); Bake All Impostors:
+        // every prop of the world without one; Remove Impostor: the selected entities' entries
+        editor->addMenuAction(addActionToQMenuAndActionHash(buildMenu, MenuOption::BuildBakeImpostor, 0,
+            editor.data(), SLOT(bakeImpostor())));
+        editor->addMenuAction(addActionToQMenuAndActionHash(buildMenu, MenuOption::BuildBakeAllImpostors, 0,
+            editor.data(), SLOT(bakeAllImpostors())));
+        editor->addMenuAction(addActionToQMenuAndActionHash(buildMenu, MenuOption::BuildRemoveImpostor, 0,
+            editor.data(), SLOT(removeImpostor())));
     }
 
     //TODO: Remove Navigation menu when these functions are included in GoTo menu
@@ -428,8 +450,8 @@ Menu::Menu() {
     MenuWrapper* developerMenu = addMenu("Developer", "Developer");
     
 
-    // Developer > Tivoli Options >>>
-    MenuWrapper* tivoliOptionsMenu = developerMenu->addMenu("Tivoli Options");
+    // Developer > Darkride Options >>>
+    MenuWrapper* tivoliOptionsMenu = developerMenu->addMenu("Darkride Options");
 
     addCheckableActionToQMenuAndActionHash(tivoliOptionsMenu, MenuOption::StopRendering);
 
@@ -437,7 +459,7 @@ Menu::Menu() {
                                                     qApp->getLoadCompleteEntityTreeSetting());
  
 
-    //// Developer > Tivoli Options > Test Zone Culling (test)
+    //// Developer > Darkride Options > Test Zone Culling (test)
     //addCheckableActionToQMenuAndActionHash(tivoliOptionsMenu, MenuOption::TestZoneCulling, 0, false);
 
 
@@ -495,6 +517,12 @@ Menu::Menu() {
     // Developer > Scripting > Verbose Logging
     addCheckableActionToQMenuAndActionHash(scriptingOptionsMenu, MenuOption::VerboseLogging, 0, false,
                                            qApp, SLOT(updateVerboseLogging()));
+
+    // Developer > Scripting > Run JavaScript on WebAssembly (which engine a .js client script loads on; takes effect
+    // for scripts loaded after the change)
+    addCheckableActionToQMenuAndActionHash(scriptingOptionsMenu, MenuOption::RunJavaScriptOnWebAssembly,
+                                           [](bool checked) { WasmScriptEngine::setRunJavaScriptOnWebAssembly(checked); },
+                                           0, WasmScriptEngine::runJavaScriptOnWebAssembly());
     
     // Developer > Scripting > Enable Speech Control API
 #if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
@@ -541,6 +569,44 @@ Menu::Menu() {
     addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::AmbientOcclusion, 0, RenderScriptingInterface::getInstance()->getAmbientOcclusionEnabled(),
         RenderScriptingInterface::getInstance(), SLOT(setAmbientOcclusionEnabled(bool)));
 
+    // Developer > Render > Forward Rendering: the forward path (Forward+: the point and spot lights with their shadows
+    // and cookies, and the sun's cascades, shaded in one multisampled pass), the default since 2026-10-16; off,
+    // deferred, for what it alone has (ambient occlusion, temporal antialiasing, scattering). The item shows the
+    // method in use, whoever set it (a preset, a script, the setting)
+    action = addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::RenderForward, 0,
+        RenderScriptingInterface::getInstance()->getRenderMethod() == RenderScriptingInterface::RenderMethod::FORWARD);
+    connect(action, &QAction::triggered, [action] {
+        RenderScriptingInterface::getInstance()->setRenderMethod(action->isChecked() ?
+            RenderScriptingInterface::RenderMethod::FORWARD : RenderScriptingInterface::RenderMethod::DEFERRED);
+    });
+    connect(RenderScriptingInterface::getInstance(), &RenderScriptingInterface::settingsChanged, action, [action] {
+        // the method changed by another road (a preset, a script): the item follows
+        action->setChecked(RenderScriptingInterface::getInstance()->getRenderMethod() == RenderScriptingInterface::RenderMethod::FORWARD);
+    });
+
+    // Developer > Render > MSAA (Forward): the forward path's multisampling, 1, 2, 4 or 8 samples a pixel (the
+    // graphics presets set it: Potato 1, Low 2, Medium and High 4); the setting behind it is Render.msaaSamples
+    {
+        MenuWrapper* msaaMenu = renderOptionsMenu->addMenu(MenuOption::RenderMsaaMenu);
+        QActionGroup* msaaGroup = new QActionGroup(msaaMenu);
+        msaaGroup->setExclusive(true);
+        auto renderInterface = RenderScriptingInterface::getInstance();
+        const std::vector<std::pair<QString, int>> choices = {
+            { MenuOption::RenderMsaaOff, 1 }, { MenuOption::RenderMsaa2, 2 }, { MenuOption::RenderMsaa4, 4 }, { MenuOption::RenderMsaa8, 8 }
+        };
+        const int maxSamples = gpu::Context::getMaxSamples();   // known: the GL backend is up before the menu
+        for (const auto& choice : choices) {
+            const int samples = choice.second;
+            auto msaaAction = msaaGroup->addAction(addCheckableActionToQMenuAndActionHash(msaaMenu, choice.first, 0,
+                renderInterface->getMsaaSamples() == samples));
+            msaaAction->setEnabled(maxSamples <= 0 || samples <= maxSamples);   // what this GPU cannot do is greyed
+            connect(msaaAction, &QAction::triggered, [samples] { RenderScriptingInterface::getInstance()->setMsaaSamples(samples); });
+            connect(renderInterface, &RenderScriptingInterface::settingsChanged, msaaAction, [msaaAction, samples] {
+                msaaAction->setChecked(RenderScriptingInterface::getInstance()->getMsaaSamples() == samples);
+            });
+        }
+    }
+
     // Developer > Render > Cache Light Shadows: off, a spot or point light's shadow maps are drawn every frame, for
     // comparing
     action = addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::LocalShadowCaching, 0, true);
@@ -564,6 +630,44 @@ Menu::Menu() {
                 config->setStaticCaching(action->isChecked());
             }
         }
+    });
+    // Developer > Render > Mirrors: mirror shapes show their reflection (Mirrors.h); off, they show their colour
+    action = addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::Mirrors, 0, true);
+    connect(action, &QAction::triggered, [action] { Mirrors::instance().setEnabled(action->isChecked()); });
+    // Developer > Render > Half-Resolution Mirrors: a mirror's picture at half its size on screen, a quarter of the cost
+    action = addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::MirrorsHalfResolution, 0, false);
+    connect(action, &QAction::triggered, [action] { Mirrors::instance().setResolutionScale(action->isChecked() ? 0.5f : 1.0f); });
+
+    // Developer > Render > Impostor Cards: entities with an impostor card draw it at a distance (IMPOSTORS.md); off,
+    // every entity draws its model. Not saved.
+    action = addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::ImpostorCards, 0, true);
+    connect(action, &QAction::triggered, [action] {
+        DependencyManager::get<LODManager>()->setImpostorsEnabled(action->isChecked());
+    });
+    // Developer > Render > Automatic LODs: meshes draw their simplified versions where those look the same
+    // (AUTOMATIC-LODS.md); off, every mesh draws in full. Not saved.
+    action = addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::AutomaticLods, 0, true);
+    connect(action, &QAction::triggered, [action] {
+        DependencyManager::get<LODManager>()->setMeshLodsEnabled(action->isChecked());
+    });
+    // Developer > Render > Show Impostors and LODs: every card tinted blue, and what the view draws of the thing at its
+    // centre, card or model and its LOD level, written at the top of the view (scripts/system/impostorLodView.js reads
+    // LODManager.showImpostorsAndLods). Not saved.
+    action = addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::ShowImpostorsAndLods, 0, false);
+    connect(action, &QAction::triggered, [action] {
+        DependencyManager::get<LODManager>()->setShowImpostorsAndLods(action->isChecked());
+    });
+    // Developer > Render > Show Models Still Loading: a model whose file hasn't loaded yet, or failed to, shows as a
+    // magenta wire box where it will be, as High Fidelity always drew it; off, nothing shows there until it's ready
+    action = addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::ShowModelsStillLoading, 0, false);
+    connect(action, &QAction::triggered, [action] {
+        render::entities::ModelEntityRenderer::setShowModelsStillLoading(action->isChecked());
+    });
+    // Developer > Render > Show NaN Pixels: a fragment whose shading came out NaN (not a number) is painted magenta, so
+    // the fault can be found; off, it is black, which players barely notice
+    action = addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::ShowNaNPixels, 0, false);
+    connect(action, &QAction::triggered, [action] {
+        ToneMapAndResample::setShowNaNPixels(action->isChecked());
     });
 
     addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::WorldAxes);
@@ -917,46 +1021,36 @@ Menu::Menu() {
     // Help/Application menu ----------------------------------
     MenuWrapper * helpMenu = addMenu("Help");
 
-    action = addActionToQMenuAndActionHash(helpMenu, "About Tivoli Cloud VR");
+    action = addActionToQMenuAndActionHash(helpMenu, "About Darkride");
     connect(action, &QAction::triggered, [] {
         qApp->showDialog(QString("hifi/dialogs/AboutDialog.qml"),
             QString("hifi/dialogs/TabletAboutDialog.qml"), "AboutDialog");
     });
     helpMenu->addSeparator();
 
-    // Help > Online Documentation
+    // Help > Online Documentation, JavaScript API Reference, Changelog and Report a Bug stay greyed out until
+    // Darkride has those pages (Tivoli's are gone)
     action = addActionToQMenuAndActionHash(helpMenu, "Online Documentation");
-    connect(action, &QAction::triggered, qApp, [] {
-        QDesktopServices::openUrl(QUrl("https://docs.tivolicloud.com/"));
-    });
+    action->setEnabled(false);
 
     // Help > Discord Server
     action = addActionToQMenuAndActionHash(helpMenu, "Discord Server");
     connect(action, &QAction::triggered, qApp, [] {
-        QDesktopServices::openUrl(QUrl("https://tivolicloud.com/discord"));
+        QDesktopServices::openUrl(QUrl("https://discord.gg/fQqG7dT9wY"));
     });
 
-    // Help > JavaScript API Reference
     action = addActionToQMenuAndActionHash(helpMenu, "JavaScript API Reference");
-    connect(action, &QAction::triggered, qApp, [] {
-        QDesktopServices::openUrl(QUrl("https://apidocs.tivolicloud.com/"));
-    });
+    action->setEnabled(false);
 
     addActionToQMenuAndActionHash(helpMenu, "Controls Reference", 0, qApp, SLOT(showHelp()));
 
     helpMenu->addSeparator();
 
-    // Help > Changelog
     action = addActionToQMenuAndActionHash(helpMenu, "Changelog");
-    connect(action, &QAction::triggered, qApp, [] {
-        QDesktopServices::openUrl(QUrl("https://docs.tivolicloud.com/changelog/"));
-    });
+    action->setEnabled(false);
 
-    // Help > Report a bug!
-    action = addActionToQMenuAndActionHash(helpMenu, "Report a bug!");
-    connect(action, &QAction::triggered, qApp, [] {
-        QDesktopServices::openUrl(QUrl("https://git.tivolicloud.com/tivolicloud/issues"));
-    });
+    action = addActionToQMenuAndActionHash(helpMenu, "Report a Bug");
+    action->setEnabled(false);
 }
 
 void Menu::addMenuItem(const MenuItemProperties& properties) {

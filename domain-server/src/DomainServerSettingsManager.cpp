@@ -1003,21 +1003,18 @@ void DomainServerSettingsManager::processUsernameFromIDRequestPacket(QSharedPoin
             // Write the UUID to the packet
             usernameFromIDReplyPacket->write(nodeUUID.toRfc4122());
 
-            // Check if the sending node has permission to kick (is an admin)
-            // OR if the message is from a node whose UUID matches the one in the packet
-            if (sendingNode->getCanKick() || nodeUUID == sendingNode->getUUID()) {
-                // It's time to figure out the username
-                verifiedUsername = matchingNode->getPermissions().getVerifiedUserName();
-                usernameFromIDReplyPacket->writeString(verifiedUsername);
+            // Everyone in this domain may know which account each session in it signed in with: the account was
+            // checked when it connected, and it is the name its tag shows. The client asks so that names and AI
+            // residents' marks come from this check, not from a list of who is where on the metaverse.
+            verifiedUsername = matchingNode->getPermissions().getVerifiedUserName();
+            usernameFromIDReplyPacket->writeString(verifiedUsername);
 
-                // now put in the machine fingerprint
+            // The machine fingerprint only for those who may kick (admins), or a node asking about itself
+            if (sendingNode->getCanKick() || nodeUUID == sendingNode->getUUID()) {
                 DomainServerNodeData* nodeData = static_cast<DomainServerNodeData*>(matchingNode->getLinkedData());
                 machineFingerprint = nodeData ? nodeData->getMachineFingerprint() : QUuid();
-                usernameFromIDReplyPacket->write(machineFingerprint.toRfc4122());
-            } else {
-                usernameFromIDReplyPacket->writeString(verifiedUsername);
-                usernameFromIDReplyPacket->write(machineFingerprint.toRfc4122());
             }
+            usernameFromIDReplyPacket->write(machineFingerprint.toRfc4122());
             // Write whether or not the user is an admin
             bool isAdmin = matchingNode->getCanKick();
             usernameFromIDReplyPacket->writePrimitive(isAdmin);

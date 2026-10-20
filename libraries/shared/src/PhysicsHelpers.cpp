@@ -96,6 +96,16 @@ void Physics::setSessionUUID(const QUuid& sessionID) {
     _sessionID = sessionID.isNull() ? AVATAR_SELF_ID : sessionID;
 }
 
+static bool _serverAuthority { false };
+
+void Physics::setServerAuthority(bool authority) {
+    _serverAuthority = authority;
+}
+
+bool Physics::isServerAuthority() {
+    return _serverAuthority;
+}
+
 const QUuid& Physics::getSessionUUID() {
     return _sessionID;
 }

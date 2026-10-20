@@ -122,7 +122,7 @@ if (APPLE)
   # configure CMake to use a custom Info.plist
   set_target_properties(${this_target} PROPERTIES MACOSX_BUNDLE_INFO_PLIST MacOSXBundleInfo.plist.in)
 
-  set(MACOSX_BUNDLE_BUNDLE_NAME "Tivoli Cloud VR")
+  set(MACOSX_BUNDLE_BUNDLE_NAME "Darkride")
   if (PRODUCTION_BUILD)
     set(MACOSX_BUNDLE_GUI_IDENTIFIER com.tivolicloud.interface)
   else ()
@@ -151,7 +151,13 @@ endif ()
 if (APPLE)
   add_executable(${TARGET_NAME} MACOSX_BUNDLE ${INTERFACE_SRCS} ${QM})
 
-  # make sure the output name for the .app bundle is correct
+  # the bundle and the program are named for Darkride (Darkride.app, Contents/MacOS/Darkride); the CMake target
+  # stays "interface"
+  set_target_properties(${TARGET_NAME} PROPERTIES OUTPUT_NAME "${INTERFACE_BUNDLE_NAME}")
+  if (NOT INTERFACE_BUNDLE_NAME STREQUAL "interface" AND EXISTS "${CMAKE_CURRENT_BINARY_DIR}/interface.app")
+    message(WARNING "${CMAKE_CURRENT_BINARY_DIR}/interface.app is left from before the client became "
+      "${INTERFACE_BUNDLE_NAME}.app and is no longer built; delete it once no client runs from it")
+  endif ()
   # Fix up the rpath so macdeployqt works
   set_target_properties(${TARGET_NAME} PROPERTIES INSTALL_RPATH "@executable_path/../Frameworks")
 elseif (WIN32)
@@ -160,12 +166,14 @@ elseif (WIN32)
   set(CONFIGURE_ICON_RC_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/Icon.rc")
   configure_file("${HF_CMAKE_DIR}/templates/Icon.rc.in" ${CONFIGURE_ICON_RC_OUTPUT})
 
-  set(APP_FULL_NAME "Tivoli Cloud VR")
+  set(APP_FULL_NAME "Darkride")
   set(CONFIGURE_VERSION_INFO_RC_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/VersionInfo.rc")
   configure_file("${HF_CMAKE_DIR}/templates/VersionInfo.rc.in" ${CONFIGURE_VERSION_INFO_RC_OUTPUT})
 
   # add an executable that also has the icon itself and the configured rc file as resources
   add_executable(${TARGET_NAME} WIN32 ${INTERFACE_SRCS} ${QM} ${CONFIGURE_ICON_RC_OUTPUT} ${CONFIGURE_VERSION_INFO_RC_OUTPUT})
+  # the program is Darkride.exe; the CMake target stays "interface"
+  set_target_properties(${TARGET_NAME} PROPERTIES OUTPUT_NAME "${INTERFACE_BUNDLE_NAME}")
 
   if (NOT DEV_BUILD)
     add_custom_command(
@@ -215,9 +223,9 @@ link_hifi_libraries(
   shared workload task octree ktx gpu gl procedural graphics graphics-scripting render
   pointers recording hfm fbx networking material-networking
   model-networking model-baker entities avatars
-  audio audio-client animation script-engine physics vehicles
+  audio audio-client animation script-engine wasm-scripting physics vehicles
   render-utils entities-renderer avatars-renderer ui qml auto-updater midi terrain
-  controllers plugins image platform auto-rigging
+  controllers plugins image platform auto-rigging unity-import
   ui-plugins display-plugins input-plugins
   # Platform specific GL libraries
   ${PLATFORM_GL_BACKEND}
@@ -429,6 +437,9 @@ else()
     optional_win_executable_signing()
   endif()
 endif()
+
+# the JavaScript guest of the WebAssembly script engine, beside the other resources
+copy_javascript_guest("${RESOURCES_DEV_DIR}")
 
 if (DEV_BUILD AND (APPLE OR UNIX))
   # create a qt.conf file to override hard-coded search paths in Qt libs

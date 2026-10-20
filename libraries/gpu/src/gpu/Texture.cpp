@@ -87,6 +87,10 @@ void Storage::assignTexture(Texture* texture) {
     }
 }
 
+uint16 Texture::Storage::getNumFaces() const {
+    return _texture ? _texture->getNumStoredFaces() : Texture::NUM_FACES_PER_TYPE[_type];
+}
+
 void MemoryStorage::reset() {
     _mips.clear();
     bumpStamp();
@@ -116,7 +120,7 @@ bool MemoryStorage::isMipAvailable(uint16 level, uint8 face) const {
 }
 
 void MemoryStorage::allocateMip(uint16 level) {
-    auto faceCount = Texture::NUM_FACES_PER_TYPE[getType()];
+    auto faceCount = getNumFaces();
     if (level >= _mips.size()) {
         _mips.resize(level + 1, std::vector<PixelsPointer>(faceCount));
     }
@@ -132,7 +136,7 @@ void MemoryStorage::assignMipData(uint16 level, const storage::StoragePointer& s
     allocateMip(level);
     auto& mip = _mips[level];
 
-    auto faceCount = Texture::NUM_FACES_PER_TYPE[getType()];
+    auto faceCount = getNumFaces();
 
     // here we grabbed an array of faces
     // The bytes assigned here are supposed to contain all the faces bytes of the mip.
@@ -204,11 +208,16 @@ TexturePointer Texture::createStrict(const Element& texelFormat, uint16 width, u
 }
 
 TexturePointer Texture::create3D(const Element& texelFormat, uint16 width, uint16 height, uint16 depth, uint16 numMips, const Sampler& sampler) {
-    return create(TextureUsageType::RESOURCE, TEX_3D, texelFormat, width, height, depth, 1, 0, numMips, sampler);
+    // a strict resource: the volume is uploaded whole from its stored mip (no streaming of a 3D texture)
+    return create(TextureUsageType::STRICT_RESOURCE, TEX_3D, texelFormat, width, height, depth, 1, 0, numMips, sampler);
 }
 
 TexturePointer Texture::createCube(const Element& texelFormat, uint16 width, uint16 numMips, const Sampler& sampler) {
     return create(TextureUsageType::RESOURCE, TEX_CUBE, texelFormat, width, width, 1, 1, 0, numMips, sampler);
+}
+
+TexturePointer Texture::createCubeArray(const Element& texelFormat, uint16 width, uint16 numSlices, uint16 numMips, const Sampler& sampler) {
+    return create(TextureUsageType::STRICT_RESOURCE, TEX_CUBE, texelFormat, width, width, 1, 1, numSlices, numMips, sampler);
 }
 
 TexturePointer Texture::create(TextureUsageType usageType, Type type, const Element& texelFormat, uint16 width, uint16 height, uint16 depth, uint16 numSamples, uint16 numSlices, uint16 numMips, const Sampler& sampler)

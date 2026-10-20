@@ -61,6 +61,10 @@
  *     rather than Interface clients. The result is unique among all avatars present in the domain at the time.
  * @property {boolean} lookAtSnappingEnabled=true - <code>true</code> if the avatar's eyes snap to look at another avatar's
  *     eyes when the other avatar is in the line of sight and also has <code>lookAtSnappingEnabled == true</code>.
+ * @property {string} gazeStyle="calm" - How the avatar's eyes behave, for everyone to see: <code>"calm"</code>,
+ *     <code>"excited"</code>, <code>"shy"</code>, <code>"sleepy"</code> or <code>"intent"</code>. A style sets how often
+ *     and how far the eyes dart, where they rest and how much they meet other people's eyes, what the head does with
+ *     them, and how the lids blink.
  * @property {string} skeletonModelURL - The avatar's FST file.
  * @property {AttachmentData[]} attachmentData - Information on the avatar's attachments. 
  *     <p class="important">Deprecated: This property is deprecated and will be removed. Use avatar entities instead.</p>

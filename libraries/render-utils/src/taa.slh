@@ -116,6 +116,7 @@ vec2 taa_fetchVelocityMap(vec2 uv) {
     return texture(velocityMap, uv).xy;
 }
 
+// reversed-Z: the nearest fragment has the greatest depth, so the smallest value here is the nearest
 float taa_fetchDepth(vec2 uv) {
     return -texture(depthMap, vec2(uv), 0.0).x;
 }

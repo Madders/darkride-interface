@@ -15,6 +15,7 @@
 var paths = [];
 var idCounter = 0;
 var imageCount = 0;
+var isShowingSetupInstructions = false;
 var blastShareText = "Blast to my Connections",
     blastAlreadySharedText = "Already Blasted to Connections",
     hifiShareText = "Share to Snaps Feed",
@@ -33,14 +34,16 @@ function showSetupInstructions() {
     snapshotImagesDiv.className = "snapshotInstructions";
     snapshotImagesDiv.innerHTML = '<img class="centeredImage" src="./img/snapshotIcon.png" alt="Snapshot Instructions" width="64" height="64"/>' +
         '<br/>' +
-        '<p>Take and share snaps and GIFs with people in High Fidelity, Facebook, and Twitter.</p>' +
+        '<p>Take Snaps and GIFs; signed in, they\'re kept in your My Files, in Snapshots.</p>' +
         "<h4>Setup Instructions</h4>" +
-        "<p>Before you can begin taking snaps, please choose where you'd like to save snaps on your computer:</p>" +
+        "<p>Sign in to keep your Snaps in My Files, or choose where you'd like to save them on this computer:</p>" +
         '<br/>' +
         '<div style="text-align:center;">' +
-            '<input class="blueButton" style="margin-left:auto;margin-right:auto;width:130px;" type="button" value="CHOOSE" onclick="chooseSnapshotLocation()" />' +
+            '<input class="blueButton" style="margin-right:20px;width:130px;" type="button" value="SIGN IN" onclick="login()" />' +
+            '<input class="blueButton" style="width:130px;" type="button" value="CHOOSE" onclick="chooseSnapshotLocation()" />' +
         '</div>';
     document.getElementById("snap-button").disabled = true;
+    isShowingSetupInstructions = true;
 }
 function showSetupComplete() {
     var snapshotImagesDiv = document.getElementById("snapshot-images");
@@ -49,19 +52,20 @@ function showSetupComplete() {
         '<br/>' +
         '<div style="text-align:center;font-weight:bold;">' +
             '<p>Snapshot location set.</p>' +
-            '<p>Press the big red button to take a snap!</p>' +
+            '<p>Press the big red button to take a Snap!</p>' +
         '</div>';
     document.getElementById("snap-button").disabled = false;
+    isShowingSetupInstructions = false;
 }
 function showSnapshotInstructions() {
     var snapshotImagesDiv = document.getElementById("snapshot-images");
     snapshotImagesDiv.className = "snapshotInstructions";
     snapshotImagesDiv.innerHTML = '<img class="centeredImage" src="./img/snapshotIcon.png" alt="Snapshot Instructions" width="64" height="64"/>' +
         '<br/>' +
-        '<p>Take and share snaps and GIFs with people in High Fidelity, Facebook, and Twitter.</p>' +
+        '<p>Take Snaps and GIFs; they\'re kept in your My Files, in Snapshots.</p>' +
         '<br/>' +
         '<div style="text-align:center;font-weight:bold;">' +
-            '<p>Press the big red button to take a snap!</p>' +
+            '<p>Press the big red button to take a Snap!</p>' +
         '</div>';
 }
 function chooseSnapshotLocation() {
@@ -289,6 +293,37 @@ function shareForUrl(selectedID) {
         data: paths[parseInt(selectedID.substring(1), 10)]
     }));
 }
+// A line under a snap that says where it went: My Files, or this computer and why.
+function addStoredCaption(id, caption) {
+    var element = document.createElement("DIV");
+    element.id = id + "stored";
+    element.className = "snapStored";
+    element.textContent = caption || "";
+    document.getElementById("snapshot-images").appendChild(element);
+}
+function setStoredCaption(id, caption) {
+    var element = document.getElementById(id + "stored");
+    if (element) {
+        element.textContent = caption || "";
+    }
+}
+// Where a snap went after it was taken. In My Files it shows from there, since its copy on this computer is gone; on
+// this computer it may have moved out of the folder it waited in for its upload.
+function snapshotStored(takenPath, location, caption) {
+    ["p0", "p1"].forEach(function (id, index) {
+        var container = document.getElementById(id);
+        if (!container || container.getAttribute("data-taken-path") !== takenPath) {
+            return;
+        }
+        var img = document.getElementById(id + "img");
+        if (img && img.getAttribute("src") !== location) {
+            img.onload = null; // what the first load set up stays
+            img.src = location;
+        }
+        paths[index] = location;
+        setStoredCaption(id, caption);
+    });
+}
 function addImage(image_data, isLoggedIn, canShare, isGifLoading, isShowingPreviousImages, blastButtonDisabled, hifiButtonDisabled, canBlast) {
     if (!image_data.localPath) {
         return;
@@ -308,7 +343,9 @@ function addImage(image_data, isLoggedIn, canShare, isGifLoading, isShowingPrevi
     img.id = id + "img";
     img.src = image_data.localPath;
     imageContainer.appendChild(img);
+    imageContainer.setAttribute("data-taken-path", image_data.takenPath || image_data.localPath);
     document.getElementById("snapshot-images").appendChild(imageContainer);
+    addStoredCaption(id, image_data.caption);
     paths.push(image_data.localPath);
     img.onload = function () {
         if (isGif) {
@@ -644,9 +681,6 @@ function handleNametagsSetting(setting) {
 }
 
 window.onload = function () {
-    // Uncomment the line below to test functionality in a browser.
-    // See definition of "testInBrowser()" to modify tests.
-    //testInBrowser(4);
     openEventBridge(function () {
         // Set up a handler for receiving the data, and tell the .js we are ready to receive it.
         EventBridge.scriptEventReceived.connect(function (message) {
@@ -672,6 +706,11 @@ window.onload = function () {
                     break;
                 case 'showPreviousImages':
                     clearImages();
+                    if (isShowingSetupInstructions) {
+                        // signed in since: snaps go to My Files
+                        document.getElementById("snap-button").disabled = false;
+                        isShowingSetupInstructions = false;
+                    }
                     imageCount = message.image_data.length;
                     if (imageCount > 0) {
                         message.image_data.forEach(function (element, idx) {
@@ -698,6 +737,9 @@ window.onload = function () {
                             var gifPath = message.image_data[0].localPath,
                                 p1img = document.getElementById('p1img');
                             p1img.src = gifPath;
+                            document.getElementById("p1").setAttribute("data-taken-path",
+                                message.image_data[0].takenPath || gifPath);
+                            setStoredCaption("p1", message.image_data[0].caption);
 
                             paths[1] = gifPath;
                             shareForUrl("p1");
@@ -727,6 +769,9 @@ window.onload = function () {
                     break;
                 case 'setPrintButtonDisabled':
                     setPrintButtonDisabled();
+                    break;
+                case 'snapshotStored':
+                    snapshotStored(message.takenPath, message.location, message.caption);
                     break;
                 case 'snapshotUploadComplete':
                     var isGif = fileExtensionMatches(message.image_url, "gif");
@@ -812,31 +857,4 @@ function printToPolaroid() {
     } else {
         setPrintButtonLoading();
     }
-}
-
-function testInBrowser(test) {
-    if (test === 0) {
-        showSetupInstructions();
-    } else if (test === 1) {
-        imageCount = 2;
-        //addImage({ localPath: 'http://lorempixel.com/553/255' });
-        addImage({ localPath: 'D:/Dropbox/Screenshots/High Fidelity Snapshots/hifi-snap-by-zfox-on-2017-05-01_13-28-58.jpg', story_id: 1338 }, true, true, false, true, false, false, true);
-        addImage({ localPath: 'D:/Dropbox/Screenshots/High Fidelity Snapshots/hifi-snap-by-zfox-on-2017-05-01_13-28-58.gif', story_id: 1337 }, true, true, false, true, false, false, true);
-    } else if (test === 2) {
-        addImage({ localPath: 'D:/Dropbox/Screenshots/High Fidelity Snapshots/hifi-snap-by-zfox-on-2017-05-01_13-28-58.jpg', story_id: 1338 }, true, true, false, true, false, false, true);
-        addImage({ localPath: 'D:/Dropbox/Screenshots/High Fidelity Snapshots/hifi-snap-by-zfox-on-2017-05-01_13-28-58.gif', story_id: 1337 }, true, true, false, true, false, false, true);
-        showConfirmationMessage("p0", 'blast');
-        showConfirmationMessage("p1", 'hifi');
-    } else if (test === 3) {
-        imageCount = 2;
-        //addImage({ localPath: 'http://lorempixel.com/553/255' });
-        addImage({ localPath: 'D:/Dropbox/Screenshots/High Fidelity Snapshots/hifi-snap-by-zfox-on-2017-05-01_13-28-58.jpg', story_id: 1338 }, true, true, false, true, false, false, true);
-        addImage({ localPath: 'D:/Dropbox/Screenshots/High Fidelity Snapshots/hifi-snap-by-zfox-on-2017-05-01_13-28-58.gif', story_id: 1337 }, true, true, false, true, false, false, true);
-        showUploadingMessage("p0", 'hifi');
-    } else if (test === 4) {
-    imageCount = 2;
-    //addImage({ localPath: 'http://lorempixel.com/553/255' });
-    addImage({ localPath: 'D:/Dropbox/Screenshots/High Fidelity Snapshots/hifi-snap-by-zfox-on-2017-05-01_13-28-58.jpg', story_id: 1338 }, false, true, false, true, false, false, true);
-    addImage({ localPath: 'D:/Dropbox/Screenshots/High Fidelity Snapshots/hifi-snap-by-zfox-on-2017-05-01_13-28-58.gif', story_id: 1337 }, false, true, false, true, false, false, true);
-}
 }

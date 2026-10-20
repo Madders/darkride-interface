@@ -118,6 +118,7 @@ private:
     std::vector<HifiSockAddr> getConnectionSockAddrs();
     void connectToSendSignal(const HifiSockAddr& destinationAddr, QObject* receiver, const char* slot);
     
+    qint64 writeDatagramNow(const QByteArray& datagram, const HifiSockAddr& sockAddr);
     Q_INVOKABLE void writeReliablePacket(Packet* packet, const HifiSockAddr& sockAddr);
     Q_INVOKABLE void writeReliablePacketList(PacketList* packetList, const HifiSockAddr& sockAddr);
     

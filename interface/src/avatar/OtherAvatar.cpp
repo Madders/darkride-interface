@@ -18,27 +18,36 @@
 #include <PhysicsWorld.h>
 #include "DetailedMotionState.h"
 #include "DebugDraw.h"
+#include <AvatarConstants.h>
+#include <QTimer>
 
 const float DISPLAYNAME_FADE_TIME = 0.5f;
 const float DISPLAYNAME_FADE_FACTOR = pow(0.01f, 1.0f / DISPLAYNAME_FADE_TIME);
 
-static glm::u8vec3 getLoadingOrbColor(Avatar::LoadingStatus loadingStatus) {
+// While another person's avatar loads, a see-through silhouette with a cyan-to-violet rim stands where they are and
+// pulses; when the model arrives, a shimmer of sparkles rises as the avatar fades in. The images come from
+// tools/make-arrival-images.py; the silhouette is 0.4 as wide as it is tall and a little taller than an avatar.
+static const float SILHOUETTE_HEIGHT = 1.8f;
+static const float SILHOUETTE_ASPECT = 0.4f;
+// before its model loads, an avatar's world position is its hips, about this far up its height
+static const float HIPS_FRACTION_OF_HEIGHT = 0.54f;
+static const glm::u8vec3 ARRIVAL_CYAN(0x00, 0xaf, 0xff);
+static const glm::u8vec3 ARRIVAL_VIOLET(0xa5, 0x48, 0xff);
 
-    const glm::u8vec3 NO_MODEL_COLOR(0xe3, 0xe3, 0xe3);
-    const glm::u8vec3 LOAD_MODEL_COLOR(0xef, 0x93, 0xd1);
-    const glm::u8vec3 LOAD_SUCCESS_COLOR(0x1f, 0xc6, 0xa6);
-    const glm::u8vec3 LOAD_FAILURE_COLOR(0xc6, 0x21, 0x47);
-    switch (loadingStatus) {
-    case Avatar::LoadingStatus::NoModel:
-        return NO_MODEL_COLOR;
-    case Avatar::LoadingStatus::LoadModel:
-        return LOAD_MODEL_COLOR;
-    case Avatar::LoadingStatus::LoadSuccess:
-        return LOAD_SUCCESS_COLOR;
-    case Avatar::LoadingStatus::LoadFailure:
-    default:
-        return LOAD_FAILURE_COLOR;
-    }
+// the silhouette as drawn while loading; dimmed if the model could not be loaded
+static glm::u8vec3 getLoadingOrbColor(Avatar::LoadingStatus loadingStatus) {
+    const glm::u8vec3 LOADING_COLOR(0xff, 0xff, 0xff);
+    const glm::u8vec3 LOAD_FAILURE_COLOR(0x6a, 0x70, 0x8c);
+    return loadingStatus == Avatar::LoadingStatus::LoadFailure ? LOAD_FAILURE_COLOR : LOADING_COLOR;
+}
+
+static float silhouetteHeight(float scale) {
+    return SILHOUETTE_HEIGHT * scale;
+}
+
+static glm::vec3 silhouetteCentre(const glm::vec3& hips, float scale) {
+    const float feet = hips.y - HIPS_FRACTION_OF_HEIGHT * DEFAULT_AVATAR_HEIGHT * scale;
+    return glm::vec3(hips.x, feet + 0.5f * silhouetteHeight(scale), hips.z);
 }
 
 OtherAvatar::OtherAvatar(QThread* thread) : Avatar(thread) {
@@ -63,50 +72,104 @@ void OtherAvatar::removeOrb() {
 }
 
 void OtherAvatar::setOrbVisible(bool isVisible) {
-    if (!_otherAvatarOrbMeshPlaceholderID.isNull()) {
+    if (!_otherAvatarOrbMeshPlaceholderID.isNull() && isVisible != _orbVisible) {
+        _orbVisible = isVisible;
         EntityItemProperties properties;
         properties.setVisible(isVisible);
         DependencyManager::get<EntityScriptingInterface>()->editEntity(_otherAvatarOrbMeshPlaceholderID, properties);
     }
 }
 
+void OtherAvatar::arrived() {
+    if (_otherAvatarOrbMeshPlaceholderID.isNull() || !_orbVisible) {
+        return;
+    }
+    setOrbVisible(false);
+
+    const float scale = getTargetScale();
+    const float height = silhouetteHeight(scale);
+
+    EntityItemProperties properties;
+    properties.setType(EntityTypes::ParticleEffect);
+    properties.setName("Avatar Arrival " + getID().toString());
+    properties.setIgnorePickIntersection(true);
+    // the same place and height as the silhouette it replaces
+    properties.setPosition(silhouetteCentre(getWorldPosition(), scale));
+    properties.setTextures(PathUtils::resourcesUrl() + "images/avatar-arrival-sparkle.png");
+    properties.setMaxParticles(150);
+    properties.setLifespan(1.2f);
+    properties.setEmitRate(120.0f);
+    // from all through a column the size of the body (the emitter's z is up, its y is depth), drifting upward
+    properties.setEmitDimensions(glm::vec3(0.5f * scale, 0.3f * scale, 0.9f * height));
+    properties.setEmitRadiusStart(0.0f);
+    properties.setEmitSpeed(0.04f * scale);
+    properties.setSpeedSpread(0.03f * scale);
+    properties.setEmitAcceleration(glm::vec3(0.0f, 0.35f, 0.0f) * scale);
+    properties.setAccelerationSpread(glm::vec3(0.05f, 0.1f, 0.05f) * scale);
+    properties.setParticleRadius(0.02f * scale);
+    properties.setRadiusStart(0.03f * scale);
+    properties.setRadiusFinish(0.0f);
+    properties.setColor(ARRIVAL_VIOLET);
+    properties.setColorStart(glm::vec3(ARRIVAL_CYAN));
+    properties.setColorFinish(glm::vec3(235.0f, 225.0f, 255.0f));
+    properties.setAlpha(0.9f);
+    properties.setAlphaStart(0.0f);
+    properties.setAlphaFinish(0.0f);
+    const QUuid shimmerID = DependencyManager::get<EntityScriptingInterface>()->addEntityInternal(properties, entity::HostType::LOCAL);
+
+    // it emits for a moment and is gone once its last sparkle has faded
+    const int EMIT_MS = 600;
+    const int REMOVE_MS = EMIT_MS + 1600;
+    QTimer::singleShot(EMIT_MS, qApp, [shimmerID] {
+        EntityItemProperties stop;
+        stop.setIsEmitting(false);
+        DependencyManager::get<EntityScriptingInterface>()->editEntity(shimmerID, stop);
+    });
+    QTimer::singleShot(REMOVE_MS, qApp, [shimmerID] {
+        DependencyManager::get<EntityScriptingInterface>()->deleteEntity(shimmerID);
+    });
+}
 
 void OtherAvatar::updateOrbPosition() {
     if (!_otherAvatarOrbMeshPlaceholderID.isNull()) {
+        const glm::vec3 position = silhouetteCentre(getWorldPosition(), getTargetScale());
+        if (glm::distance2(position, _orbPosition) < 0.0001f) {
+            return;
+        }
+        _orbPosition = position;
         EntityItemProperties properties;
-        properties.setPosition(getHead()->getPosition());
+        properties.setPosition(position);
         DependencyManager::get<EntityScriptingInterface>()->editEntity(_otherAvatarOrbMeshPlaceholderID, properties);
     }
 }
 
 void OtherAvatar::createOrb() {
     if (_otherAvatarOrbMeshPlaceholderID.isNull()) {
+        const float scale = getTargetScale();
+        const float height = silhouetteHeight(scale);
+        _orbPosition = silhouetteCentre(getWorldPosition(), scale);
+
         EntityItemProperties properties;
-        // properties.setType(EntityTypes::Sphere);
         properties.setType(EntityTypes::Image);
-        properties.setImageURL(PathUtils::resourcesUrl() + "icons/defaultNameCardUser.png");
+        properties.setImageURL(PathUtils::resourcesUrl() + "images/avatar-arrival-silhouette.png");
         properties.setEmissive(true);
-        properties.setBillboardMode(BillboardMode::FULL);
+        properties.setKeepAspectRatio(false);
+        // turns about the vertical to face whoever looks, standing upright
+        properties.setBillboardMode(BillboardMode::YAW);
         properties.setAlpha(1.0f);
         properties.setColor(getLoadingOrbColor(_loadingStatus));
-        // TO DO: Consider having different versions of placeholders
-        // A generic everything is placeholder mode
-        // A loading error mode, and a loading-in-progress mode
-        // Loading Status are NoModel,
-        //      LoadModel,
-        //      LoadSuccess,
-        //      LoadFailure
+        // breathes while it waits
+        properties.getPulse().setMin(0.45f);
+        properties.getPulse().setMax(1.0f);
+        properties.getPulse().setPeriod(1.6f);
+        properties.getPulse().setAlphaMode(PulseMode::IN_PHASE);
         properties.setName("Loading Avatar " + getID().toString());
-        //properties.setPrimitiveMode(PrimitiveMode::LINES);
-        //properties.getPulse().setMin(0.5f);
-        //properties.getPulse().setMax(1.0f);
-        //properties.getPulse().setColorMode(PulseMode::IN_PHASE);
         properties.setIgnorePickIntersection(true);
 
-        properties.setPosition(getHead()->getPosition());
-        properties.setRotation(glm::quat(0.0f, 0.0f, 0.0f, 1.0));
-        properties.setDimensions(glm::vec3(0.5f, 0.5f, 0.5f));
+        properties.setPosition(_orbPosition);
+        properties.setDimensions(glm::vec3(SILHOUETTE_ASPECT * height, height, 0.01f));
         properties.setVisible(true);
+        _orbVisible = true;
 
         _otherAvatarOrbMeshPlaceholderID = DependencyManager::get<EntityScriptingInterface>()->addEntityInternal(properties, entity::HostType::LOCAL);
     }
@@ -287,6 +350,7 @@ void OtherAvatar::simulate(float deltaTime, bool inView) {
     PerformanceTimer perfTimer("simulate");
     {
         PROFILE_RANGE(simulation, "updateJoints");
+        updateAvatarMenu(deltaTime);
         if (inView) {
             Head* head = getHead();
             if (_hasNewJointData || _transit.isActive()) {

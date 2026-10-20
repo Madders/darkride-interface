@@ -109,6 +109,7 @@ protected:
     glm::vec3 _saccadeTarget;
     float _leftEyeBlinkVelocity { 0.0f };
     float _rightEyeBlinkVelocity { 0.0f };
+    float _blinkHold { 0.0f };  // seconds the lids still stay shut in this blink (a sleepy gaze style)
     float _timeWithoutTalking { 0.0f };
 
     // delta angles for local head rotation (driven by hardware input)

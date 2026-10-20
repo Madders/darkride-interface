@@ -104,7 +104,7 @@ void RequestFilters::interceptTivoliWebEngineRequest(QWebEngineUrlRequestInfo& i
     info.setHttpHeader(
         "User-Agent",
         (
-            defaultUserAgent + " TivoliCloudVR/" +
+            defaultUserAgent + " Darkride/" +
             (BuildInfo::BUILD_TYPE == BuildInfo::BuildType::Stable ? BuildInfo::VERSION : "dev")
         ).toLocal8Bit()
     );

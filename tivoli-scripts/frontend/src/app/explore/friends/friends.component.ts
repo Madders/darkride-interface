@@ -43,9 +43,18 @@ export class FriendsComponent implements OnInit, OnDestroy {
 		}
 	}
 
-	onJoinFriend(username: string) {
-		this.scriptService.emitEvent("explore", "joinUser", username);
-		this.scriptService.emitEvent("explore", "close");
+	onJoinFriend(friend: Friend) {
+		// the loading screen shows the world they're in, when Explore knows it
+		this.exploreService.hopStart(
+			friend.domain?.name || friend.username,
+			"",
+			friend.domain?.id ?? null,
+		);
+		this.scriptService.emitEvent("explore", "joinUser", friend.username);
+	}
+
+	onHoverFriend() {
+		this.scriptService.emitEvent("explore", "hover");
 	}
 
 	refresh() {

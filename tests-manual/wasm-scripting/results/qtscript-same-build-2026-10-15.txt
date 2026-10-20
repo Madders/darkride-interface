@@ -1,0 +1,23 @@
+peak resident memory: 1218 MB
+engine: ES5 (QtScript)
+js-arithmetic: 2000000 in 81 ms, 0.04 us each (check 1)
+js-objects: 300000 in 13 ms, 0.04 us each (check 134999550000)
+js-strings: 100000 in 8 ms, 0.08 us each (check 1388890)
+js-arrays: 200000 in 18 ms, 0.09 us each (check 999)
+js-function-calls: 1000000 in 17 ms, 0.02 us each (check 3500000)
+js-json: 2000 in 11 ms, 5.50 us each (check 296000)
+host-Vec3.sum: 100000 in 251 ms, 2.51 us each (check 300067)
+host-Vec3.length: 100000 in 93 ms, 0.93 us each (check 1300000)
+host-Quat.multiply: 50000 in 110 ms, 2.20 us each (check -940)
+host-Uuid.generate: 50000 in 145 ms, 2.90 us each (check 1900000)
+host-MyAvatar.position-get: 100000 in 151 ms, 1.51 us each (check 101326)
+host-MyAvatar.position-set: 10000 in 18 ms, 1.80 us each (check 0)
+host-Entities.getEntityProperties-all: 2000 in 173 ms, 86.50 us each (check 2000)
+host-Entities.getEntityProperties-position: 20000 in 911 ms, 45.55 us each (check 40000)
+host-Entities.editEntity-position: 5000 in 315 ms, 63.00 us each (check 0)
+host-JSON.stringify-entity: 1000 in 32 ms, 32.00 us each (check 3263)
+host-Script.resolvePath: 20000 in 421 ms, 21.05 us each (check 1840000)
+update: 600 frames, dt mean 12.06 ms sd 5.97 min 3.07 max 18.09; wall mean 12.06 ms sd 5.98 max 19.0
+setTimeout(10): 50 timers, actual mean 10.92 ms min 10 max 12
+done
+peak resident memory: 1218 MB

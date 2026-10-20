@@ -39,11 +39,10 @@ Q_LOGGING_CATEGORY(trace_baker, "trace.baker")
 #endif
 
 static bool tracingEnabled() {
-    if (!DependencyManager::isSet<tracing::Tracer>()) {
-        return false;
-    }
-
-    // Cheers, love! The cavalry's here!
+    // Asked at the start and the end of every profiled scope on every thread, so it must not take the dependency
+    // manager's lock each time: isSet() does, get() keeps a weak pointer once the tracer is found and only looks it
+    // up again while there is none (get() returns null without a word in a release build). A render thread was seen
+    // stuck for good in that lock (2026-10-14), with no thread holding it.
     auto tracer = DependencyManager::get<tracing::Tracer>();
     return (tracer && tracer->isEnabled());
 }

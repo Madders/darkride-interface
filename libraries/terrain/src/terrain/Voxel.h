@@ -39,6 +39,22 @@ inline float decodeDistance(int8_t encoded) {
     return encoded / DISTANCE_SCALE;
 }
 
+// A distance at the byte's limit says only "far on this side": it stays at the limit whatever the voxel size.
+const float SATURATED_DISTANCE = DISTANCE_MAX / DISTANCE_SCALE;
+const float SATURATION_EPSILON = 1.0e-4f;
+
+// A distance read in one voxel size, encoded in another: `scale` old voxels to a new one (2 when the voxels are
+// halved, 0.5 when they are doubled). What was at the limit stays there.
+inline int8_t rescaleDistance(float voxels, float scale) {
+    if (voxels >= SATURATED_DISTANCE - SATURATION_EPSILON) {
+        return DISTANCE_MAX;
+    }
+    if (voxels <= -SATURATED_DISTANCE + SATURATION_EPSILON) {
+        return -DISTANCE_MAX;
+    }
+    return encodeDistance(voxels * scale);
+}
+
 struct Voxel {
     int8_t distance { DISTANCE_MAX };   // air, far from any surface
     uint8_t material { 0 };

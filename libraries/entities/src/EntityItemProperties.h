@@ -59,6 +59,7 @@
 #include "HazePropertyGroup.h"
 #include "BloomPropertyGroup.h"
 #include "ZoneCullingPropertyGroup.h"
+#include "VehiclePropertyGroup.h"
 #include "ToneMappingPropertyGroup.h"
 #include "PulsePropertyGroup.h"
 #include "RingGizmoPropertyGroup.h"
@@ -157,6 +158,8 @@ public:
     static void entityPropertyFlagsFromScriptValue(const QScriptValue& object, EntityPropertyFlags& flags);
 
     static bool getPropertyInfo(const QString& propertyName, EntityPropertyInfo& propertyInfo);
+    // every property of a group, by the group's name ("grab", "vehicle"): empty for a name that is no group
+    static QList<EntityPropertyList> getPropertiesOfGroup(const QString& groupName);
 
     // editing related features supported by all entities
     quint64 getLastEdited() const { return _lastEdited; }
@@ -218,6 +221,7 @@ public:
     DEFINE_PROPERTY_REF(PROP_TRACK_ID, TrackID, trackID, QUuid, UNKNOWN_ENTITY_ID);
     DEFINE_PROPERTY(PROP_TRACK_OFFSET, TrackOffset, trackOffset, float, 0.0f);
     DEFINE_PROPERTY_GROUP(Grab, grab, GrabPropertyGroup);
+    DEFINE_PROPERTY_GROUP(Vehicle, vehicle, VehiclePropertyGroup);
 
 
 
@@ -403,6 +407,12 @@ public:
     DEFINE_PROPERTY(PROP_TRACK_CLOSED, TrackClosed, trackClosed, bool, false);
     DEFINE_PROPERTY(PROP_TRACK_SPEED, TrackSpeed, trackSpeed, float, TrackEntityItem::DEFAULT_SPEED);
     DEFINE_PROPERTY(PROP_TRACK_ACCELERATION, TrackAcceleration, trackAcceleration, float, TrackEntityItem::DEFAULT_ACCELERATION);
+    DEFINE_PROPERTY(PROP_TRAIN_DISTANCE, TrainDistance, trainDistance, float, 0.0f);
+    DEFINE_PROPERTY(PROP_TRAIN_SPEED, TrainSpeed, trainSpeed, float, 0.0f);
+    DEFINE_PROPERTY(PROP_TRAIN_REVERSED, TrainReversed, trainReversed, bool, false);
+    DEFINE_PROPERTY(PROP_TRAIN_DWELL, TrainDwell, trainDwell, float, 0.0f);
+    DEFINE_PROPERTY(PROP_TRAIN_STATION, TrainStation, trainStation, quint16, TrackEntityItem::NO_STATION);
+    DEFINE_PROPERTY(PROP_TRAIN_TIME, TrainTime, trainTime, quint64, 0);
 
     DEFINE_PROPERTY_REF(PROP_LINE_POINTS, LinePoints, linePoints, QVector<glm::vec3>, ENTITY_ITEM_DEFAULT_EMPTY_VEC3_QVEC);
     DEFINE_PROPERTY(PROP_STROKE_WIDTHS, StrokeWidths, strokeWidths, QVector<float>, QVector<float>());

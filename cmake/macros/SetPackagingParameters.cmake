@@ -35,10 +35,12 @@ macro(SET_PACKAGING_PARAMETERS)
     set(DEPLOY_PACKAGE TRUE)
     set(PRODUCTION_BUILD 1)
     set(BUILD_VERSION ${RELEASE_NUMBER})
+    # the organization names the settings and data folders of the client and the servers alike (a world's
+    # entities live under it), so it keeps its Tivoli name until both move together; people see Darkride
     set(BUILD_ORGANIZATION "Tivoli Cloud VR")
     set(HIGH_FIDELITY_PROTOCOL "hifi")
     set(HIGH_FIDELITY_APP_PROTOCOL "hifiapp")
-    set(INTERFACE_BUNDLE_NAME "interface")
+    set(INTERFACE_BUNDLE_NAME "Darkride")
     set(INTERFACE_ICON_PREFIX "interface")
 
     # add definition for this release type
@@ -61,7 +63,7 @@ macro(SET_PACKAGING_PARAMETERS)
     set(PR_BUILD 1)
     set(BUILD_VERSION "PR${RELEASE_NUMBER}")
     set(BUILD_ORGANIZATION "Tivoli Cloud VR - PR${RELEASE_NUMBER}")
-    set(INTERFACE_BUNDLE_NAME "interface")
+    set(INTERFACE_BUNDLE_NAME "Darkride")
     set(INTERFACE_ICON_PREFIX "interface-beta")
 
     # add definition for this release type
@@ -70,7 +72,7 @@ macro(SET_PACKAGING_PARAMETERS)
     set(DEV_BUILD 1)
     set(BUILD_VERSION "dev")
     set(BUILD_ORGANIZATION "Tivoli Cloud VR - ${BUILD_VERSION}")
-    set(INTERFACE_BUNDLE_NAME "interface")
+    set(INTERFACE_BUNDLE_NAME "Darkride")
     set(INTERFACE_ICON_PREFIX "interface-beta")
 
     # add definition for this release type
@@ -87,6 +89,9 @@ macro(SET_PACKAGING_PARAMETERS)
   # when HEAD changes (a checkout), and after a commit the hash catches up on the next cmake run.
   set(BUILD_BRANCH "")
   set(BUILD_COMMIT_SHORT "")
+  # A name for this build's clients, first in the window title, for telling one session's clients from another's
+  # on one machine: cmake -DCLIENT_LABEL="Darkride - Editor/Renderer" . (empty: none)
+  set(CLIENT_LABEL "" CACHE STRING "A name for this build's clients, shown first in the window title")
   find_package(Git QUIET)
   if (GIT_FOUND)
     execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse --abbrev-ref HEAD
@@ -183,7 +188,7 @@ macro(SET_PACKAGING_PARAMETERS)
   endif ()
 
   if (WIN32)
-    set(INTERFACE_EXEC_PREFIX "interface")
+    set(INTERFACE_EXEC_PREFIX "Darkride")
     set(INTERFACE_ICON_FILENAME "${INTERFACE_ICON_PREFIX}.ico")
     set(NITPICK_ICON_FILENAME "${NITPICK_ICON_PREFIX}.ico")
 
@@ -194,21 +199,21 @@ macro(SET_PACKAGING_PARAMETERS)
 
     # shortcut names
     if (PRODUCTION_BUILD)
-      set(INTERFACE_SHORTCUT_NAME "Tivoli Cloud VR")
+      set(INTERFACE_SHORTCUT_NAME "Darkride")
       set(CONSOLE_SHORTCUT_NAME "Console")
       set(SANDBOX_SHORTCUT_NAME "Sandbox")
       set(APP_USER_MODEL_ID "com.highfidelity.console")
     else ()
-      set(INTERFACE_SHORTCUT_NAME "Tivoli Cloud VR - ${BUILD_VERSION_NO_SHA}")
+      set(INTERFACE_SHORTCUT_NAME "Darkride - ${BUILD_VERSION_NO_SHA}")
       set(CONSOLE_SHORTCUT_NAME "Console - ${BUILD_VERSION_NO_SHA}")
       set(SANDBOX_SHORTCUT_NAME "Sandbox - ${BUILD_VERSION_NO_SHA}")
     endif ()
 
     set(INTERFACE_HF_SHORTCUT_NAME "${INTERFACE_SHORTCUT_NAME}")
-    set(CONSOLE_HF_SHORTCUT_NAME "Tivoli Cloud VR ${CONSOLE_SHORTCUT_NAME}")
-    set(SANDBOX_HF_SHORTCUT_NAME "Tivoli Cloud VR ${SANDBOX_SHORTCUT_NAME}")
+    set(CONSOLE_HF_SHORTCUT_NAME "Darkride ${CONSOLE_SHORTCUT_NAME}")
+    set(SANDBOX_HF_SHORTCUT_NAME "Darkride ${SANDBOX_SHORTCUT_NAME}")
 	
-    set(PRE_SANDBOX_INTERFACE_SHORTCUT_NAME "Tivoli Cloud VR")
+    set(PRE_SANDBOX_INTERFACE_SHORTCUT_NAME "Darkride")
     set(PRE_SANDBOX_CONSOLE_SHORTCUT_NAME "Server Console")
 
     # check if we need to find signtool

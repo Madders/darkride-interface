@@ -1132,7 +1132,7 @@ void watchParentProcess(int parentPID) {
 
 // TODO: maybe this should live as qApp->property(hifi::properties::USER_AGENT)? (see GlobalAppProperties.h)
 const QByteArray TIVOLI_CLOUD_VR_USER_AGENT = QString(
-    "TivoliCloudVR/" +
+    "Darkride/" +
     (BuildInfo::BUILD_TYPE == BuildInfo::BuildType::Stable ? BuildInfo::VERSION : "dev")
 ).toLocal8Bit();
 

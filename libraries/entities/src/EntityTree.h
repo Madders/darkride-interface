@@ -121,7 +121,9 @@ public:
     EntityItemPointer addEntity(const EntityItemID& entityID, const EntityItemProperties& properties, bool isClone = false, const bool isImport = false);
 
     // use this method if you only know the entityID
-    bool updateEntity(const EntityItemID& entityID, const EntityItemProperties& properties, const SharedNodePointer& senderNode = SharedNodePointer(nullptr));
+    // isPhysics: the edit is a simulation owner's update (PacketType::EntityPhysics), not an explicit edit (round 7)
+    bool updateEntity(const EntityItemID& entityID, const EntityItemProperties& properties, const SharedNodePointer& senderNode = SharedNodePointer(nullptr),
+                      bool isPhysics = false);
 
     // check if the avatar is a child of this entity, If so set the avatar parentID to null
     void unhookChildAvatar(const EntityItemID entityID);
@@ -304,7 +306,7 @@ protected:
     void recursivelyFilterAndCollectForDelete(const EntityItemPointer& entity, std::vector<EntityItemPointer>& entitiesToDelete, bool force) const;
     void processRemovedEntities(const DeleteEntityOperator& theOperator);
     bool updateEntity(EntityItemPointer entity, const EntityItemProperties& properties,
-            const SharedNodePointer& senderNode = SharedNodePointer(nullptr));
+            const SharedNodePointer& senderNode = SharedNodePointer(nullptr), bool isPhysics = false);
     static bool sendEntitiesOperation(const OctreeElementPointer& element, void* extraData);
     static void bumpTimestamp(EntityItemProperties& properties);
 
