@@ -1291,6 +1291,10 @@ void ScriptEngine::run() {
         // (because we're a client script)
         hifi::scripting::setLocalAccessSafeThread(true);
     }
+    if (QThread::currentThread() != qApp->thread() && _context == Context::ENTITY_CLIENT_SCRIPT) {
+        // a world's scripts: APIs that act on the user's own installation refuse calls from this thread
+        hifi::scripting::setRestrictedScriptThread(true);
+    }
 
     auto filenameParts = _fileNameString.split("/");
     auto name = filenameParts.size() > 0 ? filenameParts[filenameParts.size() - 1] : "unknown";
@@ -1472,6 +1476,7 @@ void ScriptEngine::run() {
     // Don't leave our local-file-access flag laying around, reset it to false when the scriptengine 
     // thread is finished
     hifi::scripting::setLocalAccessSafeThread(false);
+    hifi::scripting::setRestrictedScriptThread(false);
     _isRunning = false;
     emit runningStateChanged();
     emit doneRunning();

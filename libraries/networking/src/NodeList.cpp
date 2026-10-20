@@ -404,30 +404,11 @@ void NodeList::sendDomainServerCheckIn() {
             QByteArray protocolVersionSig = protocolVersionsSignature();
             packetStream.writeBytes(protocolVersionSig.constData(), protocolVersionSig.size());
 
-            // if possible, include the MAC address for the current interface in our connect request
-            QString hardwareAddress;
-            for (auto networkInterface : QNetworkInterface::allInterfaces()) {
-                for (auto interfaceAddress : networkInterface.addressEntries()) {
-                    if (interfaceAddress.ip() == localSockAddr.getAddress()) {
-                        // this is the interface whose local IP matches what we've detected the current IP to be
-                        hardwareAddress = networkInterface.hardwareAddress();
-
-                        // stop checking interfaces and addresses
-                        break;
-                    }
-                }
-
-                // stop looping if this was the current interface
-                if (!hardwareAddress.isEmpty()) {
-                    break;
-                }
-            }
-
-            packetStream << hardwareAddress;
-
-            // now add the machine fingerprint
-            auto accountManager = DependencyManager::get<AccountManager>();
-            packetStream << FingerprintUtils::getMachineFingerprint();
+            // the network-card address and machine fingerprint the domain sees are this computer's own for this domain
+            // (see FingerprintUtils): stable here, different in every other domain
+            const QString domainKey = _domainHandler.getHostname();
+            packetStream << FingerprintUtils::getDomainHardwareAddress(domainKey);
+            packetStream << FingerprintUtils::getDomainFingerprint(domainKey);
 
             platform::json all = platform::getAll();
             platform::json desc;
@@ -437,7 +418,7 @@ void NodeList::sendDomainServerCheckIn() {
             desc[platform::keys::CPUS] = all[platform::keys::CPUS];
             desc[platform::keys::GPUS] = all[platform::keys::GPUS];
             desc[platform::keys::DISPLAYS] = all[platform::keys::DISPLAYS];
-            desc[platform::keys::NICS] = all[platform::keys::NICS];
+            // not the network cards: their addresses would identify this computer to every domain
 
             QByteArray systemInfo(desc.dump().c_str());
             QByteArray compressedSystemInfo = qCompress(systemInfo);
@@ -573,6 +554,10 @@ void NodeList::sendDSPathQuery(const QString& newPath) {
 }
 
 void NodeList::processDomainServerPathResponse(QSharedPointer<ReceivedMessage> message) {
+    if (!_domainHandler.isFromDomainServer(*message)) {
+        qCDebug(networking) << "Ignoring a path response that didn't come from the domain server";
+        return;
+    }
     // This is a response to a path query we theoretically made.
     // In the future we may want to check that this was actually from our DS and for a query we actually made.
 
@@ -665,6 +650,10 @@ void NodeList::pingPunchForDomainServer() {
 }
 
 void NodeList::processDomainServerConnectionTokenPacket(QSharedPointer<ReceivedMessage> message) {
+    if (!_domainHandler.isFromDomainServer(*message)) {
+        qCDebug(networking) << "Ignoring a connection token that didn't come from the domain server";
+        return;
+    }
     if (_domainHandler.getSockAddr().isNull()) {
         // refuse to process this packet if we aren't currently connected to the DS
         return;
@@ -677,6 +666,10 @@ void NodeList::processDomainServerConnectionTokenPacket(QSharedPointer<ReceivedM
 }
 
 void NodeList::processDomainServerList(QSharedPointer<ReceivedMessage> message) {
+    if (!_domainHandler.isFromDomainServer(*message)) {
+        qCDebug(networking) << "Ignoring a domain list that didn't come from the domain server";
+        return;
+    }
 
     // parse header information 
     QDataStream packetStream(message->getMessage());
@@ -802,6 +795,10 @@ void NodeList::processDomainServerList(QSharedPointer<ReceivedMessage> message) 
 }
 
 void NodeList::processDomainServerAddedNode(QSharedPointer<ReceivedMessage> message) {
+    if (!_domainHandler.isFromDomainServer(*message)) {
+        qCDebug(networking) << "Ignoring an added node that didn't come from the domain server";
+        return;
+    }
     // setup a QDataStream
     QDataStream packetStream(message->getMessage());
 
@@ -810,6 +807,10 @@ void NodeList::processDomainServerAddedNode(QSharedPointer<ReceivedMessage> mess
 }
 
 void NodeList::processDomainServerRemovedNode(QSharedPointer<ReceivedMessage> message) {
+    if (!_domainHandler.isFromDomainServer(*message)) {
+        qCDebug(networking) << "Ignoring a removed node that didn't come from the domain server";
+        return;
+    }
     // read the UUID from the packet, remove it if it exists
     QUuid nodeUUID = QUuid::fromRfc4122(message->readWithoutCopy(NUM_BYTES_RFC4122_UUID));
     qCDebug(networking) << "Received packet from domain-server to remove node with UUID" << uuidStringWithoutCurlyBraces(nodeUUID);
@@ -1312,6 +1313,10 @@ void NodeList::requestUsernameFromSessionID(const QUuid& nodeID) {
 }
 
 void NodeList::processUsernameFromIDReply(QSharedPointer<ReceivedMessage> message) {
+    if (!_domainHandler.isFromDomainServer(*message)) {
+        qCDebug(networking) << "Ignoring a username reply that didn't come from the domain server";
+        return;
+    }
     // read the UUID from the packet
     QString nodeUUIDString = (QUuid::fromRfc4122(message->readWithoutCopy(NUM_BYTES_RFC4122_UUID))).toString();
     // read the username from the packet

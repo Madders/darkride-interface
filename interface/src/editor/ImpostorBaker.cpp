@@ -6,6 +6,7 @@
 //
 
 #include "ImpostorBaker.h"
+#include <shared/LocalFileAccessGate.h>
 
 #include <QtCore/QBuffer>
 #include <QtCore/QDateTime>
@@ -64,6 +65,10 @@ QString ImpostorBaker::folder() const {
 }
 
 void ImpostorBaker::bake(const QUuid& entityID, int size) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "Impostors.bake isn't available to a world's scripts";
+        return;
+    }
     // scripts call from their own thread; the bake, its timer and the scene's models belong to the main thread
     if (QThread::currentThread() != thread()) {
         QMetaObject::invokeMethod(this, [this, entityID, size] { bake(entityID, size); }, Qt::QueuedConnection);
@@ -300,6 +305,10 @@ QVector<QUuid> ImpostorBaker::candidates(float maxRadius, float minRadius, bool 
 }
 
 int ImpostorBaker::bakeAll(int size, float maxRadius, float minRadius, bool rebake) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "Impostors.bakeAll isn't available to a world's scripts";
+        return 0;
+    }
     if (QThread::currentThread() != thread()) {
         int count = 0;
         QMetaObject::invokeMethod(this, [&] { count = bakeAll(size, maxRadius, minRadius, rebake); }, Qt::BlockingQueuedConnection);

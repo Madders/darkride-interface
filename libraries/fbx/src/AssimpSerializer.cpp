@@ -30,6 +30,7 @@
 
 #include <QtGui/QImage>
 #include <QtCore/QBuffer>
+#include <QtCore/QTimer>
 
 // disabled because it causes crashes with Assimp::DefaultLogger::WriteToStreams
 // #define ENABLE_ASSIMP_LOGGING
@@ -41,10 +42,15 @@ MediaType AssimpSerializer::getMediaType() const {
     aiString aiExts;
     importer.GetExtensionList(aiExts);
 
+    // The model formats Darkride reads through Assimp: the common ones for worlds and avatars. Assimp has importers for
+    // dozens more, many old and little used; content from anywhere only reaches these. (FBX and OBJ have their own
+    // serializers.) Add a format here to support it.
+    static const QStringList ALLOWED_EXTENSIONS = { "gltf", "glb", "dae", "3ds", "ply", "stl" };
+
     auto exts = QString(aiExts.C_Str()).split(";");
     for (QString anyExt : exts) {
         QString ext = anyExt.replace("*.", "");
-        if (ext == "fbx" || ext == "obj") continue;
+        if (!ALLOWED_EXTENSIONS.contains(ext.toLower())) continue;
 
         // qDebug(modelformat) << "Available format:" << ext; 
         mediaType.extensions.push_back(ext.toStdString());
@@ -60,51 +66,54 @@ std::unique_ptr<hfm::Serializer::Factory> AssimpSerializer::getFactory() const {
     return std::make_unique<hfm::Serializer::SimpleFactory<AssimpSerializer>>();
 }
 
+// A file a model refers to (a glTF's .bin, an .mtl, a texture), downloaded once when Assimp opens it and then read
+// from memory like a file
 class TivoliIOStream : public Assimp::IOStream {
-    friend class TivoliIOSystem;
-
-protected:
-    hifi::URL url;
-    
-    TivoliIOStream(hifi::URL url) : url(url) {}
-
 public:
+    explicit TivoliIOStream(QByteArray data) : _data(std::move(data)) {}
     ~TivoliIOStream() {}
+
     size_t Read(void* pvBuffer, size_t pSize, size_t pCount) override {
-        // TODO: i think this function runs twice for some reason
-        auto request = DependencyManager::get<ResourceManager>()->createResourceRequest(
-            nullptr, url, true, -1, "TivoliIOSystem::Exists"
-        );
-        if (!request)  return 0;
-
-        QEventLoop loop;
-        QObject::connect(request, &ResourceRequest::finished, &loop, &QEventLoop::quit);
-        request->send();
-        loop.exec();
-
-        if (request->getResult() == ResourceRequest::Success) {
-            auto data = request->getData();
-            memcpy(pvBuffer, data.data(), data.size());
-            // return data.size();
-            return pCount;
-        } else {
+        if (pSize == 0 || pCount == 0 || _position >= (size_t)_data.size()) {
             return 0;
         }
+        // whole items only, and never more than the caller asked for or than is left
+        size_t remaining = (size_t)_data.size() - _position;
+        size_t items = std::min(pCount, remaining / pSize);
+        size_t bytes = items * pSize;
+        memcpy(pvBuffer, _data.constData() + _position, bytes);
+        _position += bytes;
+        return items;
     }
     size_t Write(const void* pvBuffer, size_t pSize, size_t pCount) override {
         return 0;
     }
     aiReturn Seek(size_t pOffset, aiOrigin pOrigin) override {
-        return aiReturn_FAILURE;
+        // as Assimp's own MemoryIOStream: from the start, from here, or back from the end, never outside the file
+        size_t size = (size_t)_data.size();
+        if (pOrigin == aiOrigin_SET && pOffset <= size) {
+            _position = pOffset;
+        } else if (pOrigin == aiOrigin_CUR && pOffset <= size - _position) {
+            _position += pOffset;
+        } else if (pOrigin == aiOrigin_END && pOffset <= size) {
+            _position = size - pOffset;
+        } else {
+            return aiReturn_FAILURE;
+        }
+        return aiReturn_SUCCESS;
     }
     size_t Tell() const override {
-        return 0;
+        return _position;
     }
     size_t FileSize() const override {
-        return 0;
+        return (size_t)_data.size();
     }
     void Flush () override {
     }
+
+private:
+    QByteArray _data;
+    size_t _position { 0 };
 };
 
 class TivoliIOSystem : public Assimp::IOSystem {
@@ -115,16 +124,64 @@ public:
     ~TivoliIOSystem() {}
 
     bool Exists(const char* pFile) const override {
-        return true;
+        return allowed(resolve(pFile));
     }
     char getOsSeparator() const override {
         return '/';
     }
     Assimp::IOStream* Open(const char* pFile, const char* pMode) override {
-        return new TivoliIOStream(originalUrl.resolved(QString::fromLocal8Bit(pFile)));
+        hifi::URL url = resolve(pFile);
+        if (!allowed(url)) {
+            qCWarning(modelformat) << "AssimpSerializer: not fetching" << url << "for" << originalUrl;
+            return nullptr;
+        }
+
+        auto request = DependencyManager::get<ResourceManager>()->createResourceRequest(
+            nullptr, url, true, -1, "TivoliIOSystem::Open"
+        );
+        if (!request) {
+            return nullptr;
+        }
+
+        QEventLoop loop;
+        QTimer timeout;
+        timeout.setSingleShot(true);
+        QObject::connect(request, &ResourceRequest::finished, &loop, &QEventLoop::quit);
+        QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+        request->send();
+        timeout.start(MAX_FETCH_MSECS);
+        loop.exec();
+
+        bool ok = timeout.isActive() && request->getResult() == ResourceRequest::Success;
+        QByteArray data = ok ? request->getData() : QByteArray();
+        request->deleteLater();
+        if (!ok || data.size() > MAX_FILE_BYTES) {
+            qCWarning(modelformat) << "AssimpSerializer: couldn't fetch" << url << "for" << originalUrl;
+            return nullptr;
+        }
+        return new TivoliIOStream(std::move(data));
     }
     void Close(Assimp::IOStream* pFile) override {
         delete pFile;
+    }
+
+private:
+    static constexpr int MAX_FETCH_MSECS = 30 * 1000;
+    static constexpr int MAX_FILE_BYTES = 256 * 1024 * 1024;
+
+    hifi::URL resolve(const char* pFile) const {
+        return originalUrl.resolved(QString::fromLocal8Bit(pFile));
+    }
+
+    // A model's files come the same way as the model: over its own scheme, and never from a network share
+    bool allowed(const hifi::URL& url) const {
+        if (url.scheme() != originalUrl.scheme()) {
+            return false;
+        }
+        if (url.isLocalFile() && !url.host().isEmpty()) {
+            return false;
+        }
+        return true;
     }
 };
 
@@ -430,6 +487,11 @@ void AssimpSerializer::processMeshes(const hifi::VariantHash& mapping) {
         for (size_t faceIndex = 0; faceIndex < mMesh->mNumFaces; faceIndex++) {
             aiFace face = mMesh->mFaces[faceIndex];
             if (face.mNumIndices != 3) continue; // must be a triangle
+            // and of the mesh's own vertices
+            if (face.mIndices[0] >= mMesh->mNumVertices || face.mIndices[1] >= mMesh->mNumVertices ||
+                face.mIndices[2] >= mMesh->mNumVertices) {
+                continue;
+            }
             for (size_t i = 0; i < face.mNumIndices; i++) {
                 meshPartPtr->triangleIndices.push_back(face.mIndices[i]);
             }
@@ -692,8 +754,12 @@ void AssimpSerializer::processAnimations() {
             //     extractTranslation(joint->globalTransform) -
             //     asVec3(positionKey.mValue);
             
-            auto rotationKey = channel->mRotationKeys[frame];
-            animationFrame->rotations[jointIndex] = asQuat(rotationKey.mValue);            
+            // a channel with fewer keys than the longest holds its last one
+            if (channel->mNumRotationKeys == 0 || jointIndex < 0 || jointIndex >= animationFrame->rotations.size()) {
+                continue;
+            }
+            auto rotationKey = channel->mRotationKeys[std::min(frame, (size_t)channel->mNumRotationKeys - 1)];
+            animationFrame->rotations[jointIndex] = asQuat(rotationKey.mValue);
         }
     }
 }
@@ -901,6 +967,7 @@ HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi
         data.constData(), data.size(),
         // aiProcess_CalcTangentSpace |
         joinIdenticalVertices |
+        aiProcess_ValidateDataStructure | // refuses scenes whose indices or counts don't add up
         aiProcess_Triangulate |
         aiProcess_RemoveComponent |
         aiProcess_GenNormals | 

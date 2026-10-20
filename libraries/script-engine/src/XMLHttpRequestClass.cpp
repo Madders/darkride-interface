@@ -15,6 +15,7 @@
 #include "XMLHttpRequestClass.h"
 
 #include <QEventLoop>
+#include <QHostAddress>
 #include <qurlquery.h>
 
 #include <AccountManager.h>
@@ -23,6 +24,7 @@
 
 #include "ResourceRequestObserver.h"
 #include "ScriptEngine.h"
+#include "ScriptEngineLogging.h"
 
 const QString METAVERSE_API_URL = NetworkingConstants::METAVERSE_SERVER_URL().toString() + "/api/";
 
@@ -156,6 +158,14 @@ void XMLHttpRequestClass::send(const QScriptValue& data) {
             }
         }
 
+        if (!isUrlAllowed()) {
+            qCWarning(scriptengine) << "XMLHttpRequest to" << _url.toDisplayString() << "isn't allowed for this script";
+            _errorCode = QNetworkReply::ContentAccessDenied;
+            setReadyState(DONE);
+            emit requestComplete();
+            return;
+        }
+
         doSend();
 
         if (!_async) {
@@ -164,6 +174,44 @@ void XMLHttpRequestClass::send(const QScriptValue& data) {
             loop.exec();
         }
     }
+}
+
+// The user's own scripts may request anything. Other scripts (a world's scripts on the visitor's computer, the
+// servers' scripts, agents) use the web and the world's assets: http, https and atp. A world's scripts on a
+// visitor's computer also can't reach that computer itself or its local network by address.
+bool XMLHttpRequestClass::isUrlAllowed() const {
+    auto scriptEngine = qobject_cast<ScriptEngine*>(_engine);
+    if (scriptEngine && scriptEngine->isClientScript()) {
+        return true;
+    }
+
+    const QString scheme = _url.scheme().toLower();
+    if (scheme != "http" && scheme != "https" && scheme != "atp") {
+        return false;
+    }
+
+    if (!scriptEngine || scriptEngine->getContext() == "entity_client") {
+        const QString host = _url.host().toLower();
+        if (host == "localhost" || host.endsWith(".localhost")) {
+            return false;
+        }
+        QHostAddress address(host);
+        bool isIPv4 = false;
+        quint32 ipv4 = address.toIPv4Address(&isIPv4);
+        if (isIPv4) {
+            address = QHostAddress(ipv4);  // an IPv4 address written as IPv6 (::ffff:a.b.c.d)
+        }
+        if (!address.isNull() && (address.isLoopback() || address.isLinkLocal() || address.isSiteLocal() ||
+                                  address.isUniqueLocalUnicast() || address.isMulticast() ||
+                                  address.isInSubnet(QHostAddress("10.0.0.0"), 8) ||
+                                  address.isInSubnet(QHostAddress("172.16.0.0"), 12) ||
+                                  address.isInSubnet(QHostAddress("192.168.0.0"), 16) ||
+                                  address.isInSubnet(QHostAddress("100.64.0.0"), 10) ||
+                                  address.isInSubnet(QHostAddress("0.0.0.0"), 8))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void XMLHttpRequestClass::doSend() {
@@ -203,8 +251,12 @@ void XMLHttpRequestClass::requestFinished() {
         _rawResponseData.append(_reply->readAll());
 
         if (_responseType == "json") {
-            _responseData = _engine->evaluate("(" + QString(_rawResponseData.data()) + ")");
-            if (_responseData.isError()) {
+            // parsed as JSON by the engine's JSON.parse, never run as code
+            QScriptValue parse = _engine->globalObject().property("JSON").property("parse");
+            _responseData = parse.isFunction()
+                ? parse.call(QScriptValue(), QScriptValueList() << QScriptValue(QString::fromUtf8(_rawResponseData)))
+                : QScriptValue::NullValue;
+            if (_engine->hasUncaughtException() || _responseData.isError()) {
                 _engine->clearExceptions();
                 _responseData = QScriptValue::NullValue;
             }

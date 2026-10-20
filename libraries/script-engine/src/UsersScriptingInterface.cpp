@@ -10,6 +10,7 @@
 //
 
 #include "UsersScriptingInterface.h"
+#include <shared/LocalFileAccessGate.h>
 
 #include <NodeList.h>
 
@@ -22,6 +23,10 @@ UsersScriptingInterface::UsersScriptingInterface() {
 }
 
 void UsersScriptingInterface::ignore(const QUuid& nodeID, bool ignoreEnabled) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "Users.ignore isn't available to a world's scripts";
+        return;
+    }
     // ask the NodeList to ignore this user (based on the session ID of their node)
     DependencyManager::get<NodeList>()->ignoreNodeBySessionID(nodeID, ignoreEnabled);
 }
@@ -32,6 +37,10 @@ bool UsersScriptingInterface::getIgnoreStatus(const QUuid& nodeID) {
 }
 
 void UsersScriptingInterface::personalMute(const QUuid& nodeID, bool muteEnabled) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "Users.personalMute isn't available to a world's scripts";
+        return;
+    }
     // ask the NodeList to mute the user with the given session ID
     // "Personal Mute" only applies one way and is not global
     DependencyManager::get<NodeList>()->personalMuteNodeBySessionID(nodeID, muteEnabled);
@@ -52,6 +61,10 @@ float UsersScriptingInterface::getAvatarGain(const QUuid& nodeID) {
 }
 
 void UsersScriptingInterface::kick(const QUuid& nodeID) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "Users.kick isn't available to a world's scripts";
+        return;
+    }
 
     if (_kickConfirmationOperator) {
         bool waitingForKickResponse = _kickResponseLock.resultWithReadLock<bool>([&] { return _waitingForKickResponse; });
@@ -64,6 +77,10 @@ void UsersScriptingInterface::kick(const QUuid& nodeID) {
 }
 
 void UsersScriptingInterface::mute(const QUuid& nodeID) {
+    if (hifi::scripting::isRestrictedScriptThread()) {
+        qWarning() << "Users.mute isn't available to a world's scripts";
+        return;
+    }
     // ask the NodeList to mute the user with the given session ID
     DependencyManager::get<NodeList>()->muteNodeBySessionID(nodeID);
 }

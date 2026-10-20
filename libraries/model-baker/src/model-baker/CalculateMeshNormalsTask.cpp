@@ -27,8 +27,13 @@ void CalculateMeshNormalsTask::run(const baker::BakeContextPointer& context, con
             normalsOut = std::vector<glm::vec3>(mesh.normals.begin(), mesh.normals.end());
         } else {
             normalsOut.resize(mesh.vertices.size());
+            // a triangle that names a vertex the mesh doesn't have adds to a scratch normal instead
+            glm::vec3 scratch;
             baker::calculateNormals(mesh,
-                [&normalsOut](int normalIndex) /* NormalAccessor */ {
+                [&normalsOut, &scratch](int normalIndex) /* NormalAccessor */ {
+                    if (normalIndex < 0 || normalIndex >= (int)normalsOut.size()) {
+                        return &scratch;
+                    }
                     return &normalsOut[normalIndex];
                 },
                 [&mesh](int vertexIndex, glm::vec3& outVertex) /* VertexSetter */ {

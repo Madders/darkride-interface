@@ -376,7 +376,11 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
             decodedBuffer.Init(dracoArray.data(), dracoArray.size());
 
             std::unique_ptr<draco::Mesh> dracoMesh(new draco::Mesh());
-            decoder.DecodeBufferToGeometry(&decodedBuffer, dracoMesh.get());
+            if (!decoder.DecodeBufferToGeometry(&decodedBuffer, dracoMesh.get()).ok()) {
+                // a mesh that doesn't decode is left out, rather than used half-decoded
+                qCWarning(modelformat) << "A Draco mesh in this model couldn't be decoded, and is left out";
+                dracoMesh.reset(new draco::Mesh());
+            }
 
             // prepare attributes for this mesh
             auto positionAttribute = dracoMesh->GetNamedAttribute(draco::GeometryAttribute::POSITION);
@@ -471,6 +475,12 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                 // grab the material ID and texture ID for this face, if we have it
                 auto& dracoFace = dracoMesh->face(draco::FaceIndex(i));
                 auto& firstCorner = dracoFace[0];
+
+                // a face of the mesh's own points only
+                if (dracoFace[0].value() >= numVertices || dracoFace[1].value() >= numVertices ||
+                    dracoFace[2].value() >= numVertices) {
+                    continue;
+                }
 
                 uint16_t materialID { 0 };
 

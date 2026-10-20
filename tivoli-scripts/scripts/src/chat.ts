@@ -229,7 +229,31 @@ class ChatHandler extends WebEventHandler {
 		this.commands.push(tpCommand);
 	}
 
+	// A link in chat is previewed by every reader's Darkride, so only web pages out on the internet are: not
+	// other kinds of address, and not this computer or its local network. (QtScript has no startsWith/endsWith.)
+	isPreviewable(url: string) {
+		const match = /^https?:\/\/(\[[^\]]+\]|[^\/:?#]+)/i.exec(url);
+		if (match == null) return false;
+		const host = match[1].toLowerCase();
+		if (host.charAt(0) == "[") return false; // IPv6 addresses by number
+		if (/(^|\.)localhost$/.test(host) || /\.local$/.test(host)) return false;
+		const ipv4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host);
+		if (ipv4 != null) {
+			const a = parseInt(ipv4[1], 10);
+			const b = parseInt(ipv4[2], 10);
+			if (a == 0 || a == 10 || a == 127 || a >= 224) return false;
+			if (a == 169 && b == 254) return false;
+			if (a == 172 && b >= 16 && b <= 31) return false;
+			if (a == 192 && b == 168) return false;
+			if (a == 100 && b >= 64 && b <= 127) return false;
+		} else if (/^[\d.]+$/.test(host) || host.indexOf(".") == -1) {
+			return false; // a number that isn't a plain IPv4 address, or a name on the local network
+		}
+		return true;
+	}
+
 	getMetaTags(url: string, callback: (headContent: string) => any) {
+		if (!this.isPreviewable(url)) return callback(null);
 		request<string>(url, (error, response, html) => {
 			if (error) return callback(null);
 			if (response.headers["content-type"].indexOf("text/html") == -1)

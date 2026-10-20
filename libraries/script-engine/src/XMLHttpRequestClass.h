@@ -291,6 +291,7 @@ signals:
 
 private:
     void setReadyState(ReadyState readyState);
+    bool isUrlAllowed() const;
     void doSend();
     void connectToReply(QNetworkReply* reply);
     void disconnectFromReply(QNetworkReply* reply);

@@ -417,6 +417,9 @@ void WasmScriptEngine::run() {
     if (QThread::currentThread() != qApp->thread() && _context == Context::CLIENT_SCRIPT) {
         hifi::scripting::setLocalAccessSafeThread(true);
     }
+    if (QThread::currentThread() != qApp->thread() && _context == Context::ENTITY_CLIENT_SCRIPT) {
+        hifi::scripting::setRestrictedScriptThread(true);
+    }
     QSharedPointer<ScriptEngines> scriptEngines(_scriptEngines);
     if (!scriptEngines || scriptEngines->isStopped()) {
         return;
@@ -450,6 +453,7 @@ void WasmScriptEngine::run() {
 
     emit finished(_fileNameString, qSharedPointerCast<ScriptEngine>(sharedFromThis()));
     hifi::scripting::setLocalAccessSafeThread(false);
+    hifi::scripting::setRestrictedScriptThread(false);
     _isRunning = false;
     emit runningStateChanged();
     emit doneRunning();

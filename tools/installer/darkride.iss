@@ -75,7 +75,7 @@ Name: "{autodesktop}\Darkride"; Filename: "{app}\Darkride.exe"; Tasks: desktopic
 Root: HKA; Subkey: "Software\Classes\hifi"; ValueType: string; ValueData: "URL:Darkride Protocol"; Flags: uninsdeletekey; Tasks: hifiurls
 Root: HKA; Subkey: "Software\Classes\hifi"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Tasks: hifiurls
 Root: HKA; Subkey: "Software\Classes\hifi\DefaultIcon"; ValueType: string; ValueData: """{app}\Darkride.exe"",0"; Tasks: hifiurls
-Root: HKA; Subkey: "Software\Classes\hifi\shell\open\command"; ValueType: string; ValueData: """{app}\Darkride.exe"" --url ""%1"""; Tasks: hifiurls
+Root: HKA; Subkey: "Software\Classes\hifi\shell\open\command"; ValueType: string; ValueData: """{app}\Darkride.exe"" --protocol-url ""%1"""; Tasks: hifiurls
 
 [Run]
 Filename: "{app}\Darkride.exe"; Description: "{cm:LaunchProgram,Darkride}"; Flags: nowait postinstall skipifsilent
