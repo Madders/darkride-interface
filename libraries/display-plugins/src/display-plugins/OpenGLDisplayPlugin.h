@@ -14,6 +14,7 @@
 #include <queue>
 
 #include <QtCore/QThread>
+#include <QtCore/QByteArray>
 #include <QtCore/QTimer>
 #include <QtGui/QImage>
 
@@ -74,7 +75,13 @@ public:
 
     bool beginFrameRender(uint32_t frameIndex) override;
 
-    virtual bool wantVsync() const { return false; }
+    // the desktop window swaps as soon as a frame is drawn, the display showing whichever frame is newest at each of
+    // its own refreshes; TIVOLI_VSYNC=1 in the environment locks the swap to the display's refresh instead (an
+    // experiment of 2026-10-19 on the driver's stutter, PHYSICS.md "The driver's stutter")
+    virtual bool wantVsync() const {
+        static const bool forced = !qgetenv("TIVOLI_VSYNC").isEmpty() && qgetenv("TIVOLI_VSYNC") != "0";
+        return forced;
+    }
     void setVsyncEnabled(bool vsyncEnabled) { _vsyncEnabled = vsyncEnabled; }
     bool isVsyncEnabled() const { return _vsyncEnabled; }
     // Three threads, one for rendering, one for texture transfers, one reserved for the GL driver

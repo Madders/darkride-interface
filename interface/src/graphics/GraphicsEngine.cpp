@@ -387,6 +387,18 @@ void GraphicsEngine::render_performFrame() {
             renderArgs._blitFramebuffer = finalFramebuffer;
             FrameDiag::beginFrame();
             render_runRenderFrame(&renderArgs);
+            // the trace: this frame's camera against the traced item as it was just drawn
+            render::ItemID traced = _traceItem.load();
+            if (render::Item::isValidID(traced)) {
+                const auto& item = _renderScene->getItem(traced);
+                if (item.exist()) {
+                    glm::vec3 center = item.getBound().calcCenter();
+                    std::lock_guard<std::mutex> lock(_traceMutex);
+                    if (_traceSamples.size() < 200000) {
+                        _traceSamples.push_back({ usecTimestampNow(), viewFrustum.getPosition(), center });
+                    }
+                }
+            }
         }
     }
 
@@ -439,4 +451,17 @@ void GraphicsEngine::render_performFrame() {
 void GraphicsEngine::editRenderArgs(RenderArgsEditor editor) {
     QMutexLocker renderLocker(&_renderArgsMutex);
     editor(_appRenderArgs);
+}
+
+void GraphicsEngine::setRenderTraceItem(render::ItemID id) {
+    std::lock_guard<std::mutex> lock(_traceMutex);
+    _traceSamples.clear();
+    _traceItem = id;
+}
+
+std::vector<GraphicsEngine::TraceSample> GraphicsEngine::takeRenderTrace() {
+    std::lock_guard<std::mutex> lock(_traceMutex);
+    std::vector<TraceSample> samples;
+    samples.swap(_traceSamples);
+    return samples;
 }

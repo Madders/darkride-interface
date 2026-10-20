@@ -65,8 +65,9 @@ void PhysicsServer::run() {
 
     auto nodeList = DependencyManager::get<NodeList>();
     // the entity server for the tree; the clients (agents) so that the domain introduces them and the hole punch
-    // completes: a driver's VehicleInput packets come straight from its client (round 6)
-    nodeList->addSetOfNodeTypesToNodeInterestSet({ NodeType::EntityServer, NodeType::Agent });
+    // completes: a driver's VehicleInput packets come straight from its client (round 6); the asset server for the
+    // world's own files, such as a terrain at an atp: URL (without it every atp: fetch fails "Server Unavailable")
+    nodeList->addSetOfNodeTypesToNodeInterestSet({ NodeType::EntityServer, NodeType::Agent, NodeType::AssetServer });
     connect(nodeList.data(), &LimitedNodeList::nodeActivated, this, &PhysicsServer::nodeActivated);
     connect(nodeList.data(), &LimitedNodeList::nodeKilled, this, &PhysicsServer::nodeKilled);
     connect(nodeList.data(), &LimitedNodeList::uuidChanged, this, [](const QUuid& sessionUUID, const QUuid&) {

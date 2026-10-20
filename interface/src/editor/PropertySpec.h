@@ -54,7 +54,9 @@ enum class PropertyKind {
     CollisionMask,
     TerrainLayers,  // a Terrain's material layers: the list, with the selected layer's settings (TerrainLayersEditor)
     TerrainCaps,    // a Terrain's closed box: a checkbox read and set through the Terrain tool, not a property (TerrainCapsEditor)
-    Impostor        // an entity's impostor card (IMPOSTORS.md): the entry's summary and atlases, Bake and Remove (ImpostorEditor)
+    Impostor,       // an entity's impostor card (IMPOSTORS.md): the entry's summary and atlases, Bake and Remove (ImpostorEditor)
+    VehicleWheels,  // a vehicle's wheels, a JSON list of Unity WheelCollider-like objects, as a list with the selected wheel's fields (VehiclePartsEditor)
+    VehicleSeats    // a vehicle's seats, a JSON list, the same way
 };
 
 struct PropertySpec {
