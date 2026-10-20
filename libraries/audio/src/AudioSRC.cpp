@@ -12,6 +12,7 @@
 #include "AudioSRC.h"
 
 #include <assert.h>
+#include <algorithm>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1432,6 +1433,9 @@ AudioSRC::AudioSRC(int inputSampleRate, int outputSampleRate, int numChannels, Q
     assert(outputSampleRate > 0);
     assert(numChannels > 0);
     assert(numChannels <= SRC_MAX_CHANNELS);
+
+    // the asserts are gone in a release build, and the channel arrays hold SRC_MAX_CHANNELS
+    numChannels = std::max(1, std::min(numChannels, SRC_MAX_CHANNELS));
 
     _inputSampleRate = inputSampleRate;
     _outputSampleRate = outputSampleRate;
