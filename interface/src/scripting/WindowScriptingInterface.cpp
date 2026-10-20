@@ -153,7 +153,13 @@ void WindowScriptingInterface::openUrl(const QUrl& url) {
             args["url"] = url.toString();
             AndroidHelper::instance().requestActivity("WebView", true, args);
 #else
-            QDesktopServices::openUrl(url);
+            // web pages and e-mail open straight away; anything else the system would open (a file, another app's
+            // link) asks the user first
+            if (scheme == "http" || scheme == "https" || scheme == "mailto") {
+                QDesktopServices::openUrl(url);
+            } else {
+                QMetaObject::invokeMethod(qApp, "showUrlHandler", Q_ARG(const QUrl&, url));
+            }
 #endif
         }
     }
