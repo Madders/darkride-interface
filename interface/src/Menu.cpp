@@ -18,6 +18,7 @@
 #include <QFileDialog>
 #include <QMenuBar>
 #include <QShortcut>
+#include <QTimer>
 
 #include <thread>
 
@@ -100,6 +101,11 @@ Menu::Menu() {
                 dialogsManager.data(), &DialogsManager::toggleLoginDialog);
         connect(accountManager.data(), &AccountManager::logoutComplete,
                 dialogsManager.data(), &DialogsManager::toggleLoginDialog);
+
+        // The signals above only fire after a profile is loaded or a logout completes, so prime the menu item
+        // so its triggered signal is connected: otherwise File > Login does nothing on a fresh start. Deferred
+        // because Menu::getInstance() is null until construction finishes.
+        QTimer::singleShot(0, dialogsManager.data(), &DialogsManager::toggleLoginDialog);
     }
 
     // File > Import Avatar: wear an .fst, or auto rig a character file (AUTO-RIGGING.md)
@@ -167,7 +173,7 @@ Menu::Menu() {
         QObject::connect(nodeList.data(), &NodeList::canWriteAssetsChanged, assetServerAction, &QAction::setEnabled);
         assetServerAction->setEnabled(nodeList->getThisNodeCanWriteAssets());
     }
-
+    /*
     // Edit > Avatar Packager
 #ifndef Q_OS_ANDROID
     action = addActionToQMenuAndActionHash(editMenu, MenuOption::AvatarPackager);
@@ -175,7 +181,7 @@ Menu::Menu() {
         DependencyManager::get<AvatarPackager>()->open();
     });
 #endif
-
+*/
     // Edit > Reload All Content and clear caches
     addActionToQMenuAndActionHash(editMenu, MenuOption::ReloadContent, 0, qApp, SLOT(reloadResourceCaches()));    
 

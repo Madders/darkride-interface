@@ -41,6 +41,8 @@ private:
 
     void processScene(const hifi::VariantHash& mapping);
 
+    void processGltfExtras(const hifi::ByteArray& data);
+
 };
 
 #endif // hifi_AssimpSerializer_h
