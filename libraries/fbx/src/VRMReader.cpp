@@ -13,6 +13,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <QStringList>
 #include <QtEndian>
 
@@ -243,20 +244,26 @@ VRMInfo readVRM(const QByteArray& glb) {
         physics["tipCollision"] = true;
         info.flowPhysics.insert(group, physics);
     };
-    // a joint that branches stays as animated, and each branch is a thread of its own, as Flow follows one child
-    std::function<void(int, QVector<int>&)> collectChain = [&](int node, QVector<int>& chain) {
+    // a joint that branches stays as animated, and each branch is a thread of its own, as Flow follows one child. A file
+    // can loop or repeat a child, so a node is taken once and a chain no deeper than any real rig
+    const int MOST_CHAIN_DEPTH = 256;
+    std::function<void(int, QVector<int>&, QSet<int>&, int)> collectChain = [&](int node, QVector<int>& chain, QSet<int>& visited, int depth) {
+        if (node < 0 || node >= nodes.size() || depth > MOST_CHAIN_DEPTH || visited.contains(node)) {
+            return;
+        }
+        visited.insert(node);
         const QVector<int> nodeChildren = children(node);
         if (nodeChildren.size() >= 2) {
             for (int child : nodeChildren) {
                 QVector<int> branch;
-                collectChain(child, branch);
+                collectChain(child, branch, visited, depth + 1);
                 chain += branch;
             }
             return;
         }
         chain.append(node);
         if (nodeChildren.size() == 1) {
-            collectChain(nodeChildren[0], chain);
+            collectChain(nodeChildren[0], chain, visited, depth + 1);
         }
     };
     // a node's collider, kept if it's the largest so far (Flow has one sphere a joint)
@@ -312,8 +319,9 @@ VRMInfo readVRM(const QByteArray& glb) {
         for (const QJsonValue& boneGroup : secondary["boneGroups"].toArray()) {
             const QJsonObject group = boneGroup.toObject();
             QVector<int> springNodes;
+            QSet<int> visited;
             for (const QJsonValue& bone : group["bones"].toArray()) {
-                collectChain(bone.toInt(-1), springNodes);
+                collectChain(bone.toInt(-1), springNodes, visited, 0);
             }
             const float gravityY = group.contains("gravityDir") ? vectorOf(group["gravityDir"]).y : -1.0f;
             // 0.x's misspelling
