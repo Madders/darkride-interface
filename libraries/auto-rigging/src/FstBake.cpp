@@ -113,8 +113,27 @@ void autorig::bakeFst(const HFMModel& model, const VRMInfo& vrm, const QStringLi
         lines << "flowPhysicsData = " + QString::fromUtf8(QJsonDocument(line).toJson(QJsonDocument::Compact));
     }
     for (auto itr = model.flowData._collisionsConfig.begin(); itr != model.flowData._collisionsConfig.end(); itr++) {
+        QVariantMap collision = itr.value().toMap();
+        // A collider is in its joint's own axes. Worn as the .vrm, they're turned back by the automatic offset; with
+        // jointRotationOffset2 in the FST nothing is, so it's turned here
+        int jointIndex = -1;
+        for (int i = 0; i < (int)model.joints.size() && jointIndex < 0; i++) {
+            if (model.joints[i].name == itr.key()) {
+                jointIndex = i;
+            }
+        }
+        if (offsets.contains(jointIndex) && collision.contains("offset")) {
+            const QVariantMap in = collision["offset"].toMap();
+            const glm::vec3 turned = glm::inverse(offsets[jointIndex]) *
+                glm::vec3(in["x"].toFloat(), in["y"].toFloat(), in["z"].toFloat());
+            QVariantMap out;
+            out["x"] = turned.x;
+            out["y"] = turned.y;
+            out["z"] = turned.z;
+            collision["offset"] = out;
+        }
         QJsonObject line;
-        line[itr.key()] = QJsonObject::fromVariantMap(itr.value().toMap());
+        line[itr.key()] = QJsonObject::fromVariantMap(collision);
         lines << "flowCollisionsData = " + QString::fromUtf8(QJsonDocument(line).toJson(QJsonDocument::Compact));
     }
     if (!model.flowData._physicsConfig.isEmpty()) {
