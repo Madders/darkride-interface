@@ -81,13 +81,16 @@ public:
         InvalidByteRange,
         InvalidURL,
         NotFound,
-        RedirectFail
+        RedirectFail,
+        HostNotFound    // the name did not resolve: final, and the host is dead for a while (ResourceCache)
     };
     Q_ENUM(Result)
 
     QByteArray getData() { return _data; }
     State getState() const { return _state; }
     Result getResult() const { return _result; }
+    // the HTTP status the server answered with (404, 403, …), 0 for other schemes or no answer
+    int getStatusCode() const { return _statusCode; }
     QString getResultString() const;
     QUrl getUrl() const { return _url; }
     QUrl getRelativePathUrl() const { return _relativePathURL; }
@@ -116,6 +119,7 @@ protected:
     QUrl _relativePathURL;
     State _state { NotStarted };
     Result _result;
+    int _statusCode { 0 };
     QByteArray _data;
     bool _failOnRedirect { false };
     bool _cacheEnabled { true };

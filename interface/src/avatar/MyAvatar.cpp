@@ -43,7 +43,6 @@
 #include <ModelEntityItem.h>
 #include <GLMHelpers.h>
 #include <TextRenderer3D.h>
-#include <UserActivityLogger.h>
 #include <AnimDebugDraw.h>
 #include <AnimClip.h>
 #include <AnimInverseKinematics.h>
@@ -362,8 +361,6 @@ MyAvatar::MyAvatar(QThread* thread) :
 
 MyAvatar::~MyAvatar() {
     _lookAtTargetAvatar.reset();
-    delete _scriptEngine;
-    _scriptEngine = nullptr;
 }
 
 QString MyAvatar::getDominantHand() const {
@@ -420,15 +417,16 @@ void MyAvatar::enableHandTouchForID(const QUuid& entityID) {
 }
 
 void MyAvatar::registerMetaTypes(ScriptEnginePointer engine) {
-    QScriptValue value = engine->newQObject(this, QScriptEngine::QtOwnership, QScriptEngine::ExcludeDeleteLater | QScriptEngine::ExcludeChildObjects);
-    engine->globalObject().setProperty("MyAvatar", value);
+    // through the engine's registrations, so that every script engine sees both (on QtScript the same as before:
+    // QtOwnership, no deleteLater, no child objects; DriveKeys a plain object of the keys' values)
+    engine->registerGlobalObject("MyAvatar", this);
 
-    QScriptValue driveKeys = engine->newObject();
+    QVariantMap driveKeys;
     auto metaEnum = QMetaEnum::fromType<DriveKeys>();
     for (int i = 0; i < MAX_DRIVE_KEYS; ++i) {
-        driveKeys.setProperty(metaEnum.key(i), metaEnum.value(i));
+        driveKeys[metaEnum.key(i)] = metaEnum.value(i);
     }
-    engine->globalObject().setProperty("DriveKeys", driveKeys);
+    engine->registerGlobalValue("DriveKeys", driveKeys);
 
     qScriptRegisterMetaType(engine.data(), audioListenModeToScriptValue, audioListenModeFromScriptValue);
     qScriptRegisterMetaType(engine.data(), driveKeysToScriptValue, driveKeysFromScriptValue);
@@ -1686,8 +1684,7 @@ void MyAvatar::handleChangedAvatarEntityData() {
                 blobFailed = true; // blob doesn't exist
                 return;
             }
-            std::lock_guard<std::mutex> guard(_scriptEngineLock);
-            if (!EntityItemProperties::blobToProperties(*_scriptEngine, itr.value(), properties)) {
+            if (!EntityItemProperties::blobToProperties(itr.value(), properties)) {
                 blobFailed = true; // blob is corrupt
             }
         });
@@ -1719,8 +1716,7 @@ void MyAvatar::handleChangedAvatarEntityData() {
                 skip = true;
                 return;
             }
-            std::lock_guard<std::mutex> guard(_scriptEngineLock);
-            if (!EntityItemProperties::blobToProperties(*_scriptEngine, itr.value(), properties)) {
+            if (!EntityItemProperties::blobToProperties(itr.value(), properties)) {
                 skip = true;
             }
         });
@@ -1827,10 +1823,7 @@ bool MyAvatar::updateStaleAvatarEntityBlobs() const {
         if (found) {
             ++numFound;
             QByteArray blob;
-            {
-                std::lock_guard<std::mutex> guard(_scriptEngineLock);
-                EntityItemProperties::propertiesToBlob(*_scriptEngine, getID(), properties, blob);
-            }
+            EntityItemProperties::propertiesToBlob(getID(), properties, blob);
             _avatarEntitiesLock.withWriteLock([&] {
                 _cachedAvatarEntityBlobs[id] = blob;
             });
@@ -1886,10 +1879,7 @@ AvatarEntityMap MyAvatar::getAvatarEntityData() const {
         EntityItemProperties properties = entity->getProperties(desiredProperties);
 
         QByteArray blob;
-        {
-            std::lock_guard<std::mutex> guard(_scriptEngineLock);
-            EntityItemProperties::propertiesToBlob(*_scriptEngine, getID(), properties, blob, true);
-        }
+        EntityItemProperties::propertiesToBlob(getID(), properties, blob, true);
 
         data[entityID] = blob;
     }
@@ -2016,9 +2006,6 @@ void MyAvatar::avatarEntityDataToJson(QJsonObject& root) const {
 }
 
 void MyAvatar::loadData() {
-    if (!_scriptEngine) {
-        _scriptEngine = new QScriptEngine();
-    }
     getHead()->setBasePitch(_headPitchSetting.get());
 
     _yawSpeed = _yawSpeedSetting.get(_yawSpeed);
@@ -2272,7 +2259,7 @@ void MyAvatar::snapOtherAvatarLookAtTargetsToMe(const AvatarHash& hash) {
                 glm::vec3 gazeOffset = lookAtPosition - getHead()->getEyePosition();
 
                  ViewFrustum viewFrustum;
-                 qApp->copyViewFrustum(viewFrustum);
+                 qApp->getViewState().copyViewFrustum(viewFrustum);
 
                  glm::vec3 viewPosition = viewFrustum.getPosition();
 #if DEBUG_ALWAYS_LOOKAT_EYES_NOT_CAMERA
@@ -2627,12 +2614,8 @@ QVariantList MyAvatar::getAvatarEntitiesVariant() {
             QVariantMap avatarEntityData;
             avatarEntityData["id"] = entityID;
             EntityItemProperties entityProperties = entity->getProperties(desiredProperties);
-            {
-                std::lock_guard<std::mutex> guard(_scriptEngineLock);
-                QScriptValue scriptProperties;
-                scriptProperties = EntityItemPropertiesToScriptValue(_scriptEngine, entityProperties);
-                avatarEntityData["properties"] = scriptProperties.toVariant();
-            }
+            PlainScriptEngine engine;
+            avatarEntityData["properties"] = entityProperties.copyToScriptValue(&engine, false).toVariant();
             avatarEntitiesData.append(QVariant(avatarEntityData));
         }
     }
@@ -2694,7 +2677,6 @@ void MyAvatar::useFullAvatarURL(const QUrl& fullAvatarURL, const QString& modelN
     const QString& urlString = fullAvatarURL.toString();
     if (urlString.isEmpty() || (fullAvatarURL != getSkeletonModelURL())) {
         setSkeletonModelURL(fullAvatarURL);
-        UserActivityLogger::getInstance().changedModel("skeleton", urlString);
     } else {
         emit onLoadComplete();
     }
@@ -4190,7 +4172,7 @@ void MyAvatar::updateActionMotor(float deltaTime) {
 
     // May need to change view if boom length has changed
     if (previousBoomLength != _boomLength) {
-        qApp->changeViewAsNeeded(_boomLength);
+        qApp->getViewState().changeViewAsNeeded(_boomLength);
     }
 }
 
@@ -4231,7 +4213,7 @@ void MyAvatar::updateViewBoom() {
 
     // May need to change view if boom length has changed
     if (previousBoomLength != _boomLength) {
-        qApp->changeViewAsNeeded(_boomLength);
+        qApp->getViewState().changeViewAsNeeded(_boomLength);
     }
 }
 

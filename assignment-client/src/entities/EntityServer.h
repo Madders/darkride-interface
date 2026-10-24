@@ -71,7 +71,8 @@ protected:
 
 private slots:
     void handleEntityPacket(QSharedPointer<ReceivedMessage> message, SharedNodePointer senderNode);
-    void domainSettingsRequestFailed();
+    // a client's request for the list of every entity (EntityListMessage.h), sent to us point to point
+    void handleMessagesPacket(QSharedPointer<ReceivedMessage> message, SharedNodePointer senderNode);
 
 private:
     SimpleEntitySimulationPointer _entitySimulation;
@@ -79,13 +80,14 @@ private:
 
     QReadWriteLock _viewerSendingStatsLock;
     QMap<QUuid, QMap<QUuid, ViewerSendingStats>> _viewerSendingStats;
-
-    static const int DEFAULT_MINIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS = 45 * 60 * 1000;                    // 45m
-    static const int DEFAULT_MAXIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS = 60 * 60 * 1000;                    // 1h
-    int _MINIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS = DEFAULT_MINIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS;  // 45m
-    int _MAXIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS = DEFAULT_MAXIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS;  // 1h
-    QTimer _dynamicDomainVerificationTimer;
-    void startDynamicDomainVerification();
+    // one entity list per client at a time: a request soon after an answer is answered at the end of the wait, once
+    struct EntityListPacing {
+        quint64 lastAnswer { 0 };
+        quint32 requestNumber { 0 };
+        bool scheduled { false };
+    };
+    QHash<QUuid, EntityListPacing> _entityListPacing;
+    void sendEntityList(const QUuid& nodeID);
 };
 
 #endif  // hifi_EntityServer_h

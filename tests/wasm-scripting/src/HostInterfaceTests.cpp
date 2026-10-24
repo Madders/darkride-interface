@@ -299,17 +299,22 @@ void HostInterfaceTests::testCallErrors() {
     QVariant result = f.call(probe, "noSuchMethod", {});
     QVERIFY(HostInterface::isErrorRecord(result));
     QVERIFY(errorMessage(result).contains("no method noSuchMethod"));
-    QCOMPARE(result.toMap().value(HostInterface::ERROR_KEY).toMap().value("type").toString(), QString("CallError"));
+    // the error types QtScript gave the same failures: a missing method a TypeError, too few arguments for every
+    // candidate a SyntaxError, an argument that will not convert a TypeError
+    auto typeOf = [](const QVariant& record) { return record.toMap().value(HostInterface::ERROR_KEY).toMap().value("type").toString(); };
+    QCOMPARE(typeOf(result), QString("TypeError"));
     // too few arguments
     result = f.call(probe, "add", { 1 });
     QVERIFY(HostInterface::isErrorRecord(result));
     QVERIFY(errorMessage(result).contains("arguments"));
+    QCOMPARE(typeOf(result), QString("SyntaxError"));
     // an argument that will not convert (a string parameter takes anything, as toString does in JavaScript,
     // so add's overloads always match two arguments; scale's vec3 and float do not take a bool and a map)
     QCOMPARE(f.call(probe, "add", { QVariantMap(), QVariantList() }), QVariant("{}[]"));
     result = f.call(probe, "scale", { true, QVariantMap() });
     QVERIFY(HostInterface::isErrorRecord(result));
     QVERIFY(errorMessage(result).contains("converted"));
+    QCOMPARE(typeOf(result), QString("TypeError"));
     // a wrong signature, a bad index, an unknown handle, a signal is not callable, a private invokable is hidden;
     // a protected one is callable, as on QtScript
     QVERIFY(HostInterface::isErrorRecord(f.call(probe, "add(float)", { 1 })));
@@ -347,20 +352,21 @@ void HostInterfaceTests::testProperties() {
     const int32_t probe = f.probeHandle();
     QCOMPARE(f.get(probe, "count"), QVariant(0));
     QCOMPARE(f.get(probe, "label"), QVariant("probe"));
-    QCOMPARE(f.set(probe, "count", 7).userType(), int(QMetaType::Nullptr));
+    // a write that worked returns nothing: no bytes cross back
+    QCOMPARE(f.set(probe, "count", 7).userType(), int(QMetaType::UnknownType));
     QCOMPARE(f.probe.count(), 7);
     QCOMPARE(f.get(probe, "count"), QVariant(7));
     // the value is converted to the property's type
-    QCOMPARE(f.set(probe, "count", "12").userType(), int(QMetaType::Nullptr));
+    QCOMPARE(f.set(probe, "count", "12").userType(), int(QMetaType::UnknownType));
     QCOMPARE(f.probe.count(), 12);
     QVariantMap position;
     position["x"] = 1.5;
     position["y"] = 2.5;
     position["z"] = 3.5;
-    QCOMPARE(f.set(probe, "position", position).userType(), int(QMetaType::Nullptr));
+    QCOMPARE(f.set(probe, "position", position).userType(), int(QMetaType::UnknownType));
     QCOMPARE(f.probe.position(), glm::vec3(1.5f, 2.5f, 3.5f));
     QCOMPARE(f.get(probe, "position").toMap().value("y").toDouble(), 2.5);
-    QCOMPARE(f.set(probe, "mode", "Stopped").userType(), int(QMetaType::Nullptr));
+    QCOMPARE(f.set(probe, "mode", "Stopped").userType(), int(QMetaType::UnknownType));
     QCOMPARE(f.probe.mode(), Probe::Stopped);
     QCOMPARE(f.get(probe, "mode"), QVariant(10));
     // errors

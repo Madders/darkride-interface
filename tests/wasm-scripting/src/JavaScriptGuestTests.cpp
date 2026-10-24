@@ -8,7 +8,10 @@
 
 #include "JavaScriptGuestTests.h"
 
+#include <thread>
+
 #include <QtCore/QDir>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 
@@ -47,7 +50,10 @@ struct Guest {
     QStringList logged;        // "<level> <text>"
     QStringList errors;        // level 3 only
     QStringList failures;
+    QStringList timeLimits;    // "<entry> <entity> <reason>" for each call ended at the time limit
     QVariantList carried;      // what the script handed to Probe.carry
+    std::chrono::milliseconds callTimeout { 10000 };
+    bool nameTimeLimits { false }; // with a time-limit handler, a limit is not a failure
 
     bool start(const QString& source, QString& error) {
         QFile file(guestModulePath());
@@ -55,12 +61,13 @@ struct Guest {
             error = "no guest module at " + guestModulePath();
             return false;
         }
-        module = runtime->compile(file.readAll(), error);
+        // as the engine runs it: the guest asks whether to stop, the runtime checks no deadlines in its loops
+        module = runtime->compile(file.readAll(), error, WasmRuntime::Interruption::Cooperative);
         if (!module) {
             return false;
         }
         WasmInstance::Limits limits;
-        limits.callTimeout = std::chrono::milliseconds(10000);
+        limits.callTimeout = callTimeout;
         instance = std::make_unique<WasmInstance>(module, limits);
         host = std::make_unique<HostInterface>(*instance, objects, codec, relay);
         host->setLogger([this](int level, const QString& text) {
@@ -70,6 +77,11 @@ struct Guest {
             }
         });
         host->setFailureHandler([this](const QString& entry, const QString& failure) { failures << entry + ": " + failure; });
+        if (nameTimeLimits) {
+            host->setTimeLimitHandler([this](const QString& entry, const QString& entity, const QString& reason) {
+                timeLimits << entry + " " + entity + " " + reason;
+            });
+        }
         host->install();
         instance->enableWasi();
         objects.registerGlobal("Script", &script);
@@ -462,3 +474,175 @@ void JavaScriptGuestTests::testScopedCallbacks() {
     guest.stop();
 }
 
+// A handler that never returns. The guest runs without deadline checks in its loops, so QuickJS's interrupt
+// handler asks the host whether to stop: the call ends soon after its time limit or a stop, the reason is the
+// host's to report (the guest logs the interruption at the debug level only), and after a time limit the script
+// runs on.
+void JavaScriptGuestTests::testRunawayLoopIsInterrupted() {
+    {
+        Guest guest;
+        guest.callTimeout = std::chrono::milliseconds(100);
+        START_OR_SKIP(guest, R"(
+            Probe.bare.connect(function () { var n = 0; while (true) { n++; } });
+            Probe.named.connect(function (name) { Probe.carry(name); });
+        )");
+        QElapsedTimer timer;
+        timer.start();
+        guest.probe.ping();
+        qint64 elapsed = timer.elapsed();
+        QVERIFY2(elapsed >= 90 && elapsed < 2000, qPrintable(QString("took %1 ms").arg(elapsed)));
+        QVERIFY2(guest.failures.join(" ").contains("limit of 100 ms"), qPrintable(guest.failures.join(" | ")));
+        QVERIFY2(guest.errors.isEmpty(), qPrintable(guest.errors.join(" | ")));
+        guest.probe.send("after", true);
+        QCOMPARE(guest.carried.size(), 1);
+        QCOMPARE(guest.carried[0].toString(), QString("after"));
+        guest.stop();
+    }
+    {
+        Guest guest;
+        guest.callTimeout = std::chrono::milliseconds(0); // no limit, as JavaScript runs in the client
+        START_OR_SKIP(guest, R"( Probe.bare.connect(function () { while (true) {} }); )");
+        WasmInstance* instance = guest.instance.get();
+        std::thread stopper([instance] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            instance->requestStop();
+        });
+        QElapsedTimer timer;
+        timer.start();
+        guest.probe.ping();
+        qint64 elapsed = timer.elapsed();
+        stopper.join();
+        QVERIFY2(elapsed >= 40 && elapsed < 2000, qPrintable(QString("took %1 ms").arg(elapsed)));
+        QVERIFY2(guest.failures.join(" ").contains("stopped"), qPrintable(guest.failures.join(" | ")));
+    }
+}
+
+// The time limit per entity script: the guest hosts every entity script of a world, so when one runs away in a
+// method, a timer or a signal handler, the call ends at the limit naming that entity (the shim knows which
+// script is running, for its callbacks and handlers too), the guest is whole, the other scripts' calls work,
+// and the state the unwinding skipped (Script.remoteCallerID, the running entity) is reset. After its unload
+// the runaway's handlers fire no more.
+void JavaScriptGuestTests::testRunawayEntityScriptIsNamed() {
+    Guest guest;
+    // a limit long enough that a busy machine's preemption does not reach it during the short calls (the clock
+    // is the module's own time, wall time of its run)
+    guest.callTimeout = std::chrono::milliseconds(250);
+    guest.nameTimeLimits = true;
+    START_OR_SKIP(guest, "");
+    const QString script = R"((function () {
+        var self = this;
+        this.remotelyCallable = ["spin", "ping"];
+        this.preload = function (id) {
+            self.id = id;
+            Probe.bare.connect(function () { if (self.armed) { while (true) {} } Probe.carry("signal to " + id); });
+        };
+        this.spin = function (id) { while (true) {} };
+        this.later = function (id) { Script.setTimeout(function () { while (true) {} }, 10); };
+        this.arm = function (id) { self.armed = true; };
+        this.ping = function (id) { Probe.carry("ping " + id + " caller " + Script.remoteCallerID); return "pong"; };
+        this.unload = function (id) { Probe.carry("unload " + id); };
+    }))";
+    const QString A = "{aaaaaaaa-0000-0000-0000-00000000000a}";
+    const QString B = "{bbbbbbbb-0000-0000-0000-00000000000b}";
+    auto payload = [](const QString& entity, const QString& method, const QString& caller = QString()) {
+        QVariantMap map;
+        map["entity"] = entity;
+        map["method"] = method;
+        map["args"] = QVariantList();
+        if (!caller.isEmpty()) {
+            map["remoteCallerID"] = caller;
+        }
+        return map;
+    };
+    QVariant result;
+    QString error;
+    for (const QString& entity : { A, B }) {
+        QVariantMap load;
+        load["entity"] = entity;
+        load["url"] = "file:///test/runaway.js";
+        load["source"] = script;
+        QVERIFY2(guest.host->callWithPayload("entity_load", load, result, error), qPrintable(error));
+        QVERIFY2(!HostInterface::isErrorRecord(result), qPrintable(result.toString()));
+        QVERIFY(guest.host->callWithPayload("entity_call", payload(entity, "preload"), result, error));
+    }
+
+    // a method that never returns, called from another client: the call ends at the limit, naming A
+    QElapsedTimer timer;
+    timer.start();
+    QVERIFY(!guest.host->callWithPayload("entity_call", payload(A, "spin", "{cccccccc-0000-0000-0000-00000000000c}"), result, error));
+    qint64 elapsed = timer.elapsed();
+    QVERIFY2(elapsed >= 230 && elapsed < 3000, qPrintable(QString("took %1 ms").arg(elapsed)));
+    QVERIFY2(error.contains("limit of 250 ms"), qPrintable(error));
+    QCOMPARE(guest.timeLimits.size(), 1);
+    QVERIFY2(guest.timeLimits[0].startsWith("entity_call " + A + " "), qPrintable(guest.timeLimits[0]));
+    QVERIFY2(guest.failures.isEmpty(), qPrintable(guest.failures.join(" | ")));
+    QVERIFY2(guest.errors.isEmpty(), qPrintable(guest.errors.join(" | ")));
+
+    // the guest is whole, the other script answers, and the remote caller of the interrupted call is forgotten
+    error.clear();
+    QVERIFY2(guest.host->callWithPayload("entity_call", payload(B, "ping"), result, error),
+             qPrintable(error + " | logged: " + guest.logged.join(" | ")));
+    QCOMPARE(result.toString(), QString("pong"));
+    QCOMPARE(guest.carried.size(), 1);
+    QCOMPARE(guest.carried[0].toString(), "ping " + B + " caller undefined");
+
+    // a timer A set runs away: the callback is A's
+    QVERIFY(guest.host->callWithPayload("entity_call", payload(A, "later"), result, error));
+    QCOMPARE(guest.script.timers.size(), 1);
+    const int timerCallback = guest.script.timers.begin().value().id;
+    QVERIFY(!guest.host->callCallback(timerCallback, QVariantList(), result, error));
+    QVERIFY2(error.contains("limit of 250 ms"), qPrintable(error));
+    QCOMPARE(guest.timeLimits.size(), 2);
+    QVERIFY2(guest.timeLimits[1].startsWith("call_callback " + A + " "), qPrintable(guest.timeLimits[1]));
+
+    // a signal handler A connected runs away: the handler is A's; B's handler on the same signal still ran or
+    // runs on the next emission
+    QVERIFY(guest.host->callWithPayload("entity_call", payload(A, "arm"), result, error));
+    guest.carried.clear();
+    guest.probe.ping();
+    QCOMPARE(guest.timeLimits.size(), 3);
+    QVERIFY2(guest.timeLimits[2].startsWith("on_signal " + A + " "), qPrintable(guest.timeLimits[2]));
+    QVERIFY2(guest.failures.isEmpty(), qPrintable(guest.failures.join(" | ")));
+
+    // A unloaded by the host: its handlers and callbacks go; B's handler runs alone
+    QVariantMap unload;
+    unload["entity"] = A;
+    QVERIFY(guest.host->callWithPayload("entity_unload", unload, result, error));
+    guest.carried.clear();
+    guest.probe.ping();
+    QCOMPARE(guest.timeLimits.size(), 3);
+    QCOMPARE(guest.carried.size(), 1);
+    QCOMPARE(guest.carried[0].toString(), "signal to " + B);
+    QVariantMap has;
+    has["entity"] = A;
+    has["method"] = "spin";
+    QVERIFY(guest.host->callWithPayload("entity_has", has, result, error));
+    QCOMPARE(result.toInt(), 0);
+    QVERIFY2(guest.errors.isEmpty(), qPrintable(guest.errors.join(" | ")));
+    guest.stop();
+}
+
+// What a script sees as QtScript showed it: an API object prints as "Class(name = "objectName")", a call with too few
+// arguments throws a real SyntaxError and a call whose arguments will not convert a real TypeError (instanceof works).
+void JavaScriptGuestTests::testErrorsAndPrintedNamesAsOnQtScript() {
+    Guest guest;
+    guest.probe.setObjectName("the probe");
+    START_OR_SKIP(guest, R"(
+        var out = [String(Probe), "" + Assets];
+        try { Probe.add(1); } catch (e) { out.push(e.name, e instanceof SyntaxError, e.message.indexOf("arguments") >= 0); }
+        try { Probe.scale(true, {}); } catch (e) { out.push(e.name, e instanceof TypeError); }
+        Probe.carry(out);
+    )");
+    QVERIFY2(guest.errors.isEmpty(), qPrintable(guest.errors.join(" | ")));
+    QCOMPARE(guest.carried.size(), 1);
+    const QVariantList out = guest.carried[0].toList();
+    QCOMPARE(out.size(), 7);
+    QCOMPARE(out[0].toString(), QString("Probe(name = \"the probe\")"));
+    QCOMPARE(out[1].toString(), QString("AssetScriptingInterface(name = \"\")"));
+    QCOMPARE(out[2].toString(), QString("SyntaxError"));
+    QCOMPARE(out[3].toBool(), true);
+    QCOMPARE(out[4].toBool(), true);
+    QCOMPARE(out[5].toString(), QString("TypeError"));
+    QCOMPARE(out[6].toBool(), true);
+    guest.stop();
+}

@@ -11,6 +11,9 @@
 
 #include "DrawTask.h"
 
+#include <atomic>
+#include <unordered_map>
+
 #include <algorithm>
 #include <assert.h>
 
@@ -42,6 +45,63 @@ void render::renderItems(const RenderContextPointer& renderContext, const ItemBo
 namespace {
     int repeatedInvalidKeyMessageID = 0;
     std::once_flag messageIDFlag;
+
+    // GPU instancing (INSTANCING.md 3.3): whether a pipeline bucket's items may share draws. Translucent items keep
+    // their back-to-front order, deformed ones have their own skinning buffers, fading ones their own fade parameters,
+    // lightmapped ones their own texture transforms (until 3.5), and an item with its own pipeline sets everything
+    // itself; a wireframe is a debug view.
+    bool bucketCanInstance(const RenderArgs* args, const ShapeKey& key) {
+        return args->_enableInstancing && key.isValid() && !key.hasOwnPipeline() && !key.isTranslucent() &&
+               !key.isDeformed() && !key.isFaded() && !key.hasLightMap() && !key.isWireframe();
+    }
+
+    // every grouping pass has a number of its own, so an item's settled state is never taken for a later pass's
+    std::atomic<uint32_t> instancingPassCounter { 0 };
+
+    struct InstanceGroup {
+        Item item;                 // the first (nearest) member: it draws the group
+        Transforms transforms;     // every member's transform, in order; empty for an item that draws alone
+    };
+
+    // Draws a bucket's items grouped by the draw they can share: an item that answers with a key joins the group of
+    // the first item that answered that key, which draws them all at once. Groups and the items that draw alone keep
+    // the order of their first appearance, so a bucket sorted front to back stays roughly so.
+    void renderInstancedShapes(RenderArgs* args, const ShapePipelinePointer& pipeline, const ShapeKey& key, const std::vector<Item>& items) {
+        args->_instancingPass = ++instancingPassCounter;
+        std::vector<InstanceGroup> groups;
+        groups.reserve(items.size());
+        std::unordered_map<InstanceKey, size_t, InstanceKey::Hash> groupOf;
+        for (const auto& item : items) {
+            auto answer = item.getInstancing(args);
+            if (answer.draw == Instancing::NONE) {
+                continue;
+            }
+            if (answer.draw == Instancing::ALONE) {
+                groups.push_back({ item, {} });
+                continue;
+            }
+            auto found = groupOf.find(answer.key);
+            if (found == groupOf.end()) {
+                groupOf.emplace(answer.key, groups.size());
+                groups.push_back({ item, { answer.transform } });
+            } else {
+                groups[found->second].transforms.push_back(answer.transform);
+            }
+        }
+        for (auto& group : groups) {
+            if (pipeline) {
+                pipeline->prepareShapeItem(args, key, group.item);
+            }
+            if (group.transforms.size() > 1) {
+                group.item.renderInstances(args, group.transforms);
+            } else {
+                group.item.render(args);
+            }
+        }
+        // settled state is the pass's own: a draw of these items later in the frame, outside a grouping pass, must
+        // settle again (its view may differ)
+        args->_instancingPass = 0;
+    }
 }
 
 void renderShape(RenderArgs* args, const ShapePlumberPointer& shapeContext, const Item& item, const ShapeKey& globalKey) {
@@ -74,10 +134,46 @@ void render::renderShapes(const RenderContextPointer& renderContext,
     if (maxDrawnItems != -1) {
         numItemsToDraw = glm::min(numItemsToDraw, maxDrawnItems);
     }
+    if (!args->_enableInstancing) {
+        for (auto i = 0; i < numItemsToDraw; ++i) {
+            auto& item = scene->getItem(inItems[i].id);
+            renderShape(args, shapeContext, item, globalKey);
+        }
+        return;
+    }
+
+    // GPU instancing (INSTANCING.md 3.3): a run of items with one key that may share draws (a shadow pass's items all
+    // have one) is grouped and drawn together, in its place; the rest draw one by one as before
+    std::vector<Item> run;
+    ShapeKey runKey;
+    auto flushRun = [&]() {
+        if (run.empty()) {
+            return;
+        }
+        args->_itemShapeKey = runKey._flags.to_ulong();
+        args->_shapePipeline = shapeContext->pickPipeline(args, runKey);
+        if (args->_shapePipeline) {
+            renderInstancedShapes(args, args->_shapePipeline, runKey, run);
+        }
+        args->_shapePipeline = nullptr;
+        args->_itemShapeKey = 0;
+        run.clear();
+    };
     for (auto i = 0; i < numItemsToDraw; ++i) {
         auto& item = scene->getItem(inItems[i].id);
-        renderShape(args, shapeContext, item, globalKey);
+        auto key = item.getShapeKey() | globalKey;
+        if (bucketCanInstance(args, key)) {
+            if (!run.empty() && runKey._flags != key._flags) {
+                flushRun();
+            }
+            runKey = key;
+            run.push_back(item);
+        } else {
+            flushRun();
+            renderShape(args, shapeContext, item, globalKey);
+        }
     }
+    flushRun();
 }
 
 void render::renderStateSortShapes(const RenderContextPointer& renderContext,
@@ -125,6 +221,10 @@ void render::renderStateSortShapes(const RenderContextPointer& renderContext,
             continue;
         }
         args->_itemShapeKey = pipelineKey._flags.to_ulong();
+        if (bucketCanInstance(args, pipelineKey)) {
+            renderInstancedShapes(args, args->_shapePipeline, pipelineKey, bucket);   // GPU instancing (INSTANCING.md 3.3)
+            continue;
+        }
         for (auto& item : bucket) {
             args->_shapePipeline->prepareShapeItem(args, pipelineKey, item);
             item.render(args);

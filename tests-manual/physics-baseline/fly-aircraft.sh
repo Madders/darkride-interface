@@ -1,8 +1,8 @@
 #!/bin/zsh
 # Fly the tilt-thrust aircraft yourself (PHYSICS.md round 8): a client on the physics sandbox (the server flies it, you give
-# the orders) with the terrain and the craft made for you. Climb aboard and click it to take the stick: W/S set the
-# throttle (X cuts it), A/D roll and yaw, up/down the elevator, Space tilts the nacelles up toward hover while held, C
-# tilts them down toward forward flight, F leaves the stick. R for a fresh craft on the pad, T back to the pad.
+# the orders) with the terrain and the craft made for you. Climb aboard and click it to take the stick; it flies through
+# the flight assistant (scripts/system/libraries/flightAssist.js): W/S faster and slower (X stops, into a hover), A/D bank
+# (turn in a hover), Up/Down or Space/C climb and descend; F leaves the stick. R for a fresh craft on the pad, T back to it.
 #   tests-manual/physics-baseline/fly-aircraft.sh [path/to/Darkride.app] [udp port|serverless]
 set -e
 D=$(cd "$(dirname "$0")" && pwd)
@@ -29,5 +29,5 @@ URL="hifi://localhost:$PORT"
 echo "client: $BIN"
 echo "world: $URL"
 echo "terrain: $TERRAIN_URL"
-echo "aboard, click the craft for the stick: W/S throttle (X cuts), A/D roll and yaw, up/down elevator, Space tilts to hover, C to forward flight, F leave; R fresh craft, T to the pad"
+echo "aboard, click the craft for the stick (the flight assistant): W/S faster and slower (X stops), A/D bank (turn in a hover), Up/Down or Space/C climb and descend, F leave; R fresh craft, T to the pad"
 "$BIN" --allowMultipleInstances --url "$URL" --testScript "$R/aircraft-playground.js" > "$R/client.log" 2>&1 || true

@@ -25,8 +25,8 @@
 #include <RegisteredMetaTypes.h>
 #include <PointerEvent.h>
 #include <PickFilter.h>
+#include <ScriptCallback.h>
 
-#include "PolyVoxEntityItem.h"
 #include "LineEntityItem.h"
 #include "PolyLineEntityItem.h"
 #include "EntityTree.h"
@@ -827,6 +827,13 @@ public slots:
             const QScriptValue& entityIdsToInclude = QScriptValue(), const QScriptValue& entityIdsToDiscard = QScriptValue(),
             bool visibleOnly = false, bool collidableOnly = false) const;
 
+    // findRayIntersection with the lists as lists of IDs, for the WebAssembly script engine (a name of its own, as
+    // setIgnoreItemsVector has: QtScript would find a same-named overload ambiguous with the QScriptValue one). Without
+    // it a module's call with lists reaches the shorter form and the lists are dropped.
+    Q_INVOKABLE RayToEntityIntersectionResult findRayIntersectionVector(const PickRay& ray, bool precisionPicking,
+            const QVector<QUuid>& entityIdsToInclude, const QVector<QUuid>& entityIdsToDiscard, bool visibleOnly,
+            bool collidableOnly) const;
+
     /**jsdoc
      * Reloads an entity's server entity script such that the latest version re-downloaded.
      * @function Entities.reloadServerScripts
@@ -854,6 +861,9 @@ public slots:
      *     information on the error.
      */
     Q_INVOKABLE bool getServerScriptStatus(const QUuid& entityID, QScriptValue callback);
+    // The same request for the WebAssembly script engine, the callback as a ScriptCallback (QtScript never picks this
+    // overload: it cannot make a ScriptCallback)
+    Q_INVOKABLE bool getServerScriptStatus(const QUuid& entityID, const ScriptCallback& callback);
 
     /**jsdoc
      * Gets metadata for certain entity properties such as <code>script</code> and <code>serverScripts</code>.
@@ -885,6 +895,9 @@ public slots:
      */
     Q_INVOKABLE bool queryPropertyMetadata(const QUuid& entityID, QScriptValue property, QScriptValue scopeOrCallback,
         QScriptValue methodOrName = QScriptValue());
+    // The same query for the WebAssembly script engine: the callback is called with (error, result), each a map or
+    // null; the module's runtime gives the scope forms and makes the error an Error, as makeError did
+    Q_INVOKABLE bool queryPropertyMetadata(const QUuid& entityID, const QString& property, const ScriptCallback& callback);
 
 
     /**jsdoc
@@ -949,204 +962,6 @@ public slots:
     // FIXME move to a renderable entity interface
     Q_INVOKABLE bool getDrawZoneBoundaries() const;
 
-
-    /**jsdoc
-     * Sets the values of all voxels in a spherical portion of a {@link Entities.EntityProperties-PolyVox|PolyVox} entity.
-     * @function Entities.setVoxelSphere
-     * @param {Uuid} entityID - The ID of the {@link Entities.EntityProperties-PolyVox|PolyVox} entity.
-     * @param {Vec3} center - The center of the sphere of voxels to set, in world coordinates.
-     * @param {number} radius - The radius of the sphere of voxels to set, in world coordinates.
-     * @param {number} value - If <code>value % 256 == 0</code> then each voxel is cleared, otherwise each voxel is set.
-     * @example <caption>Create a PolyVox sphere.</caption>
-     * var position = Vec3.sum(MyAvatar.position, Vec3.multiplyQbyV(MyAvatar.orientation, { x: 0, y: 0.5, z: -8 }));
-     * var polyVox = Entities.addEntity({
-     *     type: "PolyVox",
-     *     position: position,
-     *     dimensions: { x: 2, y: 2, z: 2 },
-     *     voxelVolumeSize: { x: 32, y: 32, z: 32 },
-     *     lifetime: 300  // Delete after 5 minutes.
-     * });
-     * Entities.setVoxelSphere(polyVox, position, 0.9, 255);
-     */
-    // FIXME move to a renderable entity interface
-    Q_INVOKABLE bool setVoxelSphere(const QUuid& entityID, const glm::vec3& center, float radius, int value);
-    
-    /**jsdoc
-     * Sets the values of all voxels in a capsule-shaped portion of a {@link Entities.EntityProperties-PolyVox|PolyVox} entity.
-     * @function Entities.setVoxelCapsule
-     * @param {Uuid} entityID - The ID of the {@link Entities.EntityProperties-PolyVox|PolyVox} entity.
-     * @param {Vec3} start - The center of the sphere of voxels to set, in world coordinates.
-     * @param {Vec3} end - The center of the sphere of voxels to set, in world coordinates.
-     * @param {number} radius - The radius of the capsule cylinder and spherical ends, in world coordinates.
-     * @param {number} value - If <code>value % 256 == 0</code> then each voxel is cleared, otherwise each voxel is set.
-     * @example <caption>Create a PolyVox capsule shape.</caption>
-     * var position = Vec3.sum(MyAvatar.position, Vec3.multiplyQbyV(MyAvatar.orientation, { x: 0, y: 0.5, z: -8 }));
-     * var polyVox = Entities.addEntity({
-     *     type: "PolyVox",
-     *     position: position,
-     *     dimensions: { x: 2, y: 2, z: 2 },
-     *     voxelVolumeSize: { x: 32, y: 32, z: 32 },
-     *     lifetime: 300  // Delete after 5 minutes.
-     * });
-     * var startPosition = Vec3.sum({ x: -0.5, y: 0, z: 0 }, position);
-     * var endPosition = Vec3.sum({ x: 0.5, y: 0, z: 0 }, position);
-     * Entities.setVoxelCapsule(polyVox, startPosition, endPosition, 0.5, 255);
-     */
-    // FIXME move to a renderable entity interface
-    Q_INVOKABLE bool setVoxelCapsule(const QUuid& entityID, const glm::vec3& start, const glm::vec3& end, float radius, int value);
-
-    /**jsdoc
-     * Sets the value of a particular voxel in a {@link Entities.EntityProperties-PolyVox|PolyVox} entity.
-     * @function Entities.setVoxel
-     * @param {Uuid} entityID - The ID of the {@link Entities.EntityProperties-PolyVox|PolyVox} entity.
-     * @param {Vec3} position - The position relative to the minimum axes values corner of the entity. The 
-     *     <code>position</code> coordinates are rounded to the nearest integer to get the voxel coordinate. The minimum axes 
-     *     corner voxel is <code>{ x: 0, y: 0, z: 0 }</code>.
-     * @param {number} value - If <code>value % 256 == 0</code> then voxel is cleared, otherwise the voxel is set.
-     * @example <caption>Create a cube PolyVox entity and clear the minimum axes' corner voxel.</caption>
-     * var entity = Entities.addEntity({
-     *     type: "PolyVox",
-     *     position: Vec3.sum(MyAvatar.position, Vec3.multiplyQbyV(MyAvatar.orientation, { x: 0, y: 0.5, z: -8 })),
-     *     dimensions: { x: 2, y: 2, z: 2 },
-     *     voxelVolumeSize: { x: 16, y: 16, z: 16 },
-     *     lifetime: 300  // Delete after 5 minutes.
-     * });
-     * Entities.setAllVoxels(entity, 1);
-     * Entities.setVoxel(entity, { x: 0, y: 0, z: 0 }, 0);
-     */
-    // FIXME move to a renderable entity interface
-    Q_INVOKABLE bool setVoxel(const QUuid& entityID, const glm::vec3& position, int value);
-
-    /**jsdoc
-     * Sets the values of all voxels in a {@link Entities.EntityProperties-PolyVox|PolyVox} entity.
-     * @function Entities.setAllVoxels
-     * @param {Uuid} entityID - The ID of the {@link Entities.EntityProperties-PolyVox|PolyVox} entity.
-     * @param {number} value - If <code>value % 256 == 0</code> then each voxel is cleared, otherwise each voxel is set.
-     * @example <caption>Create a PolyVox cube.</caption>
-     * var entity = Entities.addEntity({
-     *     type: "PolyVox",
-     *     position: Vec3.sum(MyAvatar.position, Vec3.multiplyQbyV(MyAvatar.orientation, { x: 0, y: 0.5, z: -8 })),
-     *     dimensions: { x: 2, y: 2, z: 2 },
-     *     voxelVolumeSize: { x: 16, y: 16, z: 16 },
-     *     lifetime: 300  // Delete after 5 minutes.
-     * });
-     * Entities.setAllVoxels(entity, 1);
-     */
-    // FIXME move to a renderable entity interface
-    Q_INVOKABLE bool setAllVoxels(const QUuid& entityID, int value);
-
-    /**jsdoc
-     * Sets the values of all voxels in a cubic portion of a {@link Entities.EntityProperties-PolyVox|PolyVox} entity.
-     * @function Entities.setVoxelsInCuboid
-     * @param {Uuid} entityID - The ID of the {@link Entities.EntityProperties-PolyVox|PolyVox} entity.
-     * @param {Vec3} lowPosition - The position of the minimum axes value corner of the cube of voxels to set, in voxel 
-     *     coordinates.
-     * @param {Vec3} cuboidSize - The size of the cube of voxels to set, in voxel coordinates.
-     * @param {number} value - If <code>value % 256 == 0</code> then each voxel is cleared, otherwise each voxel is set.
-     * @example <caption>Create a PolyVox cube and clear the voxels in one corner.</caption>
-     * var polyVox = Entities.addEntity({
-     *     type: "PolyVox",
-     *     position: Vec3.sum(MyAvatar.position, Vec3.multiplyQbyV(MyAvatar.orientation, { x: 0, y: 0.5, z: -8 })),
-     *     rotation: MyAvatar.orientation,
-     *     dimensions: { x: 2, y: 2, z: 2 },
-     *     voxelVolumeSize: { x: 16, y: 16, z: 16 },
-     *     lifetime: 300  // Delete after 5 minutes.
-     * });
-     * Entities.setAllVoxels(polyVox, 1);
-     * var cuboidPosition = { x: 12, y: 12, z: 12 };
-     * var cuboidSize = { x: 4, y: 4, z: 4 };
-     * Entities.setVoxelsInCuboid(polyVox, cuboidPosition, cuboidSize, 0);
-     */
-    // FIXME move to a renderable entity interface
-    Q_INVOKABLE bool setVoxelsInCuboid(const QUuid& entityID, const glm::vec3& lowPosition, const glm::vec3& cuboidSize, int value);
-
-    /**jsdoc
-     * Converts voxel coordinates in a {@link Entities.EntityProperties-PolyVox|PolyVox} entity to world coordinates. Voxel 
-     * coordinates are relative to the minimum axes values corner of the entity with a scale of <code>Vec3.ONE</code> being the 
-     * dimensions of each voxel.
-     * @function Entities.voxelCoordsToWorldCoords
-     * @param {Uuid} entityID - The ID of the {@link Entities.EntityProperties-PolyVox|PolyVox} entity.
-     * @param {Vec3} voxelCoords - The voxel coordinates. May be fractional and outside the entity's bounding box.
-     * @returns {Vec3} The world coordinates of the <code>voxelCoords</code> if the <code>entityID</code> is a 
-     *     {@link Entities.EntityProperties-PolyVox|PolyVox} entity, otherwise {@link Vec3(0)|Vec3.ZERO}.
-     * @example <caption>Create a PolyVox cube with the 0,0,0 voxel replaced by a sphere.</caption>
-     * // Cube PolyVox with 0,0,0 voxel missing.
-     * var polyVox = Entities.addEntity({
-     *     type: "PolyVox",
-     *     position: Vec3.sum(MyAvatar.position, Vec3.multiplyQbyV(MyAvatar.orientation, { x: 0, y: 0.5, z: -8 })),
-     *     dimensions: { x: 2, y: 2, z: 2 },
-     *     voxelVolumeSize: { x: 16, y: 16, z: 16 },
-     *     lifetime: 300  // Delete after 5 minutes.
-     * });
-     * Entities.setAllVoxels(polyVox, 1);
-     * Entities.setVoxel(polyVox, { x: 0, y: 0, z: 0 }, 0);
-     *
-     * // Red sphere in 0,0,0 corner position.
-     * var cornerPosition = Entities.voxelCoordsToWorldCoords(polyVox, { x: 0, y: 0, z: 0 });
-     * var voxelDimensions = Vec3.multiply(2 / 16, Vec3.ONE);
-     * var sphere = Entities.addEntity({
-     *     type: "Sphere",
-     *     position: Vec3.sum(cornerPosition, Vec3.multiply(0.5, voxelDimensions)),
-     *     dimensions: voxelDimensions,
-     *     color: { red: 255, green: 0, blue: 0 },
-     *     lifetime: 300  // Delete after 5 minutes.
-     * });
-     */
-    // FIXME move to a renderable entity interface
-    Q_INVOKABLE glm::vec3 voxelCoordsToWorldCoords(const QUuid& entityID, glm::vec3 voxelCoords);
-
-    /**jsdoc
-     * Converts world coordinates to voxel coordinates in a {@link Entities.EntityProperties-PolyVox|PolyVox} entity. Voxel 
-     * coordinates are relative to the minimum axes values corner of the entity, with a scale of <code>Vec3.ONE</code> being 
-     * the dimensions of each voxel.
-     * @function Entities.worldCoordsToVoxelCoords
-     * @param {Uuid} entityID - The ID of the {@link Entities.EntityProperties-PolyVox|PolyVox} entity.
-     * @param {Vec3} worldCoords - The world coordinates. The value may be outside the entity's bounding box.
-     * @returns {Vec3} The voxel coordinates of the <code>worldCoords</code> if the <code>entityID</code> is a 
-     *     {@link Entities.EntityProperties-PolyVox|PolyVox} entity, otherwise {@link Vec3(0)|Vec3.ZERO}. The value may be 
-     *     fractional and outside the entity's bounding box.
-     */
-    // FIXME move to a renderable entity interface
-    Q_INVOKABLE glm::vec3 worldCoordsToVoxelCoords(const QUuid& entityID, glm::vec3 worldCoords);
-
-    /**jsdoc
-     * Converts voxel coordinates in a {@link Entities.EntityProperties-PolyVox|PolyVox} entity to local coordinates. Local 
-     * coordinates are relative to the minimum axes value corner of the entity, with the scale being the same as world 
-     * coordinates. Voxel coordinates are relative to the minimum axes values corner of the entity, with a scale of 
-     * <code>Vec3.ONE</code> being the dimensions of each voxel.
-     * @function Entities.voxelCoordsToLocalCoords
-     * @param {Uuid} entityID - The ID of the {@link Entities.EntityProperties-PolyVox|PolyVox} entity.
-     * @param {Vec3} voxelCoords - The voxel coordinates. The value may be fractional and outside the entity's bounding box.
-     * @returns {Vec3} The local coordinates of the <code>voxelCoords</code> if the <code>entityID</code> is a 
-     *     {@link Entities.EntityProperties-PolyVox|PolyVox} entity, otherwise {@link Vec3(0)|Vec3.ZERO}.
-     * @example <caption>Get the world dimensions of a voxel in a PolyVox entity.</caption>
-     * var polyVox = Entities.addEntity({
-     *     type: "PolyVox",
-     *     position: Vec3.sum(MyAvatar.position, Vec3.multiplyQbyV(MyAvatar.orientation, { x: 0, y: 0.5, z: -8 })),
-     *     dimensions: { x: 2, y: 2, z: 2 },
-     *     voxelVolumeSize: { x: 16, y: 16, z: 16 },
-     *     lifetime: 300  // Delete after 5 minutes.
-     * });
-     * var voxelDimensions = Entities.voxelCoordsToLocalCoords(polyVox, Vec3.ONE);
-     * print("Voxel dimensions: " + JSON.stringify(voxelDimensions));
-     */
-    // FIXME move to a renderable entity interface
-    Q_INVOKABLE glm::vec3 voxelCoordsToLocalCoords(const QUuid& entityID, glm::vec3 voxelCoords);
-
-    /**jsdoc
-     * Converts local coordinates to voxel coordinates in a {@link Entities.EntityProperties-PolyVox|PolyVox} entity. Local 
-     * coordinates are relative to the minimum axes value corner of the entity, with the scale being the same as world 
-     * coordinates. Voxel coordinates are relative to the minimum axes values corner of the entity, with a scale of 
-     * <code>Vec3.ONE</code> being the dimensions of each voxel.
-     * @function Entities.localCoordsToVoxelCoords
-     * @param {Uuid} entityID - The ID of the {@link Entities.EntityProperties-PolyVox|PolyVox} entity.
-     * @param {Vec3} localCoords - The local coordinates. The value may be outside the entity's bounding box.
-     * @returns {Vec3} The voxel coordinates of the <code>worldCoords</code> if the <code>entityID</code> is a 
-     *     {@link Entities.EntityProperties-PolyVox|PolyVox} entity, otherwise {@link Vec3(0)|Vec3.ZERO}. The value may be 
-     *     fractional and outside the entity's bounding box.
-     */
-    // FIXME move to a renderable entity interface
-    Q_INVOKABLE glm::vec3 localCoordsToVoxelCoords(const QUuid& entityID, glm::vec3 localCoords);
 
     /**jsdoc
      * Sets all the points in a {@link Entities.EntityProperties-Line|Line} entity.
@@ -1621,6 +1436,41 @@ public slots:
     // FIXME move to a renderable entity interface
     Q_INVOKABLE QStringList getJointNames(const QUuid& entityID);
 
+    /**jsdoc
+     * Gets the custom properties stored in a {@link Entities.EntityProperties-Model|Model} entity's model file: the
+     * <code>extras</code> of a glTF file's nodes and materials. Blender writes an object's or material's custom properties
+     * there when the glTF exporter's "Include &gt; Custom Properties" option is on.
+     * <p>The model is loaded separately by each client from the same file, so every client gets the same values. They aren't
+     * available in server entity scripts, which don't load models.</p>
+     * @function Entities.getModelExtras
+     * @param {Uuid} entityID - The ID of the {@link Entities.EntityProperties-Model|Model} entity.
+     * @returns {Entities.ModelExtras} The custom properties if the entity is a
+     *     {@link Entities.EntityProperties-Model|Model} entity and is loaded, otherwise <code>{}</code>.
+     * @example <caption>Report a model's custom properties.</caption>
+     * entityID = Entities.addEntity({
+     *     type: "Model",
+     *     modelURL: "https://example.com/tagged.glb",
+     *     position: Vec3.sum(MyAvatar.position, Vec3.multiplyQbyV(MyAvatar.orientation, { x: 0, y: 0, z: -5 })),
+     *     lifetime: 300  // Delete after 5 minutes.
+     * });
+     *
+     * Script.setTimeout(function () {
+     *     // Custom properties aren't available until after the model has loaded.
+     *     var extras = Entities.getModelExtras(entityID);
+     *     print("Custom properties: " + JSON.stringify(extras));
+     *     // E.g., { "objects": { "Tree": { "isFoliage": true } }, "materials": { "Leaves": { "sway": 0.2 } } }
+     * }, 2000);
+     */
+    /**jsdoc
+     * The custom properties in a model file.
+     * @typedef {object} Entities.ModelExtras
+     * @property {Object<string, object>} objects - The custom properties of each object (glTF node) that has some, by object
+     *     name. Object names are the model's joint names, per {@link Entities.getJointNames|getJointNames}.
+     * @property {Object<string, object>} materials - The custom properties of each material that has some, by material name.
+     */
+    // FIXME move to a renderable entity interface
+    Q_INVOKABLE QVariantMap getModelExtras(const QUuid& entityID);
+
 
     /**jsdoc
      * Gets the IDs of entities and avatars that are directly parented to an entity or avatar model. To get all descendants, 
@@ -1978,10 +1828,9 @@ public slots:
                                             const glm::vec3& start, const glm::vec3& end, float radius);
 
     /**jsdoc
-     * Gets the meshes in a {@link Entities.EntityProperties-Model|Model} or {@link Entities.EntityProperties-PolyVox|PolyVox} 
-     * entity.
+     * Gets the meshes in a {@link Entities.EntityProperties-Model|Model} entity.
      * @function Entities.getMeshes
-     * @param {Uuid} entityID - The ID of the <code>Model</code> or <code>PolyVox</code> entity to get the meshes of.
+     * @param {Uuid} entityID - The ID of the <code>Model</code> entity to get the meshes of.
      * @param {Entities~getMeshesCallback} callback - The function to call upon completion.
      * @deprecated This function is deprecated and will be removed. It no longer works for Model entities. Use the 
      *     {@link Graphics} API instead.
@@ -1990,7 +1839,7 @@ public slots:
       * Called when a {@link Entities.getMeshes} call is complete.
       * @callback Entities~getMeshesCallback
       * @param {MeshProxy[]} meshes - If <code>success</code> is <code>true</code>, a {@link MeshProxy} per mesh in the 
-      *     <code>Model</code> or <code>PolyVox</code> entity; otherwise <code>undefined</code>. 
+      *     <code>Model</code> entity; otherwise <code>undefined</code>. 
       * @param {boolean} success - <code>true</code> if the {@link Entities.getMeshes} call was successful, <code>false</code> 
       *     otherwise. The call may be unsuccessful if the requested entity could not be found.
       * @deprecated This function is deprecated and will be removed. It no longer works for Model entities. Use the 
@@ -1998,6 +1847,8 @@ public slots:
       */
     // FIXME move to a renderable entity interface
     Q_INVOKABLE void getMeshes(const QUuid& entityID, QScriptValue callback);
+    // The same for the WebAssembly script engine, the callback as a ScriptCallback, called before this returns
+    Q_INVOKABLE void getMeshes(const QUuid& entityID, const ScriptCallback& callback);
 
     /**jsdoc
      * Gets the object to world transform, excluding scale, of an entity.
@@ -2630,7 +2481,6 @@ private slots:
 
 private:
     bool actionWorker(const QUuid& entityID, std::function<bool(EntitySimulationPointer, EntityItemPointer)> actor);
-    bool polyVoxWorker(QUuid entityID, std::function<bool(PolyVoxEntityItem&)> actor);
     bool setPoints(QUuid entityID, std::function<bool(LineEntityItem&)> actor);
     void queueEntityMessage(PacketType packetType, EntityItemID entityID, const EntityItemProperties& properties);
     bool addLocalEntityCopy(EntityItemProperties& propertiesWithSimID, EntityItemID& id, bool isClone = false);
@@ -2638,6 +2488,11 @@ private:
     EntityItemPointer checkForTreeEntityAndTypeMatch(const QUuid& entityID,
                                                      EntityTypes::EntityType entityType = EntityTypes::Unknown);
 
+
+    /// findRayIntersection's search, its lists read by the QtScript form or the WebAssembly engine's twin
+    RayToEntityIntersectionResult findRayIntersectionInLists(const PickRay& ray, bool precisionPicking,
+        const QVector<EntityItemID>& entitiesToInclude, const QVector<EntityItemID>& entitiesToDiscard, bool visibleOnly,
+        bool collidableOnly) const;
 
     /// actually does the work of finding the ray intersection, can be called in locking mode or tryLock mode
     RayToEntityIntersectionResult evalRayIntersectionWorker(const PickRay& ray, Octree::lockType lockType,

@@ -20,8 +20,6 @@ enum class PluginType {
 class DisplayPlugin;
 class InputPlugin;
 class CodecPlugin;
-class SteamClientPlugin;
-class OculusPlatformPlugin;
 class TeaProtocolPlugin;
 class Plugin;
 class PluginContainer;
@@ -36,7 +34,5 @@ using InputPluginProvider = std::function<InputPluginList()>;
 using CodecPluginPointer = std::shared_ptr<CodecPlugin>;
 using CodecPluginList = std::vector<CodecPluginPointer>;
 using CodecPluginProvider = std::function<CodecPluginList()>;
-using SteamClientPluginPointer = std::shared_ptr<SteamClientPlugin>;
-using OculusPlatformPluginPointer = std::shared_ptr<OculusPlatformPlugin>;
 using TeaProtocolPluginPointer = std::shared_ptr<TeaProtocolPlugin>;
 using InputPluginSettingsPersister = std::function<void(const InputPluginList&)>;

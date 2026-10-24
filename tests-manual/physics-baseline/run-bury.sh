@@ -23,5 +23,7 @@ echo "results: $R"
 XDG_CONFIG_HOME="$R/home/config" TIVOLI_APP_DATA_DIR="$R/home/data" \
     "$BIN" --allowMultipleInstances --url "file://$D/world.json" --tokens "{}" --testScript "$R/bury-test.js" \
     --testResultsLocation "$R" > "$R/client.log" 2>&1 || true
+# the client's texture cache (data/ktx_cache, up to 1.5 GB a run) goes; its log and results stay
+rm -rf "$R/home/data/ktx_cache"
 grep -a "PHYSICS-BURY" "$R/client.log" | sed 's/.*PHYSICS-BURY/PHYSICS-BURY/' || { echo "no summary in $R/client.log" >&2; exit 1; }
 echo "lifts during the walk: $(sed -n '/PHYSICS-BURY walk start/,/PHYSICS-BURY walk end/p' "$R/client.log" | grep -a -c 'lifted onto it')"

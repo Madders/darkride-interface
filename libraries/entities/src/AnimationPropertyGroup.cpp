@@ -65,7 +65,8 @@ bool operator!=(const AnimationPropertyGroup& a, const AnimationPropertyGroup& b
  * @property {boolean} hold=false - <code>true</code> if the rotations and translations of the last frame played are 
  *     maintained when the animation stops playing, <code>false</code> if they aren't.
  */
-void AnimationPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties, QScriptEngine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
+template <typename Value, typename Engine>
+void AnimationPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties, Engine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_ANIMATION_URL, Animation, animation, URL, url);
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_ANIMATION_ALLOW_TRANSLATION, Animation, animation, AllowTranslation, allowTranslation);
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_ANIMATION_FPS, Animation, animation, FPS, fps);
@@ -78,7 +79,8 @@ void AnimationPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desire
 }
 
 
-void AnimationPropertyGroup::copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) {
+template <typename Value>
+void AnimationPropertyGroup::copyFromScriptValue(const Value& object, bool& _defaultSettings) {
 
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(animation, url, QString, setURL);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(animation, allowTranslation, bool, setAllowTranslation);
@@ -398,3 +400,5 @@ float AnimationPropertyGroup::computeLoopedFrame(float frame) const {
 bool AnimationPropertyGroup::isValidAndRunning() const {
     return getRunning() && (getFPS() > 0.0f) && (getNumFrames() > 1.0f) && !(getURL().isEmpty());
 }
+
+INSTANTIATE_PROPERTY_GROUP_CONVERSIONS(AnimationPropertyGroup)

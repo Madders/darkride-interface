@@ -78,7 +78,17 @@ void LocationBookmarks::teleportToBookmark() {
 }
 
 void LocationBookmarks::addBookmark() {
-    ModalDialogListener* dlg = OffscreenUi::getTextAsync(OffscreenUi::ICON_PLACEMARK, "Bookmark Location", "Name", QString());
+    // the name starts as the place's: the world's name, else its place name
+    auto addressManager = DependencyManager::get<AddressManager>();
+    QString placeName = addressManager->getDomainLabel().trimmed();
+    if (placeName.isEmpty()) {
+        placeName = addressManager->getPlaceName();
+    }
+    ModalDialogListener* dlg = OffscreenUi::getTextAsync(OffscreenUi::ICON_PLACEMARK, "Bookmark This Place", QString(), placeName);
+    if (QQuickItem* box = dlg->getDialogItem()) {
+        OffscreenUi::setButtonText(box, QMessageBox::Ok, "Add");
+        box->setProperty("placeholderText", "Name");
+    }
 
     connect(dlg, &ModalDialogListener::response, this, [=] (QVariant response) {
         disconnect(dlg, &ModalDialogListener::response, this, nullptr);

@@ -16,8 +16,9 @@
 #include "EntityItemProperties.h"
 #include "EntityItemPropertiesMacros.h"
 
-void VehiclePropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties,
-                                             QScriptEngine* engine, bool skipDefaults,
+template <typename Value, typename Engine>
+void VehiclePropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties,
+                                             Engine* engine, bool skipDefaults,
                                              EntityItemProperties& defaultEntityProperties) const {
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_VEHICLE_TYPE, Vehicle, vehicle, Type, type);
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_VEHICLE_MASS, Vehicle, vehicle, Mass, mass);
@@ -72,7 +73,8 @@ void VehiclePropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredP
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_VEHICLE_TILT, Vehicle, vehicle, Tilt, tilt);
 }
 
-void VehiclePropertyGroup::copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) {
+template <typename Value>
+void VehiclePropertyGroup::copyFromScriptValue(const Value& object, bool& _defaultSettings) {
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(vehicle, type, QString, setType);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(vehicle, mass, float, setMass);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(vehicle, centerOfMass, vec3, setCenterOfMass);
@@ -1002,3 +1004,5 @@ uint64_t VehiclePropertyGroup::definitionHash() const {
     memcpy(&hash, digest.constData(), sizeof(hash));
     return hash == 0 ? 1 : hash;
 }
+
+INSTANTIATE_PROPERTY_GROUP_CONVERSIONS(VehiclePropertyGroup)

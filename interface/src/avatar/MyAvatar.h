@@ -3206,10 +3206,6 @@ private:
     //
     // Also these lists for tracking delayed changes to blobs and Settings
     mutable std::set<EntityItemID> _staleCachedAvatarEntityBlobs;
-    //
-    // keep a ScriptEngine around so we don't have to instantiate on the fly (these are very slow to create/delete)
-    mutable std::mutex _scriptEngineLock;
-    QScriptEngine* _scriptEngine { nullptr };
     bool _needToSaveAvatarEntitySettings { false };
 
     bool _reactionTriggers[NUM_AVATAR_TRIGGER_REACTIONS] { false, false };

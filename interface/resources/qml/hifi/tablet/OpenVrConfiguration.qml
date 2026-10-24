@@ -740,14 +740,6 @@ Flickable {
                 InputConfiguration.calibrationStatus.connect(calibrationStatusInfo);
             }
 
-            Component.onDestruction: {
-                var settings = InputConfiguration.configurationSettings(openVrConfiguration.pluginName);
-                var data = {
-                    "num_pucks": settings["puckCount"]
-                }
-                UserActivityLogger.logAction("mocap_ui_close_dialog", data);
-            }
-
             HifiControls.SpinBox {
                 id: timeToCalibrate
                 width: 70
@@ -952,17 +944,6 @@ Flickable {
                 to: 0
             }
 
-
-            function logAction(action, status) {
-                var data = {
-                    "num_pucks": status["puckCount"],
-                    "puck_configuration": status["configuration"],
-                    "head_puck": status["head_puck"],
-                    "hand_puck": status["hand_pucks"]
-                }
-                UserActivityLogger.logAction(action, data);
-            }
-
             function calibrationStatusInfo(status) {
                 var calibrationScreen = stack.currentItem;
 
@@ -973,17 +954,8 @@ Flickable {
 
                 if (status["calibrated"]) {
                     calibrationScreen.success();
-
-                    if (status["UI"]) {
-                        logAction("mocap_ui_success", status);
-                    }
-
                 } else if (!status["calibrated"]) {
                     calibrationScreen.failure();
-
-                    if (status["UI"]) {
-                        logAction("mocap_ui_failed", status);
-                    }
                 }
                 updateCalibrationButton();
             }
@@ -1070,12 +1042,6 @@ Flickable {
 
                 initializeButtonState();
                 updateCalibrationText();
-
-                var data = {
-                    "num_pucks": settings["puckCount"]
-                };
-
-                UserActivityLogger.logAction("mocap_ui_open_dialog", data);
 
                 isConfiguring = false;
             }

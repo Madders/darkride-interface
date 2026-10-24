@@ -23,7 +23,6 @@
 #include "Menu.h"
 #include "Snapshot.h"
 #include "SnapshotAnimated.h"
-#include "UserActivityLogger.h"
 #include "ui/Keyboard.h"
 
 void setupPreferences() {
@@ -165,12 +164,6 @@ void setupPreferences() {
     }
 
     {
-        auto getter = []() -> bool { return qApp->getMiniTabletEnabled(); };
-        auto setter = [](bool value) { qApp->setMiniTabletEnabled(value); };
-        preferences->addPreference(new CheckPreference(UI_CATEGORY, "Use mini tablet", getter, setter));
-    }
-
-    {
         auto getter = []() -> int { return DependencyManager::get<Keyboard>()->getUse3DKeyboard(); };
         auto setter = [](int value) { DependencyManager::get<Keyboard>()->setUse3DKeyboard(value); };
         preferences->addPreference(new CheckPreference(UI_CATEGORY, "Use Virtual Keyboard", getter, setter));
@@ -245,15 +238,6 @@ void setupPreferences() {
         preference->setMax(5);
         preference->setStep(1);
         preferences->addPreference(preference);
-    }
-
-    {
-        auto getter = []() -> bool { return !Menu::getInstance()->isOptionChecked(MenuOption::DisableActivityLogger); };
-        auto setter = [](bool value) { Menu::getInstance()->setIsOptionChecked(MenuOption::DisableActivityLogger, !value); };
-        preferences->addPreference(new CheckPreference("Privacy",
-                                                       "Send data - Allow Darkride to collect "
-                                                       "information to improve the product. ",
-                                                       getter, setter));
     }
 
     static const QString AVATAR_TUNING{ "Avatar Tuning" };

@@ -17,11 +17,15 @@
 #include <QJsonDocument>
 #include <QRandomGenerator>
 
+#include <EntityListMessage.h>
 #include <EntityTree.h>
+#include <EntityTreeElement.h>
+#include <MessagesClient.h>
 #include <ResourceCache.h>
 #include <ScriptCache.h>
 #include <plugins/PluginManager.h>
 #include <EntityEditFilters.h>
+#include <WasmEditFilterEngine.h>
 #include <NetworkingConstants.h>
 #include <hfm/ModelFormatRegistry.h>
 
@@ -37,8 +41,7 @@ const char* LOCAL_MODELS_PERSIST_FILE = "resources/models.svo";
 
 EntityServer::EntityServer(ReceivedMessage& message) :
     OctreeServer(message),
-    _entitySimulation(nullptr),
-    _dynamicDomainVerificationTimer(this)
+    _entitySimulation(nullptr)
 {
     DependencyManager::set<ResourceManager>();
     DependencyManager::set<ResourceCacheSharedItems>();
@@ -55,15 +58,10 @@ EntityServer::EntityServer(ReceivedMessage& message) :
         PacketType::EntityClone,
         PacketType::EntityEdit,
         PacketType::EntityErase,
-        PacketType::EntityPhysics,
-        PacketType::ChallengeOwnership,
-        PacketType::ChallengeOwnershipRequest,
-        PacketType::ChallengeOwnershipReply },
+        PacketType::EntityPhysics },
         this,
         "handleEntityPacket");
-
-    connect(&_dynamicDomainVerificationTimer, &QTimer::timeout, this, &EntityServer::startDynamicDomainVerification);
-    _dynamicDomainVerificationTimer.setSingleShot(true);
+    packetReceiver.registerListener(PacketType::MessagesData, this, "handleMessagesPacket");
 }
 
 EntityServer::~EntityServer() {
@@ -90,6 +88,79 @@ void EntityServer::handleEntityPacket(QSharedPointer<ReceivedMessage> message, S
     }
 }
 
+void EntityServer::handleMessagesPacket(QSharedPointer<ReceivedMessage> message, SharedNodePointer senderNode) {
+    // any client may ask: the list says nothing a query with no view would not send it in full
+    if (!senderNode || senderNode->getType() != NodeType::Agent) {
+        return;
+    }
+    QString channel, text;
+    QByteArray data;
+    bool isText = false;
+    QUuid senderID;
+    MessagesClient::decodeMessagesPacket(message, channel, isText, text, data, senderID);
+    quint32 requestNumber = 0;
+    if (isText || channel != EntityListMessage::CHANNEL || !EntityListMessage::decodeRequest(data, requestNumber)) {
+        return;
+    }
+    const quint64 MIN_USECS_BETWEEN_ANSWERS = 2 * USECS_PER_SECOND;
+    QUuid nodeID = senderNode->getUUID();
+    auto& pacing = _entityListPacing[nodeID];
+    pacing.requestNumber = requestNumber;
+    if (pacing.scheduled) {
+        return;   // the answer on its way will carry this request's number
+    }
+    quint64 now = usecTimestampNow();
+    if (pacing.lastAnswer == 0 || now - pacing.lastAnswer >= MIN_USECS_BETWEEN_ANSWERS) {
+        sendEntityList(nodeID);
+        return;
+    }
+    pacing.scheduled = true;
+    int waitMs = (int)((MIN_USECS_BETWEEN_ANSWERS - (now - pacing.lastAnswer)) / USECS_PER_MSEC) + 1;
+    QTimer::singleShot(waitMs, this, [this, nodeID] { sendEntityList(nodeID); });
+}
+
+void EntityServer::sendEntityList(const QUuid& nodeID) {
+    auto nodeList = DependencyManager::get<NodeList>();
+    SharedNodePointer node = nodeList->nodeWithUUID(nodeID);
+    auto pacingIt = _entityListPacing.find(nodeID);
+    if (!node || pacingIt == _entityListPacing.end()) {
+        _entityListPacing.remove(nodeID);
+        return;
+    }
+    QVector<EntityListMessage::Record> records;
+    EntityTreePointer tree = std::static_pointer_cast<EntityTree>(_tree);
+    quint64 start = usecTimestampNow();
+    if (tree) {
+        tree->withReadLock([&] {
+            tree->recurseTreeWithOperation([&](const OctreeElementPointer& element, void*) {
+                auto entityElement = std::static_pointer_cast<EntityTreeElement>(element);
+                entityElement->forEachEntity([&](const EntityItemPointer& entity) {
+                    EntityListMessage::Record record;
+                    record.id = entity->getID();
+                    record.parentID = entity->getParentID();
+                    record.type = entity->getType();
+                    record.visible = entity->getVisible();
+                    record.locked = entity->getLocked();
+                    record.created = entity->getCreated();
+                    bool success = false;
+                    record.cube = entity->getQueryAACube(success);
+                    record.name = entity->getName();
+                    records << record;
+                });
+                return true;
+            });
+        });
+    }
+    QByteArray reply = EntityListMessage::encodeReply(pacingIt->requestNumber, records);
+    quint64 built = usecTimestampNow();
+    nodeList->sendPacketList(MessagesClient::encodeMessagesDataPacket(EntityListMessage::CHANNEL, reply,
+                                                                      nodeList->getSessionUUID()), *node);
+    pacingIt->lastAnswer = built;
+    pacingIt->scheduled = false;
+    qDebug() << "Sent the entity list to" << nodeID << ":" << records.size() << "entities," << reply.size() << "bytes,"
+             << (built - start) << "usecs to build";
+}
+
 std::unique_ptr<OctreeQueryNode> EntityServer::createOctreeQueryNode() {
     return std::unique_ptr<OctreeQueryNode> { new EntityNodeData() };
 }
@@ -108,6 +179,9 @@ OctreePointer EntityServer::createTree() {
     DependencyManager::registerInheritance<SpatialParentFinder, AssignmentParentFinder>();
     DependencyManager::set<AssignmentParentFinder>(tree);
     DependencyManager::set<EntityEditFilters>(std::static_pointer_cast<EntityTree>(tree));
+    // a filter script runs on the engine the scripting setting names: QtScript, or the WebAssembly engine's
+    // JavaScript guest with DARKRIDE_RUN_JS_ON_WASM=1
+    EntityEditFilters::setEngineFactory(&WasmEditFilterEngine::makeForSetting);
 
     return tree;
 }
@@ -121,9 +195,6 @@ void EntityServer::beforeRun() {
     connect(_pruneDeletedEntitiesTimer, SIGNAL(timeout()), this, SLOT(pruneDeletedEntities()));
     const int PRUNE_DELETED_MODELS_INTERVAL_MSECS = 1 * 1000; // once every second
     _pruneDeletedEntitiesTimer->start(PRUNE_DELETED_MODELS_INTERVAL_MSECS);
-
-    DomainHandler& domainHandler = DependencyManager::get<NodeList>()->getDomainHandler();
-    connect(&domainHandler, &DomainHandler::settingsReceiveFail, this, &EntityServer::domainSettingsRequestFailed);
 }
 
 void EntityServer::entityCreated(const EntityItem& newEntity, const SharedNodePointer& senderNode) {
@@ -325,18 +396,6 @@ void EntityServer::readAdditionalConfiguration(const QJsonObject& settingsSectio
         tree->setEntityMaxTmpLifetime(EntityTree::DEFAULT_MAX_TMP_ENTITY_LIFETIME);
     }
 
-    int minTime;
-    if (readOptionInt("dynamicDomainVerificationTimeMin", settingsSectionObject, minTime)) {
-        _MINIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS = minTime * 1000;
-    }
-
-    int maxTime;
-    if (readOptionInt("dynamicDomainVerificationTimeMax", settingsSectionObject, maxTime)) {
-        _MAXIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS = maxTime * 1000;
-    }
-
-    startDynamicDomainVerification();
-
     tree->setWantEditLogging(wantEditLogging);
     tree->setWantTerseEditLogging(wantTerseEditLogging);
 
@@ -382,6 +441,7 @@ void EntityServer::nodeKilled(SharedNodePointer node) {
         tree->deleteDescendantsOfAvatar(node->getUUID());
         tree->forgetAvatarID(node->getUUID());
     }
+    _entityListPacing.remove(node->getUUID());
     OctreeServer::nodeKilled(node);
 }
 
@@ -459,24 +519,4 @@ QString EntityServer::serverSubclassStats() {
     statsString += "\r\n\r\n";
 
     return statsString;
-}
-
-void EntityServer::domainSettingsRequestFailed() {
-    auto nodeList = DependencyManager::get<NodeList>();
-    qCDebug(entities) << "The EntityServer couldn't get the Domain Settings. Starting dynamic domain verification with default values...";
-
-    _MINIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS = DEFAULT_MINIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS;
-    _MAXIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS = DEFAULT_MAXIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS;
-    startDynamicDomainVerification();
-}
-
-void EntityServer::startDynamicDomainVerification() {
-    qCDebug(entities) << "Starting Dynamic Domain Verification...";
-
-    EntityTreePointer tree = std::static_pointer_cast<EntityTree>(_tree);
-    tree->startDynamicDomainVerificationOnServer((float) _MAXIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS / MSECS_PER_SECOND);
-
-    int nextInterval = QRandomGenerator::global()->bounded((_MAXIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS + 1) - _MINIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS) + _MINIMUM_DYNAMIC_DOMAIN_VERIFICATION_TIMER_MS;
-    qCDebug(entities) << "Restarting Dynamic Domain Verification timer for" << nextInterval / 1000 << "seconds";
-    _dynamicDomainVerificationTimer.start(nextInterval);
 }

@@ -55,6 +55,7 @@ WebEngineView {
     ControlsUit.PermissionPopupBackground {
         id: permissionPopupBackground
         z: 100
+        unit: 1
         onSendPermission: {
             root.grantFeaturePermission(securityOrigin, feature, shouldGivePermission);
         }

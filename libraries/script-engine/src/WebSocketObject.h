@@ -17,6 +17,7 @@
 #include <QtCore/QObject>
 #include <QtCore/QString>
 #include <QtWebSockets/QWebSocket>
+#include <QtWebSockets/QWebSocketServer>
 
 class WebSocketObject : public QObject {
     Q_OBJECT
@@ -76,6 +77,44 @@ public:
     Q_INVOKABLE QObject* createWebSocket(const QString& url);
     /// Deletes a socket this factory made, once the script is done with it.
     Q_INVOKABLE void dispose(QObject* socket);
+};
+
+/// A WebSocket server as a plain QObject: the behaviour of WebSocketServerClass, an agent's WebSocketServer, for an
+/// engine without QtScript. It listens on every address from the start (port 0 picks a free one), and each incoming
+/// connection arrives through newConnection as a WebSocketObject, which lives as long as the server.
+class WebSocketServerObject : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(QString url READ url)
+    Q_PROPERTY(int port READ port)
+    Q_PROPERTY(bool listening READ listening)
+
+public:
+    WebSocketServerObject(const QString& serverName, int port, QObject* parent = nullptr);
+
+    QString url() const { return _server.serverUrl().toDisplayString(); }
+    int port() const { return _server.serverPort(); }
+    bool listening() const { return _server.isListening(); }
+
+    /// Closes every client that is still open ("Server closing."), then the server.
+    Q_INVOKABLE void close();
+
+signals:
+    void newConnection(QObject* client);
+
+private:
+    QWebSocketServer _server;
+    QList<WebSocketObject*> _clients;
+};
+
+/// Makes WebSocket servers. An engine registers it for an agent only, as the QtScript engine gives WebSocketServer
+/// to agents only: a client or entity script may not listen on the player's machine.
+class WebSocketServerFactory : public QObject {
+    Q_OBJECT
+
+public:
+    explicit WebSocketServerFactory(QObject* parent = nullptr) : QObject(parent) {}
+
+    Q_INVOKABLE QObject* createWebSocketServer(const QString& serverName, int port);
 };
 
 #endif // hifi_WebSocketObject_h

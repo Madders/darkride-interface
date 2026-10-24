@@ -9,6 +9,7 @@
 #include "ValueCodec.h"
 
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 #include <QtCore/QCborArray>
@@ -375,6 +376,16 @@ QCborValue ValueCodec::encodeVariantMap(const QVariantMap& items) const {
 
 QCborValue ValueCodec::toCbor(const QVariant& value) const {
     const int type = value.userType();
+    // a CBOR item made by the caller (an ordered map, say) crosses as it is
+    if (type == QMetaType::QCborValue) {
+        return value.value<QCborValue>();
+    }
+    if (type == QMetaType::QCborMap) {
+        return QCborValue(value.value<QCborMap>());
+    }
+    if (type == QMetaType::QCborArray) {
+        return QCborValue(value.value<QCborArray>());
+    }
     switch (type) {
         case QMetaType::UnknownType:
             return QCborValue(QCborValue::Undefined);
@@ -601,7 +612,143 @@ QCborValue ValueCodec::toCbor(const QVariant& value) const {
     return QCborValue(QCborValue::Undefined);
 }
 
+namespace {
+
+// CBOR as RFC 8949 writes it, the head in its shortest form, as Qt's writer does.
+void appendHead(QByteArray& out, uint8_t major, quint64 value) {
+    const char type = char(major << 5);
+    if (value < 24) {
+        out.append(char(type | char(value)));
+        return;
+    }
+    int bytes = value <= 0xff ? 1 : value <= 0xffff ? 2 : value <= 0xffffffffu ? 4 : 8;
+    out.append(char(type | char(bytes == 1 ? 24 : bytes == 2 ? 25 : bytes == 4 ? 26 : 27)));
+    for (int shift = (bytes - 1) * 8; shift >= 0; shift -= 8) {
+        out.append(char((value >> shift) & 0xff));
+    }
+}
+
+void appendInteger(QByteArray& out, qint64 value) {
+    if (value >= 0) {
+        appendHead(out, 0, quint64(value));
+    } else {
+        appendHead(out, 1, quint64(-1 - value));
+    }
+}
+
+void appendDouble(QByteArray& out, double value) {
+    quint64 bits;
+    memcpy(&bits, &value, sizeof(bits));
+    out.append(char(0xfb));
+    for (int shift = 56; shift >= 0; shift -= 8) {
+        out.append(char((bits >> shift) & 0xff));
+    }
+}
+
+void appendText(QByteArray& out, const QString& text) {
+    QByteArray utf8 = text.toUtf8();
+    appendHead(out, 3, quint64(utf8.size()));
+    out.append(utf8);
+}
+
+// A map of numbers under one-letter keys ("x", "y", "z", "w"), as xyz() and xyzw() build it.
+void appendLetters(QByteArray& out, const char* keys, const double* values, int count) {
+    appendHead(out, 5, quint64(count));
+    for (int i = 0; i < count; ++i) {
+        out.append(char(0x61));
+        out.append(keys[i]);
+        appendDouble(out, values[i]);
+    }
+}
+
+} // namespace
+
+bool ValueCodec::encodeDirectly(const QVariant& value, QByteArray& out) const {
+    // the same cases, in the same order of precedence, as toCbor: the built-in types, then the glm types, all
+    // before the registry, so no registered conversion can be skipped here
+    const int type = value.userType();
+    switch (type) {
+        case QMetaType::UnknownType:
+            out.append(char(0xf7));
+            return true;
+        case QMetaType::Nullptr:
+            out.append(char(0xf6));
+            return true;
+        case QMetaType::Bool:
+            out.append(char(value.toBool() ? 0xf5 : 0xf4));
+            return true;
+        case QMetaType::Int:
+        case QMetaType::Short:
+        case QMetaType::Char:
+        case QMetaType::SChar:
+        case QMetaType::Long:
+        case QMetaType::LongLong:
+            appendInteger(out, value.toLongLong());
+            return true;
+        case QMetaType::UInt:
+        case QMetaType::UShort:
+        case QMetaType::UChar:
+        case QMetaType::ULong:
+        case QMetaType::ULongLong: {
+            qulonglong unsignedValue = value.toULongLong();
+            if (unsignedValue <= qulonglong(std::numeric_limits<qint64>::max())) {
+                appendInteger(out, qint64(unsignedValue));
+            } else {
+                appendDouble(out, double(unsignedValue));
+            }
+            return true;
+        }
+        case QMetaType::Double:
+        case QMetaType::Float:
+            appendDouble(out, value.toDouble());
+            return true;
+        case QMetaType::QString:
+            appendText(out, value.toString());
+            return true;
+        case QMetaType::QUuid: {
+            QUuid uuid = value.toUuid();
+            if (uuid.isNull()) {
+                out.append(char(0xf6));
+            } else {
+                appendText(out, uuid.toString());
+            }
+            return true;
+        }
+        default:
+            break;
+    }
+    if (type == qMetaTypeId<glm::vec3>()) {
+        glm::vec3 v = value.value<glm::vec3>();
+        const double values[] = { v.x, v.y, v.z };
+        appendLetters(out, "xyz", values, 3);
+        return true;
+    }
+    if (type == qMetaTypeId<glm::quat>()) {
+        glm::quat q = value.value<glm::quat>();
+        const double values[] = { q.x, q.y, q.z, q.w };
+        appendLetters(out, "xyzw", values, 4);
+        return true;
+    }
+    if (type == qMetaTypeId<glm::vec2>()) {
+        glm::vec2 v = value.value<glm::vec2>();
+        const double values[] = { v.x, v.y };
+        appendLetters(out, "xy", values, 2);
+        return true;
+    }
+    if (type == qMetaTypeId<glm::vec4>()) {
+        glm::vec4 v = value.value<glm::vec4>();
+        const double values[] = { v.x, v.y, v.z, v.w };
+        appendLetters(out, "xyzw", values, 4);
+        return true;
+    }
+    return false;
+}
+
 QByteArray ValueCodec::encode(const QVariant& value) const {
+    QByteArray bytes;
+    if (encodeDirectly(value, bytes)) {
+        return bytes;
+    }
     return toCbor(value).toCbor();
 }
 
@@ -667,6 +814,50 @@ QVariant ValueCodec::fromCbor(const QCborValue& value) const {
             return fromCbor(value.taggedValue());
         default:
             return QVariant();
+    }
+}
+
+int ValueCodec::genericTypeOf(const QCborValue& value) const {
+    // fromCbor(value)'s cases, the type of each
+    switch (value.type()) {
+        case QCborValue::Integer: {
+            qint64 i = value.toInteger();
+            return (i >= std::numeric_limits<int>::min() && i <= std::numeric_limits<int>::max()) ? int(QMetaType::Int)
+                                                                                                    : int(QMetaType::LongLong);
+        }
+        case QCborValue::Double:
+            return QMetaType::Double;
+        case QCborValue::True:
+        case QCborValue::False:
+            return QMetaType::Bool;
+        case QCborValue::Null:
+            return QMetaType::Nullptr;
+        case QCborValue::String:
+            return QMetaType::QString;
+        case QCborValue::ByteArray:
+            return QMetaType::QByteArray;
+        case QCborValue::Array:
+            return QMetaType::QVariantList;
+        case QCborValue::Map: {
+            const QCborMap map = value.toMap();
+            if (map.value(OBJECT_KEY).isInteger()) {
+                return QMetaType::QObjectStar;
+            }
+            if (map.value(CALLBACK_KEY).isInteger()) {
+                return scriptCallbackTypeId();
+            }
+            return QMetaType::QVariantMap;
+        }
+        case QCborValue::DateTime:
+            return QMetaType::QDateTime;
+        case QCborValue::Url:
+            return QMetaType::QUrl;
+        case QCborValue::Uuid:
+            return QMetaType::QUuid;
+        case QCborValue::Tag:
+            return genericTypeOf(value.taggedValue());
+        default:
+            return QMetaType::UnknownType;
     }
 }
 

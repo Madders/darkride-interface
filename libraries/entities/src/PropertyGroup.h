@@ -31,9 +31,12 @@ class PropertyGroup {
 public:
     virtual ~PropertyGroup() = default;
 
-    // EntityItemProperty related helpers
-    virtual void copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties, QScriptEngine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const = 0;
-    virtual void copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) = 0;
+    // EntityItemProperty related helpers. Each group also has, as member templates over the value and engine types
+    // (QScriptValue with QScriptEngine, PlainScriptValue with PlainScriptEngine), compiled for both by
+    // INSTANTIATE_PROPERTY_GROUP_CONVERSIONS at the end of its .cpp:
+    //   void copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties, Engine* engine, bool skipDefaults,
+    //                          EntityItemProperties& defaultEntityProperties) const;
+    //   void copyFromScriptValue(const Value& object, bool& _defaultSettings);
     virtual void debugDump() const { }
     virtual void listChangedProperties(QList<QString>& out) { }
 
@@ -70,5 +73,14 @@ public:
                                                 EntityPropertyFlags& propertyFlags, bool overwriteLocalData,
                                                 bool& somethingChanged) = 0;
 };
+
+// The two conversions of a group, compiled for QtScript's values and for plain values
+#define INSTANTIATE_PROPERTY_GROUP_CONVERSIONS(T) \
+    template void T::copyToScriptValue<QScriptValue, QScriptEngine>(const EntityPropertyFlags&, QScriptValue&, QScriptEngine*, \
+                                                                     bool, EntityItemProperties&) const; \
+    template void T::copyToScriptValue<PlainScriptValue, PlainScriptEngine>(const EntityPropertyFlags&, PlainScriptValue&, \
+                                                                             PlainScriptEngine*, bool, EntityItemProperties&) const; \
+    template void T::copyFromScriptValue<QScriptValue>(const QScriptValue&, bool&); \
+    template void T::copyFromScriptValue<PlainScriptValue>(const PlainScriptValue&, bool&);
 
 #endif // hifi_PropertyGroup_h

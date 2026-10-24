@@ -139,7 +139,6 @@ declare namespace Entities {
 	function isAddedEntity(id: Uuid): boolean;
 	function isChildOfParent(childID: Uuid, parentID: Uuid): boolean;
 	function isLoaded(id: Uuid): boolean;
-	function localCoordsToVoxelCoords(entityID: Uuid, localCoords: Vec3): Vec3;
 	function localToWorldAngularVelocity(
 		localAngularVelocity: Vec3,
 		parentID: Uuid,
@@ -213,7 +212,6 @@ declare namespace Entities {
 		jointIndex: number,
 		translation: Vec3,
 	): boolean;
-	function setAllVoxels(entityID: Uuid, value: number): void;
 	function setDrawZoneBoundaries(value: boolean): void;
 	function setKeyboardFocusEntity(id: Uuid): void;
 	function setLightsArePickable(value: boolean): void;
@@ -238,26 +236,6 @@ declare namespace Entities {
 		translation: Vec3[],
 	): boolean;
 	function setPacketsPerSecond(packetsPerSecond: number): void;
-	function setVoxel(entityID: Uuid, position: Vec3, value: number): void;
-	function setVoxelCapsule(
-		entityID: Uuid,
-		start: Vec3,
-		end: Vec3,
-		radius: number,
-		value: number,
-	): void;
-	function setVoxelsInCuboid(
-		entityID: Uuid,
-		lowPosition: Vec3,
-		cuboidSize: Vec3,
-		value: number,
-	): void;
-	function setVoxelSphere(
-		entityID: Uuid,
-		center: Vec3,
-		radius: number,
-		value: number,
-	): void;
 	function setZonesArePickable(value: boolean): void;
 	function textSize(id: Uuid, text: string): Size;
 	function updateAction<T>(
@@ -266,10 +244,7 @@ declare namespace Entities {
 		arguments: T,
 	): boolean;
 	function verifyStaticCertificateProperties(entityID: Uuid): boolean;
-	function voxelCoordsToLocalCoords(entityID: Uuid, voxelCoords: Vec3): Vec3;
-	function voxelCoordsToWorldCoords(entityID: Uuid, voxelCoords: Vec3): Vec3;
 	function wantsHandControllerPointerEvents(entityID: Uuid): boolean;
-	function worldCoordsToVoxelCoords(entityID: Uuid, worldCoords: Vec3): Vec3;
 	function worldToLocalAngularVelocity(
 		worldAngularVelocity: Vec3,
 		parentID: Uuid,
@@ -739,22 +714,6 @@ declare namespace Entities {
 		faceCamera: boolean;
 	}
 
-	interface EntityPropertiesPolyVox extends EntityProperties {
-		dimensions: Vec3;
-		voxelVolumeSize: Vec3;
-		voxelData: string;
-		voxelSurfaceStyle: PolyVoxSurfaceStyle;
-		xTextureURL: string;
-		yTextureURL: string;
-		zTextureURL: string;
-		xNNeighborID: Uuid;
-		yNNeighborID: Uuid;
-		zNNeighborID: Uuid;
-		xPNeighborID: Uuid;
-		yPNeighborID: Uuid;
-		zPNeighborID: Uuid;
-	}
-
 	interface EntityPropertiesShape extends EntityProperties {
 		shape: Shape;
 		dimensions: Vec3;
@@ -836,7 +795,6 @@ declare namespace Entities {
 		| EntityPropertiesModel
 		| EntityPropertiesParticleEffect
 		| EntityPropertiesPolyLine
-		| EntityPropertiesPolyVox
 		| EntityPropertiesShape
 		| EntityPropertiesSphere
 		| EntityPropertiesText
@@ -860,7 +818,6 @@ declare namespace Entities {
 		| "ParticleEffect"
 		| "Line"
 		| "PolyLine"
-		| "PolyVox"
 		| "Grid"
 		| "Gizmo"
 		| "Light"
@@ -950,13 +907,6 @@ declare namespace Entities {
 	type NestableType = "entity" | "avatar" | "unknown";
 
 	type PhysicsMotionType = "static" | "kinematic" | "dynamic";
-
-	enum PolyVoxSurfaceStyle {
-		marchingCubes,
-		cubic,
-		edgedCubic,
-		edgedMarchingCubes,
-	}
 
 	type PrimitiveMode = "solid" | "lines";
 

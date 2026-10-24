@@ -129,6 +129,10 @@ void TrackSimulation::adoptState(Train& train, const TrackEntityItem& track, con
     }
 
     TrackEntityItem::TrainState received = track.getTrainState();   // the six as one
+    if (!std::isfinite(received.distance) || !std::isfinite(received.speed) || !std::isfinite(received.dwell)) {
+        qCWarning(physics) << "train on track" << track.getID() << ": a state from" << received.time << "is not finite; ignored";
+        return;   // the setters refuse these; this covers an older server's
+    }
     TrackFollower::State state;
     state.s = received.distance;
     state.speed = received.speed;
@@ -155,7 +159,7 @@ void TrackSimulation::adoptState(Train& train, const TrackEntityItem& track, con
             << train.follower.state().s << "m, speed" << train.follower.state().speed << ", dwell" << train.follower.state().dwellRemaining
             << "; residual" << residual << (std::fabs(residual) > SNAP_DISTANCE ? "(snapped)" : "(blended)");
     }
-    if (!train.running || std::fabs(residual) > SNAP_DISTANCE) {
+    if (!train.running || !std::isfinite(residual) || std::fabs(residual) > SNAP_DISTANCE) {
         residual = 0.0f;
     }
     train.residual = residual;

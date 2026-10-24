@@ -13,6 +13,7 @@
 
 #include "Application.h"
 #include "ui/DialogsManager.h"
+#include "scripting/WindowScriptingInterface.h"
 
 #include <DependencyManager.h>
 #include <DomainHandler.h>
@@ -41,6 +42,8 @@ void ConnectionMonitor::init() {
     }
 
     connect(&_timer, &QTimer::timeout, this, [this]() {
+        // scripts are told first: the loading screen (worldLoading.js) lifts, so the failure window isn't hidden behind it
+        emit DependencyManager::get<WindowScriptingInterface>()->domainConnectionTimedOut();
         // set in a timeout error
         bool enableInterstitial = DependencyManager::get<NodeList>()->getDomainHandler().getInterstitialModeEnabled();
         if (enableInterstitial) {
@@ -48,9 +51,7 @@ void ConnectionMonitor::init() {
             emit setRedirectErrorState(REDIRECT_HIFI_ADDRESS, "", 5);
         } else {
             qDebug() << "ConnectionMonitor: Showing connection failure window";
-#if !defined(DISABLE_QML)
             DependencyManager::get<DialogsManager>()->setDomainConnectionFailureVisibility(true);
-#endif
         }
     });
 }
@@ -61,10 +62,8 @@ void ConnectionMonitor::startTimer() {
 
 void ConnectionMonitor::stopTimer() {
     _timer.stop();
-#if !defined(DISABLE_QML)
     bool enableInterstitial = DependencyManager::get<NodeList>()->getDomainHandler().getInterstitialModeEnabled();
     if (!enableInterstitial) {
         DependencyManager::get<DialogsManager>()->setDomainConnectionFailureVisibility(false);
     }
-#endif
 }

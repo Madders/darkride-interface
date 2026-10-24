@@ -72,10 +72,12 @@ static const glm::vec3 INITIAL_EQUIPPABLE_INDICATOR_OFFSET { glm::vec3(0.0f) };
 class GrabPropertyGroup : public PropertyGroup {
 public:
     // EntityItemProperty related helpers
-    virtual void copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties,
-                                   QScriptEngine* engine, bool skipDefaults,
-                                   EntityItemProperties& defaultEntityProperties) const override;
-    virtual void copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) override;
+    template <typename Value, typename Engine>
+    void copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties,
+                                   Engine* engine, bool skipDefaults,
+                                   EntityItemProperties& defaultEntityProperties) const;
+    template <typename Value>
+    void copyFromScriptValue(const Value& object, bool& _defaultSettings);
 
     void merge(const GrabPropertyGroup& other);
 

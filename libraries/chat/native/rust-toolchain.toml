@@ -1,0 +1,4 @@
+# matrix-sdk 0.19 wants Rust 1.96 or newer; this pins what the spike was built and measured with
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"

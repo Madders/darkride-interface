@@ -19,24 +19,21 @@ ClipboardScriptingInterface::ClipboardScriptingInterface() {
 }
 
 glm::vec3 ClipboardScriptingInterface::getContentsDimensions() {
-    return qApp->getEntityClipboard()->getContentsDimensions();
+    return qApp->getEntityClipboard().tree()->getContentsDimensions();
 }
 
 float ClipboardScriptingInterface::getClipboardContentsLargestDimension() {
-    return qApp->getEntityClipboard()->getContentsLargestDimension();
+    return qApp->getEntityClipboard().tree()->getContentsLargestDimension();
 }
 
+// Each call runs on the main thread, where the clipboard lives, and waits for its result.
 bool ClipboardScriptingInterface::exportEntities(const QString& filename, const QVector<QUuid>& entityIDs) {
     if (hifi::scripting::isRestrictedScriptThread()) {
         qWarning() << "Clipboard.exportEntities isn't available to a world's scripts";
         return false;
     }
-    bool retVal;
-    BLOCKING_INVOKE_METHOD(qApp, "exportEntities",
-                              Q_RETURN_ARG(bool, retVal),
-                              Q_ARG(const QString&, filename),
-                              Q_ARG(const QVector<QUuid>&, entityIDs));
-    return retVal;
+    auto& clipboard = qApp->getEntityClipboard();
+    return BLOCKING_INVOKE(qApp, [&] { return clipboard.exportEntities(filename, entityIDs); });
 }
 
 bool ClipboardScriptingInterface::exportEntities(const QString& filename, float x, float y, float z, float scale) {
@@ -44,15 +41,8 @@ bool ClipboardScriptingInterface::exportEntities(const QString& filename, float 
         qWarning() << "Clipboard.exportEntities isn't available to a world's scripts";
         return false;
     }
-    bool retVal;
-    BLOCKING_INVOKE_METHOD(qApp, "exportEntities",
-                              Q_RETURN_ARG(bool, retVal),
-                              Q_ARG(const QString&, filename),
-                              Q_ARG(float, x),
-                              Q_ARG(float, y),
-                              Q_ARG(float, z),
-                              Q_ARG(float, scale));
-    return retVal;
+    auto& clipboard = qApp->getEntityClipboard();
+    return BLOCKING_INVOKE(qApp, [&] { return clipboard.exportEntities(filename, x, y, z, scale); });
 }
 
 bool ClipboardScriptingInterface::importEntities(
@@ -60,22 +50,11 @@ bool ClipboardScriptingInterface::importEntities(
     const bool isObservable,
     const qint64 callerId
 ) {
-    bool retVal;
-    BLOCKING_INVOKE_METHOD(qApp, "importEntities",
-                              Q_RETURN_ARG(bool, retVal),
-                              Q_ARG(const QString&, filename),
-                              Q_ARG(const bool, isObservable),
-                              Q_ARG(const qint64, callerId));
-    return retVal;
+    auto& clipboard = qApp->getEntityClipboard();
+    return BLOCKING_INVOKE(qApp, [&] { return clipboard.importEntities(filename, isObservable, callerId); });
 }
 
 QVector<EntityItemID> ClipboardScriptingInterface::pasteEntities(glm::vec3 position, const QString& entityHostType) {
-    QVector<EntityItemID> retVal;
-    BLOCKING_INVOKE_METHOD(qApp, "pasteEntities",
-                              Q_RETURN_ARG(QVector<EntityItemID>, retVal),
-                              Q_ARG(const QString&, entityHostType),
-                              Q_ARG(float, position.x),
-                              Q_ARG(float, position.y),
-                              Q_ARG(float, position.z));
-    return retVal;
+    auto& clipboard = qApp->getEntityClipboard();
+    return BLOCKING_INVOKE(qApp, [&] { return clipboard.pasteEntities(entityHostType, position.x, position.y, position.z); });
 }

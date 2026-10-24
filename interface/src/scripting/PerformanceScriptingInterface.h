@@ -108,7 +108,7 @@ public:
     Q_ENUM(RefreshRateProfile)
 
     PerformanceScriptingInterface();
-    ~PerformanceScriptingInterface() = default;
+    ~PerformanceScriptingInterface();
 
 public slots:
 
@@ -191,6 +191,9 @@ signals:
 
 private:
     static std::once_flag registry_flag;
+
+    // each script engine and QML surface has its own Performance object: a change made through one is announced by all
+    void announceChange();
 };
 
 #endif // header guard

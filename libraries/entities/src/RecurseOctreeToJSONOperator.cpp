@@ -10,16 +10,17 @@
 //
 
 #include "RecurseOctreeToJSONOperator.h"
+
+#include <PlainScriptValue.h>
+
 #include "EntityItemProperties.h"
 
-RecurseOctreeToJSONOperator::RecurseOctreeToJSONOperator(const OctreeElementPointer&, QScriptEngine* engine,
+RecurseOctreeToJSONOperator::RecurseOctreeToJSONOperator(const OctreeElementPointer&,
     QString jsonPrefix, bool skipDefaults, bool skipThoseWithBadParents):
-    _engine(engine),
     _json(jsonPrefix),
     _skipDefaults(skipDefaults),
     _skipThoseWithBadParents(skipThoseWithBadParents)
 {
-    _toStringMethod = _engine->evaluate("(function() { return JSON.stringify(this, null, '    ') })");
 }
 
 bool RecurseOctreeToJSONOperator::postRecursion(const OctreeElementPointer& element) {
@@ -34,9 +35,8 @@ void RecurseOctreeToJSONOperator::processEntity(const EntityItemPointer& entity)
         return;  // we weren't able to resolve a parent from _parentID, so don't save this entity.
     }
 
-    QScriptValue qScriptValues = _skipDefaults
-        ? EntityItemNonDefaultPropertiesToScriptValue(_engine, entity->getProperties())
-        : EntityItemPropertiesToScriptValue(_engine, entity->getProperties());
+    PlainScriptEngine engine;
+    const PlainScriptValue values = entity->getProperties().copyToScriptValue(&engine, _skipDefaults);
 
     if (_comma) {
         _json += ',';
@@ -44,7 +44,6 @@ void RecurseOctreeToJSONOperator::processEntity(const EntityItemPointer& entity)
     _comma = true;
     _json += "\n    ";
 
-    // Override default toString():
-    qScriptValues.setProperty("toString", _toStringMethod);
-    _json += qScriptValues.toString();
+    // the text JSON.stringify(values, null, '    ') gives, which QtScript's own JSON.stringify wrote before
+    _json += values.toJson("    ");
 }

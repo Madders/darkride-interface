@@ -28,6 +28,7 @@
 #include "HTTPResourceRequest.h"
 #include "NetworkAccessManager.h"
 #include "NetworkLogging.h"
+#include "RedirectCache.h"
 
 ResourceManager::ResourceManager(bool atpSupportEnabled) : _atpSupportEnabled(atpSupportEnabled) {
     _thread.setObjectName("Resource Manager Thread");
@@ -95,9 +96,33 @@ const QSet<QString>& getKnownUrls() {
     return knownUrls;
 }
 
+// tea://<username>/<path>, a user file by its path, was fetched by Tivoli's tea protocol plugin, which asks
+// tea.tivolicloud.com (gone) and can't be had any more (its download is gone too, and there was never one for Apple
+// silicon). The metaverse's files host serves the same path to everyone unless the file is tea-only (private):
+// https://files.<metaverse host>/<username>/<path>, with any query and fragment kept. A username's case doesn't
+// matter there, so the host part's lowercasing by QUrl is harmless.
+static QUrl teaUrlOnFilesHost(const QUrl& teaUrl) {
+    QUrl metaverse = NetworkingConstants::METAVERSE_SERVER_URL();
+    QUrl files;
+    files.setScheme(metaverse.scheme());
+    files.setHost("files." + metaverse.host());
+    files.setPort(metaverse.port());
+    files.setPath("/" + teaUrl.host(QUrl::FullyEncoded) + teaUrl.path(QUrl::FullyEncoded), QUrl::StrictMode);
+    if (teaUrl.hasQuery()) {
+        files.setQuery(teaUrl.query(QUrl::FullyEncoded), QUrl::StrictMode);
+    }
+    if (teaUrl.hasFragment()) {
+        files.setFragment(teaUrl.fragment(QUrl::FullyEncoded), QUrl::StrictMode);
+    }
+    return files;
+}
+
 QUrl ResourceManager::normalizeURL(const QUrl& originalUrl) {
     QUrl url = QUrl(normalizeURL(originalUrl.toString()));
     auto scheme = url.scheme();
+    if (scheme == URL_SCHEME_TEA) {
+        return teaUrlOnFilesHost(url);
+    }
     if (!getKnownUrls().contains(scheme)) {
         // check the degenerative file case: on windows we can often have urls of the form c:/filename
         // this checks for and works around that case.
@@ -110,6 +135,7 @@ QUrl ResourceManager::normalizeURL(const QUrl& originalUrl) {
 }
 
 void ResourceManager::cleanup() {
+    RedirectCache::save();
     // cleanup the AssetClient thread
     DependencyManager::destroy<AssetClient>();
     _thread.quit();

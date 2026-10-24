@@ -184,17 +184,21 @@
             hs.rms.toFixed(1) + "/" + hs.max.toFixed(1) + ", camera " + cs.mean.toFixed(1) + "/" + cs.rms.toFixed(1) + "/" + cs.max.toFixed(1));
         log("car/eye/camera steps in a row (mm): " + carSteps.slice(0, 24).map(function (v, i) { return v.toFixed(0) + "/" + eyeSteps[i].toFixed(0) + "/" + camSteps[i].toFixed(0); }).join(" "));
         log("car/camera steps in a row (mm): " + carSteps.slice(0, 30).map(function (v, i) { return v.toFixed(0) + "/" + camSteps[i].toFixed(0); }).join(" "));
-        renderTraceSummary();
+        var renderTrace = renderTraceSummary();
+        var presentTrace = presentTraceSummary(renderTrace);
+        var refreshTrace = displayedSummary(presentTrace, renderTrace);
         var stats2 = Entities.getVehicleStats ? Entities.getVehicleStats() : {};
         log("vehicle stats: " + JSON.stringify(stats2));
-        Test.saveObject({ reason: reason, samples: samples, summary: { step: st, gap: gp, seatDev: seatDev, seatMax: seatMax, camDev: camDev, camMax: camMax, speed: sp, stats: stats2 } }, "seat-jitter.json");
+        Test.saveObject({ reason: reason, samples: samples, renderTrace: renderTrace, presentTrace: presentTrace, refreshTrace: refreshTrace,
+                          summary: { step: st, gap: gp, seatDev: seatDev, seatMax: seatMax, camDev: camDev, camMax: camMax, speed: sp,
+                                     presented: presented, displayed: displayed, stats: stats2 } }, "seat-jitter.json");
         stand();
         Script.setTimeout(function () { Test.quit(); }, 1500);
     }
     function renderTraceSummary() {
-        if (!Test.takeRenderTrace) { return; }
+        if (!Test.takeRenderTrace) { return []; }
         var trace = Test.takeRenderTrace();
-        if (!trace.length) { log("render trace: none"); return; }
+        if (!trace.length) { log("render trace: none"); return trace; }
         var t0 = trace[0][0], t1 = trace[trace.length - 1][0];
         var lo = t0 + 0.3 * (t1 - t0), hi = t0 + 0.9 * (t1 - t0);
         var itemSteps = [], camSteps = [], gaps = [], offsetChanges = [], along = [], inRow = [];
@@ -224,9 +228,172 @@
             oc.max.toFixed(1) + "; frames with a change over 8 mm: " + big + " of " + offsetChanges.length + "; sign flips along the motion " + flips);
         log("RENDERED car/camera steps in a row (mm): " + inRow.join(" "));
         log("RENDERED offset change along the motion in a row (mm): " + along.slice(0, 40).map(function (v) { return (v >= 0 ? "+" : "") + v.toFixed(0); }).join(" "));
+        return trace;
+    }
+    // The presents (Test.takePresentTrace, the editor renderer's frame-pacing round): each sample is the swap's return,
+    // which with vsync on is the display's refresh, and the rendered frame it showed. Paired with the render trace by
+    // frame index, the car's step per PRESENTED frame against the gap between presents is the eye's own measure: the
+    // shown speed (step over gap) should be the same every frame, whatever the gaps did.
+    var presented = null;
+    function presentTraceSummary(renderTrace) {
+        if (!Test.takePresentTrace) { return []; }
+        var presents = Test.takePresentTrace();
+        Test.tracePresents(false);
+        if (!presents.length) { log("present trace: none"); return presents; }
+        var hz = Test.getDisplayRefreshRate ? Test.getDisplayRefreshRate() : 0;
+        var t0 = presents[0][0], t1 = presents[presents.length - 1][0];
+        var lo = t0 + 0.3 * (t1 - t0), hi = t0 + 0.9 * (t1 - t0);
+        var itemByFrame = {};
+        renderTrace.forEach(function (s) { if (s.length > 7) { itemByFrame[s[7]] = { x: s[4], y: s[5], z: s[6] }; } });
+        var gaps = [], steps = [], shownSpeeds = [], pairs = [], gapRow = [], stepRow = [], byRefresh = {};
+        var presentCost = [], swapCost = [], gpuCost = [];
+        var n = 0, repeats = 0, within = 0;
+        for (var i = 1; i < presents.length; i++) {
+            var a = presents[i - 1], b = presents[i];
+            if (b[0] < lo || b[0] > hi) { continue; }
+            n++;
+            var gap = b[0] - a[0];
+            gaps.push(gap);
+            if (b.length > 5) { presentCost.push(b[3]); swapCost.push(b[4]); gpuCost.push(b[5]); }
+            if (gapRow.length < 40) { gapRow.push(gap.toFixed(1)); }
+            if (!b[2]) { repeats++; }
+            if (hz > 0) {
+                var r = gap * hz / 1000;
+                var k = Math.round(r);
+                byRefresh[k] = (byRefresh[k] || 0) + 1;
+                if (Math.abs(r - k) < 0.25) { within++; }
+            }
+            var pa = itemByFrame[a[1]], pb = itemByFrame[b[1]];
+            if (pa && pb && gap > 0) {
+                var step = 1000 * Vec3.distance(pa, pb);
+                steps.push(step);
+                shownSpeeds.push(step / gap);   // m/s as shown: mm per ms
+                pairs.push([gap, step]);
+                if (stepRow.length < 40) { stepRow.push(step.toFixed(0)); }
+            }
+        }
+        var gs = stats(gaps), ss = stats(steps), vs = stats(shownSpeeds);
+        var corr = 0;
+        if (pairs.length > 2) {
+            var mg = 0, ms = 0;
+            pairs.forEach(function (p) { mg += p[0]; ms += p[1]; });
+            mg /= pairs.length; ms /= pairs.length;
+            var sgg = 0, sss = 0, sgs = 0;
+            pairs.forEach(function (p) { sgg += (p[0] - mg) * (p[0] - mg); sss += (p[1] - ms) * (p[1] - ms); sgs += (p[0] - mg) * (p[1] - ms); });
+            corr = (sgg > 0 && sss > 0) ? sgs / Math.sqrt(sgg * sss) : 0;
+        }
+        log("PRESENTED frames: " + n + " in the window, gap mean " + gs.mean.toFixed(2) + " ms rms " + gs.rms.toFixed(2) + " max " +
+            gs.max.toFixed(1) + "; repeats (no new frame) " + repeats + "; display " + hz.toFixed(0) + " Hz, vsync " +
+            (Test.isVsyncEnabled ? Test.isVsyncEnabled() : "?") + "; gaps by whole refreshes " + JSON.stringify(byRefresh) +
+            ", within a quarter refresh of a whole number " + within + " of " + gaps.length);
+        log("PRESENTED car step per present mean " + ss.mean.toFixed(1) + " mm rms " + ss.rms.toFixed(1) + " max " + ss.max.toFixed(1) +
+            "; step-to-gap correlation " + corr.toFixed(2) + " (1 = each frame advances by its own interval); shown speed mean " +
+            vs.mean.toFixed(2) + " m/s rms " + vs.rms.toFixed(2) + " (" + (vs.mean > 0 ? (100 * vs.rms / vs.mean).toFixed(0) : "?") + "%)");
+        log("PRESENTED gaps in a row (ms): " + gapRow.join(" "));
+        log("PRESENTED car steps in a row (mm): " + stepRow.join(" "));
+        var pc = stats(presentCost), sc = stats(swapCost), gc = stats(gpuCost);
+        if (presentCost.length) {
+            // what a present costs: its whole duration, the swap's share (the wait for the display, with vsync), and the
+            // GPU's time per frame; the present less the swap is the thread's own work, what must fit in a refresh
+            log("PRESENTED cost: present mean " + pc.mean.toFixed(2) + " ms rms " + pc.rms.toFixed(2) + " max " + pc.max.toFixed(1) +
+                "; swap mean " + sc.mean.toFixed(2) + " max " + sc.max.toFixed(1) + "; present less swap mean " + (pc.mean - sc.mean).toFixed(2) +
+                "; GPU per frame mean " + gc.mean.toFixed(2) + " ms max " + gc.max.toFixed(1));
+        }
+        presented = { n: n, gap: gs, step: ss, shownSpeed: vs, correlation: corr, repeats: repeats, displayHz: hz, byRefresh: byRefresh, within: within,
+                      presentCost: pc, swapCost: sc, gpuCost: gc };
+        return presents;
+    }
+    // The display's own refreshes (Test.takeRefreshTrace, macOS's display link), against the presents: at each refresh
+    // the compositor shows the newest frame flushed before it, so the frame shown per refresh follows from the swap's
+    // return times. A refresh showing the frame before's again is a repeat, one with a frame never shown between is a
+    // skip; the car's step per refresh is what the eye gets, the measure that matters.
+    var displayed = null;
+    function displayedSummary(presents, renderTrace) {
+        if (!Test.takeRefreshTrace) { return []; }
+        var refreshes = Test.takeRefreshTrace();
+        Test.traceRefreshes(false);
+        if (!refreshes.length || !presents.length) { log("refresh trace: none"); return refreshes; }
+        var itemByFrame = {};
+        renderTrace.forEach(function (s) { if (s.length > 7) { itemByFrame[s[7]] = { x: s[4], y: s[5], z: s[6] }; } });
+        var t0 = presents[0][0], t1 = presents[presents.length - 1][0];
+        var lo = t0 + 0.3 * (t1 - t0), hi = t0 + 0.9 * (t1 - t0);
+        var rgaps = [], shown = [], j = 0, n = 0;
+        for (var i = 1; i < refreshes.length; i++) {
+            var v = refreshes[i];
+            if (v < lo || v > hi) { continue; }
+            rgaps.push(v - refreshes[i - 1]);
+            while (j + 1 < presents.length && presents[j + 1][0] <= v) { j++; }
+            if (presents[j][0] <= v) { shown.push(presents[j][1]); n++; }
+        }
+        var repeats = 0, skips = 0, steps = [], stepRow = [];
+        for (i = 1; i < shown.length; i++) {
+            if (shown[i] === shown[i - 1]) { repeats++; }
+            else if (shown[i] - shown[i - 1] >= 2) { skips++; }
+            var pa = itemByFrame[shown[i - 1]], pb = itemByFrame[shown[i]];
+            if (pa && pb) {
+                var step = 1000 * Vec3.distance(pa, pb);
+                steps.push(step);
+                if (stepRow.length < 40) { stepRow.push(step.toFixed(0)); }
+            }
+        }
+        var rs = stats(rgaps), ds = stats(steps);
+        // the step's change from one refresh to the next: the car accelerates through the window, so the steps' own
+        // rms is mostly that; a repeat or a skip is a change of a whole step
+        var changes = [];
+        for (i = 1; i < steps.length; i++) { changes.push(Math.abs(steps[i] - steps[i - 1])); }
+        var cs2 = stats(changes);
+        var seconds = (hi - lo) / 1000;
+        log("DISPLAYED: " + n + " refreshes in the window, refresh gap mean " + rs.mean.toFixed(3) + " ms rms " + rs.rms.toFixed(3) +
+            "; repeats " + repeats + " skips " + skips + " (" + (repeats / seconds).toFixed(1) + " and " + (skips / seconds).toFixed(1) +
+            " a second); car step per refresh mean " + ds.mean.toFixed(1) + " mm rms " + ds.rms.toFixed(1) + " (" +
+            (ds.mean > 0 ? (100 * ds.rms / ds.mean).toFixed(0) : "?") + "%) max " + ds.max.toFixed(1) +
+            "; step change refresh to refresh mean " + cs2.mean.toFixed(2) + " mm rms " + cs2.rms.toFixed(2) + " max " + cs2.max.toFixed(1));
+        log("DISPLAYED car steps per refresh in a row (mm): " + stepRow.join(" "));
+        // the phase: where in its refresh interval each present started (its return less its duration, after the
+        // last refresh before it), against the flush's wait and whether its frame was shown at the next refresh (the
+        // map a sweep draws: TIVOLI_PRESENT_PHASE_SWEEP=1 walks the phase through the interval)
+        var BUCKET = 0.5;
+        var buckets = {};
+        var k = 0;
+        for (i = 0; i < presents.length; i++) {
+            var p = presents[i];
+            if (p.length < 6 || p[0] < lo || p[0] > hi) { continue; }
+            var start = p[0] - p[3];
+            while (k + 1 < refreshes.length && refreshes[k + 1] <= start) { k++; }
+            if (refreshes[k] > start || k + 1 >= refreshes.length) { continue; }
+            var phase = start - refreshes[k];
+            var nextRefresh = refreshes[k + 1];
+            // the frame shown at the next refresh: the newest present returned before it
+            var m = i;
+            while (m + 1 < presents.length && presents[m + 1][0] <= nextRefresh) { m++; }
+            var shownNext = presents[m][0] <= nextRefresh ? presents[m][1] : -1;
+            var b = Math.floor(phase / BUCKET) * BUCKET;
+            var key = b.toFixed(1);
+            if (!buckets[key]) { buckets[key] = { n: 0, swap: 0, swapMax: 0, shown: 0 }; }
+            buckets[key].n++;
+            buckets[key].swap += p[4];
+            if (p[4] > buckets[key].swapMax) { buckets[key].swapMax = p[4]; }
+            if (shownNext === p[1]) { buckets[key].shown++; }
+        }
+        var keys = Object.keys(buckets).sort(function (a, b) { return parseFloat(a) - parseFloat(b); });
+        if (keys.length) {
+            log("PHASE map (start after the refresh, ms: presents, flush wait mean/max ms, shown at the next refresh %): " +
+                keys.map(function (key) {
+                    var b = buckets[key];
+                    return key + ": " + b.n + ", " + (b.swap / b.n).toFixed(2) + "/" + b.swapMax.toFixed(1) + ", " + (100 * b.shown / b.n).toFixed(0);
+                }).join(" | "));
+        }
+        displayed = { refreshes: n, refreshGap: rs, repeats: repeats, skips: skips, step: ds, seconds: seconds, phase: buckets };
+        return refreshes;
     }
     function drive() {
         if (Test.traceRenderedEntity) { log("render trace " + (Test.traceRenderedEntity(chassis) ? "on" : "unavailable")); }
+        if (Test.traceRefreshes) { Test.traceRefreshes(true); }
+        if (Test.tracePresents) {
+            Test.tracePresents(true);
+            log("present trace on; display " + (Test.getDisplayRefreshRate ? Test.getDisplayRefreshRate().toFixed(0) : "?") + " Hz, vsync " +
+                (Test.isVsyncEnabled ? Test.isVsyncEnabled() : "?"));
+        }
         Entities.setVehicleControls(chassis, { throttle: THROTTLE, steering: 0, brake: 0, handBrake: 0 });
         log("driving straight at throttle " + THROTTLE + " for " + DRIVE_SECONDS + " s");
         sampler = Script.setInterval(sample, 2);
@@ -246,11 +413,23 @@
         MyAvatar.position = { x: x + 3, y: LandRover.groundHeight(x + 3, pad.z) + 1.2, z: pad.z };
         chassis = LandRover.create(x, pad.z, 0, LIFETIME).chassis;
         log("rover " + chassis + " at x " + x + ", z " + pad.z);
+        // the car before any input, once a second until the drive: a car that moves here is moved by something
+        // other than its driver (10-20: one run had it 3 m away at 3.5 m/s by the settle check, and in the hills)
+        var preDrive = Script.setInterval(function () {
+            var s = Entities.getEntityProperties(chassis, ["position", "velocity", "angularVelocity"]);
+            if (!s || !s.position) { return; }
+            var st = Entities.getVehicleStats ? Entities.getVehicleStats() : {};
+            var live = st.live || {};
+            log("pre-drive: chassis " + fmtV(s.position) + ", speed " + Vec3.length(s.velocity).toFixed(3) + ", spin " +
+                Vec3.length(s.angularVelocity).toFixed(3) + ", throttle " + (live.forward !== undefined ? live.forward.toFixed(2) : "?") +
+                " steering " + (live.right !== undefined ? live.right.toFixed(2) : "?") + " gear " + live.gear + " wheelRPM " +
+                (live.wheelRPM ? live.wheelRPM.map(function (v) { return v.toFixed(0); }).join("/") : "?"));
+        }, 1000);
         Script.setTimeout(function () {
             var s = Entities.getEntityProperties(chassis, ["position", "velocity"]);
             log("settled: chassis " + fmtV(s.position) + ", speed " + Vec3.length(s.velocity).toFixed(3));
             sit(LandRover.SEATS[0]);
-            Script.setTimeout(drive, 3000);
+            Script.setTimeout(function () { Script.clearInterval(preDrive); drive(); }, 3000);
         }, 4000);
     }
     function setUp() {

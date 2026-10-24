@@ -32,7 +32,6 @@
 #include "DomainMetadata.h"
 #include "DomainServerSettingsManager.h"
 #include "DomainServerWebSessionData.h"
-#include "WalletTransaction.h"
 #include "DomainContentBackupManager.h"
 
 #include "PendingAssignedNodeData.h"
@@ -43,7 +42,6 @@ Q_DECLARE_LOGGING_CATEGORY(domain_server)
 Q_DECLARE_LOGGING_CATEGORY(domain_server_ice)
 
 typedef QSharedPointer<Assignment> SharedAssignmentPointer;
-typedef QMultiHash<QUuid, WalletTransaction*> TransactionHash;
 
 using Subnet = QPair<QHostAddress, int>;
 using SubnetList = std::vector<Subnet>;
@@ -85,7 +83,6 @@ public slots:
     /// Called by NodeList to inform us a node has been killed
     void nodeKilled(SharedNodePointer node);
 
-    void transactionJSONCallback(const QJsonObject& data);
 
     void restart();
 
@@ -106,8 +103,6 @@ private slots:
     void processOctreeDataRequestMessage(QSharedPointer<ReceivedMessage> message);
     void processOctreeDataPersistMessage(QSharedPointer<ReceivedMessage> message);
 
-    void setupPendingAssignmentCredits();
-    void sendPendingTransactionsToServer();
 
     void performIPAddressUpdate(const HifiSockAddr& newPublicSockAddr);
     void sendHeartbeatToMetaverse() { sendHeartbeatToMetaverse(QString()); }
@@ -236,7 +231,6 @@ private:
 
     QHash<QUuid, SharedAssignmentPointer> _allAssignments;
     QQueue<SharedAssignmentPointer> _unfulfilledAssignments;
-    TransactionHash _pendingAssignmentCredits;
 
     bool _isUsingDTLS { false };
 

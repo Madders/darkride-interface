@@ -41,6 +41,7 @@ winget install -e --id Microsoft.PowerShell --source winget --installer-type wix
 winget install -e --id Python.Python.3.13
 winget install -e --id OpenJS.NodeJS.LTS
 winget install -e --id Git.Git
+winget install -e --id Rustlang.Rustup
 ```
 
 | Tool | Why |
@@ -50,6 +51,7 @@ winget install -e --id Git.Git
 | Python 3 | Runs the build's setup scripts. 3.13 is tested |
 | Node.js (LTS) | Builds the in-world web UI |
 | Git | Gets the code, and some dependencies |
+| Rust (rustup) | Builds chat's library (`libraries/chat/native`), which is written in Rust. The build installs the Rust version that library needs the first time |
 
 Close the terminal and open a new one, so it sees the new programs, and check that each one answers:
 
@@ -58,6 +60,7 @@ pwsh --version
 python --version
 node --version
 git --version
+rustup --version
 ```
 
 ## 2. Install Qt 5.15.2
@@ -176,8 +179,9 @@ VS Code builds Darkride with the same compiler and presets as steps 4 and 5, thr
 These SDKs can no longer be downloaded, so the build leaves out the plugins that need them:
 
 -   **Oculus PC SDK.** Rift and Quest headsets work through SteamVR with the OpenVR plugin. If you have `LibOVR.lib` in the vcpkg tree, `oculus-plugin` is built again.
--   **Leap Motion 2.3 SDK.**
--   **Tea protocol plugin**, a prebuilt binary on every platform. It is used if its extracted archive is in `plugins/tea-protocol-plugin-prebuilt/tea-protocol-plugin-2021-12-12`.
+
+The Leap Motion plugin and the prebuilt `tea:` protocol plugin, whose downloads are gone too, were removed from the code
+(10-22).
 
 ## Troubleshooting
 

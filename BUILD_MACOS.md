@@ -56,6 +56,16 @@ Download and install these programs:
     pip3 install mako # needed for mesa
     ```
 
+-   **Rust**, through rustup: https://rustup.rs
+
+    Chat's library (`libraries/chat/native`) is written in Rust. Install rustup and let it set up Rust:
+
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    ```
+
+    Open a new terminal afterwards. The build installs the Rust version the library needs the first time.
+
 ## Step 2. Configuring environment variables
 
 You can set these however you like. We recommend you write a **helper shell script** but that's not necessary.

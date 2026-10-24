@@ -29,7 +29,7 @@
 #include "MainWindow.h"
 #include "Menu.h"
 #include "OffscreenUi.h"
-#include "commerce/QmlCommerce.h"
+#include "editor/Editor.h"
 
 static const QString DESKTOP_LOCATION = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
 static const QString LAST_BROWSE_LOCATION_SETTING = "LastBrowseLocation";
@@ -49,15 +49,19 @@ WindowScriptingInterface::WindowScriptingInterface() {
     connect(&domainHandler, &DomainHandler::domainConnectionRefused, this, &WindowScriptingInterface::domainConnectionRefused);
     connect(&domainHandler, &DomainHandler::redirectErrorStateChanged, this, &WindowScriptingInterface::redirectErrorStateChanged);
 
+    // an entities file dropped on the window or opened by its address: build mode imports it (Editor::importEntities),
+    // or, outside build mode, a script that asks for it (the old Create app, while it is still loaded); with neither,
+    // build mode comes on for it
     connect(qApp, &Application::svoImportRequested, [this](const QString& urlString) {
         static const QMetaMethod svoImportRequestedSignal =
             QMetaMethod::fromSignal(&WindowScriptingInterface::svoImportRequested);
 
-        if (isSignalConnected(svoImportRequestedSignal)) {
+        auto editor = DependencyManager::get<Editor>();
+        if (!editor->isActive() && isSignalConnected(svoImportRequestedSignal)) {
             QUrl url(urlString);
             emit svoImportRequested(url.url());
         } else {
-            OffscreenUi::asyncWarning("Import SVO Error", "You need to be running edit.js to import entities.");
+            editor->importEntities(urlString);
         }
     });
 
@@ -66,6 +70,7 @@ WindowScriptingInterface::WindowScriptingInterface() {
     connect(qApp, &Application::interstitialModeChanged, [this] (bool interstitialMode) {
         emit interstitialModeChanged(interstitialMode);
     });
+    connect(qApp, &Application::worldLoadingChanged, this, &WindowScriptingInterface::worldLoadingChanged);
 }
 
 WindowScriptingInterface::~WindowScriptingInterface() {
@@ -113,12 +118,29 @@ QVariant WindowScriptingInterface::confirm(const QString& message) {
     return QVariant((QMessageBox::Yes == OffscreenUi::question("", message, QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes)));
 }
 
+// A script's Window.PromptOptions as the prompt's properties.
+static QVariantMap promptProperties(const QVariantMap& options) {
+    QVariantMap properties;
+    if (options.contains("placeholderText")) {
+        properties.insert("placeholderText", options.value("placeholderText").toString());
+    }
+    if (options.contains("buttonText")) {
+        properties.insert("buttonTexts", QVariantMap { { QString::number(QMessageBox::Ok), options.value("buttonText").toString() } });
+    }
+    if (options.contains("monospace")) {
+        properties.insert("monospace", options.value("monospace").toBool());
+    }
+    return properties;
+}
+
 /// Display a prompt with a text box
 /// \param const QString& message message to display
 /// \param const QString& defaultText default text in the text box
+/// \param const QVariantMap& options how the prompt looks (Window.PromptOptions)
 /// \return the text in the text box if the dialog was accepted, `null` otherwise.
-QVariant WindowScriptingInterface::prompt(const QString& message, const QString& defaultText) {
-    QString result = OffscreenUi::getText(nullptr, "", message, QLineEdit::Normal, defaultText);
+QVariant WindowScriptingInterface::prompt(const QString& message, const QString& defaultText, const QVariantMap& options) {
+    QString result = DependencyManager::get<OffscreenUi>()->inputDialog(OffscreenUi::ICON_NONE, "", message, defaultText,
+                                                                        promptProperties(options)).toString();
     if (result.isEmpty()) {
         return nullResult();
     }
@@ -128,9 +150,10 @@ QVariant WindowScriptingInterface::prompt(const QString& message, const QString&
 /// Display a prompt with a text box
 /// \param const QString& message message to display
 /// \param const QString& defaultText default text in the text box
-void WindowScriptingInterface::promptAsync(const QString& message, const QString& defaultText) {
-    bool ok = false;
-    ModalDialogListener* dlg = OffscreenUi::getTextAsync(nullptr, "", message, QLineEdit::Normal, defaultText, &ok);
+/// \param const QVariantMap& options how the prompt looks (Window.PromptOptions)
+void WindowScriptingInterface::promptAsync(const QString& message, const QString& defaultText, const QVariantMap& options) {
+    ModalDialogListener* dlg = DependencyManager::get<OffscreenUi>()->inputDialogAsync(OffscreenUi::ICON_NONE, "", message,
+                                                                                      defaultText, promptProperties(options));
     connect(dlg, &ModalDialogListener::response, this, [=] (QVariant result) {
         disconnect(dlg, &ModalDialogListener::response, this, nullptr);
         emit promptTextChanged(result.toString());
@@ -146,8 +169,6 @@ void WindowScriptingInterface::openUrl(const QUrl& url) {
         auto scheme = url.scheme();
         if (scheme == URL_SCHEME_HIFI) {
             DependencyManager::get<AddressManager>()->handleLookupString(url.toString());
-        } else if (scheme == URL_SCHEME_HIFIAPP) {
-            DependencyManager::get<QmlCommerce>()->openSystemApp(url.path());
         } else {
 #if defined(Q_OS_ANDROID)
             QMap<QString, QString> args;
@@ -478,15 +499,15 @@ bool WindowScriptingInterface::setDisplayTexture(const QString& name) {
 }
 
 void WindowScriptingInterface::takeSnapshot(bool notify, bool includeAnimated, float aspectRatio, const QString& filename) {
-    qApp->takeSnapshot(notify, includeAnimated, aspectRatio, filename);
+    qApp->getSnapshotRequests().takeSnapshot(notify, includeAnimated, aspectRatio, filename);
 }
 
 void WindowScriptingInterface::takeSecondaryCameraSnapshot(const bool& notify, const QString& filename) {
-    qApp->takeSecondaryCameraSnapshot(notify, filename);
+    qApp->getSnapshotRequests().takeSecondaryCameraSnapshot(notify, filename);
 }
 
 void WindowScriptingInterface::takeSecondaryCamera360Snapshot(const glm::vec3& cameraPosition, const bool& cubemapOutputFormat, const bool& notify, const QString& filename) {
-    qApp->takeSecondaryCamera360Snapshot(cameraPosition, cubemapOutputFormat, notify, filename);
+    qApp->getSnapshotRequests().takeSecondaryCamera360Snapshot(cameraPosition, cubemapOutputFormat, notify, filename);
 }
 
 void WindowScriptingInterface::shareSnapshot(const QString& path, const QUrl& href) {
@@ -494,7 +515,7 @@ void WindowScriptingInterface::shareSnapshot(const QString& path, const QUrl& hr
         qWarning() << "Window.shareSnapshot isn't available to a world's scripts";
         return;
     }
-    qApp->shareSnapshot(path, href);
+    qApp->getSnapshotRequests().shareSnapshot(path, href);
 }
 
 void WindowScriptingInterface::makeConnection(bool success, const QString& userNameOrError) {
@@ -632,6 +653,14 @@ float WindowScriptingInterface::domainLoadingProgress() {
     return qApp->getOctreePacketProcessor().domainLoadingProgress();
 }
 
+QVariantMap WindowScriptingInterface::getWorldLoading() {
+    return qApp->getWorldLoadingState();
+}
+
+void WindowScriptingInterface::showWorldNow() {
+    QMetaObject::invokeMethod(qApp, [] { qApp->showWorldNow(); });
+}
+
 int WindowScriptingInterface::getDisplayPluginCount() {
     return (int)PluginManager::getInstance()->getDisplayPlugins().size();
 }
@@ -677,4 +706,8 @@ void WindowScriptingInterface::setLoadingScreen(const QVariantMap& state) {
         return;
     }
     emit loadingScreenChanged(state);
+}
+
+void WindowScriptingInterface::pressLoadingScreenButton(const QString& button) {
+    emit loadingScreenButtonPressed(button);
 }

@@ -23,6 +23,11 @@ class MaterialEntityRenderer : public TypedEntityRenderer<MaterialEntityItem> {
     using Parent = TypedEntityRenderer<MaterialEntityItem>;
     using Pointer = std::shared_ptr<MaterialEntityRenderer>;
 public:
+    // whether what this material draws has loaded: its textures, and for a procedural material its shader and every
+    // image channel (Procedural::isReady). The arrival waits for it (SafeLanding): a ground painted by a material
+    // entity was drawn black while its 27 MB splatmap still loaded, its model being "drawn" long before (10-21)
+    bool isMaterialReady() const;
+
     MaterialEntityRenderer(const EntityItemPointer& entity) : Parent(entity) {}
     ~MaterialEntityRenderer() { deleteMaterial(_parentID, _parentMaterialName); }
 

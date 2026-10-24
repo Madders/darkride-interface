@@ -46,7 +46,6 @@
 #include "WebEntityItem.h"
 #include "ParticleEffectEntityItem.h"
 #include "LineEntityItem.h"
-#include "PolyVoxEntityItem.h"
 #include "GridEntityItem.h"
 #include "GizmoEntityItem.h"
 #include "LightEntityItem.h"
@@ -116,7 +115,6 @@ class EntityItemProperties {
     friend class ParticleEffectEntityItem;
     friend class LineEntityItem;
     friend class PolyLineEntityItem;
-    friend class PolyVoxEntityItem;
     friend class GridEntityItem;
     friend class GizmoEntityItem;
     friend class TrackEntityItem;
@@ -125,8 +123,9 @@ class EntityItemProperties {
     friend class TerrainEntityItem;
     friend class MaterialEntityItem;
 public:
-    static bool blobToProperties(QScriptEngine& scriptEngine, const QByteArray& blob, EntityItemProperties& properties);
-    static void propertiesToBlob(QScriptEngine& scriptEngine, const QUuid& myAvatarID, const EntityItemProperties& properties, 
+    /// Avatar-entity data: an entity's properties as compact JSON text, through the plain conversions.
+    static bool blobToProperties(const QByteArray& blob, EntityItemProperties& properties);
+    static void propertiesToBlob(const QUuid& myAvatarID, const EntityItemProperties& properties,
         QByteArray& blob, bool allProperties = false);
 
     EntityItemProperties(EntityPropertyFlags desiredProperties = EntityPropertyFlags());
@@ -152,7 +151,11 @@ public:
     virtual QScriptValue copyToScriptValue(QScriptEngine* engine, bool skipDefaults, bool allowUnknownCreateTime = false,
         bool strictSemantics = false, EntityPsuedoPropertyFlags psueudoPropertyFlags = EntityPsuedoPropertyFlags()) const;
     virtual void copyFromScriptValue(const QScriptValue& object, bool honorReadOnly);
-    void copyFromJSONString(QScriptEngine& scriptEngine, const QString& jsonString);
+    /// The same conversions for plain values (PlainScriptValue.h): what a WebAssembly module, a world file or
+    /// avatar-entity data gets, member for member and in the same order what a script gets.
+    PlainScriptValue copyToScriptValue(PlainScriptEngine* engine, bool skipDefaults, bool allowUnknownCreateTime = false,
+        bool strictSemantics = false, EntityPsuedoPropertyFlags psueudoPropertyFlags = EntityPsuedoPropertyFlags()) const;
+    void copyFromScriptValue(const PlainScriptValue& object, bool honorReadOnly);
 
     static QScriptValue entityPropertyFlagsToScriptValue(QScriptEngine* engine, const EntityPropertyFlags& flags);
     static void entityPropertyFlagsFromScriptValue(const QScriptValue& object, EntityPropertyFlags& flags);
@@ -376,20 +379,6 @@ public:
     DEFINE_PROPERTY_REF_ENUM(PROP_TONE_MAPPING_MODE, ToneMappingMode, toneMappingMode, uint32_t, (uint32_t)TONE_MAPPING_INHERIT);
     DEFINE_PROPERTY_REF_ENUM(PROP_AVATAR_PRIORITY, AvatarPriority, avatarPriority, uint32_t, (uint32_t)COMPONENT_MODE_INHERIT);
 
-    // Polyvox
-    DEFINE_PROPERTY_REF(PROP_VOXEL_VOLUME_SIZE, VoxelVolumeSize, voxelVolumeSize, glm::vec3, PolyVoxEntityItem::DEFAULT_VOXEL_VOLUME_SIZE);
-    DEFINE_PROPERTY_REF(PROP_VOXEL_DATA, VoxelData, voxelData, QByteArray, PolyVoxEntityItem::DEFAULT_VOXEL_DATA);
-    DEFINE_PROPERTY_REF(PROP_VOXEL_SURFACE_STYLE, VoxelSurfaceStyle, voxelSurfaceStyle, uint16_t, PolyVoxEntityItem::DEFAULT_VOXEL_SURFACE_STYLE);
-    DEFINE_PROPERTY_REF(PROP_X_TEXTURE_URL, XTextureURL, xTextureURL, QString, "");
-    DEFINE_PROPERTY_REF(PROP_Y_TEXTURE_URL, YTextureURL, yTextureURL, QString, "");
-    DEFINE_PROPERTY_REF(PROP_Z_TEXTURE_URL, ZTextureURL, zTextureURL, QString, "");
-    DEFINE_PROPERTY_REF(PROP_X_N_NEIGHBOR_ID, XNNeighborID, xNNeighborID, EntityItemID, UNKNOWN_ENTITY_ID);
-    DEFINE_PROPERTY_REF(PROP_Y_N_NEIGHBOR_ID, YNNeighborID, yNNeighborID, EntityItemID, UNKNOWN_ENTITY_ID);
-    DEFINE_PROPERTY_REF(PROP_Z_N_NEIGHBOR_ID, ZNNeighborID, zNNeighborID, EntityItemID, UNKNOWN_ENTITY_ID);
-    DEFINE_PROPERTY_REF(PROP_X_P_NEIGHBOR_ID, XPNeighborID, xPNeighborID, EntityItemID, UNKNOWN_ENTITY_ID);
-    DEFINE_PROPERTY_REF(PROP_Y_P_NEIGHBOR_ID, YPNeighborID, yPNeighborID, EntityItemID, UNKNOWN_ENTITY_ID);
-    DEFINE_PROPERTY_REF(PROP_Z_P_NEIGHBOR_ID, ZPNeighborID, zPNeighborID, EntityItemID, UNKNOWN_ENTITY_ID);
-
     // Web
     DEFINE_PROPERTY_REF(PROP_SOURCE_URL, SourceUrl, sourceUrl, QString, WebEntityItem::DEFAULT_SOURCE_URL);
     DEFINE_PROPERTY_REF(PROP_DPI, DPI, dpi, uint16_t, ENTITY_ITEM_DEFAULT_DPI);
@@ -413,6 +402,12 @@ public:
     DEFINE_PROPERTY(PROP_TRAIN_DWELL, TrainDwell, trainDwell, float, 0.0f);
     DEFINE_PROPERTY(PROP_TRAIN_STATION, TrainStation, trainStation, quint16, TrackEntityItem::NO_STATION);
     DEFINE_PROPERTY(PROP_TRAIN_TIME, TrainTime, trainTime, quint64, 0);
+    DEFINE_PROPERTY_REF(PROP_TRACK_PROFILE, TrackProfile, trackProfile, QString, TrackEntityItem::DEFAULT_PROFILE);
+    DEFINE_PROPERTY(PROP_TRACK_WIDTH, TrackWidth, trackWidth, float, TrackEntityItem::DEFAULT_WIDTH);
+    DEFINE_PROPERTY(PROP_TRACK_HEIGHT, TrackHeight, trackHeight, float, TrackEntityItem::DEFAULT_HEIGHT);
+    DEFINE_PROPERTY(PROP_TRACK_CLEARANCE, TrackClearance, trackClearance, float, TrackEntityItem::DEFAULT_CLEARANCE);
+    DEFINE_PROPERTY(PROP_TRACK_PYLON_SPACING, TrackPylonSpacing, trackPylonSpacing, float, TrackEntityItem::DEFAULT_PYLON_SPACING);
+    DEFINE_PROPERTY(PROP_TRACK_PYLON_FLOOR, TrackPylonFloor, trackPylonFloor, float, TrackEntityItem::DEFAULT_PYLON_FLOOR);
 
     DEFINE_PROPERTY_REF(PROP_LINE_POINTS, LinePoints, linePoints, QVector<glm::vec3>, ENTITY_ITEM_DEFAULT_EMPTY_VEC3_QVEC);
     DEFINE_PROPERTY(PROP_STROKE_WIDTHS, StrokeWidths, strokeWidths, QVector<float>, QVector<float>());
@@ -497,7 +492,6 @@ public:
 
     QString getSimulatorIDAsString() const { return _simulationOwner.getID().toString().mid(1,36).toUpper(); }
 
-    void setVoxelDataDirty() { _voxelDataChanged = true; }
 
     void setLinePointsDirty() {_linePointsChanged = true; }
 
@@ -565,6 +559,13 @@ protected:
     void setCollisionMaskFromString(const QString& maskString);
 
 private:
+    // One body for each conversion, over the value and engine types (QScriptValue with QScriptEngine,
+    // PlainScriptValue with PlainScriptEngine); the public overloads above call them.
+    template <typename Value, typename Engine>
+    Value copyToScriptValueOf(Engine* engine, bool skipDefaults, bool allowUnknownCreateTime, bool strictSemantics,
+                          EntityPsuedoPropertyFlags psueudoPropertyFlags) const;
+    template <typename Value>
+    void copyFromScriptValueOf(const Value& object, bool honorReadOnly);
     QUuid _id;
     bool _idSet;
     quint64 _lastEdited;
@@ -733,9 +734,6 @@ inline QDebug operator<<(QDebug debug, const EntityItemProperties& properties) {
     DEBUG_PROPERTY_IF_CHANGED(debug, properties, CloneOriginID, cloneOriginID, "");
     DEBUG_PROPERTY_IF_CHANGED(debug, properties, CloneGrabbable, cloneGrabbable, "");
 
-    DEBUG_PROPERTY_IF_CHANGED(debug, properties, VoxelVolumeSize, voxelVolumeSize, "");
-    DEBUG_PROPERTY_IF_CHANGED(debug, properties, VoxelData, voxelData, "");
-    DEBUG_PROPERTY_IF_CHANGED(debug, properties, VoxelSurfaceStyle, voxelSurfaceStyle, "");
     DEBUG_PROPERTY_IF_CHANGED(debug, properties, Href, href, "");
     DEBUG_PROPERTY_IF_CHANGED(debug, properties, Description, description, "");    
     // DEBUG_PROPERTY_IF_CHANGED(debug, properties, EntityPriority, entityPriority, "");// TIVOLI tagging
@@ -743,15 +741,6 @@ inline QDebug operator<<(QDebug debug, const EntityItemProperties& properties) {
     if (properties.actionDataChanged()) {
         debug << " " << "actionData" << ":" << properties.getActionData().toHex() << "" << "\n";
     }
-    DEBUG_PROPERTY_IF_CHANGED(debug, properties, XTextureURL, xTextureURL, "");
-    DEBUG_PROPERTY_IF_CHANGED(debug, properties, YTextureURL, yTextureURL, "");
-    DEBUG_PROPERTY_IF_CHANGED(debug, properties, ZTextureURL, zTextureURL, "");
-    DEBUG_PROPERTY_IF_CHANGED(debug, properties, XNNeighborID, xNNeighborID, "");
-    DEBUG_PROPERTY_IF_CHANGED(debug, properties, YNNeighborID, yNNeighborID, "");
-    DEBUG_PROPERTY_IF_CHANGED(debug, properties, ZNNeighborID, zNNeighborID, "");
-    DEBUG_PROPERTY_IF_CHANGED(debug, properties, XPNeighborID, xPNeighborID, "");
-    DEBUG_PROPERTY_IF_CHANGED(debug, properties, YPNeighborID, yPNeighborID, "");
-    DEBUG_PROPERTY_IF_CHANGED(debug, properties, ZPNeighborID, zPNeighborID, "");
 
     DEBUG_PROPERTY_IF_CHANGED(debug, properties, ParentID, parentID, "");
     DEBUG_PROPERTY_IF_CHANGED(debug, properties, ParentJointIndex, parentJointIndex, "");

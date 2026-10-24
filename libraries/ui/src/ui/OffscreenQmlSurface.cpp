@@ -6,6 +6,7 @@
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 #include "OffscreenQmlSurface.h"
+#include "ResourceImageProvider.h"
 
 #include <unordered_set>
 #include <unordered_map>
@@ -49,7 +50,6 @@
 #include <gl/Context.h>
 #include <shared/ReadWriteLockable.h>
 
-#include "SecurityImageProvider.h"
 #include "shared/FileUtils.h"
 #include "types/FileTypeProfile.h"
 #include "types/TivoliWebEngineProfile.h"
@@ -255,10 +255,9 @@ void OffscreenQmlSurface::initializeEngine(QQmlEngine* engine) {
         qmlRegisterType<SoundEffect>("Hifi", 1, 0, "SoundEffect");
     });
 
-    // Register the pixmap Security Image Provider
-    engine->addImageProvider(SecurityImageProvider::PROVIDER_NAME, new SecurityImageProvider());
-
     engine->setNetworkAccessManagerFactory(new QmlNetworkAccessManagerFactory);
+    // pictures through the engine's own loader: private files in My Files, tea:// and atp: (ResourceImageProvider.h)
+    engine->addImageProvider(ResourceImageProvider::NAME, new ResourceImageProvider());
     auto importList = engine->importPathList();
     importList.insert(importList.begin(), PathUtils::resourcesPath() + "qml/");
     importList.insert(importList.begin(), PathUtils::resourcesPath());
@@ -383,7 +382,6 @@ void OffscreenQmlSurface::onRootCreated() {
         tabletScriptingInterface->setQmlTabletRoot("com.highfidelity.interface.tablet.system", this);
         QObject* tablet = tabletScriptingInterface->getTablet("com.highfidelity.interface.tablet.system");
         getSurfaceContext()->engine()->setObjectOwnership(tablet, QQmlEngine::CppOwnership);
-        getSurfaceContext()->engine()->addImageProvider(SecurityImageProvider::PROVIDER_NAME, new SecurityImageProvider());
     }
     QMetaObject::invokeMethod(this, "forceQmlAudioOutputDeviceUpdate", Qt::QueuedConnection);
 }
@@ -453,17 +451,11 @@ PointerEvent::EventType OffscreenQmlSurface::choosePointerEventType(QEvent::Type
 }
 
 void OffscreenQmlSurface::hoverBeginEvent(const PointerEvent& event, class QTouchDevice& device) {
-#if defined(DISABLE_QML)
-    return;
-#endif
     handlePointerEvent(event, device);
     _activeTouchPoints[event.getID()].hovering = true;
 }
 
 void OffscreenQmlSurface::hoverEndEvent(const PointerEvent& event, class QTouchDevice& device) {
-#if defined(DISABLE_QML)
-    return;
-#endif
     _activeTouchPoints[event.getID()].hovering = false;
     // Send a fake mouse move event if
     // - the event told us to
@@ -479,9 +471,6 @@ void OffscreenQmlSurface::hoverEndEvent(const PointerEvent& event, class QTouchD
 }
 
 bool OffscreenQmlSurface::handlePointerEvent(const PointerEvent& event, class QTouchDevice& device, bool release) {
-#if defined(DISABLE_QML)
-    return false;
-#endif
 
     // Ignore mouse interaction if we're paused
     if (!getRootItem() || isPaused()) {

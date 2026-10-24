@@ -145,7 +145,6 @@ void AvatarData::randomizeDefaultFullAvatarModelUrl() {
 
 const QUrl& AvatarData::defaultFullAvatarModelUrl() {
     if (_defaultFullAvatarModelUrl.isEmpty()) {
-        // _defaultFullAvatarModelUrl = PathUtils::resourcesUrl("/meshes/lynden/lynden.fst");
         randomizeDefaultFullAvatarModelUrl();
     }
 
@@ -2098,16 +2097,6 @@ void AvatarData::processAvatarIdentity(
             identityChanged = true;
         }
 
-        flagValue = identity.identityFlags.testFlag(AvatarDataPacket::IdentityFlag::verificationFailed);
-        if (flagValue != _verificationFailed) {
-            _verificationFailed = flagValue;
-            identityChanged = true;
-            setSkeletonModelURL(_skeletonModelURL);
-            if (_verificationFailed) {
-                qCDebug(avatars) << "Avatar" << getSessionDisplayName() << "marked as VERIFY-FAILED";
-            }
-        };
-
         if (identity.attachmentData != _attachmentData) {
             setAttachmentData(identity.attachmentData);
             identityChanged = true;
@@ -2136,15 +2125,8 @@ QUrl AvatarData::getWireSafeSkeletonModelURL() const {
     }
 }
 
-static const QString VERIFY_FAIL_MODEL { "/meshes/verifyFailed.fst" };
-
 const QUrl& AvatarData::getSkeletonModelURL() const {
-    if (_verificationFailed) {
-        static QUrl VERIFY_FAIL_MODEL_URL = PathUtils::resourcesUrl(VERIFY_FAIL_MODEL);
-        return VERIFY_FAIL_MODEL_URL;
-    } else {
-        return _skeletonModelURL;
-    }
+    return _skeletonModelURL;
 }
 
 QByteArray AvatarData::packSkeletonData() const {
@@ -2447,9 +2429,6 @@ QByteArray AvatarData::identityByteArray(bool setIsReplicated) const {
     }
     if (_lookAtSnappingEnabled) {
         identityFlags.setFlag(IdentityFlag::lookAtSnapping);
-    }
-    if (isCertifyFailed()) {
-        identityFlags.setFlag(IdentityFlag::verificationFailed);
     }
 
     identityStream << getSessionUUID()

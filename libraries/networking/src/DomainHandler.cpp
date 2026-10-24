@@ -30,7 +30,6 @@
 #include "udt/PacketHeaders.h"
 #include "NLPacket.h"
 #include "SharedUtil.h"
-#include "UserActivityLogger.h"
 #include "NetworkLogging.h"
 
 DomainHandler::DomainHandler(QObject* parent) :
@@ -234,8 +233,6 @@ void DomainHandler::setURLAndID(QUrl domainURL, QUuid domainID) {
 
                 DependencyManager::get<NodeList>()->flagTimeForConnectionStep(
                     LimitedNodeList::ConnectionStep::SetDomainHostname);
-
-                UserActivityLogger::getInstance().changedDomain(domainURL.host());
             }
         }
 

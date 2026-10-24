@@ -8,216 +8,134 @@
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 
-import QtQuick 2.7
-import QtQuick.Controls 2.3
+import QtQuick 2.12
 
 import controlsUit 1.0
 import stylesUit 1.0
 import "../windows"
+import "alert"
+import "alert/standardButtons.js" as StandardButtons
 
+// The desktop's text prompt, drawn as an alert: a title, the label as a line under it, then a text field, or a list
+// when items are given (current is then the index of the item chosen at first). buttonTexts gives the buttons their
+// own words ({ ok: "Rename" }); monospace shows the field in a fixed-width face, for paths and addresses.
 ModalWindow {
     id: root
-    HifiConstants { id: hifi }
-    implicitWidth: 640
-    implicitHeight: 320
     visible: true
     keyboardOverride: true  // Disable ModalWindow's keyboard.
+    frame: AlertShadow { }
+
+    anchors.centerIn: undefined
+    anchors.horizontalCenter: parent ? parent.horizontalCenter : undefined
+    anchors.top: parent ? parent.top : undefined
+    anchors.topMargin: parent ? Math.max(0, Math.round((parent.height - height) / 3)) : 0
 
     signal selected(var result);
     signal canceled();
 
-    property int icon: hifi.icons.none
-    property string iconText: ""
-    property int iconSize: 35
-    onIconChanged: updateIcon();
-
+    property int icon: 0  // kept for callers: every alert shows Darkride's picture
     property var items;
     property string label
     property var result;
-    property alias current: textResult.text
-
-    // For text boxes
-    property alias placeholderText: textResult.placeholderText
+    property var current
+    property string placeholderText
 
     // For combo boxes
     property bool editable: true;
 
-    property int titleWidth: 0
-    onTitleWidthChanged: d.resize();
+    property var buttonTexts: ({})
+    property bool monospace: false
+    property int titleWidth: 0  // ModalWindow's own frame sets it while the window is made
 
     property bool keyboardEnabled: false
     property bool keyboardRaised: false
     property bool punctuationMode: false
+    readonly property bool keyboardShown: keyboardEnabled && keyboardRaised
 
-    onKeyboardRaisedChanged: d.resize();
+    width: keyboardShown ? Math.max(panel.width, keyboard.keyboardWidth) : panel.width
+    height: panel.implicitHeight + (keyboardShown ? keyboard.raisedHeight + 8 : 0)
 
-    function updateIcon() {
-        if (!root) {
-            return;
-        }
-        iconText = hifi.glyphForIcon(root.icon);
+    function accept() {
+        root.result = items ? menu.currentText : field.text;
+        root.selected(root.result);
+        root.destroy();
     }
 
+    function cancel() {
+        root.canceled();
+        root.destroy();
+    }
+
+    // A window holds one content item, its last child, so all it shows goes in this one. ModalWindow.qml reads hifi.
     Item {
-        id: modalWindowItem
-        clip: true
-        width: pane.width
-        height: pane.height
-        anchors.margins: 0
+        width: root.width
+        height: root.height
 
-        QtObject {
-            id: d
-            readonly property int minWidth: 480
-            readonly property int maxWdith: 1280
-            readonly property int minHeight: 120
-            readonly property int maxHeight: 720
+        HifiConstants { id: hifi }
 
-            function resize() {
-                var targetWidth = Math.max(titleWidth, pane.width)
-                var targetHeight = (items ? comboBox.controlHeight : textResult.controlHeight) + 5 * hifi.dimensions.contentSpacing.y + buttons.height
-                root.width = (targetWidth < d.minWidth) ? d.minWidth : ((targetWidth > d.maxWdith) ? d.maxWidth : targetWidth);
-                root.height = ((targetHeight < d.minHeight) ? d.minHeight : ((targetHeight > d.maxHeight) ? d.maxHeight : targetHeight)) + ((keyboardEnabled && keyboardRaised) ? (keyboard.raisedHeight + 2 * hifi.dimensions.contentSpacing.y) : 0)
+        AlertPanel {
+            id: panel
+            x: parent ? Math.round((parent.width - width) / 2) : 0
+            title: root.title
+            text: root.label
+            buttons: StandardButtons.list(StandardButtons.OK | StandardButtons.CANCEL, StandardButtons.OK, 0, root.buttonTexts)
+            onClicked: {
+                if (value === StandardButtons.OK) {
+                    root.accept();
+                } else {
+                    root.cancel();
+                }
+            }
+
+            AlertField {
+                id: field
+                visible: !root.items
+                monospace: root.monospace
+                placeholderText: root.placeholderText
+            }
+
+            AlertMenu {
+                id: menu
+                visible: !!root.items
+                model: root.items ? root.items : []
             }
         }
 
-        Item {
-            anchors {
-                top: parent.top
-                bottom: keyboard.top;
-                left: parent.left;
-                right: parent.right;
-                margins: 0
-                bottomMargin: 2 * hifi.dimensions.contentSpacing.y
-            }
-
-            // FIXME make a text field type that can be bound to a history for autocompletion
-            TextField {
-                id: textResult
-                label: root.label
-                visible: items ? false : true
-                anchors {
-                    left: parent.left;
-                    right: parent.right;
-                    bottom: parent.bottom
-                }
-                KeyNavigation.down: acceptButton
-                KeyNavigation.tab: acceptButton
-            }
-
-            ComboBox {
-                id: comboBox
-                label: root.label
-                visible: items ? true : false
-                anchors {
-                    left: parent.left
-                    right: parent.right
-                    bottom: parent.bottom
-                }
-                model: items ? items : []
-                KeyNavigation.down: acceptButton
-                KeyNavigation.tab: acceptButton
-            }
-        }
-
-        property alias keyboardOverride: root.keyboardOverride
-        property alias keyboardRaised: root.keyboardRaised
-        property alias punctuationMode: root.punctuationMode
         Keyboard {
             id: keyboard
-            raised: keyboardEnabled && keyboardRaised
-            numeric: punctuationMode
-            anchors {
-                left: parent.left
-                right: parent.right
-                bottom: buttons.top
-                bottomMargin: raised ? 2 * hifi.dimensions.contentSpacing.y : 0
-            }
-        }
-
-        Flow {
-            id: buttons
-            spacing: hifi.dimensions.contentSpacing.x
-            onHeightChanged: d.resize(); onWidthChanged: d.resize();
-            layoutDirection: Qt.RightToLeft
-            anchors {
-                bottom: parent.bottom
-                right: parent.right
-                margins: 0
-                bottomMargin: hifi.dimensions.contentSpacing.y
-            }
-            Button {
-                id: cancelButton
-                action: cancelAction
-                KeyNavigation.left: acceptButton
-                KeyNavigation.up: items ? comboBox : textResult
-                KeyNavigation.backtab: acceptButton
-            }
-            Button {
-                id: acceptButton
-                action: acceptAction
-                KeyNavigation.right: cancelButton
-                KeyNavigation.up: items ? comboBox : textResult
-                KeyNavigation.tab: cancelButton
-                KeyNavigation.backtab: items ? comboBox : textResult
-            }
-        }
-
-        Action {
-            id: cancelAction
-            text: qsTr("Cancel");
-            shortcut: "Esc"
-            onTriggered: {
-                root.canceled();
-                root.destroy();
-            }
-        }
-
-        Action {
-            id: acceptAction
-            text: qsTr("OK");
-            shortcut: "Return"
-            onTriggered: {
-                root.result = items ? comboBox.currentText : textResult.text
-                root.selected(root.result);
-                root.destroy();
-            }
+            raised: root.keyboardShown
+            numeric: root.punctuationMode
+            y: panel.implicitHeight + 8
         }
     }
 
     Keys.onPressed: {
         if (!visible) {
-            return
+            return;
         }
-
         switch (event.key) {
-        case Qt.Key_Escape:
-        case Qt.Key_Back:
-            cancelAction.trigger()
-            event.accepted = true;
-            break;
-
-        case Qt.Key_Return:
-        case Qt.Key_Enter:
-            if (acceptButton.focus) {
-                acceptAction.trigger()
-            } else if (cancelButton.focus) {
-                cancelAction.trigger()
-            } else if (comboBox.focus || comboBox.popup.focus) {
-                comboBox.showList()
-            }
-            event.accepted = true;
-            break;
+            case Qt.Key_Escape:
+            case Qt.Key_Back:
+                event.accepted = true;
+                root.cancel();
+                break;
+            case Qt.Key_Return:
+            case Qt.Key_Enter:
+                event.accepted = true;
+                root.accept();
+                break;
         }
     }
 
     Component.onCompleted: {
         keyboardEnabled = HMD.active;
-        updateIcon();
-        d.resize();
         if (items) {
-            comboBox.forceActiveFocus()
+            menu.currentIndex = Math.max(0, Number(current) || 0);
+            menu.forceActiveFocus();
         } else {
-            textResult.forceActiveFocus()
+            field.text = current !== undefined && current !== null ? String(current) : "";
+            field.selectAll();
+            field.forceActiveFocus();
         }
     }
 }

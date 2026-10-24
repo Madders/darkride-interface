@@ -88,7 +88,6 @@ bool isValidFilePath(const AssetPath& path);
 bool isValidPath(const AssetPath& path);
 bool isValidHash(const QString& hashString);
 
-QString bakingStatusToString(BakingStatus status);
 
 } // namespace AssetUtils
 

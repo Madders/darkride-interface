@@ -198,6 +198,15 @@ void DeferredLightingEffect::setupFrameLightingBatch(gpu::Batch& batch, const Re
     }
 }
 
+bool DeferredLightingEffect::isForwardLit(const RenderArgs* args) {
+    return args->_renderMethod == render::Args::FORWARD && args->_renderMode != RenderArgs::SHADOW_RENDER_MODE;
+}
+
+void DeferredLightingEffect::setupForwardLightingBatch(const RenderArgs* args, gpu::Batch& batch) const {
+    setupKeyLightBatch(args, batch);
+    setupFrameLightingBatch(batch, args);
+}
+
 void SetFrameLighting::run(const render::RenderContextPointer& renderContext, const Inputs& inputs) {
     DependencyManager::get<DeferredLightingEffect>()->setFrameLighting(inputs.get0(), inputs.get1(), inputs.get2());
 }

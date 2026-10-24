@@ -1,0 +1,26 @@
+# The viewer's chat (CHAT.md 4.5): Matrix through matrix-rust-sdk, the library behind Element X; ../ffi is its C
+# interface, and src/bin/spike.rs drives it from a terminal for tests.
+[package]
+name = "darkride-chat-core"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.96"
+
+[dependencies]
+# defaults (encryption, room-key forwarding, SQLite stores, rustls on aws-lc), with SQLite built in, so no platform
+# needs its own copy
+matrix-sdk = { version = "=0.19.1", features = ["bundled-sqlite"] }
+matrix-sdk-ui = "=0.19.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# aws-lc (rustls' cryptography) assembles with NASM on Windows; its prebuilt objects spare every build machine NASM
+[target.'cfg(windows)'.dependencies]
+aws-lc-sys = { version = "=0.46.0", features = ["prebuilt-nasm"] }

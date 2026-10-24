@@ -141,6 +141,7 @@ constexpr const char*  COMMAND_NAMES[] = {
     "drawIndexedInstanced",
     "multiDrawIndirect",
     "multiDrawIndexedIndirect",
+    "drawIndexedInstances",
 
     "setInputFormat",
     "setInputBuffer",

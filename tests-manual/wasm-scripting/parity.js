@@ -22,6 +22,8 @@
     var sound = SoundCache.getSound(Paths.defaultScripts + "/tivoli/assets/chat1.wav");
     var clicks = [];
     var assetOutcomes = [];
+    var statusAnswers = [];
+    var metadataAnswers = [];
     Entities.clickDownOnEntity.connect(function (entityID, event) {
         clicks.push({ entityID: entityID, event: event });
     });
@@ -59,6 +61,9 @@
         check("entity id is a string", typeof id === "string");
         check("entity id braces", /^\{[0-9a-f-]{36}\}$/.test(id));
         attempt("getEntityProperties(id).name", function () { return Entities.getEntityProperties(id).name; });
+        // the full map and a group, keys unsorted: the order a script sees them in
+        attempt("getEntityProperties(id) keys in order", function () { return Object.keys(Entities.getEntityProperties(id)); });
+        attempt("getEntityProperties(id).grab keys in order", function () { return Object.keys(Entities.getEntityProperties(id).grab); });
         attempt("getEntityProperties(id, [position]) keys", function () { return Object.keys(Entities.getEntityProperties(id, ["position"])).sort(); });
         attempt("getEntityProperties(id, position) keys", function () { return Object.keys(Entities.getEntityProperties(id, "position")).sort(); });
         attempt("getEntityProperties position", function () { return Entities.getEntityProperties(id, ["position"]).position; });
@@ -197,6 +202,14 @@
         attempt("Entities.addEntity avatar entity", function () { var e = Entities.addEntity({ type: "Sphere", position: ENTITY_POSITION, dimensions: { x: 0.1, y: 0.1, z: 0.1 }, lifetime: 60 }, "avatar"); var p = Entities.getEntityProperties(e, ["entityHostType", "clientOnly"]); Entities.deleteEntity(e); return [p.entityHostType, p.clientOnly]; });
         attempt("Entities.getPropertyInfo", function () { return Entities.getPropertyInfo("alpha"); });
         attempt("Entities.findRayIntersection", function () { var r = Entities.findRayIntersection({ origin: { x: 0, y: 2, z: 0 }, direction: { x: 0, y: 0, z: -1 } }, true, [id]); return [Object.keys(r), r.intersects, r.entityID === id, r.face, Math.round(r.distance * 100), r.intersection, r.surfaceNormal]; });
+        // the lists matter: an include list naming no entity hits nothing, a discard list naming the entity skips it
+        attempt("Entities.findRayIntersection include other", function () { var r = Entities.findRayIntersection({ origin: { x: 0, y: 2, z: 0 }, direction: { x: 0, y: 0, z: -1 } }, false, [Uuid.generate()]); return [r.intersects, r.entityID === id]; });
+        attempt("Entities.findRayIntersection discard", function () { var r = Entities.findRayIntersection({ origin: { x: 0, y: 2, z: 0 }, direction: { x: 0, y: 0, z: -1 } }, true, [], [id], false, false); return [r.entityID === id]; });
+        attempt("Entities.getServerScriptStatus call", function () { return Entities.getServerScriptStatus(id, function (received, running, status, errorInfo) { statusAnswers.push([received, running, status, typeof errorInfo]); }); });
+        attempt("Entities.queryPropertyMetadata call", function () { return Entities.queryPropertyMetadata(id, "script", function (err, result) { metadataAnswers.push([err ? err.name : null, err instanceof Error, typeof (err && err.message), result ? Object.keys(result).sort() : null]); }); });
+        attempt("Entities.queryPropertyMetadata scope form", function () { var scope = { seen: function (err, result) { metadataAnswers.push(["scoped", this === scope]); } }; return Entities.queryPropertyMetadata(id, "script", scope, "seen"); });
+        attempt("Entities.queryPropertyMetadata unknown", function () { return Entities.queryPropertyMetadata(id, "color", function () {}); });
+        attempt("Entities.getMeshes", function () { var answer = null; Entities.getMeshes(id, function (meshes, success) { answer = [success, meshes === undefined ? "undefined" : typeof meshes]; }); return answer; });
         attempt("AvatarList.findRayIntersection", function () { var r = AvatarList.findRayIntersection({ origin: { x: 0, y: 100, z: 0 }, direction: { x: 0, y: 1, z: 0 } }); return [Object.keys(r), r.intersects, r.avatarID, r.jointIndex]; });
         attempt("Controller.getPoseValue", function () { return Controller.getPoseValue(Controller.Standard.LeftHand); });
         attempt("MyAvatar.getLeftHandPose", function () { return MyAvatar.getLeftHandPose(); });
@@ -259,6 +272,8 @@
         Script.setTimeout(function () {
             attempt("clickDownOnEntity event", function () { return clicks.length ? [clicks[0].entityID === id, clicks[0].event] : "none"; });
             attempt("Assets outcomes", function () { return assetOutcomes; });
+            attempt("Entities.getServerScriptStatus answer", function () { return statusAnswers.length ? statusAnswers[0] : "none"; });
+            attempt("Entities.queryPropertyMetadata answers", function () { return metadataAnswers; });
             attempt("Graphics.getModel", function () {
                 var model = Graphics.getModel(modelEntity);
                 if (!model) { return "no model"; }

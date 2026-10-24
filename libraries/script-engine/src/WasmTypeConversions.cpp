@@ -21,6 +21,7 @@
 #include <EntityItemID.h>
 #include <EntityItemProperties.h>
 #include <EntityScriptingInterface.h>
+#include <PlainScriptValue.h>
 #include <PointerEvent.h>
 #include <RegisteredMetaTypes.h>
 #include <ResourceCache.h>
@@ -581,6 +582,22 @@ bool decodeEntityItemID(const ValueCodec& codec, const QCborValue& value, Entity
     return ok;
 }
 
+// The entity properties, by the conversion bodies compiled for plain values (EntityItemProperties.h): a module gets
+// the map a script gets, member for member and in the same order, and what it sends is read as a script's object is
+// (QtScript's pair is EntityItemPropertiesToScriptValue and EntityItemPropertiesFromScriptValueHonorReadOnly)
+QCborValue encodeEntityItemProperties(const ValueCodec&, const EntityItemProperties& properties) {
+    PlainScriptEngine engine;
+    return properties.copyToScriptValue(&engine, false).toCbor();
+}
+
+bool decodeEntityItemProperties(const ValueCodec&, const QCborValue& value, EntityItemProperties& properties) {
+    if (!value.isMap()) {
+        return false;
+    }
+    properties.copyFromScriptValue(PlainScriptValue::fromCbor(value), true);
+    return true;
+}
+
 QCborValue encodeEntityPropertyFlags(const ValueCodec&, const EntityPropertyFlags&) {
     return QCborMap();  // EntityItemProperties::entityPropertyFlagsToScriptValue gives an empty object
 }
@@ -887,6 +904,7 @@ void WasmTypeConversions::registerAll() {
 
         add<EntityItemID>(&encodeEntityItemID, &decodeEntityItemID);
         addSequence<QVector<EntityItemID>, EntityItemID>(&encodeEntityItemID, &decodeEntityItemID);
+        add<EntityItemProperties>(&encodeEntityItemProperties, &decodeEntityItemProperties);
         add<EntityPropertyFlags>(&encodeEntityPropertyFlags, &decodeEntityPropertyFlags);
         add<EntityPropertyInfo>(&encodeEntityPropertyInfo, &decodeEntityPropertyInfo);
         add<RayToEntityIntersectionResult>(&encodeRayToEntityIntersectionResult, &decodeRayToEntityIntersectionResult);

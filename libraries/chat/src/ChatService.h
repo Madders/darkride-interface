@@ -1,0 +1,140 @@
+//
+//  ChatService.h
+//  libraries/chat/src
+//
+//  Darkride chat in the viewer: Matrix at chat.darkride.ai through the Rust library in ../native (matrix-rust-sdk),
+//  signed in with the viewer's Darkride account. The library takes commands as JSON and answers with events as JSON
+//  on its own threads; this posts them to the main thread and keeps the latest room list for the panels.
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//
+
+#ifndef hifi_ChatService_h
+#define hifi_ChatService_h
+
+#include <QtCore/QElapsedTimer>
+#include <QtCore/QJsonArray>
+#include <QtCore/QJsonObject>
+#include <QtCore/QObject>
+#include <QtCore/QTimer>
+
+#include <DependencyManager.h>
+
+class QNetworkReply;
+struct DarkrideChat;
+
+class ChatService : public QObject, public Dependency {
+    Q_OBJECT
+    SINGLETON_DEPENDENCY
+
+public:
+    enum class State {
+        SignedOut,      // no Darkride account, or chat not started yet
+        SigningIn,      // asking the metaverse for a chat token, or the homeserver for a session
+        Ready,          // signed in as the Darkride account
+        Unavailable,    // the metaverse refused (chat off, the account banned or unverified) or can't be reached
+    };
+    Q_ENUM(State)
+
+    ChatService();
+    ~ChatService();
+
+    // follows the Darkride account from now on: signed in to chat while it is, signed out when it signs out
+    void start();
+    // at quit, before the networking goes; forget: sign out of chat too (the account isn't remembered on this
+    // computer), waiting a moment for the homeserver to hear it
+    void stop(bool forget);
+
+    State state() const { return _state; }
+    // a line for the panel when chat isn't ready: why, or what it is waiting for
+    QString stateText() const { return _stateText; }
+    QString userId() const { return _userId; }
+    // the sync's state: running, offline (waiting for the server), error, idle, terminated
+    QString syncState() const { return _syncState; }
+    // [{id, name, dm, dm_user?, encrypted, invited, unread, notifications, members, avatar?, space?}]
+    QJsonArray rooms() const { return _rooms; }
+    // the joined spaces (Darkride's): [{id, name, avatar?}]
+    QJsonArray spaces() const { return _spaces; }
+    // who you are in chat: the display name and the picture's mxc address, once the server has said
+    QString profileName() const { return _profileName; }
+    QString profileAvatar() const { return _profileAvatar; }
+
+    void open(const QString& room, int count = 50);
+    void close(const QString& room);
+    void loadOlder(const QString& room, int count = 30);
+    void send(const QString& room, const QString& body);
+    // a message's reactions, its text and the message itself, by its id in the timeline: react adds the emoji, or
+    // takes yours back; edit and deleteMessage only work on your own messages
+    void react(const QString& room, const QString& id, const QString& key);
+    void edit(const QString& room, const QString& id, const QString& body);
+    void deleteMessage(const QString& room, const QString& id);
+    void markRead(const QString& room);
+    void join(const QString& room);
+    // a new direct message with someone (a Matrix user id), inviting them; commandDone says {op: create_dm, room}
+    void createDm(const QString& userId);
+    void leave(const QString& room);
+    // a picture or file into the chat's folder, answered by mediaReady with the same key: source as a message's
+    // media has it ({"url": mxc} or {"file": {...}}); a width and height ask for a thumbnail (crop: cut to fill)
+    void fetchMedia(const QString& key, const QJsonValue& source, int width = 0, int height = 0, bool crop = false);
+    // tries again after Unavailable
+    void retry();
+
+signals:
+    void stateChanged(State state);
+    void syncStateChanged(const QString& state);
+    void roomsChanged(const QJsonArray& rooms);
+    // the newest items of an open room: [{id, sender, name, body, kind, ts, own, encrypted, state, reactions,
+    // edited, editable, ...}], growing as older ones load (the library's timeline event)
+    void timelineChanged(const QString& room, const QJsonArray& items);
+    // a command finished: {op, room?, start?}; start: the room's first message is in, there's nothing older
+    void commandDone(const QJsonObject& done);
+    void commandFailed(const QString& op, const QString& message);
+    void profileChanged();
+    // path: the file; error: why there is none
+    void mediaReady(const QString& key, const QString& path, const QString& error);
+
+private slots:
+    void onAccountLoggedIn();
+    void onAccountLoggedOut();
+    void chatTokenReceived(QNetworkReply* reply);
+    void chatTokenFailed(QNetworkReply* reply);
+
+private:
+    static void receiveEvent(const char* event, void* userData);
+    void handleEvent(const QByteArray& json);
+    void command(const QJsonObject& command);
+    void requestChatToken();
+    void createLibrary(const QString& homeserver);
+    void freeLibrary();
+    void settle();
+    void setState(State state, const QString& text = QString());
+
+    DarkrideChat* _chat { nullptr };
+    QString _homeserver;
+    bool _started { false };
+    bool _tokenRequested { false };
+
+    // the library's own state (signed_out, starting, ready) and whom it is signed in as
+    QString _libraryState;
+    QString _libraryUser;
+    // from the metaverse: a two-minute token and the chat account it signs in as
+    QString _token;
+    QElapsedTimer _tokenAge;
+    QString _expectedUser;
+    // sign-ins tried since the last one that worked, so a refusal doesn't loop
+    int _signInAttempts { 0 };
+    QString _lastSignInError;
+
+    State _state { State::SignedOut };
+    QString _stateText;
+    QString _userId;
+    QString _syncState;
+    QJsonArray _rooms;
+    QJsonArray _spaces;
+    QString _profileName;
+    QString _profileAvatar;
+    QTimer _retryTimer;
+};
+
+#endif // hifi_ChatService_h

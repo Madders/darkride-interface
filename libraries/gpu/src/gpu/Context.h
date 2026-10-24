@@ -41,6 +41,7 @@ public:
     uint64_t _RSAmountTextureMemoryBounded { 0 };
 
     uint32_t _DSNumAPIDrawcalls { 0 };
+    uint32_t _DSNumInstancedDrawcalls { 0 };   // API draws that took an inline instance list (GPU instancing)
     uint32_t _DSNumDrawcalls { 0 };
     uint32_t _DSNumTriangles { 0 };
 

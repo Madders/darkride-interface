@@ -27,7 +27,6 @@
 #include "ControlPacket.h"
 #include "Packet.h"
 #include "PacketList.h"
-#include "../UserActivityLogger.h"
 #include "Socket.h"
 #include <Trace.h>
 #include <Profile.h>
@@ -338,22 +337,6 @@ void SendQueue::run() {
                 << "NPT:" << nextPacketTimestamp.time_since_epoch().count()
                 << "NOW:" << now.time_since_epoch().count();
 
-                // alright, we're in a weird state
-                // we want to know why this is happening so we can implement a better fix than this guard
-                // send some details up to the API (if the user allows us) that indicate how we could such a large timeToSleep
-                static const QString SEND_QUEUE_LONG_SLEEP_ACTION = "sendqueue-sleep";
-
-                // setup a json object with the details we want
-                QJsonObject longSleepObject;
-                longSleepObject["timeToSleep"] = qint64(timeToSleep.count());
-                longSleepObject["packetSendPeriod"] = _packetSendPeriod.load();
-                longSleepObject["nextPacketDelta"] = nextPacketDelta;
-                longSleepObject["nextPacketTimestamp"] = qint64(nextPacketTimestamp.time_since_epoch().count());
-                longSleepObject["then"] = qint64(now.time_since_epoch().count());
-
-                // hopefully send this event using the user activity logger
-                UserActivityLogger::getInstance().logAction(SEND_QUEUE_LONG_SLEEP_ACTION, longSleepObject);
-                
                 timeToSleep = MAX_SEND_QUEUE_SLEEP_USECS;
             }
             

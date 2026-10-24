@@ -68,3 +68,29 @@ void WebSocketFactory::dispose(QObject* socket) {
         socket->deleteLater();
     }
 }
+
+WebSocketServerObject::WebSocketServerObject(const QString& serverName, int port, QObject* parent) :
+    QObject(parent), _server(serverName, QWebSocketServer::NonSecureMode) {
+    if (_server.listen(QHostAddress::Any, quint16(port))) {
+        connect(&_server, &QWebSocketServer::newConnection, this, [this] {
+            while (_server.hasPendingConnections()) {
+                auto client = new WebSocketObject(_server.nextPendingConnection(), this);
+                _clients << client;
+                emit newConnection(client);
+            }
+        });
+    }
+}
+
+void WebSocketServerObject::close() {
+    for (WebSocketObject* client : _clients) {
+        if (client->readyState() != WebSocketObject::CLOSED) {
+            client->close(QWebSocketProtocol::CloseCodeGoingAway, "Server closing.");
+        }
+    }
+    _server.close();
+}
+
+QObject* WebSocketServerFactory::createWebSocketServer(const QString& serverName, int port) {
+    return new WebSocketServerObject(serverName, port, this);
+}

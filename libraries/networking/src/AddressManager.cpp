@@ -28,7 +28,6 @@
 
 #include "NodeList.h"
 #include "NetworkLogging.h"
-#include "UserActivityLogger.h"
 #include "udt/PacketHeaders.h"
 
 const QString DEFAULT_HIFI_ADDRESS = "7def9d04-b4a4-47b2-892f-43f7eb82caf7"; // squirrel nut cafe
@@ -242,10 +241,6 @@ bool AddressManager::handleUrl(const QUrl& lookupUrlIn, LookupTrigger trigger) {
         qWarning() << "Opening a local file as a world isn't available to a world's scripts";
         return false;
     }
-    static QString URL_TYPE_USER = "user";
-    static QString URL_TYPE_DOMAIN_ID = "domain_id";
-    static QString URL_TYPE_PLACE = "place";
-    static QString URL_TYPE_NETWORK_ADDRESS = "network_address";
 
     QUrl lookupUrl = lookupUrlIn;
 
@@ -290,8 +285,6 @@ bool AddressManager::handleUrl(const QUrl& lookupUrlIn, LookupTrigger trigger) {
         if (handleUsername(lookupUrl.authority())) {
             // handled a username for lookup
 
-            UserActivityLogger::getInstance().wentTo(trigger, URL_TYPE_USER, lookupUrl.toString());
-
             // save the last visited domain URL.
             _lastVisitedURL = lookupUrl;
 
@@ -304,8 +297,6 @@ bool AddressManager::handleUrl(const QUrl& lookupUrlIn, LookupTrigger trigger) {
             bool hostChanged;
             if (handleNetworkAddress(lookupUrl.host()
                                      + (lookupUrl.port() == -1 ? "" : ":" + QString::number(lookupUrl.port())), trigger, hostChanged)) {
-
-                UserActivityLogger::getInstance().wentTo(trigger, URL_TYPE_NETWORK_ADDRESS, lookupUrl.toString());
 
                 // save the last visited domain URL.
                 _lastVisitedURL = lookupUrl;
@@ -333,8 +324,6 @@ bool AddressManager::handleUrl(const QUrl& lookupUrlIn, LookupTrigger trigger) {
                 // we may have a path that defines a relative viewpoint - if so we should jump to that now
                 handlePath(path, trigger);
             } else if (handleDomainID(lookupUrl.host())){
-                UserActivityLogger::getInstance().wentTo(trigger, URL_TYPE_DOMAIN_ID, lookupUrl.toString());
-
                 // save the last visited domain URL.
                 _lastVisitedURL = lookupUrl;
 
@@ -345,8 +334,6 @@ bool AddressManager::handleUrl(const QUrl& lookupUrlIn, LookupTrigger trigger) {
                 // try to look up the domain ID on the metaverse API
                 attemptDomainIDLookup(lookupUrl.host(), lookupUrl.path(), trigger);
             } else {
-                UserActivityLogger::getInstance().wentTo(trigger, URL_TYPE_PLACE, lookupUrl.toString());
-
                 // save the last visited domain URL.
                 _lastVisitedURL = lookupUrl;
 
@@ -446,6 +433,9 @@ void AddressManager::handleAPIResponse(QNetworkReply* requestReply) {
 
 const char OVERRIDE_PATH_KEY[] = "override_path";
 const char LOOKUP_TRIGGER_KEY[] = "lookup_trigger";
+// what a lookup asks for, kept with the request so that a failure can say what it couldn't find
+const char LOOKUP_NAME_KEY[] = "lookup_name";
+const char LOOKUP_IS_USER_KEY[] = "lookup_is_user";
 
 void AddressManager::goToAddressFromObject(const QVariantMap& dataObject, const QNetworkReply* reply) {
 
@@ -592,7 +582,8 @@ void AddressManager::goToAddressFromObject(const QVariantMap& dataObject, const 
             }
         } else {
             // we've been told that this result exists but is offline, emit our signal so the application can handle
-            emit lookupResultIsOffline();
+            emit lookupResultIsOffline(reply ? reply->property(LOOKUP_NAME_KEY).toString() : QString(),
+                                       reply && reply->property(LOOKUP_IS_USER_KEY).toBool());
         }
     } else {
         qCDebug(networking) << "Received an address manager API response with no location key or place key. Cannot parse.";
@@ -607,7 +598,8 @@ void AddressManager::handleAPIError(QNetworkReply* errorReply) {
         // if this is a lookup that has no result, don't keep re-trying it
         _previousAPILookup.clear();
 
-        emit lookupResultIsNotFound();
+        emit lookupResultIsNotFound(errorReply->property(LOOKUP_NAME_KEY).toString(),
+                                    errorReply->property(LOOKUP_IS_USER_KEY).toBool());
     }
 
     emit lookupResultsFinished();
@@ -618,6 +610,7 @@ void AddressManager::attemptPlaceNameLookup(const QString& lookupString, const Q
     QString placeName = QUrl::toPercentEncoding(lookupString);
 
     QVariantMap requestParams;
+    requestParams.insert(LOOKUP_NAME_KEY, lookupString);
 
     // if the user asked for a specific path with this lookup then keep it with the request so we can use it later
     if (!overridePath.isEmpty()) {
@@ -926,6 +919,8 @@ void AddressManager::goToUser(const QString& username, bool shouldMatchOrientati
     requestParams.insert(LOOKUP_TRIGGER_KEY, static_cast<int>(
         shouldMatchOrientation ? LookupTrigger::UserInput : LookupTrigger::VisitUserFromPAL
     ));
+    requestParams.insert(LOOKUP_NAME_KEY, username);
+    requestParams.insert(LOOKUP_IS_USER_KEY, true);
     // this is a username - pull the captured name and lookup that user's location
     DependencyManager::get<AccountManager>()->sendRequest(GET_USER_LOCATION.arg(formattedUsername),
                                               AccountManagerAuth::Optional,
@@ -936,6 +931,10 @@ void AddressManager::goToUser(const QString& username, bool shouldMatchOrientati
 
 bool AddressManager::canGoBack() const {
     return (_backStack.size() > 0);
+}
+
+bool AddressManager::canGoForward() const {
+    return (_forwardStack.size() > 0);
 }
 
 void AddressManager::reconnect() {
@@ -1013,7 +1012,7 @@ void AddressManager::lookupShareableNameForDomainID(const QUuid& domainID) {
     // and not by other clients on the LAN or Internet
 
     // to work around this we use the ID to lookup the default place name, and if it exists we
-    // then use that for Steam join/invite or copiable address
+    // then use that for the copiable address
 
     // it only makes sense to lookup a shareable default name if we don't have a place name
     if (getPlaceName().isEmpty()) {

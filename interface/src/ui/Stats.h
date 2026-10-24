@@ -219,7 +219,12 @@ private: \
  *     <em>Read-only.</em>
  * @property {number} triangles - The number of triangles in the rendered scene.
  *     <em>Read-only.</em>
- * @property {number} drawcalls - The number of draw calls made for the rendered scene.
+ * @property {number} drawcalls - The number of draw calls made for the rendered scene, counting each instance of an
+ *     instanced draw.
+ * @property {number} apiDrawcalls - The number of draw calls the graphics API was given for the rendered scene: an
+ *     instanced draw counts once (GPU instancing).
+ * @property {number} instancedDrawcalls - The number of those draws that took an instance list of models' copies.
+ * @property {number} instances - The copies of models those draws drew.
  *     <em>Read-only.</em>
  * @property {number} materialSwitches - The number of material switches performed for the rendered scene.
  *     <em>Read-only.</em>
@@ -550,6 +555,9 @@ class Stats : public QQuickItem {
     STATS_PROPERTY(int, processingPending, 0)
     STATS_PROPERTY(int, triangles, 0)
     STATS_PROPERTY(quint32 , drawcalls, 0)
+    STATS_PROPERTY(quint32, apiDrawcalls, 0)
+    STATS_PROPERTY(quint32, instancedDrawcalls, 0)
+    STATS_PROPERTY(int, instances, 0)
     STATS_PROPERTY(int, materialSwitches, 0)
     STATS_PROPERTY(int, itemConsidered, 0)
     STATS_PROPERTY(int, itemOutOfView, 0)
@@ -1147,6 +1155,27 @@ signals:
      * @returns {Signal}
      */
     void drawcallsChanged();
+
+    /**jsdoc
+     * Triggered when the value of the <code>apiDrawcalls</code> property changes.
+     * @function Stats.apiDrawcallsChanged
+     * @returns {Signal}
+     */
+    void apiDrawcallsChanged();
+
+    /**jsdoc
+     * Triggered when the value of the <code>instancedDrawcalls</code> property changes.
+     * @function Stats.instancedDrawcallsChanged
+     * @returns {Signal}
+     */
+    void instancedDrawcallsChanged();
+
+    /**jsdoc
+     * Triggered when the value of the <code>instances</code> property changes.
+     * @function Stats.instancesChanged
+     * @returns {Signal}
+     */
+    void instancesChanged();
 
     /**jsdoc
      * Triggered when the value of the <code>materialSwitches</code> property changes.

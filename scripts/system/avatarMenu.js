@@ -2,9 +2,13 @@
 
 //  avatarMenu.js
 //
-//  The Avatar Menu app: an imported avatar's menu, with its toggles, buttons and submenus. Its button is on the tablet while the avatar has a menu. Choices set the avatar's
-//  parameters (MyAvatar.setAvatarParameter), which drive its effects layer: clothes shown or hidden, shape
-//  keys, bones. Parameters the avatar marks as saved are remembered per avatar and put back the next time it's worn.
+//  An imported avatar's menu, with its toggles, buttons and submenus: the choices set the avatar's parameters
+//  (MyAvatar.setAvatarParameter), which drive its effects layer: clothes shown or hidden, shape keys, bones.
+//  Parameters the avatar marks as saved are remembered per avatar and put back the next time it's worn, and a
+//  parameter that starts one of the avatar's emotes plays it. The menu itself is drawn by the Avatar panel
+//  (qml/darkride/AvatarPanel.qml, its Menu tab), which sends each choice here on the local channel
+//  io.darkride.avatarMenu as {type: "set", name, value}; a script may send the same (or, as the Emote menu test
+//  does, a tablet web event {app: "avatarMenu", type: "set", name, value}).
 //
 //  Created on 2026-10-14 for Darkride's import of avatars from Unity packages.
 //
@@ -14,15 +18,10 @@
 /* globals Script, Tablet, MyAvatar, Settings, AnimationCache, Messages */
 
 (function () {
-    var APP_BASE = "html/AvatarMenuApp.html";
-    var APP_URL = Script.resolvePath(APP_BASE);
-    var APP_LABEL = "Avatar Menu";
-    var APP_SORT_ORDER = 13;
     var SAVED_SETTING = "io.darkride.avatarMenu.saved";  // {avatar URL: {parameter: value}}
+    var CHANNEL = "io.darkride.avatarMenu";
 
     var tablet = Tablet.getTablet("com.highfidelity.interface.tablet.system");
-    var button = null;
-    var onScreen = false;
 
     function savedValues() {
         var all = Settings.getValue(SAVED_SETTING, {}) || {};
@@ -113,29 +112,8 @@
         }
     }
 
-    function sendState() {
-        var menuData = MyAvatar.getAvatarMenu();
-        var url = MyAvatar.skeletonModelURL;
-        tablet.emitScriptEvent(JSON.stringify({
-            app: "avatarMenu",
-            type: "avatarMenu",
-            menu: menuData.menu,
-            parameters: menuData.parameters,
-            folder: url.substring(0, url.lastIndexOf("/") + 1)  // the menu's icons sit beside the .fst
-        }));
-    }
-
-    function onClicked() {
-        if (onScreen) {
-            tablet.gotoHomeScreen();
-        } else {
-            onScreen = true;
-            tablet.gotoWebScreen(APP_URL);
-        }
-    }
-
-    // The emote parameters are watched as well as set from the menu page, so whatever sets them plays the emote; the
-    // page's own presses are taken at once, since a quick tap can come and go between two looks.
+    // The emote parameters are watched as well as set from the Avatar panel, so whatever sets them plays the emote; the
+    // panel's own presses are taken at once, since a quick tap can come and go between two looks.
     var emoteWatch = Script.setInterval(function () {
         Object.keys(emoteValues).forEach(function (name) {
             var value = MyAvatar.getAvatarParameter(name);
@@ -163,32 +141,39 @@
                     MyAvatar.setAvatarParameter(parameter.name, saved[parameter.name]);
                 }
             });
-            if (!button) {
-                button = tablet.addButton({
-                    icon: "icons/tablet-icons/avatar-i.svg",
-                    activeIcon: "icons/tablet-icons/avatar-a.svg",
-                    text: APP_LABEL,
-                    sortOrder: APP_SORT_ORDER
-                });
-                button.clicked.connect(onClicked);
-            }
-        } else if (button) {
-            if (onScreen) {
-                tablet.gotoHomeScreen();
-            }
-            button.clicked.disconnect(onClicked);
-            tablet.removeButton(button);
-            button = null;
-        }
-        if (onScreen) {
-            sendState();
         }
     }
 
-    function onScreenChanged(type, url) {
-        onScreen = type === "Web" && url.indexOf(APP_BASE) !== -1;
-        if (button) {
-            button.editProperties({ isActive: onScreen });
+    // a choice: the parameter set, an emote it starts played, and the value remembered when the avatar saves it
+    function choose(name, value) {
+        if (typeof name !== "string" || typeof value !== "number") {
+            return;
+        }
+        MyAvatar.setAvatarParameter(name, value);
+        if (emoteValues[name] !== undefined) {
+            emoteValues[name] = MyAvatar.getAvatarParameter(name);
+            emoteParameterSet(name, emoteValues[name]);
+        }
+        var parameter = (MyAvatar.getAvatarMenu().parameters || []).filter(function (p) {
+            return p.name === name;
+        })[0];
+        if (parameter && parameter.saved) {
+            save(name, value);
+        }
+    }
+
+    function onMessageReceived(channel, message, senderID, localOnly) {
+        if (channel !== CHANNEL || !localOnly) {
+            return;  // only this client's own panel and scripts choose for its avatar
+        }
+        var event;
+        try {
+            event = JSON.parse(message);
+        } catch (e) {
+            return;
+        }
+        if (event && event.type === "set") {
+            choose(event.name, event.value);
         }
     }
 
@@ -203,40 +188,22 @@
         if (!event || event.app !== "avatarMenu") {
             return;  // the tablet's web events reach every app
         }
-        if (event.type === "ready") {
-            sendState();
-        } else if (event.type === "set") {
-            MyAvatar.setAvatarParameter(event.name, event.value);
-            if (emoteValues[event.name] !== undefined) {
-                emoteValues[event.name] = MyAvatar.getAvatarParameter(event.name);
-                emoteParameterSet(event.name, emoteValues[event.name]);
-            }
-            var parameter = MyAvatar.getAvatarMenu().parameters.filter(function (p) {
-                return p.name === event.name;
-            })[0];
-            if (parameter && parameter.saved) {
-                save(event.name, event.value);
-            }
-            sendState();
+        if (event.type === "set") {
+            choose(event.name, event.value);
         }
     }
 
     MyAvatar.avatarMenuChanged.connect(onAvatarMenuChanged);
-    tablet.screenChanged.connect(onScreenChanged);
+    Messages.subscribe(CHANNEL);
+    Messages.messageReceived.connect(onMessageReceived);
     tablet.webEventReceived.connect(onWebEventReceived);
     Script.scriptEnding.connect(function () {
         MyAvatar.avatarMenuChanged.disconnect(onAvatarMenuChanged);
-        tablet.screenChanged.disconnect(onScreenChanged);
+        Messages.messageReceived.disconnect(onMessageReceived);
+        Messages.unsubscribe(CHANNEL);
         tablet.webEventReceived.disconnect(onWebEventReceived);
         Script.clearInterval(emoteWatch);
         stopEmote();
-        if (onScreen) {
-            tablet.gotoHomeScreen();
-        }
-        if (button) {
-            button.clicked.disconnect(onClicked);
-            tablet.removeButton(button);
-        }
     });
     onAvatarMenuChanged();
 }());

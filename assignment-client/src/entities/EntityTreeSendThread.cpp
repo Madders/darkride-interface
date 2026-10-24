@@ -11,6 +11,8 @@
 
 #include "EntityTreeSendThread.h"
 
+#include <functional>
+
 #include <QtCore/QProcessEnvironment>
 
 #include <EntityNodeData.h>
@@ -149,6 +151,9 @@ bool EntityTreeSendThread::traverseTreeAndSendContents(SharedNodePointer node, O
                 _diagLastLog = now;
                 _diagSentSinceLog = 0;
             }
+            if (type == DiffTraversal::First) {
+                logMisplacedEntities(root);
+            }
         }
         // round 10/11 diagnostics: when this traversal began and what it has sent since (the completion line below)
         _traversalStartTime = usecTimestampNow();
@@ -226,6 +231,37 @@ bool EntityTreeSendThread::traverseTreeAndSendContents(SharedNodePointer node, O
     }
 
     return sendComplete;
+}
+
+void EntityTreeSendThread::logMisplacedEntities(const EntityTreeElementPointer& root) {
+    // TIVOLI_STREAM_DIAG, at each first traversal: the entities whose octree element does not hold their query cube.
+    // The traversal reaches an entity only through its element, so such an entity is judged by its element's size
+    // rather than its own (the hunt for Tivoli Town's island, 519 children of a 1 mm group that often never arrived)
+    int misplaced = 0;
+    int entityCount = 0;
+    std::function<void(const EntityTreeElementPointer&)> visit = [&](const EntityTreeElementPointer& element) {
+        element->forEachEntity([&](const EntityItemPointer& entity) {
+            ++entityCount;
+            bool success = false;
+            AACube queryCube = entity->getQueryAACube(success);
+            if (success && !element->containsBounds(queryCube)) {   // as the octree files it: clamped to the tree
+                const int MAX_LINES = 20;
+                if (++misplaced <= MAX_LINES) {
+                    qCDebug(entities).noquote() << "stream misplaced" << entity->getID().toString() << entity->getName()
+                        << "children" << entity->getChildren().size() << "query cube" << queryCube.getScale()
+                        << "element cube" << element->getAACube().getScale();
+                }
+            }
+        });
+        for (int i = 0; i < NUMBER_OF_CHILDREN; ++i) {
+            auto child = element->getChildAtIndex(i);
+            if (child) {
+                visit(child);
+            }
+        }
+    };
+    visit(root);
+    qCDebug(entities) << "stream misplaced entities" << misplaced << "of" << entityCount;
 }
 
 bool EntityTreeSendThread::addAncestorsToExtraFlaggedEntities(const QUuid& filteredEntityID,

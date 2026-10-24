@@ -15,9 +15,6 @@
 #include <QtCore/QDir>
 #include <QtCore/QProcessEnvironment>
 
-#define OVRPL_DISABLED
-#include <OVR_Platform.h>
-
 #include <controllers/Input.h>
 #include <controllers/Pose.h>
 #include <shared/GlobalAppProperties.h>
@@ -80,21 +77,6 @@ private:
             qCWarning(oculusLog) << "Failed to initialze Oculus SDK" << ovr::getError();
             return;
         }
-
-#ifdef OCULUS_APP_ID
-        static std::once_flag once;
-        std::call_once(once, []() {
-            if (qApp->property(hifi::properties::OCULUS_STORE).toBool()) {
-                if (ovr_PlatformInitializeWindows(OCULUS_APP_ID) != ovrPlatformInitialize_Success) {
-                    qCWarning(oculusLog) << "Unable to initialize the platform for entitlement check - fail the check" << ovr::getError();
-                    return;
-                } else {
-                    qCDebug(oculusLog) << "Performing Oculus Platform entitlement check";
-                    ovr_Entitlement_GetIsViewerEntitled();
-                }
-            }
-        });
-#endif
 
         ovrGraphicsLuid luid;
         if (!OVR_SUCCESS(ovr_Create(&session, &luid))) {

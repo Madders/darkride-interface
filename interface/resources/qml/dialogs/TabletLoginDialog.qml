@@ -201,6 +201,6 @@ FocusScope {
     Component.onCompleted: {
         keyboardTimer.start();
         // a remembered account (Remember me) gets "Continue as <name>", anyone else the form
-        bodyLoader.setSource("../LoginDialog/" + (Account.loggedIn ? "ContinueBody.qml" : "LinkAccountBody.qml"), { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader, "linkSteam": false, "linkOculus": false });
+        bodyLoader.setSource("../LoginDialog/" + (Account.loggedIn ? "ContinueBody.qml" : "LinkAccountBody.qml"), { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader });
     }
 }

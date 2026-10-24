@@ -117,7 +117,9 @@ print("-- Installed linuxdeployqt")
 
 # make appdir
 
-deferred_plugins = ["libtivoli-tea-protocol-plugin.so"]
+# plugins copied in after linuxdeployqt, which must not touch them (it was the prebuilt tea: loader's place, gone since
+# ad83628471 because its archive can no longer be downloaded); one the build doesn't have is skipped
+deferred_plugins = []
 
 server_exclude_libs = [
     "libQt5WebEngineCore.so.5",
@@ -151,7 +153,6 @@ if program == "interface":
 	run(interface_dir, "mkdir -p interface.AppDir/usr/bin")
 	run(interface_dir, "cp interface interface.AppDir/usr/bin")
 	run(interface_dir, "cp resources.rcc interface.AppDir/usr/bin")
-	run(interface_dir, "cp -r jsdoc interface.AppDir/usr/bin")
 	if os.path.isdir(plugins_dir):
 		run(interface_dir, "cp -r plugins interface.AppDir/usr/bin")
 		for p in deferred_plugins:
@@ -191,6 +192,9 @@ if program == "interface":
 
 	# add final plugins in
 	for plugin in deferred_plugins:
+		if not os.path.isfile(os.path.join(interface_dir, "plugins", plugin)):
+			print("-- " + plugin + " not built, skipped")
+			continue
 		run(
 		    interface_dir,
 		    "cp plugins/" + plugin + " interface.AppDir/usr/bin/plugins"
@@ -226,7 +230,6 @@ elif program == "server":
 	    build_dir,
 	    "cp assignment-client/assignment-client server.AppDir/usr/bin"
 	)
-	run(build_dir, "cp tools/oven/oven server.AppDir/usr/bin")
 	if os.path.isdir(plugins_dir):
 		run(build_dir, "cp -r assignment-client/plugins server.AppDir/usr/bin")
 		for p in deferred_plugins:
@@ -243,7 +246,6 @@ elif program == "server":
 	    "server.AppDir/usr/bin/domain-server",
 	    "-unsupported-allow-new-glibc",
 	    "-executable=server.AppDir/usr/bin/assignment-client",
-	    "-executable=server.AppDir/usr/bin/oven",
 	    "-unsupported-allow-new-glibc",
 	    "-qmake=" + qt_path + "/bin/qmake",
 	    "-exclude-libs=" + ",".join(server_exclude_libs),
@@ -267,10 +269,12 @@ elif program == "server":
 
 	run(appdir, "ln -s usr/bin/domain-server domain-server")
 	run(appdir, "ln -s usr/bin/assignment-client assignment-client")
-	run(appdir, "ln -s usr/bin/oven oven")
 
 	# add final plugins in
 	for plugin in deferred_plugins:
+		if not os.path.isfile(os.path.join(build_dir, "assignment-client", "plugins", plugin)):
+			print("-- " + plugin + " not built, skipped")
+			continue
 		run(
 		    build_dir, "cp assignment-client/plugins/" + plugin +
 		    " server.AppDir/usr/bin/plugins"

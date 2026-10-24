@@ -64,11 +64,17 @@ void ViewportContainer::resizeEvent(QResizeEvent* event) {
     }
 }
 
+void ViewportContainer::setInset(const QMargins& inset) {
+    setContentsMargins(inset);
+    applySize();
+}
+
 void ViewportContainer::applySize() {
-    if (_viewport->size() != size()) {
+    const QRect area = contentsRect();
+    if (_viewport->geometry() != area) {
         // never while a frame is drawn to it, nor just after (see gl::ViewChangeGuard): toggling build mode, whose
         // panels resize the view, crashed in Apple's GL driver, clearing the view while it was being resized
         gl::ViewChangeGuard guard;
-        _viewport->setGeometry(0, 0, width(), height());
+        _viewport->setGeometry(area);
     }
 }
