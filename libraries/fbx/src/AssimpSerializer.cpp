@@ -1037,12 +1037,14 @@ HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi
     // https://arbook.icg.tugraz.at/schmalstieg/Schmalstieg_351.pdf
     importer.SetPropertyInteger(AI_CONFIG_PP_ICL_PTCACHE_SIZE, 64);
 
-    // Not for glTF (and VRM): where primitives share their vertex buffers, as VRoid's do, Assimp gives each primitive's
-    // mesh the whole buffer, and joining identical vertices then mixed up their bone weights. three-vrm-girl's hair
-    // vertices came out weighted Head 1 and LeftHandRing3 1, and followed her hand as it moved. Each mesh keeps the
-    // buffer's unused vertices instead, which only the memory notices.
+    // Not for a skinned glTF (or VRM): where primitives share their vertex buffers, as VRoid's do, Assimp gives each
+    // primitive's mesh the whole buffer, and joining identical vertices then mixed up their bone weights. three-vrm-girl's
+    // hair vertices came out weighted Head 1 and LeftHandRing3 1, and followed her hand as it moved. Each mesh keeps the
+    // buffer's unused vertices instead, which only the memory notices. A glTF without skins has no weights to mix up, and
+    // is joined as before.
     const QString lowerExt = ext.toLower();
-    const bool sharesVertexBuffers = lowerExt == "gltf" || lowerExt == "glb" || lowerExt == "vrm";
+    const bool isGltf = lowerExt == "gltf" || lowerExt == "glb" || lowerExt == "vrm";
+    const bool sharesVertexBuffers = isGltf && (vrm.isVRM() || data.contains("\"skins\""));
     const unsigned int joinIdenticalVertices = sharesVertexBuffers ? 0 : aiProcess_JoinIdenticalVertices;
 
     scene = importer.ReadFileFromMemory(
