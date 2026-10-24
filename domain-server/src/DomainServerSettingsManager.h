@@ -54,6 +54,9 @@ public:
     DomainServerSettingsManager();
     bool handleAuthenticatedHTTPRequest(HTTPConnection* connection, const QUrl& url);
 
+    // whether signing in with a Darkride account is in use: the domain-server turns it off when it's misconfigured
+    void setOAuthInUse(bool oauthInUse) { _oauthInUse = oauthInUse; }
+
     void setupConfigMap(const QString& userConfigFilename);
 
     // each of the three methods in this group takes a read lock of _settingsLock
@@ -208,6 +211,8 @@ private:
 
     /// guard read/write access from multiple threads to settings 
     QReadWriteLock _settingsLock { QReadWriteLock::Recursive };
+
+    bool _oauthInUse { false };
 };
 
 #endif // hifi_DomainServerSettingsManager_h

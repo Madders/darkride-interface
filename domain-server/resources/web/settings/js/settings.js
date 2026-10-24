@@ -1241,6 +1241,12 @@ $(document).ready(function(){
     // the overview's reminder links here to set one up
     if (qs["action"] === "sign-in") {
       showAdminSignInDialog(username, signInOn && passwordSet);
+      // only once: the page reloads after a save, and the address would open it again
+      delete qs["action"];
+      if (window.history.replaceState) {
+        var search = window.location.search.replace(/([?&])action=sign-in(&|$)/, "$1").replace(/[?&]$/, "");
+        window.history.replaceState(null, "", window.location.pathname + search + window.location.hash);
+      }
     }
     $('#remove-admin-password').on('click', function() {
       swalAreYouSure(
@@ -1283,6 +1289,8 @@ $(document).ready(function(){
             var error = "";
             if (!newUsername) {
               error = "Choose a username: the browser asks for one with the password.";
+            } else if (newUsername.indexOf(":") !== -1 || password.indexOf(":") !== -1) {
+              error = "The username and password can't have a colon (:) in them.";
             } else if (!password && !passwordSet) {
               error = "Choose a password.";
             } else if (password !== again) {

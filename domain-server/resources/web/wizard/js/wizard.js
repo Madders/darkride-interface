@@ -494,6 +494,11 @@ function saveUsernamePassword() {
     return;
   }
 
+  if (username.indexOf(":") != -1 || password.indexOf(":") != -1) {
+    bootbox.alert({ "message": "The username and password can't have a colon (:) in them.", "title": "No colons, please" });
+    return;
+  }
+
   if (password != verify_password) {
     bootbox.alert({ "message": "The two passwords aren't the same. Type them again.", "title": "The passwords don't match" });
     return;

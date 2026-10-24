@@ -242,6 +242,7 @@ DomainServer::DomainServer(int argc, char* argv[]) :
     if (_oauthEnable) {
         _oauthEnable = optionallyReadX509KeyAndCertificate();
     }
+    _settingsManager.setOAuthInUse(_oauthEnable);
 
     _settingsManager.apiRefreshGroupInformation();
 

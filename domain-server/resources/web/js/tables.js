@@ -122,7 +122,8 @@ $(document).ready(function(){
   $.getJSON("/settings.json", function(data) {
     var values = data.values || {};
     var security = values.security || {};
-    var lockedByAccount = !!(values.oauth && values.oauth.enable);
+    // the server's word, not oauth.enable: it turns account sign-in off when it's misconfigured
+    var lockedByAccount = data.oauth_in_use === true;
     if (data.http_password_set === true || lockedByAccount || signInReminderHidden()) {
       return;
     }
