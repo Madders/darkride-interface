@@ -19,7 +19,9 @@
 //  The screen lifts once the client has left the old world (its physics or its connection gone), the new world is
 //  connected, its physics is on and the avatar's own model has loaded
 //  (MyAvatar.isSkeletonModelLoaded; at most 10 s more after physics). A cancel, a refused connection, or 90 s without
-//  arriving lifts it anyway. While it is up, the arrival waits for what is near the avatar to be ready for physics and
+//  arriving lifts it anyway; so does the viewer giving up on a world that doesn't answer (its connection failure
+//  window opens), or a hop's place not found. While it is up, the arrival waits for what is near the avatar to be
+//  ready for physics and
 //  drawn, even where the zone would let the avatar move at once (Window.setArrivalWaitsForNearby): no pop-in under the
 //  avatar. At the first arrival, the launch screen (sign-in's navy cover) is released once this one covers the view.
 //
@@ -27,14 +29,20 @@
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 
-/* global Script, Entities, MyAvatar, Window, Messages, HMD, Account, Settings, location */
+/* global Script, Entities, MyAvatar, Window, Messages, HMD, Account, Settings, location, AddressManager */
 
 (function () {
     var CHANNEL = "Darkride-Hop";
-    var STATUS_STARTING = "Starting world…";
-    var STATUS_CONNECTING = "Connecting…";
-    var STATUS_LOADING = "Loading world…";
+    // One steady line, Caity's of 10-21: "Arriving…" for every way in, "Loading the world…" while a world that its
+    // owner set to load whole first is loading (its bar then fills). No line per step: three lines in a second and a
+    // half read as noise.
+    var STATUS_ARRIVING = "Arriving…";
+    var STATUS_WHOLE = "Loading the world…";
+    var MIN_SHOWN = 2000;         // ms: the screen stays at least this long, so an arrival never flashes it (Caity, 10-21)
     var TIME_LIMIT = 90;          // s: a way in that never arrives lifts the screen anyway
+    // ms: the screen's buttons (Cancel, and Show me now while a world loads whole) fade in once it has been up this
+    // long, so a quick arrival never shows them (Caity, 10-22: "a cancel loading button to go back and abort a load")
+    var BUTTONS_AFTER = 3000;
     var AVATAR_GRACE = 10;        // s after physics: an avatar that has not loaded by then no longer holds the screen
     var LAUNCH_RELEASE_DELAY = 600;   // ms: the desktop screen's fade-in, after which it covers the launch screen
     var TICK = 50;                // ms
@@ -104,7 +112,11 @@
             lostOld: kind !== "hop",        // and has seen the old world's physics or connection drop (physics is
                                             // sometimes switched on again in the very frame of a domain change)
             physicsOnAt: 0,
-            launchReleased: false
+            launchReleased: false,
+            progress: -1,                   // the whole-world bar, 0 to 1; negative while it glides
+            mostWaiting: 0,                 // the most entities the landing waited for once the world was all in
+            // where Cancel goes back to: the world this way left (a hop starts while still in it), none for the first
+            from: kind === "hop" ? { world: placeName(), picture: placePicture() } : null
         };
         setArrivalWaitsForNearby(true);
         if (!timer) {
@@ -137,12 +149,15 @@
         }
     }
 
-    function send(up, status) {
+    function send(up, status, progress, canCancel, canShowNow) {
         var message = { type: "screen", up: up, world: way ? way.world : (sent ? sent.world : ""),
             author: way ? way.author : (sent ? sent.author : ""), picture: way ? way.picture : (sent ? sent.picture : ""),
-            status: status };
+            status: status, progress: progress === undefined ? -1 : progress,
+            canCancel: !!(up && canCancel), canShowNow: !!(up && canShowNow) };
         if (sent && sent.up === message.up && sent.world === message.world && sent.author === message.author &&
-                sent.picture === message.picture && sent.status === message.status) {
+                sent.picture === message.picture && sent.status === message.status &&
+                Math.abs(sent.progress - message.progress) < 0.005 && sent.canCancel === message.canCancel &&
+                sent.canShowNow === message.canShowNow) {
             return;
         }
         if (!sent && !up) {
@@ -150,8 +165,11 @@
         }
         sent = message;
         if (Window.setLoadingScreen) {
-            Window.setLoadingScreen({ up: message.up, world: message.world, author: message.author,
-                picture: message.picture, status: message.status });
+            // with the headset card on a desktop (worldLoading/cardOnDesktop, to check the card without a headset), the
+            // full-window page stays down: it would cover the card
+            Window.setLoadingScreen({ up: message.up && !CARD_ON_DESKTOP, world: message.world, author: message.author,
+                picture: message.picture, status: message.status, progress: message.progress,
+                canCancel: message.canCancel, canShowNow: message.canShowNow });
         }
         Messages.sendLocalMessage(CHANNEL, JSON.stringify(message));
     }
@@ -174,19 +192,28 @@
             way.physicsOnAt = now;
         }
 
-        // arrived: in the new world with its physics on, and the avatar's own model in (or waited for long enough)
+        // arrived: in the new world with its physics on, and the avatar's own model in (or waited for long enough);
+        // the screen then lifts once it has been up MIN_SHOWN
         var arrived = !loading.active && landed && (avatarLoaded() || now - way.physicsOnAt > AVATAR_GRACE * 1000);
-        if (arrived || (!loading.active && now - way.started > TIME_LIMIT * 1000)) {
+        if ((arrived && now - way.started >= MIN_SHOWN) || (!loading.active && now - way.started > TIME_LIMIT * 1000)) {
             end();
             return;
         }
 
-        if (!way.world && location.isConnected) {
+        // (a hop's name only once it has left: before that, the world connected is still the one it is leaving)
+        if (!way.world && way.left && location.isConnected) {
             way.world = placeName();
             way.picture = way.picture || placePicture();
         }
-        var status = !way.left ? STATUS_STARTING : (location.isConnected ? STATUS_LOADING : STATUS_CONNECTING);
-        send(true, status);
+        var status = loading.active ? STATUS_WHOLE : STATUS_ARRIVING;
+        if (loading.active) {
+            way.progress = Math.max(way.progress, wholeWorldProgress(loading));
+        } else if (way.progress >= 0) {
+            way.progress = 1;   // the whole world is in: the bar stays full until the screen lifts
+        }
+        // the buttons: Cancel wherever there is somewhere to go back to, Show me now while a world loads whole
+        var offered = now - way.started >= BUTTONS_AFTER;
+        send(true, status, way.progress, offered && canGoBack(), offered && loading.active);
 
         if (HMD.active || CARD_ON_DESKTOP) {
             showCard(status, now);
@@ -199,7 +226,25 @@
         }
     }
 
-    // The headset card: the world's picture, its name, "by <author>", a thin gliding bar and the status line, on navy
+    // The whole-world bar: while the entity server is still sending, it creeps towards RECEIVING_SHARE as entities
+    // arrive (the world's total is not known until all of it has been sent: a total up front would be a protocol
+    // change); then it fills with what the landing still waits for near the arrival, a model counting once it or the
+    // impostor card drawn in its place has loaded (Caity, 10-21: "impostor cards count"). It never goes back.
+    var RECEIVING_SHARE = 0.3;
+    var RECEIVING_SCALE = 400;    // entities: the creep's scale (63 % of the share at this many)
+    function wholeWorldProgress(loading) {
+        var received = loading.received || 0;
+        if (!loading.serverDone) {
+            return RECEIVING_SHARE * (1 - Math.exp(-received / RECEIVING_SCALE));
+        }
+        var waiting = Math.max(0, received - (loading.ready || 0));
+        way.mostWaiting = Math.max(way.mostWaiting, waiting);
+        var loaded = way.mostWaiting > 0 ? 1 - waiting / way.mostWaiting : 1;
+        return RECEIVING_SHARE + (1 - RECEIVING_SHARE) * loaded;
+    }
+
+    // The headset card: the world's picture, its name, "by <author>", a thin bar (gliding, or filling while a world
+    // loads whole) and the status line, on navy
 
     function cardUnits(x, y, z) {
         return { x: SCALE * x, y: SCALE * y, z: SCALE * z };
@@ -324,12 +369,22 @@
             card.shown.status = status;
             Entities.editEntity(card.status, { text: status });
         }
-        // the bar glides: no counts, no percentages
-        var phase = ((now - way.started) % GLIDE_PERIOD) / GLIDE_PERIOD;
-        var eased = 0.5 - 0.5 * Math.cos(Math.PI * phase);
-        Entities.editEntity(card.glide, {
-            localPosition: cardUnits(-BAR_WIDTH / 2 + GLIDE_WIDTH / 2 + eased * (BAR_WIDTH - GLIDE_WIDTH), -0.33, 0.008)
-        });
+        if (way.progress >= 0) {
+            // the bar fills from the left: no counts, no percentages
+            var filled = Math.max(0.001, Math.min(1, way.progress)) * BAR_WIDTH;
+            Entities.editEntity(card.glide, {
+                localPosition: cardUnits(-BAR_WIDTH / 2 + filled / 2, -0.33, 0.008),
+                dimensions: cardUnits(filled, BAR_HEIGHT, 0.01)
+            });
+        } else {
+            // the bar glides
+            var phase = ((now - way.started) % GLIDE_PERIOD) / GLIDE_PERIOD;
+            var eased = 0.5 - 0.5 * Math.cos(Math.PI * phase);
+            Entities.editEntity(card.glide, {
+                localPosition: cardUnits(-BAR_WIDTH / 2 + GLIDE_WIDTH / 2 + eased * (BAR_WIDTH - GLIDE_WIDTH), -0.33, 0.008),
+                dimensions: cardUnits(GLIDE_WIDTH, BAR_HEIGHT, 0.01)
+            });
+        }
     }
 
     function hideCard() {
@@ -357,9 +412,68 @@
             var keepLaunch = way && way.launchReleased;
             begin("hop", String(data.world || ""), String(data.author || ""), String(data.picture || ""));
             way.launchReleased = keepLaunch || way.launchReleased;
+            if (Date.now() - lastViewpointAt < VIEWPOINT_BEFORE_START) {
+                moveWithinWorld("its viewpoint came " + (Date.now() - lastViewpointAt) + " ms before the start");
+            }
         } else if (data.type === "cancel" && way && way.kind === "hop" && !way.left) {
             end();
         }
+    }
+
+    function canGoBack() {
+        if (!way) {
+            return false;
+        }
+        // a hop that has left goes back by the address history, which has the world it left
+        return way.kind === "hop" ? !!way.from && (!way.left || location.canGoBack()) : location.canGoBack();
+    }
+
+    // Cancel: back to the world this way left, under the screen as any hop (an arrival there, with its name and
+    // picture); before the old world was left, the hop just stops. Show me now: stop waiting for the whole world.
+    function onLoadingScreenButtonPressed(button) {
+        if (!way) {
+            return;
+        }
+        if (button === "showNow") {
+            print("World loading: Show me now pressed");
+            if (loadingState().active && Window.showWorldNow) {
+                Window.showWorldNow();
+            }
+        } else if (button === "cancel" && canGoBack()) {
+            var from = way.from;
+            print("World loading: Cancel pressed, " + (way.kind === "hop" && !way.left ? "the hop stops" :
+                "going back to \"" + (from ? from.world : "") + "\""));
+            if (way.kind === "hop" && !way.left) {
+                Messages.sendLocalMessage(CHANNEL, JSON.stringify({ type: "cancel" }));
+                end();
+                return;
+            }
+            var keepLaunch = way.launchReleased;
+            begin("hop", from ? from.world : "", "", from ? from.picture : "");
+            way.from = null;                  // no Cancel on the way back
+            way.launchReleased = keepLaunch;
+            location.goBack();
+        }
+    }
+
+    // a hop to the world you're already in (Explore, picking it again): no world change follows, the address only
+    // moves you to its viewpoint; a hop to another world gets its viewpoint after the world change. So a viewpoint
+    // before any world change is a move within this world: it has arrived (the screen lifts after MIN_SHOWN), instead
+    // of waiting out the time limit for a world change that never comes (Caity's hand test, 10-22: "about a minute")
+    // The viewpoint and the hop's start reach this script by different ways (the address manager, the messages
+    // client), in either order, so a viewpoint shortly before the start counts too.
+    var VIEWPOINT_BEFORE_START = 1500;    // ms
+    var lastViewpointAt = 0;
+    function moveWithinWorld(why) {
+        if (way && way.kind === "hop" && !way.left && location.isConnected) {
+            print("World loading: the hop is a move within this world (" + why + ")");
+            way.left = true;
+            way.lostOld = true;
+        }
+    }
+    function onLocationChangeRequired() {
+        lastViewpointAt = Date.now();
+        moveWithinWorld("its viewpoint came after the start");
     }
 
     function onDomainChanged() {
@@ -375,6 +489,21 @@
         }
     }
 
+    // the world doesn't answer: the viewer gives up on it for now and opens its connection failure window, which the
+    // screen would hide until its time limit (avatar-ai, 10-22: "Can't reach" hidden for 80 s), so the screen lifts
+    function onDomainConnectionTimedOut() {
+        if (way) {
+            end();
+        }
+    }
+
+    // a hop to a place that doesn't exist or is offline goes nowhere: the old world stays, so the screen lifts at once
+    function onLookupFailed() {
+        if (way && way.kind === "hop" && !way.left) {
+            end();
+        }
+    }
+
     function onWorldLoadingChanged(loading) {
         if (loading && !way) {
             begin("whole", placeName(), "", placePicture());
@@ -385,6 +514,15 @@
     Messages.messageReceived.connect(onMessage);
     Window.domainChanged.connect(onDomainChanged);
     Window.domainConnectionRefused.connect(onDomainConnectionRefused);
+    if (Window.loadingScreenButtonPressed) {
+        Window.loadingScreenButtonPressed.connect(onLoadingScreenButtonPressed);
+    }
+    if (Window.domainConnectionTimedOut) {
+        Window.domainConnectionTimedOut.connect(onDomainConnectionTimedOut);
+    }
+    AddressManager.lookupResultIsNotFound.connect(onLookupFailed);
+    AddressManager.lookupResultIsOffline.connect(onLookupFailed);
+    AddressManager.locationChangeRequired.connect(onLocationChangeRequired);
     if (Window.worldLoadingChanged) {
         Window.worldLoadingChanged.connect(onWorldLoadingChanged);
     }
@@ -408,12 +546,21 @@
                 Window.setLoadingScreen({ up: false });
             }
             Messages.sendLocalMessage(CHANNEL, JSON.stringify({ type: "screen", up: false, world: sent.world,
-                author: sent.author, picture: sent.picture, status: "" }));
+                author: sent.author, picture: sent.picture, status: "", progress: -1 }));
         }
         Messages.messageReceived.disconnect(onMessage);
         Messages.unsubscribe(CHANNEL);
         Window.domainChanged.disconnect(onDomainChanged);
         Window.domainConnectionRefused.disconnect(onDomainConnectionRefused);
+        if (Window.loadingScreenButtonPressed) {
+            Window.loadingScreenButtonPressed.disconnect(onLoadingScreenButtonPressed);
+        }
+        if (Window.domainConnectionTimedOut) {
+            Window.domainConnectionTimedOut.disconnect(onDomainConnectionTimedOut);
+        }
+        AddressManager.lookupResultIsNotFound.disconnect(onLookupFailed);
+        AddressManager.lookupResultIsOffline.disconnect(onLookupFailed);
+        AddressManager.locationChangeRequired.disconnect(onLocationChangeRequired);
         if (Window.worldLoadingChanged) {
             Window.worldLoadingChanged.disconnect(onWorldLoadingChanged);
         }

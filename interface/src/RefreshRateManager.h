@@ -95,7 +95,17 @@ public:
     void setUXMode(UXMode uxMode);
     UXMode getUXMode() const { return _uxMode; }
 
-    void setRefreshRateOperator(std::function<void(int)> refreshRateOperator) { _refreshRateOperator = refreshRateOperator; }
+    // (the target rate, the display's own rate or 0 when unknown)
+    void setRefreshRateOperator(std::function<void(int, int)> refreshRateOperator) { _refreshRateOperator = refreshRateOperator; }
+
+    // A cap for what is on the desktop's screen, in Hz, 0 for none; Application::update sets it each frame. The sign-in
+    // screen moves nothing faster than a caret (SIGN_IN_SCREEN_RATE); a loading screen keeps 60 (LOADING_SCREEN_RATE),
+    // so a load paces its per-frame work (texture uploads, renderable updates) no slower than on a 60 Hz display today.
+    // Without it a 144 or 240 Hz display drew the scene behind those screens at its full rate, the GPU at 100 % through
+    // the whole start-up (a Windows player, 10-23). A headset keeps its rate.
+    void setScreenCap(int maxRate);
+    static const int SIGN_IN_SCREEN_RATE = 30;
+    static const int LOADING_SCREEN_RATE = 60;
     int getActiveRefreshRate() const { return _activeRefreshRate; }
     void updateRefreshRateController() const;
 
@@ -119,7 +129,8 @@ private:
     mutable ReadWriteLockable _refreshRateProfileSettingLock;
     Setting::Handle<int> _refreshRateProfileSetting { "refreshRateProfile", RefreshRateProfile::DISPLAY_BASED };
 
-    std::function<void(int)> _refreshRateOperator { nullptr };
+    std::function<void(int, int)> _refreshRateOperator { nullptr };
+    int _screenCap { 0 };
 
     std::shared_ptr<QTimer> _inactiveTimer { std::make_shared<QTimer>() };
 };

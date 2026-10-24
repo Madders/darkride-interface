@@ -1,6 +1,6 @@
 "use strict";
 /*jslint vars:true, plusplus:true, forin:true*/
-/*global Window, Script, Controller, MyAvatar, AvatarList, Entities, Messages, Audio, SoundCache, Account, UserActivityLogger, Vec3, Quat, XMLHttpRequest, location, print*/
+/*global Window, Script, Controller, MyAvatar, AvatarList, Entities, Messages, Audio, SoundCache, Account, Vec3, Quat, XMLHttpRequest, location, print*/
 //
 //  makeUserConnection.js
 //  scripts/system
@@ -610,11 +610,6 @@
                                   result.connection.new_connection ?
                                   "You and " + result.connection.username + " are now connected!" :
                                   result.connection.username);
-            UserActivityLogger.makeUserConnection(connectingId,
-                                                  true,
-                                                  result.connection.new_connection ?
-                                                  "new connection" :
-                                                  "already connected");
             return;
         } // failed
         endHandshake();
@@ -637,7 +632,6 @@
                 debug("account location:", message || 'ok');
             });
         }
-        UserActivityLogger.makeUserConnection(connectingId, false, result.connection);
     }
     // This is a bit fragile - but to account for skew in when people actually create the
     // connection request, I've upped this to 2 seconds (plus the round-trip times)

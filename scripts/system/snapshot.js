@@ -55,6 +55,15 @@ function removeFromStoryIDsToMaybeDelete(story_id) {
     print('storyIDsToMaybeDelete[] now:', JSON.stringify(storyIDsToMaybeDelete));
 }
 
+function openSnapSettings() {
+    if ((HMD.active && Settings.getValue("hmdTabletBecomesToolbar", false))
+        || (!HMD.active && Settings.getValue("desktopTabletBecomesToolbar", true))) {
+        Desktop.show("hifi/dialogs/GeneralPreferencesDialog.qml", "GeneralPreferencesDialog");
+    } else {
+        ui.openNewAppOnTop("hifi/tablet/TabletGeneralPreferences.qml");
+    }
+}
+
 function fileExtensionMatches(filePath, extension) {
     return filePath.split('.').pop().toLowerCase() === extension;
 }
@@ -122,12 +131,7 @@ function onMessage(message) {
             Window.browseDirAsync("Choose Snapshots Directory", "", "");
             break;
         case 'openSettings':
-            if ((HMD.active && Settings.getValue("hmdTabletBecomesToolbar", false))
-                || (!HMD.active && Settings.getValue("desktopTabletBecomesToolbar", true))) {
-                Desktop.show("hifi/dialogs/GeneralPreferencesDialog.qml", "GeneralPreferencesDialog");
-            } else {
-                ui.openNewAppOnTop("hifi/tablet/TabletGeneralPreferences.qml");
-            }
+            openSnapSettings();
             break;
         case 'captureStillAndGif':
             print("Changing Snapshot Capture Settings to Capture Still + GIF");
@@ -479,10 +483,13 @@ function onSnapshotStored(takenPath, location, inUserFiles, uploadError) {
         location: location,
         caption: snapCaption(takenPath)
     });
+    cameraStored(takenPath);
 }
 
 var href, snapshotDomainID;
-function takeSnapshot() {
+var captureTarget = "tablet"; // who asked for the Snap being taken: "tablet" (the tablet page) or "camera"
+function takeSnapshot(target) {
+    captureTarget = target || "tablet";
     ui.sendMessage({
         type: "snapshot",
         action: "clearPreviousImages"
@@ -540,6 +547,21 @@ function takeSnapshot() {
 
     var snapActivateSound = SoundCache.getSound(Script.resourcesPath() + "sounds/snapshot/snap.wav");
 
+    if (captureTarget === "camera") {
+        // the camera's windows are leaving the screen: a few frames for that, then the Snap
+        var renderRate = Rates.render > 0 ? Rates.render : 30;
+        Script.setTimeout(function () {
+            Audio.playSound(snapActivateSound, {
+                position: { x: MyAvatar.position.x, y: MyAvatar.position.y, z: MyAvatar.position.z },
+                localOnly: true,
+                volume: 0.6
+            });
+            Window.takeSnapshot(false, includeAnimated, CAMERA_ASPECT_RATIO);
+        }, Math.max(CAMERA_CAPTURE_DELAY, 3000 / renderRate));
+        UserActivityLogger.logAction("snaphshot_taken", { location: location.href });
+        return;
+    }
+
     // take snapshot (with no notification)
     Script.setTimeout(function () {
         Audio.playSound(snapActivateSound, {
@@ -553,7 +575,6 @@ function takeSnapshot() {
             Window.takeSnapshot(false, includeAnimated, 1.91);
         }, Math.max(SNAPSHOT_DELAY, DOUBLE_RENDER_TIME_TO_MS / Rates.render ));
     }, FINISH_SOUND_DELAY);
-    UserActivityLogger.logAction("snaphshot_taken", { location: location.href });
 }
     
 function isDomainOpen(id, callback) {
@@ -606,6 +627,11 @@ function stillSnapshotTaken(pathStillSnapshot, notify) {
     // last element in data array tells dialog whether we can share or not
     Settings.setValue("previousStillSnapPath", storedLocation(pathStillSnapshot));
 
+    if (captureTarget === "camera") {
+        cameraTaken(pathStillSnapshot, false);
+        return;
+    }
+
     HMD.openTablet();
 
     isDomainOpen(snapshotDomainID, function (canShare) {
@@ -652,6 +678,11 @@ function processingGifStarted(pathStillSnapshot) {
     }
     Settings.setValue("previousStillSnapPath", storedLocation(pathStillSnapshot));
 
+    if (captureTarget === "camera") {
+        cameraTaken(pathStillSnapshot, true);
+        return;
+    }
+
     HMD.openTablet();
     
     isDomainOpen(snapshotDomainID, function (canShare) {
@@ -677,6 +708,11 @@ function processingGifCompleted(pathAnimatedSnapshot) {
     Window.processingGifCompleted.disconnect(processingGifCompleted);
 
     Settings.setValue("previousAnimatedSnapPath", storedLocation(pathAnimatedSnapshot));
+
+    if (captureTarget === "camera") {
+        cameraGifTaken(pathAnimatedSnapshot);
+        return;
+    }
 
     isDomainOpen(snapshotDomainID, function (canShare) {
         snapshotOptions = {
@@ -791,6 +827,649 @@ function processRezPermissionChange(canRez) {
     });
 }
 
+// --- the camera on desktop -----------------------------------------------------------------------------------------
+// On desktop, Snap's button opens a camera over the world (html/SnapCamera.html): a click-through frame on the area a
+// Snap keeps, a switch bar and a shutter bar, each an overlay window showing its part of the page. In VR the button
+// opens the tablet page as before.
+
+var CAMERA_PAGE = Script.resolvePath("html/SnapCamera.html");
+var CAMERA_CHANNEL = "Snap.camera"; // local messages to Snap: "open", "close", "shutter", "review"
+var CAMERA_ASPECT_RATIO = 1.91; // what a Snap keeps of the window: its centre at this width/height
+var CAMERA_BAR = { width: 460, height: 56 };
+var CAMERA_DOCK = { width: 340, height: 108 };
+var CAMERA_EDGE = 12;
+// With Show Overlays off the desktop fades its windows out over 300 ms (Desktop.qml): the Snap waits for that, and
+// the camera's own windows leave the screen a moment before it starts, so the fade never has them.
+var CAMERA_CAPTURE_DELAY = 450;
+var CAMERA_HIDE_DELAY = 60;
+var SYSTEM_TOOLBAR = "com.highfidelity.interface.toolbar.system";
+var CAMERA_TOAST_MS = 2600;
+var CAMERA_WATCHDOG_MS = 15000; // a Snap (with a GIF, its frames) not taken by then didn't save
+var CAMERA_TOAST_LONG_MS = 6000;
+var TIMER_CHOICES = [0, 3, 10];
+var TIMER_SETTING = "snapTimerSeconds";
+var GIF_SETTING = "alsoTakeAnimatedSnapshot";
+var NAMETAGS_SETTING = "shapshotNametagsEnabled";
+var KEY_ESCAPE = 16777216; // Qt::Key_Escape
+
+var camera = {
+    windows: null,
+    open: false,
+    busy: false,
+    counting: false,
+    countdown: 0,
+    countdownTimer: null,
+    watchdog: null,
+    toast: null,
+    toastTimer: null,
+    modeBeforeSelfie: null,
+    toolbarWasVisible: false,
+    reviewOpen: false,
+    selected: 0,
+    snaps: [] // this session's Snaps from the camera, newest first: { stillPath, gifPath, time, deleting, pendingDeletes }
+};
+
+function cameraCrop() {
+    var width = Overlays.width();
+    var height = Overlays.height();
+    if (width / height > CAMERA_ASPECT_RATIO) {
+        var cropWidth = Math.round(height * CAMERA_ASPECT_RATIO);
+        return { x: Math.round((width - cropWidth) / 2), y: 0, w: cropWidth, h: height };
+    }
+    var cropHeight = Math.round(width / CAMERA_ASPECT_RATIO);
+    return { x: 0, y: Math.round((height - cropHeight) / 2), w: width, h: cropHeight };
+}
+
+function timerSeconds() {
+    var seconds = Number(Settings.getValue(TIMER_SETTING, 0));
+    return TIMER_CHOICES.indexOf(seconds) !== -1 ? seconds : 0;
+}
+
+function cameraRecord(path) {
+    return path ? storedSnaps[path] : undefined;
+}
+
+function folderOf(path) {
+    var slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+    return slash > 0 ? path.substring(0, slash) : path;
+}
+
+function timeOfDay(date) {
+    function twoDigits(number) {
+        return (number < 10 ? "0" : "") + number;
+    }
+    return twoDigits(date.getHours()) + ":" + twoDigits(date.getMinutes());
+}
+
+function cameraItem(snap) {
+    var still = cameraRecord(snap.stillPath);
+    var gif = cameraRecord(snap.gifPath);
+    var inUserFiles = !!(still && still.inUserFiles);
+    var where;
+    if (inUserFiles) {
+        where = "In My Files › Snapshots. Anyone with the link can see it; it doesn't say where it was taken.";
+    } else if (!still) {
+        where = "Saving to My Files…";
+    } else {
+        where = "On this computer, in " + folderOf(still.location) + "." +
+            (still.uploadError ? " The upload to My Files failed: " + still.uploadError : "");
+    }
+    return {
+        src: still ? still.location : snap.stillPath,
+        gifSrc: snap.gifPath ? (gif ? gif.location : snap.gifPath) : null,
+        inUserFiles: inUserFiles,
+        canDelete: !snap.deleting && (inUserFiles || !!(gif && gif.inUserFiles)),
+        when: "Today, " + timeOfDay(snap.time),
+        where: where
+    };
+}
+
+function cameraLast() {
+    var snap = camera.snaps[0];
+    if (!snap) {
+        return null;
+    }
+    var still = cameraRecord(snap.stillPath);
+    return {
+        src: still ? still.location : snap.stillPath,
+        badge: !still ? "saving" : (still.inUserFiles ? "in-files" : "local")
+    };
+}
+
+function cameraState() {
+    var timer = timerSeconds();
+    return {
+        crop: cameraCrop(),
+        width: Overlays.width(),
+        height: Overlays.height(),
+        gif: !!Settings.getValue(GIF_SETTING, true),
+        nametags: !!Settings.getValue(NAMETAGS_SETTING, true),
+        timer: timer,
+        selfie: camera.modeBeforeSelfie !== null,
+        busy: camera.busy,
+        counting: camera.counting,
+        countdown: camera.countdown,
+        progress: camera.counting && timer > 0 ? (timer - camera.countdown + 1) / timer : 0,
+        progressColor: "violet",
+        toast: camera.toast,
+        last: cameraLast(),
+        review: { open: camera.reviewOpen, selected: camera.selected, items: camera.snaps.map(cameraItem) }
+    };
+}
+
+function cameraSend(message) {
+    if (!camera.windows) {
+        return;
+    }
+    var text = JSON.stringify(message);
+    camera.windows.frame.emitScriptEvent(text);
+    camera.windows.bar.emitScriptEvent(text);
+    camera.windows.dock.emitScriptEvent(text);
+}
+
+function cameraUpdate() {
+    cameraSend({ type: "snapCamera", action: "state", state: cameraState() });
+}
+
+function cameraWindow(part, width, height, enabled) {
+    var overlay = new OverlayWebWindow({
+        title: "Snap",
+        source: CAMERA_PAGE + "?part=" + part,
+        width: width,
+        height: height,
+        visible: false,
+        frameless: true,
+        enabled: enabled
+    });
+    overlay.webEventReceived.connect(onCameraEvent);
+    return overlay;
+}
+
+function cameraPlaceWindows() {
+    var width = Overlays.width();
+    var height = Overlays.height();
+    var windows = camera.windows;
+    windows.frame.setPosition(0, 0);
+    windows.frame.setSize(width, height);
+    windows.bar.setPosition(Math.round((width - CAMERA_BAR.width) / 2), CAMERA_EDGE);
+    windows.bar.setSize(CAMERA_BAR.width, CAMERA_BAR.height);
+    windows.dock.setPosition(Math.round((width - CAMERA_DOCK.width) / 2), height - CAMERA_DOCK.height - CAMERA_EDGE);
+    windows.dock.setSize(CAMERA_DOCK.width, CAMERA_DOCK.height);
+}
+
+function cameraShowWindows(visible) {
+    var windows = camera.windows;
+    if (!windows) {
+        return;
+    }
+    windows.frame.setVisible(visible);
+    windows.bar.setVisible(visible && !camera.reviewOpen);
+    windows.dock.setVisible(visible && !camera.reviewOpen);
+}
+
+function openCamera() {
+    if (camera.open || HMD.active) {
+        return;
+    }
+    if (!camera.windows) {
+        camera.windows = {
+            frame: cameraWindow("frame", Overlays.width(), Overlays.height(), false),
+            bar: cameraWindow("bar", CAMERA_BAR.width, CAMERA_BAR.height, true),
+            dock: cameraWindow("dock", CAMERA_DOCK.width, CAMERA_DOCK.height, true)
+        };
+    }
+    camera.open = true;
+    // a camera has the screen to itself: the toolbar steps aside until it closes ("shown", which a Snap's
+    // Show Overlays off and on leaves alone; "visible" comes back with it, see Window.qml)
+    var toolbar = Toolbars.getToolbar(SYSTEM_TOOLBAR);
+    camera.toolbarWasVisible = !!(toolbar && toolbar.readProperty("shown"));
+    if (camera.toolbarWasVisible) {
+        toolbar.writeProperty("shown", false);
+    }
+    cameraPlaceWindows();
+    cameraShowWindows(true);
+    ui.buttonActive(true);
+    cameraUpdate();
+}
+
+function closeCamera() {
+    if (!camera.open) {
+        return;
+    }
+    cameraStopCountdown();
+    if (camera.toastTimer) {
+        Script.clearTimeout(camera.toastTimer);
+        camera.toastTimer = null;
+    }
+    camera.toast = null;
+    if (camera.modeBeforeSelfie !== null) {
+        var mode = camera.modeBeforeSelfie;
+        camera.modeBeforeSelfie = null;
+        Camera.mode = mode;
+    }
+    camera.reviewOpen = false;
+    camera.windows.frame.setEnabled(false);
+    camera.open = false;
+    cameraShowWindows(false);
+    if (camera.toolbarWasVisible) {
+        var toolbar = Toolbars.getToolbar(SYSTEM_TOOLBAR);
+        if (toolbar) {
+            toolbar.writeProperty("shown", true);
+        }
+        camera.toolbarWasVisible = false;
+    }
+    ui.buttonActive(false);
+}
+
+function cameraToast(toast, hideAfterMs) {
+    if (camera.toastTimer) {
+        Script.clearTimeout(camera.toastTimer);
+        camera.toastTimer = null;
+    }
+    camera.toast = toast;
+    if (toast && hideAfterMs > 0) {
+        camera.toastTimer = Script.setTimeout(function () {
+            camera.toastTimer = null;
+            camera.toast = null;
+            cameraUpdate();
+        }, hideAfterMs);
+    }
+}
+
+function cameraToastForStored(stored, isGif, gifFollows) {
+    if (stored.inUserFiles) {
+        cameraToast({
+            kind: "ok",
+            text: "Saved to My Files",
+            detail: gifFollows ? "Snapshots · the GIF follows" : (isGif ? "Snapshots · the GIF too" : "Snapshots")
+        }, gifFollows ? 0 : CAMERA_TOAST_MS);
+    } else if (stored.uploadError) {
+        cameraToast({
+            kind: "local",
+            text: "Saved on this computer",
+            detail: "the upload to My Files failed: " + stored.uploadError
+        }, CAMERA_TOAST_LONG_MS);
+    } else {
+        cameraToast({ kind: "local", text: "Saved on this computer", detail: "sign in to keep Snaps in My Files" },
+            CAMERA_TOAST_LONG_MS);
+    }
+}
+
+function cameraStartCountdown(seconds) {
+    camera.counting = true;
+    camera.countdown = seconds;
+    cameraUpdate();
+    camera.countdownTimer = Script.setInterval(function () {
+        camera.countdown -= 1;
+        if (camera.countdown <= 0) {
+            cameraStopCountdown();
+            cameraCapture();
+        } else {
+            cameraUpdate();
+        }
+    }, 1000);
+}
+
+function cameraStopCountdown() {
+    if (camera.countdownTimer) {
+        Script.clearInterval(camera.countdownTimer);
+        camera.countdownTimer = null;
+    }
+    camera.counting = false;
+    camera.countdown = 0;
+}
+
+function cameraCapture() {
+    if (camera.busy || !camera.open) {
+        return;
+    }
+    camera.busy = true;
+    cameraToast(null, 0);
+    cameraUpdate();
+    cameraShowWindows(false);
+    cameraWatch();
+    Script.setTimeout(function () {
+        takeSnapshot("camera");
+    }, CAMERA_HIDE_DELAY);
+}
+
+function cameraWatch() {
+    cameraStopWatching();
+    camera.watchdog = Script.setTimeout(function () {
+        camera.watchdog = null;
+        cameraCaptureFailed();
+    }, CAMERA_WATCHDOG_MS);
+}
+
+function cameraStopWatching() {
+    if (camera.watchdog) {
+        Script.clearTimeout(camera.watchdog);
+        camera.watchdog = null;
+    }
+}
+
+// No word from the Snap (it couldn't be saved): everything it hid comes back, and the camera says so.
+function cameraCaptureFailed() {
+    [[Window.stillSnapshotTaken, stillSnapshotTaken], [Window.processingGifStarted, processingGifStarted],
+        [Window.processingGifCompleted, processingGifCompleted]].forEach(function (pair) {
+        try {
+            pair[0].disconnect(pair[1]);
+        } catch (notConnected) {
+            // it wasn't waiting on this one
+        }
+    });
+    Reticle.visible = reticleVisible;
+    Reticle.allowMouseCapture = true;
+    if (resetOverlays) {
+        Menu.setIsOptionChecked("Show Overlays", true);
+    }
+    if (resetNametags) {
+        Render.setNametagsEnabled(true);
+    }
+    camera.busy = false;
+    cameraToast({ kind: "local", text: "That Snap didn't save", detail: "try again" }, CAMERA_TOAST_LONG_MS);
+    cameraShowWindows(camera.open);
+    cameraUpdate();
+}
+
+function cameraShutter() {
+    if (camera.counting) {
+        cameraStopCountdown();
+        cameraUpdate();
+        return;
+    }
+    if (camera.busy) {
+        return;
+    }
+    var seconds = timerSeconds();
+    if (seconds > 0) {
+        cameraStartCountdown(seconds);
+    } else {
+        cameraCapture();
+    }
+}
+
+// The still is taken (with a GIF, its frames too): the camera comes back, showing it.
+function cameraTaken(stillPath, gifFollows) {
+    camera.snaps.unshift({ stillPath: stillPath, gifPath: null, time: new Date(), deleting: false, pendingDeletes: 0 });
+    camera.selected = 0;
+    camera.busy = gifFollows;
+    if (gifFollows) {
+        cameraWatch();
+    } else {
+        cameraStopWatching();
+    }
+    var stored = cameraRecord(stillPath);
+    if (stored) {
+        cameraToastForStored(stored, false, gifFollows);
+    } else {
+        cameraToast({ kind: "saving", text: "Saving to My Files…", detail: gifFollows ? "the GIF follows" : "" }, 0);
+    }
+    if (camera.open) {
+        cameraShowWindows(true);
+        cameraSend({ type: "snapCamera", action: "flash" });
+    }
+    cameraUpdate();
+}
+
+function cameraGifTaken(gifPath) {
+    cameraStopWatching();
+    var snap = camera.snaps[0];
+    if (snap && !snap.gifPath) {
+        snap.gifPath = gifPath;
+    }
+    camera.busy = false;
+    var stored = cameraRecord(gifPath);
+    if (stored) {
+        cameraToastForStored(stored, true, false);
+    }
+    cameraUpdate();
+}
+
+// Where a camera Snap went (Snapshot.snapshotStored): the note, the thumbnail and the review follow it.
+function cameraStored(takenPath) {
+    var newest = camera.snaps[0];
+    if (!newest) {
+        return;
+    }
+    if (newest.stillPath === takenPath) {
+        cameraToastForStored(storedSnaps[takenPath], false, camera.busy);
+    } else if (newest.gifPath === takenPath) {
+        cameraToastForStored(storedSnaps[takenPath], true, false);
+    }
+    cameraUpdate();
+}
+
+function cameraOpenReview() {
+    if (!camera.snaps.length) {
+        return;
+    }
+    camera.reviewOpen = true;
+    camera.selected = 0;
+    camera.windows.frame.setEnabled(true);
+    cameraShowWindows(true);
+    cameraUpdate();
+}
+
+function cameraCloseReview() {
+    camera.reviewOpen = false;
+    if (camera.windows) {
+        camera.windows.frame.setEnabled(false);
+    }
+    cameraShowWindows(camera.open);
+    cameraUpdate();
+}
+
+function cameraSelected() {
+    return camera.snaps[camera.selected] || null;
+}
+
+function cameraCopyLink() {
+    var snap = cameraSelected();
+    var still = snap && cameraRecord(snap.stillPath);
+    if (still && still.inUserFiles) {
+        Window.copyToClipboard(still.location);
+    }
+}
+
+function cameraDelete() {
+    var snap = cameraSelected();
+    if (!snap || snap.deleting) {
+        return;
+    }
+    var urls = [];
+    [snap.stillPath, snap.gifPath].forEach(function (path) {
+        var record = cameraRecord(path);
+        if (record && record.inUserFiles) {
+            urls.push(record.location);
+        }
+    });
+    if (!urls.length) {
+        return;
+    }
+    snap.deleting = true;
+    snap.pendingDeletes = urls.length;
+    urls.forEach(function (url) {
+        Snapshot.deleteFromUserFiles(url);
+    });
+    cameraUpdate();
+}
+
+function onSnapshotDeleted(url, error) {
+    var snap = null;
+    camera.snaps.forEach(function (each) {
+        [each.stillPath, each.gifPath].forEach(function (path) {
+            var record = cameraRecord(path);
+            if (record && record.location === url) {
+                snap = each;
+            }
+        });
+    });
+    if (!snap) {
+        return;
+    }
+    if (error) {
+        snap.deleting = false;
+        cameraToast({ kind: "local", text: "Not deleted", detail: error }, CAMERA_TOAST_LONG_MS);
+        cameraUpdate();
+        return;
+    }
+    snap.pendingDeletes -= 1;
+    if (snap.pendingDeletes > 0) {
+        return;
+    }
+    // gone from My Files: Snap forgets it too
+    [snap.stillPath, snap.gifPath].forEach(function (path) {
+        var record = cameraRecord(path);
+        if (!record) {
+            return;
+        }
+        if (Settings.getValue("previousStillSnapPath") === record.location) {
+            Settings.setValue("previousStillSnapPath", "");
+        }
+        if (Settings.getValue("previousAnimatedSnapPath") === record.location) {
+            Settings.setValue("previousAnimatedSnapPath", "");
+        }
+    });
+    camera.snaps.splice(camera.snaps.indexOf(snap), 1);
+    camera.selected = Math.min(camera.selected, Math.max(0, camera.snaps.length - 1));
+    if (!camera.snaps.length) {
+        cameraCloseReview();
+    }
+    cameraToast({ kind: "ok", text: "Deleted from My Files", detail: "" }, CAMERA_TOAST_MS);
+    cameraUpdate();
+}
+
+function cameraFlip() {
+    if (camera.modeBeforeSelfie === null) {
+        camera.modeBeforeSelfie = Camera.mode;
+        Camera.mode = "selfie";
+    } else {
+        var mode = camera.modeBeforeSelfie;
+        camera.modeBeforeSelfie = null;
+        Camera.mode = mode;
+    }
+    cameraUpdate();
+}
+
+function onCameraModeUpdated(mode) {
+    // turned away from the selfie camera some other way: the flip goes back to off
+    if (mode !== "selfie" && camera.modeBeforeSelfie !== null) {
+        camera.modeBeforeSelfie = null;
+        cameraUpdate();
+    }
+}
+
+function cameraEscape() {
+    if (camera.reviewOpen) {
+        cameraCloseReview();
+    } else if (camera.counting) {
+        cameraStopCountdown();
+        cameraUpdate();
+    } else {
+        closeCamera();
+    }
+}
+
+function onCameraEvent(text) {
+    var message;
+    try {
+        message = JSON.parse(text);
+    } catch (error) {
+        return;
+    }
+    if (!message || message.type !== "snapCamera") {
+        return;
+    }
+    switch (message.action) {
+        case "ready":
+            cameraUpdate();
+            break;
+        case "close":
+            closeCamera();
+            break;
+        case "escape":
+            cameraEscape();
+            break;
+        case "toggleGif":
+            Settings.setValue(GIF_SETTING, !Settings.getValue(GIF_SETTING, true));
+            cameraUpdate();
+            break;
+        case "toggleNametags":
+            Settings.setValue(NAMETAGS_SETTING, !Settings.getValue(NAMETAGS_SETTING, true));
+            cameraUpdate();
+            break;
+        case "cycleTimer":
+            Settings.setValue(TIMER_SETTING, TIMER_CHOICES[(TIMER_CHOICES.indexOf(timerSeconds()) + 1) % TIMER_CHOICES.length]);
+            cameraUpdate();
+            break;
+        case "settings":
+            openSnapSettings();
+            break;
+        case "shutter":
+            cameraShutter();
+            break;
+        case "flip":
+            cameraFlip();
+            break;
+        case "openReview":
+            cameraOpenReview();
+            break;
+        case "closeReview":
+            cameraCloseReview();
+            break;
+        case "select":
+            camera.selected = Math.max(0, Math.min(camera.snaps.length - 1, Number(message.index) || 0));
+            cameraUpdate();
+            break;
+        case "copyLink":
+            cameraCopyLink();
+            break;
+        case "showInMyFiles":
+            Window.openUrl(Account.metaverseServerURL + "/user/files");
+            break;
+        case "delete":
+            cameraDelete();
+            break;
+        default:
+            break;
+    }
+}
+
+function onCameraKey(event) {
+    if (camera.open && event.key === KEY_ESCAPE && !event.isAutoRepeat) {
+        cameraEscape();
+    }
+}
+
+function onCameraMessage(channel, message, senderID, localOnly) {
+    if (channel !== CAMERA_CHANNEL || !localOnly) {
+        return;
+    }
+    if (message === "open") {
+        openCamera();
+    } else if (message === "close") {
+        closeCamera();
+    } else if (message === "shutter" && camera.open) {
+        cameraShutter();
+    } else if (message === "review" && camera.open) {
+        cameraOpenReview();
+    }
+}
+
+function onCameraGeometryChanged() {
+    if (camera.windows) {
+        cameraPlaceWindows();
+        cameraUpdate();
+    }
+}
+
+function onCameraDisplayModeChanged(isHMDMode) {
+    if (isHMDMode) {
+        closeCamera();
+    }
+}
+
 function startup() {
     ui = new AppUi({
         buttonName: "Snap",
@@ -808,10 +1487,43 @@ function startup() {
     Snapshot.snapshotLocationSet.connect(snapshotLocationSet);
     Snapshot.snapshotStored.connect(onSnapshotStored);
     Window.snapshotShared.connect(snapshotUploaded);
+
+    // on desktop the button opens the camera; in VR, the tablet page as before
+    var openTabletPage = ui.open;
+    ui.open = function (optionalUrl, optionalInject) {
+        if (HMD.active || optionalUrl) {
+            openTabletPage(optionalUrl, optionalInject);
+        } else if (camera.open) {
+            closeCamera();
+        } else {
+            openCamera();
+        }
+    };
+    Snapshot.snapshotDeleted.connect(onSnapshotDeleted);
+    Camera.modeUpdated.connect(onCameraModeUpdated);
+    Controller.keyPressEvent.connect(onCameraKey);
+    Window.geometryChanged.connect(onCameraGeometryChanged);
+    HMD.displayModeChanged.connect(onCameraDisplayModeChanged);
+    Messages.subscribe(CAMERA_CHANNEL);
+    Messages.messageReceived.connect(onCameraMessage);
 }
 startup();
 
 function shutdown() {
+    closeCamera();
+    if (camera.windows) {
+        camera.windows.frame.close();
+        camera.windows.bar.close();
+        camera.windows.dock.close();
+        camera.windows = null;
+    }
+    Messages.messageReceived.disconnect(onCameraMessage);
+    Messages.unsubscribe(CAMERA_CHANNEL);
+    HMD.displayModeChanged.disconnect(onCameraDisplayModeChanged);
+    Window.geometryChanged.disconnect(onCameraGeometryChanged);
+    Controller.keyPressEvent.disconnect(onCameraKey);
+    Camera.modeUpdated.disconnect(onCameraModeUpdated);
+    Snapshot.snapshotDeleted.disconnect(onSnapshotDeleted);
     Window.snapshotShared.disconnect(snapshotUploaded);
     Snapshot.snapshotStored.disconnect(onSnapshotStored);
     Snapshot.snapshotLocationSet.disconnect(snapshotLocationSet);

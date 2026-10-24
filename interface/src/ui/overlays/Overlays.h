@@ -122,8 +122,6 @@ public:
 
     void cleanupAllOverlays();
 
-    mutable QScriptEngine _scriptEngine;
-
 public slots:
     /**jsdoc
      * Adds an overlay to the scene.

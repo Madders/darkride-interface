@@ -1,0 +1,15 @@
+# The viewer's chat (CHAT.md 4.5, round 3): core is the chat over matrix-rust-sdk, ffi its C interface, the static
+# library the viewer links. Two crates because Rust skips link-time optimisation for a crate built both as a Rust
+# library (which the spike needs) and a static library: as one crate the static library was 436 MB of objects and
+# LLVM bitcode, and a C++ program linking it 52 MB even with -dead_strip.
+[workspace]
+members = ["core", "ffi"]
+resolver = "3"
+
+# small over fast: chat isn't CPU-bound, and on this Mac opt-level z with full LTO made the spike 16.3 MB instead of
+# 43.2 MB (opt-level 3, thin LTO), and built from scratch in 3 min 47 s instead of 6 min 14 s
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"

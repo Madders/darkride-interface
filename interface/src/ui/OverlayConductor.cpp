@@ -74,7 +74,6 @@ void OverlayConductor::centerUI() {
 }
 
 void OverlayConductor::update(float dt) {
-#if !defined(DISABLE_QML)
     auto offscreenUi = DependencyManager::get<OffscreenUi>();
     if (!offscreenUi) {
         return;
@@ -116,5 +115,4 @@ void OverlayConductor::update(float dt) {
     if (shouldRecenter && !_suppressedByHead) {
         centerUI();
     }
-#endif
 }

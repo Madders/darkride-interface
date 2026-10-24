@@ -17,7 +17,6 @@ Preference {
     id: root
     property alias text: dataTextField.text
     property alias placeholderText: dataTextField.placeholderText
-    property var browser;
     height: control.height + hifi.dimensions.controlInterlineHeight
 
     Component.onCompleted: {
@@ -30,11 +29,6 @@ Preference {
     }
 
     function processNewAvatar(url, modelName) {
-        if (browser) {
-            browser.destroy();
-            browser = null
-        }
-
         dataTextField.text = url;
     }
 
@@ -55,7 +49,7 @@ Preference {
             right: parent.right
             bottom: parent.bottom
         }
-        height: dataTextField.controlHeight + bookmarkAvatarButton.height + hifi.dimensions.contentSpacing.y
+        height: dataTextField.controlHeight
 
         TextField {
             id: dataTextField
@@ -69,37 +63,8 @@ Preference {
             anchors {
                 left: parent.left
                 right: parent.right
-                bottom: bookmarkAvatarButton.top
-                bottomMargin: hifi.dimensions.contentSpacing.y
-            }
-        }
-
-        QueuedButton {
-            id: bookmarkAvatarButton
-            text: "Bookmark Avatar"
-            width: 140
-            visible: dataTextField.acceptableInput
-            anchors {
-                left: parent.left
                 bottom: parent.bottom
-                rightMargin: hifi.dimensions.contentSpacing.x
-            }
-            onClickedQueued: ApplicationInterface.loadAddAvatarBookmarkDialog()
-        }
-
-        Button {
-            id: browseAvatarsButton
-            text: "Browse Avatars"
-            width: 140
-            anchors {
-                left: dataTextField.acceptableInput ? bookmarkAvatarButton.right : parent.left
-                bottom: parent.bottom
-                leftMargin: dataTextField.acceptableInput ? hifi.dimensions.contentSpacing.x : 0
-            }
-            onClicked: {
-                ApplicationInterface.loadAvatarBrowser();
             }
         }
-
     }
 }

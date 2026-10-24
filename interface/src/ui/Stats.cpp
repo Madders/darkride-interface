@@ -421,6 +421,8 @@ void Stats::updateStats(bool force) {
     gpuContext->getFrameStats(gpuFrameStats);
 
     STAT_UPDATE(drawcalls, gpuFrameStats._DSNumDrawcalls);
+    STAT_UPDATE(apiDrawcalls, gpuFrameStats._DSNumAPIDrawcalls);
+    STAT_UPDATE(instancedDrawcalls, gpuFrameStats._DSNumInstancedDrawcalls);
     STAT_UPDATE(lodTargetFramerate, DependencyManager::get<LODManager>()->getLODTargetFPS());
     STAT_UPDATE(lodAngle, DependencyManager::get<LODManager>()->getLODAngleDeg());
 
@@ -579,6 +581,7 @@ void Stats::updateStats(bool force) {
 
 void Stats::setRenderDetails(const render::RenderDetails& details) {
     STAT_UPDATE(triangles, details._trianglesRendered);
+    STAT_UPDATE(instances, details._instancesDrawn);
     STAT_UPDATE(materialSwitches, details._materialSwitches);
     if (_expanded) {
         STAT_UPDATE(itemConsidered, details._item._considered);

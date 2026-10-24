@@ -1,6 +1,6 @@
 set(TARGET_NAME entities-renderer)
 setup_hifi_library(Network Script)
-link_hifi_libraries(shared workload gpu shaders procedural graphics material-networking model-networking script-engine render render-utils image qml ui pointers terrain)
+link_hifi_libraries(shared workload gpu shaders procedural graphics material-networking model-networking script-engine render render-utils image qml ui pointers terrain vehicles)
 include_hifi_library_headers(networking)
 include_hifi_library_headers(gl)
 include_hifi_library_headers(ktx)
@@ -16,5 +16,4 @@ include_hifi_library_headers(controllers)
 include_hifi_library_headers(task)
 include_hifi_library_headers(graphics-scripting) # for Forward.h
 
-target_polyvox()
 

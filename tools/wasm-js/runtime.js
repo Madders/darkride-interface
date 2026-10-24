@@ -26,6 +26,7 @@
     // --- callbacks: functions the host holds by id ---------------------------------------------------------
     var callbacks = new Map();      // id -> function
     var callbackIds = new WeakMap(); // function -> id (the same function keeps its id)
+    var callbackOwners = new Map();  // id -> { entity, url } for a callback an entity script registered
     var nextCallbackId = 1;
 
     function registerCallback(fn) {
@@ -34,6 +35,9 @@
             id = nextCallbackId++;
             callbacks.set(id, fn);
             callbackIds.set(fn, id);
+            if (currentEntity) {
+                callbackOwners.set(id, { entity: currentEntity, url: currentSandbox });
+            }
         }
         return id;
     }
@@ -43,12 +47,17 @@
         if (fn !== undefined) {
             callbacks.delete(id);
             callbackIds.delete(fn);
+            callbackOwners.delete(id);
         }
     }
 
     function onCallback(id, args) {
         var fn = callbacks.get(id);
         if (fn !== undefined) {
+            var owner = callbackOwners.get(id);
+            if (owner !== undefined) {
+                return withEntity(owner.entity, owner.url, function () { return fn.apply(undefined, args); });
+            }
             return fn.apply(undefined, args);
         }
         return undefined;
@@ -79,7 +88,7 @@
                 else if (typeof b === "function") { thisObject = a; fn = b; }
                 else if (typeof b === "string" && a && typeof a[b] === "function") { thisObject = a; fn = a[b]; }
                 else { throw new TypeError(name + ".connect: a function is needed"); }
-                record.handlers.push({ thisObject: thisObject, fn: fn });
+                record.handlers.push({ thisObject: thisObject, fn: fn, entity: currentEntity, url: currentSandbox });
                 if (!record.connection) {
                     record.connection = host.connect(object, name);
                     if (record.connection) {
@@ -115,12 +124,39 @@
         }
         var handlers = record.handlers.slice();
         for (var i = 0; i < handlers.length; i++) {
+            var handler = handlers[i];
             try {
-                handlers[i].fn.apply(handlers[i].thisObject, args);
+                if (handler.entity) {
+                    withEntity(handler.entity, handler.url, function () { handler.fn.apply(handler.thisObject, args); });
+                } else {
+                    handler.fn.apply(handler.thisObject, args);
+                }
             } catch (e) {
                 reportError("in a handler of " + record.name, e);
             }
         }
+    }
+
+    // An entity script's signal handlers go when it does
+    function disconnectHandlersOf(entity) {
+        connections.forEach(function (record) {
+            var kept = record.handlers.filter(function (handler) { return handler.entity !== entity; });
+            if (kept.length === record.handlers.length) {
+                return;
+            }
+            record.handlers = kept;
+            if (kept.length === 0 && record.connection) {
+                connections.delete(record.connection);
+                host.disconnect(record.connection);
+                record.connection = 0;
+            }
+        });
+    }
+
+    function unregisterCallbacksOf(entity) {
+        var ids = [];
+        callbackOwners.forEach(function (owner, id) { if (owner.entity === entity) { ids.push(id); } });
+        ids.forEach(unregisterCallback);
     }
 
     // --- host objects: one JavaScript object per handle, one prototype per class --------------------------------
@@ -144,9 +180,7 @@
     var warnedReadOnly = new Set();
 
     function makeMethod(name) {
-        return function () {
-            return host.call(this, name, Array.prototype.slice.call(arguments));
-        };
+        return host.method(name);
     }
 
     // One prototype per class carries the methods and toString; each wrapper gets its properties and signals
@@ -158,7 +192,12 @@
             return proto;
         }
         proto = {};
-        Object.defineProperty(proto, "toString", { value: function () { return "[object " + className + "]"; }, writable: true, configurable: true });
+        // as QtScript printed a QObject: its class and its objectName, "Vec3(name = \"\")"
+        Object.defineProperty(proto, "toString", { value: function () {
+            var name = "";
+            try { name = host.get(this, "objectName"); } catch (e) { name = ""; }
+            return className + "(name = \"" + (name === undefined || name === null ? "" : String(name)) + "\")";
+        }, writable: true, configurable: true });
         var methods = description.methods || [];
         var seen = new Set();
         for (var i = 0; i < methods.length; i++) {
@@ -203,8 +242,8 @@
             member = properties[i];
             (function (name, writable) {
                 Object.defineProperty(object, name, {
-                    get: function () { return host.get(this, name); },
-                    set: writable ? function (value) { host.set(this, name, value); } : function () {
+                    get: host.getter(name),
+                    set: writable ? host.setter(name) : function () {
                         var key = className + "." + name;
                         if (!warnedReadOnly.has(key)) {
                             warnedReadOnly.add(key);
@@ -339,6 +378,37 @@
         "LaserPointerScriptingInterface": itemListForms,
         "PointerScriptingInterface": itemListForms,
         "EntityScriptingInterface": function (entities) {
+            // findRayIntersection with lists: the QtScript form takes them as QScriptValues, so a module's call would
+            // reach the shorter form and drop them; the host's findRayIntersectionVector takes them as lists
+            if (typeof entities.findRayIntersectionVector === "function") {
+                defineMethod(entities, "findRayIntersection", function (ray, precisionPicking, include, discard, visibleOnly, collidableOnly) {
+                    return host.call(entities, "findRayIntersectionVector",
+                        [ray, !!precisionPicking, idList(include), idList(discard), !!visibleOnly, !!collidableOnly]);
+                });
+            }
+            // queryPropertyMetadata(id, property, callback) or (id, property, scope, method): the host's form takes a
+            // callback called with (error, result); the error becomes an Error carrying its fields, as QtScript's
+            // makeError made it, and the checks QtScript made before asking are made here
+            defineMethod(entities, "queryPropertyMetadata", function (entityID, property, scopeOrCallback, methodOrName) {
+                var name = String(property);
+                var callback = scopedCallback(scopeOrCallback, methodOrName, arguments.length > 3);
+                if (typeof callback !== "function") {
+                    throw new TypeError("callback is not a function");
+                }
+                if (name !== "script" && name !== "serverScripts") {
+                    throw new Error("metadata for property " + name + " is not yet queryable");
+                }
+                return host.call(entities, "queryPropertyMetadata", [entityID, name, function (error, result) {
+                    var err;
+                    if (error) {
+                        err = new Error(error.message);
+                        for (var key in error) {
+                            if (Object.prototype.hasOwnProperty.call(error, key)) { err[key] = error[key]; }
+                        }
+                    }
+                    return callback(err, result === null ? undefined : result);
+                }]);
+            });
             // getMultipleEntityProperties(ids, properties): one getEntityProperties per id
             Object.defineProperty(entities, "getMultipleEntityProperties", {
                 value: function (ids, properties) {
@@ -1184,6 +1254,20 @@
         var entity = String(payload.entity);
         entityScripts.delete(entity);
         clearTimersOf(entity);
+        disconnectHandlersOf(entity);
+        unregisterCallbacksOf(entity);
+    }
+
+    // After the host interrupted a call (the time limit): no catch or finally ran while the call unwound, so the
+    // state the call left behind is reset here, and the entity script that was running is named for the host
+    // ("" when it was the script itself).
+    function afterInterruption() {
+        var entity = currentEntity;
+        currentEntity = "";
+        currentSandbox = "";
+        Script.remoteCallerID = undefined;
+        parentStack.length = 0;
+        return entity;
     }
 
     function entityHas(payload) {
@@ -1254,6 +1338,7 @@
         entityLoad: entityLoad,
         entityUnload: entityUnload,
         entityHas: entityHas,
-        entityCall: entityCall
+        entityCall: entityCall,
+        afterInterruption: afterInterruption
     };
 })

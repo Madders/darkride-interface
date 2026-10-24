@@ -74,7 +74,8 @@ OriginalDesktop.Desktop {
         // Literal 50 is overwritten by settings from previous session, and sysToolbar.x comes from settings when not constrained.
         x: sysToolbar.x
         buttonModel: tablet ? tablet.buttons : null;
-        shown: tablet ? tablet.toolbarMode : false;
+        // not while the bar sits on a side of the window instead (SystemToolbar, ui/SystemToolbar.h)
+        shown: tablet ? tablet.toolbarMode && !(typeof SystemToolbar !== "undefined" && SystemToolbar && SystemToolbar.docked) : false;
 
         onVisibleChanged: {
             desktop.toolbarVisibleChanged(visible, sysToolbar.objectName);

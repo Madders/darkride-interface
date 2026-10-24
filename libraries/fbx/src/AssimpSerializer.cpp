@@ -559,6 +559,8 @@ void AssimpSerializer::processBones() {
     };
     if (!hasBones) return;
 
+    QHash<size_t, Extents> skinnedMeshExtents; // by mesh index, at the bind pose
+
     for (size_t meshIndex = 0; meshIndex < scene->mNumMeshes; meshIndex++) {
         aiMesh* mMesh = scene->mMeshes[meshIndex];
         if (mMesh->mNumBones == 0) continue;
@@ -651,6 +653,42 @@ void AssimpSerializer::processBones() {
                 meshPtr->clusterIndices.push_back(0);
                 meshPtr->clusterWeights.push_back(0);
             }
+        }
+
+        // the mesh at its bind pose, where its clusters put it; a vertex with no bone weights stays by its node
+        const glm::mat4 nodeTransform = shapes.isEmpty() ? hfmModel->offset : hfmModel->joints[shapes.first()->joint].globalTransform;
+        Extents bindPoseExtents;
+        for (size_t vertexIndex = 0; vertexIndex < mMesh->mNumVertices && vertexIndex < (size_t)meshPtr->vertices.size(); vertexIndex++) {
+            const glm::vec4 vertex(meshPtr->vertices[(int)vertexIndex], 1.0f);
+            glm::vec3 bindPosition(0.0f);
+            float totalWeight = 0.0f;
+            auto influences = clusterMap.constFind(vertexIndex);
+            if (influences != clusterMap.constEnd()) {
+                for (const auto& influence : influences.value()) {
+                    const hfm::Cluster& influenceCluster = skinDeformer->clusters[influence.first];
+                    const glm::mat4 bindMatrix =
+                        hfmModel->joints[influenceCluster.jointIndex].globalTransform * influenceCluster.inverseBindMatrix;
+                    bindPosition += influence.second * glm::vec3(bindMatrix * vertex);
+                    totalWeight += influence.second;
+                }
+            }
+            bindPoseExtents.addPoint(totalWeight > 0.0f ? bindPosition / totalWeight : glm::vec3(nodeTransform * vertex));
+        }
+        if (bindPoseExtents.isValid()) {
+            skinnedMeshExtents[meshIndex] = bindPoseExtents;
+        }
+    }
+
+    // The model's extents (its natural dimensions, the head's clip distance) take a skinned mesh at its bind pose.
+    // processNode took every mesh through its node, which doesn't place a skinned one: a glTF armature at 1/100 scale
+    // left the model a hundredth of its body, so it read about 2 cm. The meshes' and shapes' own extents keep the
+    // node's frame, as hfm::Shape::transformedExtents documents.
+    hfmModel->meshExtents.reset();
+    for (int meshIndex = 0; meshIndex < (int)hfmModel->meshes.size(); meshIndex++) {
+        auto skinned = skinnedMeshExtents.constFind((size_t)meshIndex);
+        const Extents& extents = skinned != skinnedMeshExtents.constEnd() ? skinned.value() : hfmModel->meshes[meshIndex].meshExtents;
+        if (extents.isValid()) {
+            hfmModel->meshExtents.addExtents(extents);
         }
     }
 }

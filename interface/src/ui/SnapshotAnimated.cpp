@@ -66,7 +66,7 @@ void SnapshotAnimated::saveSnapshotAnimated(QString pathStill, float aspectRatio
 
 void SnapshotAnimated::captureFrames() {
     if (SnapshotAnimated::snapshotAnimatedTimerRunning) {
-        qApp->addSnapshotOperator(std::make_tuple([](const QImage& snapshot) {
+        qApp->getSnapshotRequests().add(std::make_tuple([](const QImage& snapshot) {
             // Get a screenshot from the display, then scale the screenshot down,
             // then convert it to the image format the GIF library needs,
             // then save all that to the QImage named "frame"

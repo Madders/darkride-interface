@@ -746,7 +746,7 @@ TabletModalWindow {
                 var selection = helper.saveHelper(currentSelection.text, root.dir, selectionType.currentFilter);
 
                 if (!selection) {
-                    desktop.messageBox({ icon: OriginalDialogs.StandardIcon.Warning, text: "Unable to parse selection" })
+                    tabletRoot.messageBox({ title: "Can't save with this name", text: "Choose another name." })
                     return;
                 }
 
@@ -758,23 +758,29 @@ TabletModalWindow {
 
                 // Check if the file is a valid target
                 if (!helper.urlIsWritable(selection)) {
-                    desktop.messageBox({
-                                           icon: OriginalDialogs.StandardIcon.Warning,
-                                           text: "Unable to write to location " + selection
+                    tabletRoot.messageBox({
+                                           title: "Can't save in this folder",
+                                           text: "Darkride isn't allowed to write there. Choose another folder."
                                        })
                     return;
                 }
 
                 if (helper.urlExists(selection)) {
-                    var messageBox = desktop.messageBox({
-                                                            icon: OriginalDialogs.StandardIcon.Question,
-                                                            buttons: OriginalDialogs.StandardButton.Yes | OriginalDialogs.StandardButton.No,
-                                                            text: "Do you wish to overwrite " + selection + "?",
+                    var messageBox = tabletRoot.messageBox({
+                                                            buttons: OriginalDialogs.StandardButton.Yes | OriginalDialogs.StandardButton.Cancel,
+                                                            defaultButton: OriginalDialogs.StandardButton.Cancel,
+                                                            destructiveButton: OriginalDialogs.StandardButton.Yes,
+                                                            buttonTexts: { yes: "Replace" },
+                                                            title: "Replace \u201C" + decodeURIComponent(String(selection).split("/").pop()) + "\u201D?",
+                                                            text: "A file with this name is already there."
                                                         });
-                    var result = messageBox.exec();
-                    if (OriginalDialogs.StandardButton.Yes !== result) {
-                        return;
-                    }
+                    messageBox.selected.connect(function(button) {
+                        if (button === OriginalDialogs.StandardButton.Yes) {
+                            selectedFile(selection);
+                            root.destroy();
+                        }
+                    });
+                    return;
                 }
 				
                 selectedFile(selection);

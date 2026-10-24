@@ -18,7 +18,6 @@
 
 import hifi_singleton
 import hifi_utils
-import hifi_android
 import hifi_vcpkg
 import hifi_qt
 
@@ -89,21 +88,18 @@ def parse_args():
     defaultPortsPath = hifi_utils.scriptRelative('cmake', 'ports')
     from argparse import ArgumentParser
     parser = ArgumentParser(description='Prepare build dependencies.')
-    parser.add_argument('--android', type=str)
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--force-bootstrap', action='store_true')
     parser.add_argument('--force-build', action='store_true')
     parser.add_argument('--release-type', type=str, default="DEV", help="DEV, PR, or PRODUCTION")
+    parser.add_argument('--server-only', action='store_true', help='A server build: the client dependencies (VR SDKs, gamepads, crash reporting) are not installed')
     parser.add_argument('--vcpkg-root', type=str, help='The location of the vcpkg distribution')
     parser.add_argument('--vcpkg-build-type', type=str, help='Could be `release` or `debug`. By default it doesn`t set the build-type')
     parser.add_argument('--vcpkg-skip-clean', action='store_true', help='Skip the cleanup of vcpkg downloads and packages folders after vcpkg build completition.')
     parser.add_argument('--build-root', required=True, type=str, help='The location of the cmake build')
     parser.add_argument('--ports-path', type=str, default=defaultPortsPath)
     parser.add_argument('--ci-build', action='store_true', default=os.getenv('CI_BUILD') is not None)
-    if True:
-        args = parser.parse_args()
-    else:
-        args = parser.parse_args(['--android', 'questInterface', '--build-root', 'C:/git/tivoli/android/apps/questInterface/.externalNativeBuild/cmake/debug/arm64-v8a'])
+    args = parser.parse_args()
     return args
 
 def main():
@@ -131,14 +127,13 @@ def main():
             hifi_utils.downloadAndExtract('https://cdn.tivolicloud.com/dependencies/NSIS-hifi-plugins-1.0.tgz', "C:/Program Files (x86)")
 
     qtInstallPath = ''
-    # If not android, install our Qt build
-    if not args.android:
-        qt = hifi_qt.QtDownloader(args)
-        qtInstallPath = qt.cmakePath
-        with hifi_singleton.Singleton(qt.lockFile) as lock:
-            with timer('Qt'):
-                qt.installQt()
-                qt.writeConfig()
+    qt = hifi_qt.QtDownloader(args)
+    qtInstallPath = qt.cmakePath
+    with hifi_singleton.Singleton(qt.lockFile) as lock:
+        with timer('Qt'):
+            qt.installQt()
+            qt.writeConfig()
+
 
     # Only allow one instance of the program to run at a time
     pm = hifi_vcpkg.VcpkgRepo(args)
@@ -164,17 +159,6 @@ def main():
         # here shouldn't invalidate the vcpkg install)
         with timer('Cleaning builds'):
             pm.cleanBuilds()
-
-        # If we're running in android mode, we also need to grab a bunch of additional binaries
-        # (this logic is all migrated from the old setupDependencies tasks in gradle)
-        if args.android:
-            # Find the target location
-            appPath = hifi_utils.scriptRelative('android/apps/' + args.android)
-            # Copy the non-Qt libraries specified in the config in hifi_android.py
-            hifi_android.copyAndroidLibs(pm.androidPackagePath, appPath)
-            # Determine the Qt package path
-            qtPath = os.path.join(pm.androidPackagePath, 'qt')
-            hifi_android.QtPackager(appPath, qtPath).bundle()
 
         # Fixup the vcpkg cmake to not reset VCPKG_TARGET_TRIPLET
         pm.fixupCmakeScript()

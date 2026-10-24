@@ -36,8 +36,7 @@ Item {
 
     function signInAsSomeoneElse() {
         // the form, then the sign-out: the sign-out brings no second screen while this one is up (Application)
-        bodyLoader.setSource("LinkAccountBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader,
-            "linkSteam": false, "linkOculus": false });
+        bodyLoader.setSource("LinkAccountBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader });
         Account.logOut();
     }
 
@@ -90,8 +89,7 @@ Item {
         target: Account
         function onLoggedInChanged(loggedIn) {
             if (!loggedIn) {
-                bodyLoader.setSource("LinkAccountBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader,
-                    "linkSteam": false, "linkOculus": false });
+                bodyLoader.setSource("LinkAccountBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader });
             }
         }
     }

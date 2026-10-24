@@ -91,6 +91,7 @@ private slots:
     void handleAudioPacket(QSharedPointer<ReceivedMessage> message);
     void handleOctreePacket(QSharedPointer<ReceivedMessage> message, SharedNodePointer senderNode);
     void handleSelectedAudioFormat(QSharedPointer<ReceivedMessage> message);
+    void handleMismatchAudioFormat(SharedNodePointer node, const QString& currentCodec, const QString& receivedCodec);
 
     void nodeActivated(SharedNodePointer activatedNode);
     void nodeKilled(SharedNodePointer killedNode);

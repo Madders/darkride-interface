@@ -202,7 +202,7 @@ void CauterizedModel::updateRenderItems() {
                     const auto& cauterizedMeshState = self->getCauterizeMeshState(skinDeformerIndex);
 
                     transaction.updateItem<ModelMeshPartPayload>(itemID,
-                        [modelTransform, shapeState, meshState, useDualQuaternionSkinning, cauterizedMeshState, invalidatePayloadShapeKey,
+                        [modelTransform, meshState, useDualQuaternionSkinning, cauterizedMeshState, invalidatePayloadShapeKey,
                             primitiveMode, renderItemKeyGlobalFlags, enableCauterization](ModelMeshPartPayload& mmppData) {
                         CauterizedMeshPartPayload& data = static_cast<CauterizedMeshPartPayload&>(mmppData);
                         if (useDualQuaternionSkinning) {
@@ -217,7 +217,12 @@ void CauterizedModel::updateRenderItems() {
                        // }
                         data.updateTransform(renderTransform);
                         data.updateTransformForCauterizedMesh(renderTransform);
-                        data.updateTransformAndBound(modelTransform.worldTransform(shapeState._rootFromJointTransform));
+                        // the whole body's clusters, not the cauterized ones: the bound is for every view
+                        if (useDualQuaternionSkinning) {
+                            data.updateSkinnedBound(modelTransform, meshState.clusterDualQuaternions);
+                        } else {
+                            data.updateSkinnedBound(modelTransform, meshState.clusterMatrices);
+                        }
 
                         data.setEnableCauterization(enableCauterization);
                         data.updateKey(renderItemKeyGlobalFlags);

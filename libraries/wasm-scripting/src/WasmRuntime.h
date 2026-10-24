@@ -49,9 +49,23 @@ using WasmHostFunction = std::function<QString(WasmInstance& instance, const std
 
 class WasmRuntime : public std::enable_shared_from_this<WasmRuntime> {
 public:
+    /// How a call into a module is interrupted, for a stop or a time limit.
+    enum class Interruption {
+        /// The runtime checks a deadline at every function entry and loop of the module (wasmtime's epoch
+        /// interruption): any module can be stopped, at a cost in every loop. For a module from anywhere.
+        Epoch,
+        /// The module asks the host whether to stop (WasmInstance::interruptRequested, through an import) and
+        /// unwinds by itself: no cost in its loops, and no way to stop it if it never asks. For a module known to
+        /// ask often, as the JavaScript guest does through QuickJS's interrupt handler.
+        Cooperative
+    };
+
     struct Settings {
         /// How often the epoch advances; the resolution of every instance's time limit and of requestStop().
         std::chrono::milliseconds epochTick { 10 };
+        /// Off only to measure what the epoch checks cost: without them no time limit holds and requestStop()
+        /// does not interrupt a running call.
+        bool epochInterruption { true };
     };
 
     /// Always owned by a shared_ptr (std::make_shared): the modules it compiles keep it alive.
@@ -60,9 +74,9 @@ public:
     ~WasmRuntime();
 
     /// Compiles a module from its binary form; null with the error text on failure.
-    std::shared_ptr<WasmModule> compile(const QByteArray& wasm, QString& error);
+    std::shared_ptr<WasmModule> compile(const QByteArray& wasm, QString& error, Interruption interruption = Interruption::Epoch);
     /// Compiles a module from the text format (for tests and small programs); null with the error on failure.
-    std::shared_ptr<WasmModule> compileText(const QString& text, QString& error);
+    std::shared_ptr<WasmModule> compileText(const QString& text, QString& error, Interruption interruption = Interruption::Epoch);
 
     const Settings& settings() const { return _settings; }
 
@@ -85,6 +99,7 @@ public:
     QStringList exports() const;
 
     std::shared_ptr<WasmRuntime> runtime() const { return _runtime; }
+    WasmRuntime::Interruption interruption() const;
 
     struct Impl;
     Impl& impl() { return *_impl; }
@@ -101,8 +116,10 @@ public:
     struct Limits {
         /// The most linear memory the instance may have; growth past it fails inside the module.
         int64_t memoryBytes { 256 * 1024 * 1024 };
-        /// A call into the instance that runs longer than this traps; zero is no limit (a requested stop still
-        /// interrupts the call).
+        /// A call into the instance that runs longer than this is interrupted (a trap, or for a cooperative module
+        /// the module's own unwinding); zero is no limit (a requested stop still interrupts the call). The time is
+        /// the module's own: what it spends in host functions does not count, so a slow download or a long host
+        /// call is not a runaway module.
         std::chrono::milliseconds callTimeout { 5000 };
     };
 
@@ -132,8 +149,23 @@ public:
     QByteArray readMemory(uint64_t offset, size_t length);
     bool writeMemory(uint64_t offset, const QByteArray& bytes);
 
-    /// From any thread: the running call (and every later one) traps at the next epoch tick.
+    /// From any thread: the running call stops (with epoch interruption, it traps at the next epoch tick; with
+    /// cooperative interruption, the module stops when it next asks), and every later call is refused.
     void requestStop();
+    /// Whether requestStop() was called.
+    bool isStopRequested() const;
+    /// Whether the running call should stop now: a stop was requested, or the call has run past its time limit.
+    /// A module compiled for cooperative interruption asks this often (the host interface's "interrupted" import);
+    /// it is also where such a module's profile is sampled.
+    bool interruptRequested();
+    /// Why a cooperative module was told to stop since this was last asked (it unwinds and returns normally, so
+    /// the host reports the reason); empty when it was not.
+    QString takeInterruptionReason();
+
+    /// Samples the module's stack at every epoch tick while a call runs (wasmtime's guest profiler) until
+    /// finishProfiling(), which returns the profile in the Firefox Profiler's format. For measurements.
+    bool startProfiling(const QString& name, QString& error);
+    QByteArray finishProfiling(QString& error);
 
     const Limits& limits() const { return _limits; }
     std::shared_ptr<WasmModule> module() const { return _module; }

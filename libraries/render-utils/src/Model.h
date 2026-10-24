@@ -195,6 +195,9 @@ public:
 
     bool didVisualGeometryRequestFail() const { return _visualGeometryRequestFailed; }
     bool didCollisionGeometryRequestFail() const { return _collisionGeometryRequestFailed; }
+    // what of the model failed to load, one line each, for build mode: its own file ("model <file>: 404 not found"),
+    // else its textures that failed ("texture <file>: …"); empty when nothing has
+    QStringList loadFailures() const;
 
     glm::mat4 getWorldToHFMMatrix() const;
 

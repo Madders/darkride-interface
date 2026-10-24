@@ -245,7 +245,6 @@ private:
     AnimationDetails _fadeFromDetails;
     AnimPoseVec _fadeFromPoses;
     AnimPoseVec _lastPoses;
-    mutable QScriptEngine _scriptEngine;
     std::map<QUuid, EntityItemPointer> _entities;
 
     /// Loads the joint indices, names from the FST file (if any)

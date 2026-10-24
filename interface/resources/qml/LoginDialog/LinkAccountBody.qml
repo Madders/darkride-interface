@@ -36,10 +36,6 @@ Item {
     property bool keyboardRaised: false
     property bool punctuationMode: false
 
-    property bool withSteam: withSteam
-    property bool linkSteam: linkSteam
-    property bool withOculus: withOculus
-    property bool linkOculus: linkOculus
     property string errorString: errorString
     property bool lostFocus: false
 
@@ -71,21 +67,7 @@ Item {
 
     function login() {
         loginDialog.login(emailField.text, passwordField.text);
-        if (linkAccountBody.loginDialogPoppedUp) {
-            var data;
-            if (linkAccountBody.linkSteam) {
-                data = {
-                    "action": "user linking hifi account with Steam"
-                };
-            } else {
-                data = {
-                    "action": "user logging in"
-                };
-            }
-            UserActivityLogger.logAction("encourageLoginDialog", data);
-        }
-        bodyLoader.setSource("LoggingInBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader, "withSteam": linkAccountBody.withSteam,
-            "withOculus": linkAccountBody.withOculus, "linkSteam": linkAccountBody.linkSteam, "linkOculus": linkAccountBody.linkOculus });
+        bodyLoader.setSource("LoggingInBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader });
     }
 
     function init() {
@@ -96,17 +78,12 @@ Item {
             loginErrorMessage.wrapMode = Text.WordWrap;
             errorContainer.height = (loginErrorMessageTextMetrics.width / emailField.width) * loginErrorMessageTextMetrics.height;
         }
-        loginButton.text = (!linkAccountBody.linkSteam && !linkAccountBody.linkOculus) ? "Log In" : "Link Account";
+        loginButton.text = "Log In";
         loginButton.color = hifi.buttons.blue;
         emailField.placeholderText = "Username or Email";
         var savedUsername = Settings.getValue("keepMeLoggedIn/savedUsername", "");
         emailField.text = keepMeLoggedInCheckbox.checked ? savedUsername === "Unknown user" ? "" : savedUsername : "";
-        if (linkAccountBody.linkSteam || linkAccountBody.linkOculus) {
-            loginButton.width = (passwordField.width - hifi.dimensions.contentSpacing.x) / 2;
-            loginButton.anchors.right = emailField.right;
-        } else {
-            loginButton.anchors.left = emailField.left;
-        }
+        loginButton.anchors.left = emailField.left;
         loginContainer.visible = true;
     }
 
@@ -127,7 +104,7 @@ Item {
             id: loginContainer
             width: emailField.width
             height: errorContainer.height + emailField.height + passwordField.height + 4 * hifi.dimensions.contentSpacing.y +
-                keepMeLoggedInCheckbox.height + loginButton.height + cantAccessTextMetrics.height + continueButton.height
+                keepMeLoggedInCheckbox.height + loginButton.height + cantAccessTextMetrics.height
             anchors {
                 top: parent.top
                 topMargin: root.bannerHeight + 0.25 * parent.height
@@ -303,31 +280,6 @@ Item {
                 }
             }
             HifiControlsUit.Button {
-                id: cancelButton
-                width: (passwordField.width - hifi.dimensions.contentSpacing.x) / 2;
-                height: d.minHeightButton
-                text: qsTr("Cancel")
-                fontFamily: linkAccountBody.fontFamily
-                fontSize: linkAccountBody.fontSize
-                fontBold: linkAccountBody.fontBold
-                color: hifi.buttons.noneBorderlessWhite;
-                visible: linkAccountBody.linkSteam || linkAccountBody.linkOculus
-                anchors {
-                    top: keepMeLoggedInCheckbox.bottom
-                    topMargin: hifi.dimensions.contentSpacing.y
-                }
-                onClicked: {
-                    if (linkAccountBody.loginDialogPoppedUp) {
-                        var data = {
-                            "action": "user clicked cancel at link account screen"
-                        };
-                        UserActivityLogger.logAction("encourageLoginDialog", data);
-                    }
-                    bodyLoader.setSource("CompleteProfileBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader, "withSteam": linkAccountBody.withSteam,
-                        "withOculus": linkAccountBody.withOculus, "errorString": "" });
-                }
-            }
-            HifiControlsUit.Button {
                 id: loginButton
                 width: passwordField.width
                 height: d.minHeightButton
@@ -351,7 +303,6 @@ Item {
             HifiStylesUit.ShortcutText {
                 id: cantAccessText
                 z: 10
-                visible: !linkAccountBody.linkSteam && !linkAccountBody.linkOculus
                 anchors {
                     top: loginButton.bottom
                     topMargin: hifi.dimensions.contentSpacing.y
@@ -377,61 +328,6 @@ Item {
                         lightboxPopup.visible = false;
                     }
                     lightboxPopup.visible = true;
-                    if (linkAccountBody.loginDialogPoppedUp) {
-                        var data = {
-                            "action": "user clicked can't access account"
-                        };
-                        UserActivityLogger.logAction("encourageLoginDialog", data);
-                    }
-                }
-            }
-            HifiControlsUit.Button {
-                id: continueButton;
-                width: emailField.width;
-                height: d.minHeightButton
-                color: hifi.buttons.none;
-                anchors {
-                    top: cantAccessText.bottom
-                    topMargin: hifi.dimensions.contentSpacing.y
-                    left: emailField.left
-                }
-                text: qsTr("CONTINUE WITH STEAM")
-                fontFamily: linkAccountBody.fontFamily
-                fontSize: linkAccountBody.fontSize
-                fontBold: linkAccountBody.fontBold
-                buttonGlyph: hifi.glyphs.steamSquare
-                buttonGlyphSize: 24
-                buttonGlyphRightMargin: 10
-                onClicked: {
-                    if (loginDialog.isOculusRunning()) {
-                        linkAccountBody.withOculus = true;
-                        loginDialog.loginThroughOculus();
-                    } else
-                    if (loginDialog.isSteamRunning()) {
-                        linkAccountBody.withSteam = true;
-                        loginDialog.loginThroughSteam();
-                    }
-                    if (linkAccountBody.loginDialogPoppedUp) {
-                        var data;
-                        if (linkAccountBody.withOculus) {
-                            data = {
-                                "action": "user clicked login through Oculus"
-                            };
-                        } else if (linkAccountBody.withSteam) {
-                            data = {
-                                "action": "user clicked login through Steam"
-                            };
-                        }
-                        UserActivityLogger.logAction("encourageLoginDialog", data);
-                    }
-
-                    bodyLoader.setSource("LoggingInBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader,
-                        "withSteam": linkAccountBody.withSteam, "withOculus": linkAccountBody.withOculus, "linkSteam": linkAccountBody.linkSteam, "linkOculus": linkAccountBody.linkOculus});
-                }
-                Component.onCompleted: {
-                    // Darkride's accounts have no Steam or Oculus sign-in, so this button never shows, even with
-                    // Steam running; its screens (CompleteProfileBody, UsernameCollisionBody) are High Fidelity's
-                    continueButton.visible = false;
                 }
             }
         }
@@ -439,7 +335,6 @@ Item {
             id: signUpContainer
             width: loginContainer.width
             height: signUpTextMetrics.height
-            visible: !linkAccountBody.linkSteam && !linkAccountBody.linkOculus
             anchors {
                 left: loginContainer.left
                 top: loginContainer.bottom
@@ -476,18 +371,12 @@ Item {
                      leftMargin: hifi.dimensions.contentSpacing.x
                 }
 
-                // signing up is on the website, in the browser (High Fidelity's form, SignUpBody.qml, isn't used)
+                // signing up is on the website, in the browser
                 text: "<a href='https://darkride.ai/?signUp'>Sign Up</a>"
 
                 linkColor: hifi.colors.blueAccent
                 onLinkActivated: {
                     Tablet.playSound(TabletEnums.ButtonClick);
-                    if (linkAccountBody.loginDialogPoppedUp) {
-                        var data = {
-                            "action": "user clicked sign up button"
-                        };
-                        UserActivityLogger.logAction("encourageLoginDialog", data);
-                    }
                     Window.openUrl(link);
                 }
             }

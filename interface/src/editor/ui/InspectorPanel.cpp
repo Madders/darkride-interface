@@ -15,6 +15,7 @@
 #include <QtWidgets/QGridLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QScrollArea>
+#include <QtWidgets/QStyle>
 #include <QtWidgets/QToolButton>
 #include <QtWidgets/QVBoxLayout>
 
@@ -23,6 +24,7 @@
 #include "ImpostorEditor.h"
 #include "TerrainCapsEditor.h"
 #include "TerrainLayersEditor.h"
+#include "TrackPointsEditor.h"
 #include "UserDataEditor.h"
 #include "VehiclePartsEditor.h"
 
@@ -75,6 +77,13 @@ InspectorPanel::InspectorPanel(QWidget* parent) : QDockWidget("Inspector", paren
     _title->setObjectName("EditorInspectorTitle");
     _title->setWordWrap(true);
     _contentLayout->addWidget(_title);
+    // what the selection could not load (setLoadProblem), under the title; hidden while nothing has failed
+    _loadProblem = new QLabel(_content);
+    _loadProblem->setObjectName("EditorInspectorLoadProblem");
+    _loadProblem->setWordWrap(true);
+    _loadProblem->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    _loadProblem->hide();
+    _contentLayout->addWidget(_loadProblem);
     _contentLayout->addStretch(1);
 
     _scroll->setWidget(_empty);
@@ -112,6 +121,18 @@ QPixmap InspectorPanel::contentPicture() const {
     return shown ? shown->grab() : QPixmap();
 }
 
+void InspectorPanel::setLoadProblem(const QString& problem) {
+    if (_loadProblem->text() == problem && _loadProblem->isVisible() == !problem.isEmpty()) {
+        return;
+    }
+    _loadProblem->setText(problem.isEmpty() ? QString() : "Couldn't load:\n" + problem);
+    _loadProblem->setVisible(!problem.isEmpty());
+    // the name goes red with it, as the entity's row does in the Hierarchy
+    _title->setProperty("loadFailed", !problem.isEmpty());
+    _title->style()->unpolish(_title);
+    _title->style()->polish(_title);
+}
+
 void InspectorPanel::setSummary(const QString& text) {
     _emptyLabel->setText(text);
     if (_scroll->widget() != _empty) {
@@ -137,6 +158,13 @@ void InspectorPanel::showEntities(const QVector<EntityItemProperties>& snapshots
         _scroll->takeWidget();
         _scroll->setWidget(_content);
     }
+    // a new selection: a track's Points list starts with no point chosen (the editors are kept between selections of
+    // one type, and the row chosen in the last track must not carry over to this one)
+    for (auto& row : _rows) {
+        if (auto points = qobject_cast<TrackPointsEditor*>(row.editor)) {
+            points->forgetChoice();
+        }
+    }
     applyValues(snapshots, true);
 }
 
@@ -147,21 +175,22 @@ void InspectorPanel::refreshValues(const QVector<EntityItemProperties>& snapshot
 }
 
 void InspectorPanel::rebuild(const QStringList& sections) {
-    // everything but the title and the stretch goes
+    // everything but the title, the load problem line and the stretch goes
+    const int KEPT_AT_TOP = 2;
     for (auto& row : _rows) {
         delete row.label;
         delete row.editor;
     }
     _rows.clear();
     _sections.clear();
-    while (_contentLayout->count() > 2) {
-        auto item = _contentLayout->takeAt(1);
+    while (_contentLayout->count() > KEPT_AT_TOP + 1) {
+        auto item = _contentLayout->takeAt(KEPT_AT_TOP);
         if (item->widget()) {
             item->widget()->deleteLater();
         }
         delete item;
     }
-    int position = 1;
+    int position = KEPT_AT_TOP;
     for (const auto& sectionId : sections) {
         if (auto widget = buildSection(sectionId, _content)) {
             _contentLayout->insertWidget(position++, widget);
@@ -215,7 +244,8 @@ QWidget* InspectorPanel::buildSection(const QString& sectionId, QWidget* parent)
         auto editor = PropertyEditor::create(*spec, body);
         auto label = editor->createLabel(body);
         label->setObjectName("EditorInspectorLabel");
-        bool parts = spec->kind == PropertyKind::VehicleWheels || spec->kind == PropertyKind::VehicleSeats;
+        bool parts = spec->kind == PropertyKind::VehicleWheels || spec->kind == PropertyKind::VehicleSeats
+            || spec->kind == PropertyKind::TrackPoints;
         bool tall = spec->kind == PropertyKind::Json || spec->kind == PropertyKind::UserData
             || spec->kind == PropertyKind::CollisionMask || spec->kind == PropertyKind::TerrainLayers
             || spec->kind == PropertyKind::Impostor || parts;
@@ -247,6 +277,9 @@ QWidget* InspectorPanel::buildSection(const QString& sectionId, QWidget* parent)
         }
         if (auto parts = qobject_cast<VehiclePartsEditor*>(editor)) {
             connect(parts, &VehiclePartsEditor::partChosen, this, [this, key](int index) { emit vehiclePartChosen(key, index); });
+        }
+        if (auto points = qobject_cast<TrackPointsEditor*>(editor)) {
+            connect(points, &TrackPointsEditor::pointChosen, this, &InspectorPanel::trackPointChosen);
         }
         // right-click on a label: Copy and Paste the row's value, as Unity does
         label->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -355,5 +388,14 @@ void InspectorPanel::applyVisibility(const EntityItemProperties& first) {
     if (auto userData = qobject_cast<UserDataEditor*>(_rows.value(QStringLiteral("userData")).editor)) {
         claimed.sort();
         userData->setClaimedEntries(claimed);
+    }
+}
+
+void InspectorPanel::chooseTrackPoint(int index) {
+    auto row = _rows.find(QStringLiteral("trackPoints"));
+    if (row != _rows.end()) {
+        if (auto points = qobject_cast<TrackPointsEditor*>(row->editor)) {
+            points->choose(index);
+        }
     }
 }

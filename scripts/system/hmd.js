@@ -62,9 +62,6 @@ function onHmdChanged(isHmd) {
 function onClicked() {
     var isDesktop = Menu.isOptionChecked(desktopMenuItemName);
     Menu.setIsOptionChecked(isDesktop ? headset : desktopMenuItemName, true);
-    if (!isDesktop) {
-        UserActivityLogger.logAction("exit_vr");
-    }
 }
 
 if (headset) {

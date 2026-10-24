@@ -480,6 +480,24 @@ void VehicleSimulation::preSubstep(uint32_t step, float dt) {
                     << (Physics::isServerAuthority() ? "(physics server)" : "");
             }
         }
+        bool localDriver = !authority && isLocalDriver(vehicle.state);
+        if (localDriver != vehicle.wasLocalDriver) {
+            vehicle.wasLocalDriver = localDriver;
+            if (localDriver) {
+                // the wheel taken (again): nothing of an earlier drive is kept. A second sit after standing found the
+                // round trips and the lead's window holding the standing time and jumped the clock a second ahead
+                // (round 12); the server aligns its buffer afresh from the first input after a gap, so the sequence
+                // itself need not start over.
+                vehicle.history.clear();
+                vehicle.lead.reset();
+                vehicle.inputSendTimes.clear();
+                vehicle.recent.clear();
+                vehicle.unsent.clear();
+                vehicle.rtt = 0.0f;
+                vehicle.driveStartSequence = vehicle.nextSequence;
+                qCDebug(physics) << "vehicle" << vehicle.entity->getName() << "driven from here from input" << vehicle.nextSequence;
+            }
+        }
         checkCorrection(vehicle, step);
         chooseInput(vehicle, step);
         applyModelInput(vehicle, vehicle.applied, dt);
@@ -508,8 +526,20 @@ void VehicleSimulation::postSubstep(uint32_t step, float dt) {
 
 void VehicleSimulation::recordTelemetry() {
     Telemetry t;
+    // the vehicle this client drives first: what its scripts read here (the flight assistant's airspeed and tilt, a
+    // readout) is that vehicle's; with none driven, the first of the map as before. With a second aircraft in the world
+    // the flight assistant flew on a parked one's airspeed and tilt (10-24).
+    std::vector<Vehicle*> order;
+    order.reserve(_vehicles.size());
     for (auto& entry : _vehicles) {
-        Vehicle& vehicle = entry.second;
+        if (isLocalDriver(entry.first)) {
+            order.insert(order.begin(), &entry.second);
+        } else {
+            order.push_back(&entry.second);
+        }
+    }
+    for (Vehicle* each : order) {
+        Vehicle& vehicle = *each;
         if (vehicle.aircraft && vehicle.aircraftBuilt) {
             const AircraftForces& f = vehicle.aircraftForces;
             t.valid = true;
@@ -631,8 +661,12 @@ void VehicleSimulation::chooseInput(Vehicle& vehicle, uint32_t step) {
         // when none arrived for it
         VehicleInput input;
         bool taken = vehicle.inputs.take(step, input);
-        vehicle.lastTick = vehicle.inputs.tickForStep(step);
-        vehicle.lastMargin = vehicle.inputs.margin(step);
+        // the tick and margin the stream reports; none while the buffer is quiet (a second sit found the margin of the
+        // standing time, hundreds of ticks, clamped to -127 in the first states after the wheel was taken again, and the
+        // driver's lead jumped its clock a second ahead on it, round 12)
+        bool quiet = vehicle.inputs.quiet(step);
+        vehicle.lastTick = quiet ? 0 : vehicle.inputs.tickForStep(step);
+        vehicle.lastMargin = quiet ? 0 : vehicle.inputs.margin(step);
         _stats.bufferMargin = vehicle.lastMargin;
         if (taken) {
             vehicle.applied = input;
@@ -961,9 +995,15 @@ void VehicleSimulation::reconcileStream(Vehicle& vehicle, uint32_t step) {
     const VehicleState newest = buffer.newest();
     vehicle.lastStreamTime = newest.time;
     quint64 now = usecTimestampNow();
-    noteRoundTrip(vehicle, newest.tick != 0 ? newest.tick : newest.input.sequence, now);
+    uint32_t ack = newest.tick != 0 ? newest.tick : newest.input.sequence;
+    // a state acked outside what this sit has sent says nothing about its lead or round trip: before its first input, or
+    // past its newest (the server's tick under an alignment the sit's first input then replaces)
+    bool thisDrive = (int32_t)(ack - vehicle.driveStartSequence) >= 0 && (int32_t)(ack - vehicle.nextSequence) < 0;
+    if (thisDrive) {
+        noteRoundTrip(vehicle, ack, now);
+    }
     correctDriver(vehicle, newest, step, driverBlendTime(vehicle));
-    if (newest.tick != 0) {
+    if (newest.tick != 0 && thisDrive) {
         // the lead (round 10): the server's margin at that substep, and a shift of this client's ticks when the least
         // over a window says so: a few ticks by time dilation, a stall's worth by a jump of the counter
         double t = (double)now * 1.0e-6;

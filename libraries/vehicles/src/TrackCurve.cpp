@@ -25,6 +25,15 @@ namespace {
     const glm::vec3 WORLD_UP(0.0f, 1.0f, 0.0f);
     const glm::vec3 WORLD_FRONT(0.0f, 0.0f, -1.0f);
     const glm::vec3 WORLD_RIGHT(1.0f, 0.0f, 0.0f);
+    // polyline() and poses() return at most this many vertices, whatever spacing is asked for: a track thousands of
+    // kilometres long sampled every half metre would be millions (10-21 review)
+    const int MAX_POLYLINE_VERTICES = 65536;
+
+    // the vertices for a length at about a spacing: two at least, the count in double before it becomes an int
+    int vertexCount(float length, float spacing) {
+        double segments = std::ceil((double)length / (double)spacing);
+        return (int)std::min(std::max(segments, 2.0), (double)(MAX_POLYLINE_VERTICES - 1)) + 1;
+    }
 }
 
 void TrackCurve::clear() {
@@ -269,7 +278,7 @@ std::vector<glm::vec3> TrackCurve::polyline(float spacing) const {
         return line;
     }
     spacing = std::max(spacing, 0.01f);
-    int count = std::max(2, (int)std::ceil(_length / spacing)) + 1;
+    int count = vertexCount(_length, spacing);
     line.reserve(count);
     for (int i = 0; i < count; ++i) {
         line.push_back(positionAt(_length * (float)i / (float)(count - 1)));
@@ -283,7 +292,7 @@ std::vector<TrackCurve::Pose> TrackCurve::poses(float spacing) const {
         return line;
     }
     spacing = std::max(spacing, 0.01f);
-    int count = std::max(2, (int)std::ceil(_length / spacing)) + 1;
+    int count = vertexCount(_length, spacing);
     line.reserve(count);
     for (int i = 0; i < count; ++i) {
         line.push_back(poseAt(_length * (float)i / (float)(count - 1)));

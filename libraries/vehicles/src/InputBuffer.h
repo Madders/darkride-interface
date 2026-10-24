@@ -31,6 +31,7 @@ public:
     static constexpr int MAX_LEAD = 90;        // substeps: an input further ahead than this is refused (a second)
     static constexpr int REALIGN_MARGIN = 45;  // a margin past this for REALIGN_STEPS substeps sets the alignment again
     static constexpr int REALIGN_STEPS = 90;
+    static constexpr int LATE_REALIGN_INPUTS = 45;  // late inputs in a row (half a second's) that set the alignment again
 
     enum class Push { Stored, Duplicate, Late, Early };
 
@@ -45,6 +46,9 @@ public:
     // the driver's tick that substep `step` applies (0 before the first input)
     uint32_t tickForStep(uint32_t step) const { return _aligned ? step - _offset : 0; }
     bool aligned() const { return _aligned; }
+    // no input for more than a lead's worth of substeps (the driver stood up, the link dropped): the alignment, the
+    // tick for a step and the margin say nothing until the next input aligns the buffer again
+    bool quiet(uint32_t step) const { return !_pushed || (int32_t)(step - _lastPushStep) > MAX_LEAD; }
     size_t size() const { return _inputs.size(); }
     void reset();
 
@@ -73,7 +77,10 @@ private:
     uint32_t _newestTick { 0 };      // the highest tick heard of, stored or not
     uint32_t _lastTakenStep { 0 };
     bool _taken { false };
+    uint32_t _lastPushStep { 0 };    // when an input last arrived, to tell a gap (the driver stood, the link dropped)
+    bool _pushed { false };
     int _overfullSteps { 0 };
+    int _lateRun { 0 };              // late inputs in a row (LATE_REALIGN_INPUTS)
     Counts _counts;
 };
 

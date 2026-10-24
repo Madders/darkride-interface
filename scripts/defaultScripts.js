@@ -10,18 +10,13 @@
 	// "system/bubble.js",
 
 	"system/snapshot.js",
-	"system/pal.js",
-	// "system/avatarapp.js",
 	// "system/makeUserConnection.js",
 	// "system/tablet-goto.js",
-	// "system/marketplaces/marketplaces.js",
 	// "system/notifications.js",
-	// "system/commerce/wallet.js",
 	"system/tablet-ui/tabletUI.js",
 	"system/emote.js",
 	"system/vehicles.js", // sit in and drive vehicles (PHYSICS.md round 6)
 	"system/avatarMenu.js", // an imported avatar's menu
-	// "system/miniTablet.js",
 	// "system/audioMuteOverlay.js", // the big text that appears when you're muted
 	"system/keyboardShortcuts/keyboardShortcuts.js"
 	// "system/interstitialPage.js"
@@ -34,7 +29,7 @@
 	"tivoli/tivoli.js",
 	"system/inspect.js",
 	"system/controllers/controllerScripts.js",
-	"system/create/edit.js",
+	"system/buildMode.js", // the bar's Create button: the native editor's build mode
 	"system/impostorLodView.js" // Developer > Render > Show Impostors and LODs
 ].forEach(function (script) {
 	var runningScripts = ScriptDiscoveryService.getRunning();

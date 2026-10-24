@@ -8,6 +8,8 @@
 
 #include "ServerTerrainEntityItem.h"
 
+#include <atomic>
+
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <QtCore/QUrl>
@@ -21,6 +23,14 @@
 #include <terrain/SurfaceNets.h>
 #include <terrain/TerrainFile.h>
 #include <terrain/VoxelGrid.h>
+
+// The serial in a shape key ("terrain/<id>/<serial>") comes from one counter for the whole process: per entity object it
+// restarted at 1 whenever the entity was made again (leaving and re-entering a domain), and the shape manager keeps
+// released shapes for a while under their keys, so a changed shape could come back as the old one (10-21 review).
+static uint64_t nextShapeSerial() {
+    static std::atomic<uint64_t> serial { 0 };
+    return ++serial;
+}
 
 EntityItemPointer ServerTerrainEntityItem::factory(const EntityItemID& entityID, const EntityItemProperties& properties) {
     std::shared_ptr<ServerTerrainEntityItem> entity(new ServerTerrainEntityItem(entityID), [](ServerTerrainEntityItem* ptr) { ptr->deleteLater(); });
@@ -191,7 +201,7 @@ void ServerTerrainEntityItem::build(const terrain::VoxelGrid& grid) {
         }
     });
 
-    ++_shapeSerial;
+    _shapeSerial = nextShapeSerial();
     ShapeInfo info;
     if (points.size() >= 3 && indices.size() >= 3) {
         info.setParams(SHAPE_TYPE_STATIC_MESH, 0.5f * getScaledDimensions(),

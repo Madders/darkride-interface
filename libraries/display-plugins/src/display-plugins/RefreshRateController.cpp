@@ -12,7 +12,39 @@
 #include "RefreshRateController.h"
 
 #include <QtCore/QThread>
+#include <algorithm>
+#include <thread>
 #include <NumericalConstants.h>
+
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+#endif
+
+#include "DisplayLink.h"
+
+namespace {
+    // Sleeps about this long. On Windows the plain sleep keeps to the system timer's resolution (a millisecond at
+    // best, 15.6 ms unless something in the process raised it), so a high-resolution waitable timer is used where
+    // Windows has one (10, 1803 and later); elsewhere the plain sleep, whose lateness the caller measures and covers.
+    void sleepAbout(std::chrono::nanoseconds duration) {
+#if defined(Q_OS_WIN)
+        static thread_local HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                                                  TIMER_ALL_ACCESS);
+        if (timer) {
+            LARGE_INTEGER due;
+            due.QuadPart = -(LONGLONG)(duration.count() / 100);   // relative, in units of 100 ns
+            if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
+                WaitForSingleObject(timer, INFINITE);
+                return;
+            }
+        }
+#endif
+        std::this_thread::sleep_for(duration);
+    }
+}
 
 long int hzToDurationNanoseconds(int refreshRate) {
     return (int64_t) (NSECS_PER_SECOND / (quint64) refreshRate);
@@ -30,16 +62,118 @@ int RefreshRateController::getRefreshRateLimitPeriod() const {
     return durationNanosecondsToHz(_refreshRateLimitPeriod);
 }
 
-std::chrono::nanoseconds RefreshRateController::sleepThreadIfNeeded(QThread* thread, bool isHmd) {
-    if (!isHmd) {
-        static const std::chrono::nanoseconds EPSILON = std::chrono::milliseconds(1);
-        auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(_endTime - _startTime);
-        auto refreshRateLimitPeriod = std::chrono::nanoseconds(_refreshRateLimitPeriod);
-        auto sleepDuration = refreshRateLimitPeriod - (duration + EPSILON);
-        if (sleepDuration.count() > 0) {
-            thread->msleep(std::chrono::duration_cast<std::chrono::milliseconds>(sleepDuration).count());
-        }
-        return sleepDuration;
+float RefreshRateController::getPacedPeriodSeconds() const {
+    if (_unpacedPresents > 0) {
+        return 0.0f;   // the schedule restarted lately: the slots are not whole periods apart yet
     }
-    return std::chrono::nanoseconds(0);
+    // a period under a millisecond is none set yet (the default), one over 50 ms a window in the background
+    const int64_t MIN_PERIOD_NS = 1000000;
+    const int64_t MAX_PERIOD_NS = 50000000;
+    int64_t period = _pacedPeriodNs > 0 ? _pacedPeriodNs.load() : _refreshRateLimitPeriod.load();
+    return (period >= MIN_PERIOD_NS && period <= MAX_PERIOD_NS) ? (float)period * 1.0e-9f : 0.0f;
+}
+
+std::chrono::nanoseconds RefreshRateController::sleepThreadIfNeeded(QThread* thread, bool isHmd, bool vsync) {
+    using namespace std::chrono;
+    if (isHmd) {
+        _scheduled = false;
+        _slotIndex++;
+        return nanoseconds(0);
+    }
+    // With vsync the swap waits for the display's refresh: a sleep on top of it only beats against the refreshes.
+    // The display-based profile, whose target is the display's own rate, sleeps not at all then; the throttled
+    // profiles keep their pacing.
+    if (vsync && _displayRefreshRate > 0 && getRefreshRateLimitPeriod() >= _displayRefreshRate) {
+        _scheduled = false;
+        _slotIndex++;
+        return nanoseconds(0);
+    }
+    auto period = nanoseconds(_refreshRateLimitPeriod);
+    auto now = steady_clock::now();
+    int64_t nowNs = duration_cast<nanoseconds>(now.time_since_epoch()).count();
+    int64_t refreshNs = 0;
+    int64_t refreshPeriodNs = 0;
+    bool atDisplayRate = _displayRefreshRate > 0 && getRefreshRateLimitPeriod() >= _displayRefreshRate;
+    if (atDisplayRate && DisplayLink::instance().nextRefresh(nowNs, refreshNs, refreshPeriodNs)) {
+        // In phase with the display: one slot per refresh interval, a fixed phase after the interval's refresh, so
+        // the frame is flushed at the same point of every interval and the compositor shows it at the next refresh.
+        // The phase, 2 ms: measured on 2026-10-20 (a 144 Hz panel, 6.94 ms intervals, a 120 Hz second display), the
+        // flush waits 1.4 to 2.4 ms for the compositor from a millisecond before each refresh to a millisecond after
+        // it, 0.8 ms at 1.5 to 2 ms in and 0.3 to 0.5 ms from 2.5 to 5.5 ms in, with a tail to 4 ms wherever it
+        // starts; a present of a millisecond's work from 2 ms in returns by 4 ms as a rule and has 3.9 ms for the
+        // flush before the next refresh, which covers the tail (from 3 ms in, 2.9 ms did not: 1.7 refreshes a second
+        // were missed). TIVOLI_PRESENT_PHASE_US in the environment sets another; TIVOLI_PRESENT_PHASE_SWEEP=1 walks it through the whole interval,
+        // 50 us a present, for a scripted test's map of the flush's wait and the frames' arrival against the phase
+        // (seat-jitter.js, PHYSICS.md "The driver's stutter"). This interval's slot is taken unless the last present
+        // took it (one present an interval); a present that overran into this interval presents at once, in it: its
+        // frame shows at this interval's refresh like an on-time one, and the interval count stays whole. Until the
+        // 10-21 review a present more than 1.5 ms past its slot waited for the next interval's, which lost a refresh
+        // every time and halved the rate of a scene whose presents take a little over a period (a 60 Hz panel at
+        // 30 fps once presents took 18 ms, where presenting at once gives about 55).
+        static const int64_t DEFAULT_PHASE_NS = 2000000;
+        static const int64_t SWEEP_STEP_NS = 50000;
+        static const int64_t phaseSetting = qgetenv("TIVOLI_PRESENT_PHASE_US").isEmpty() ? DEFAULT_PHASE_NS :
+            (int64_t)qgetenv("TIVOLI_PRESENT_PHASE_US").toLongLong() * 1000;
+        static const bool sweep = !qgetenv("TIVOLI_PRESENT_PHASE_SWEEP").isEmpty() && qgetenv("TIVOLI_PRESENT_PHASE_SWEEP") != "0";
+        int64_t phase = sweep ? (int64_t)(_presentCount * SWEEP_STEP_NS) % refreshPeriodNs : phaseSetting % refreshPeriodNs;
+        _presentCount++;
+        int64_t slot = refreshNs - refreshPeriodNs + phase;   // this interval's (the refresh is the next one)
+        if (slot <= _lastSlotNs + refreshPeriodNs / 2) {
+            // this interval's slot was the last present's: one present an interval
+            slot += refreshPeriodNs;
+        }
+        // the intervals this slot is on from the last (one as a rule; a lost refresh counts)
+        int64_t advanced = _lastSlotNs > 0 ? (slot - _lastSlotNs + refreshPeriodNs / 2) / refreshPeriodNs : 1;
+        _slotIndex += (uint64_t)std::max<int64_t>(1, advanced);
+        _lastSlotNs = slot;
+        _nextPresent = steady_clock::time_point(nanoseconds(slot));   // in the past for an overrun: no wait
+        _scheduled = false;   // the free schedule restarts from now if the link goes quiet
+        _pacedPeriodNs = refreshPeriodNs;
+        _unpacedPresents = 0;   // the display's own intervals: whole by construction
+    } else {
+        // The free schedule, at the target rate (no refresh signal: Windows, Linux, macOS off the display link, or a
+        // throttled rate). Late means the next slot is already behind: a present overran its period. Such a present
+        // goes at once and the schedule restarts from it; until the 10-21 review it waited a whole period more
+        // (144 Hz presents of 8 ms ran at 67 fps where unpaced ones ran at 125). Its slot is then not a whole number
+        // of periods after the last one, so the clock is reported unpaced (the physics on the wall clock) until
+        // presents land in their slots again; likewise when the schedule starts or the rate changes.
+        static const int RESUME_PACED_PRESENTS = 8;
+        bool restart = !_scheduled || period != _scheduledPeriod || now >= _nextPresent + period;
+        if (restart) {
+            _scheduled = true;
+            _scheduledPeriod = period;
+            _nextPresent = now;
+            _unpacedPresents = RESUME_PACED_PRESENTS;
+        } else {
+            _nextPresent += period;
+            if (_unpacedPresents > 0) {
+                _unpacedPresents--;
+            }
+        }
+        _slotIndex++;
+        _pacedPeriodNs = period.count();
+    }
+    auto remaining = duration_cast<nanoseconds>(_nextPresent - now);
+    if (remaining.count() > 0) {
+        // The kernel's sleep wakes late, by how much depends on the platform and the thread (measured 10-21 on this
+        // Mac: about a millisecond for an ordinary thread, under 0.07 ms for a real-time one): sleep to within a
+        // margin of the slot and spin the rest. The margin follows the lateness actually seen, a decaying maximum,
+        // between 0.1 ms and the 0.6 ms it always was: never more spin than before, much less where sleeps are
+        // precise (the spin cost 4 % of a core at 60 Hz and 9 % at 144 Hz at 0.6 ms, the review found).
+        static const int64_t MIN_MARGIN_NS = 100000;
+        static const int64_t MAX_MARGIN_NS = 600000;
+        static const int64_t MARGIN_HEADROOM_NS = 50000;
+        static const double LATE_DECAY = 0.995;   // per present: the maximum fades over a second or two at 144 Hz
+        int64_t margin = std::min(std::max(_sleepLateNs + MARGIN_HEADROOM_NS, MIN_MARGIN_NS), MAX_MARGIN_NS);
+        if (remaining.count() > margin) {
+            auto wake = _nextPresent - nanoseconds(margin);
+            sleepAbout(duration_cast<nanoseconds>(wake - now));
+            int64_t late = duration_cast<nanoseconds>(steady_clock::now() - wake).count();
+            _sleepLateNs = std::max((int64_t)(LATE_DECAY * (double)_sleepLateNs), std::max<int64_t>(late, 0));
+        }
+        while (steady_clock::now() < _nextPresent) {
+            std::this_thread::yield();
+        }
+    }
+    return remaining;
 }

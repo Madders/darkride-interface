@@ -83,7 +83,6 @@ AvatarMixer::AvatarMixer(ReceivedMessage& message) :
     packetReceiver.registerListener(PacketType::BulkAvatarTraitsAck, this, "queueIncomingPacket");
     packetReceiver.registerListenerForTypes({ PacketType::OctreeStats, PacketType::EntityData, PacketType::EntityErase },
         this, "handleOctreePacket");
-    packetReceiver.registerListener(PacketType::ChallengeOwnership, this, "queueIncomingPacket");
 
     packetReceiver.registerListenerForTypes({
         PacketType::ReplicatedAvatarIdentity,
@@ -527,8 +526,6 @@ void AvatarMixer::handleAvatarKilled(SharedNodePointer avatarNode) {
            } else {
                _sessionDisplayNames.erase(displayNameIter);
            }
-
-            nodeData->getAvatar().stopChallengeTimer();
         }
 
         std::unique_ptr<NLPacket> killPacket;

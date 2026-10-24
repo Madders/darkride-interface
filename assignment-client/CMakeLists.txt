@@ -13,29 +13,11 @@ setup_memory_debugger()
 link_hifi_libraries(
   audio avatars octree gpu graphics shaders fbx hfm entities
   networking animation recording shared script-engine embedded-webserver
-  controllers physics plugins midi image
+  controllers physics plugins image
   material-networking model-networking ktx shaders
   workload vehicles terrain
 )
 include_hifi_library_headers(procedural)
-
-if (BUILD_TOOLS)
-  add_dependencies(${TARGET_NAME} oven)
-
-  if (WIN32)
-    add_custom_command(
-      TARGET ${TARGET_NAME} POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_directory
-              $<TARGET_FILE_DIR:oven>
-              $<TARGET_FILE_DIR:${TARGET_NAME}>)
-  else()
-    add_custom_command(
-      TARGET ${TARGET_NAME} POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E create_symlink
-              $<TARGET_FILE:oven>
-              $<TARGET_FILE_DIR:${TARGET_NAME}>/oven)
-  endif()
-endif (BUILD_TOOLS)
 
 if (WIN32)
   package_libraries_for_deployment()

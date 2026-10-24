@@ -590,8 +590,8 @@ public:
     ChangeHandlerId registerChangeHandler(const ChangeHandlerCallback& handler);
     void deregisterChangeHandler(const ChangeHandlerId& changeHandlerId);
 
+    // Always empty since the marketplace went; EntityItemProperties::verifyStaticCertificateProperties still reads it.
     static QString _marketplacePublicKey;
-    static void retrieveMarketplacePublicKey();
 
     void collectChildrenForDelete(std::vector<EntityItemPointer>& entitiesToDelete, const QUuid& sessionID) const;
 

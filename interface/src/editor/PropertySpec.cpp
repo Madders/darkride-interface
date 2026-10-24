@@ -318,6 +318,64 @@ namespace {
         P_INT("terrainVersion", TerrainVersion, uint32_t);
         P_STR("terrainLayers", TerrainLayers);
 
+        // a moving frame, and riding a track (PHYSICS.md 4.1 and 4.8)
+        P_BOOL("frame", Frame);
+        P_UUID("trackID", TrackID);
+        P_FLOAT("trackOffset", TrackOffset);
+        // the Track entity: the curve's points, bank and stops as one JSON list the points editor shows, wrapped with
+        // the loop flag ({"points": [{"x","y","z","bank","dwell"}...], "closed": bool}) so the editor can give the length
+        add("trackPoints", [](const EP& p) {
+            QJsonArray points;
+            const QVector<glm::vec3>& positions = p.getTrackPoints();
+            const QVector<float>& bank = p.getTrackBank();
+            const QVector<float>& dwell = p.getTrackDwell();
+            for (int i = 0; i < positions.size(); ++i) {
+                QJsonObject point;
+                point["x"] = (double)positions[i].x;
+                point["y"] = (double)positions[i].y;
+                point["z"] = (double)positions[i].z;
+                point["bank"] = i < bank.size() ? (double)bank[i] : 0.0;
+                point["dwell"] = i < dwell.size() ? (double)dwell[i] : 0.0;
+                points.append(point);
+            }
+            QJsonObject wrapper;
+            wrapper["points"] = points;
+            wrapper["closed"] = p.getTrackClosed();
+            return QVariant(QString::fromUtf8(QJsonDocument(wrapper).toJson(QJsonDocument::Compact)));
+        }, [](EP& p, const QVariant& v) {
+            QJsonDocument document = QJsonDocument::fromJson(v.toString().toUtf8());
+            QJsonArray points = document.isObject() ? document.object().value("points").toArray() : document.array();
+            QVector<glm::vec3> positions;
+            QVector<float> bank;
+            QVector<float> dwell;
+            for (const QJsonValue& item : points) {
+                QJsonObject point = item.toObject();
+                positions << glm::vec3((float)point.value("x").toDouble(), (float)point.value("y").toDouble(), (float)point.value("z").toDouble());
+                bank << (float)point.value("bank").toDouble();
+                dwell << (float)point.value("dwell").toDouble();
+            }
+            p.setTrackPoints(positions);
+            p.setTrackBank(bank);
+            p.setTrackDwell(dwell);
+        });
+        P_BOOL("trackClosed", TrackClosed);
+        P_FLOAT("trackSpeed", TrackSpeed);
+        P_FLOAT("trackAcceleration", TrackAcceleration);
+        P_STR("trackProfile", TrackProfile);
+        P_FLOAT("trackWidth", TrackWidth);
+        P_FLOAT("trackHeight", TrackHeight);
+        P_FLOAT("trackClearance", TrackClearance);
+        P_FLOAT("trackPylonSpacing", TrackPylonSpacing);
+        P_FLOAT("trackPylonFloor", TrackPylonFloor);
+        // the train's state, read-only: the physics server writes it
+        P_FLOAT("trainDistance", TrainDistance);
+        P_FLOAT("trainSpeed", TrainSpeed);
+        add("trainStation", [](const EP& p) {
+            quint16 station = p.getTrainStation();
+            return QVariant(station == TrackEntityItem::NO_STATION ? QString("none") : QString("point %1").arg(station + 1));
+        }, [](EP&, const QVariant&) {});
+        P_BOOL("trainReversed", TrainReversed);
+
         // vehicle (PHYSICS.md 4.8): the group's definition, which the simulator rebuilds the vehicle from whenever it
         // changes, and the state the simulator writes (shown read-only)
 #define G_VEC3(key, G, N)   add(key, [](const EP& p) { return QVariant(toQ(p.G().get##N())); }, [](EP& p, const QVariant& v) { p.G().set##N(fromQ(v.value<QVector3D>())); })
@@ -1267,6 +1325,29 @@ namespace {
         add(spec("terrainClosedBox", "Closed Box", K::TerrainCaps, "terrain"));
         add(spec("terrainLayers", "Layers", K::TerrainLayers, "terrain"));
 
+        // track (PHYSICS.md 4.8): the curve a train rides, its schedule, the guideway it draws and the train's state
+        add(spec("trackClosed", "Loop", K::Bool, "track"));
+        range(add(spec("trackSpeed", "Speed", K::Float, "track")), 0, 200, 0.5, 1, "m/s");
+        range(add(spec("trackAcceleration", "Acceleration", K::Float, "track")), 0, 100, 0.1, 2, "m/s²");
+        add(spec("trackPoints", "Points", K::TrackPoints, "track"));
+        en("trackProfile", "Profile", "track_guideway", { "beam:Beam (a monorail's)", "none:None (dress it with models)" });
+        const char* BEAM = "trackProfile=beam";
+        with(range(add(spec("trackWidth", "Beam Width", K::Float, "track_guideway")), 0.01, 1000, 0.05, 2, "m"), BEAM);
+        with(range(add(spec("trackHeight", "Beam Height", K::Float, "track_guideway")), 0.01, 1000, 0.05, 2, "m"), BEAM);
+        with(range(add(spec("trackClearance", "Clearance", K::Float, "track_guideway")), -1000, 1000, 0.05, 2, "m"), BEAM);
+        with(range(add(spec("trackPylonSpacing", "Pylon Spacing", K::Float, "track_guideway")), 0, 1000, 0.5, 1, "m"), BEAM);
+        with(range(add(spec("trackPylonFloor", "Pylon Floor", K::Float, "track_guideway")), -1000, 1000, 0.1, 2, "m"), BEAM);
+        with(add(spec("color", "Color", K::Color, "track_guideway")), BEAM);
+        add(spec("trainDistance", "Distance", K::Float, "track_train")).readOnly = true;
+        add(spec("trainSpeed", "Speed", K::Float, "track_train")).readOnly = true;
+        add(spec("trainStation", "Station", K::String, "track_train")).readOnly = true;
+        add(spec("trainReversed", "Reversed", K::Bool, "track_train")).readOnly = true;
+
+        // a moving frame (PHYSICS.md 4.1): a physics world of its own that rides along; and a car on a track
+        add(spec("frame", "Reference Frame", K::Bool, "frame"));
+        add(spec("trackID", "Track", K::String, "frame"));
+        with(stepping(add(spec("trackOffset", "Track Offset", K::Float, "frame")), 0.1, 2, "m"), "trackID!=");
+
         // vehicle (PHYSICS.md 4.8): the entity is the chassis or hull, with the names Unity gives a Rigidbody and a
         // WheelCollider where it has them and Jolt's for the engine and transmission; the simulator (the physics server,
         // or the owning client) rebuilds the vehicle as any of these change, so they can be tuned while it drives.
@@ -1437,6 +1518,9 @@ namespace {
         { "material_data", "Material Data", true },
         { "grid", "Grid", false },
         { "terrain", "Terrain", false },
+        { "track", "Track", false },
+        { "track_guideway", "Guideway", true },
+        { "track_train", "Train", true },
         { "particles", "Particles", false },
         { "particles_emit", "Emit", true },
         { "particles_size", "Size", true },
@@ -1450,6 +1534,7 @@ namespace {
         { "physics", "Physics", false },
         { "vehicle", "Vehicle", false },
         { "vehicle_state", "Vehicle State", true },
+        { "frame", "Moving Frame", false },
         { "userData", "User Data", false }
     };
 }
@@ -1498,13 +1583,13 @@ static QStringList typeSections(EntityTypes::EntityType type, bool multiple) {
         case EntityTypes::Box:
         case EntityTypes::Sphere:
         case EntityTypes::Shape:
-            return { "base", "spatial", "shape", "reflectionProbe", "impostor", "behavior", "collision", "physics", "vehicle", "vehicle_state" };
+            return { "base", "spatial", "shape", "reflectionProbe", "impostor", "behavior", "collision", "physics", "vehicle", "vehicle_state", "frame" };
         case EntityTypes::Text:
             return { "base", "spatial", "text", "behavior", "collision", "physics" };
         case EntityTypes::Zone:
             return { "base", "spatial", "zone", "behavior", "physics" };
         case EntityTypes::Model:
-            return { "base", "spatial", "model", "lightmap", "impostor", "behavior", "collision", "physics", "vehicle", "vehicle_state" };
+            return { "base", "spatial", "model", "lightmap", "impostor", "behavior", "collision", "physics", "vehicle", "vehicle_state", "frame" };
         case EntityTypes::Image:
             return { "base", "spatial", "image", "behavior", "collision", "physics" };
         case EntityTypes::Web:
@@ -1520,8 +1605,10 @@ static QStringList typeSections(EntityTypes::EntityType type, bool multiple) {
             return { "base", "spatial", "grid", "behavior", "physics" };
         case EntityTypes::Terrain:
             return { "base", "spatial", "terrain", "behavior", "collision" };
+        case EntityTypes::Track:
+            return { "base", "spatial", "track", "track_guideway", "track_train", "behavior", "collision" };
         default:
-            return { "base", "spatial", "behavior", "collision", "physics" };
+            return { "base", "spatial", "behavior", "collision", "physics", "frame" };
     }
 }
 
@@ -1568,6 +1655,9 @@ bool takesEntry(const QString& key, const EntityItemProperties& properties) {
 QStringList storedKeys(const QString& key) {
     if (key == QStringLiteral("scale")) {
         return { QStringLiteral("dimensions") };
+    }
+    if (key == QStringLiteral("trackPoints")) {
+        return { key, QStringLiteral("dimensions") };   // a points edit refits the track's box (Editor::fitTrackBox)
     }
     if (key == QLatin1String(SHADOWS_KEY)) {
         return { QStringLiteral("userData"), QStringLiteral("canCastShadow") };

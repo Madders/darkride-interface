@@ -112,6 +112,7 @@ public slots:
      * @function Window.prompt
      * @param {string} message - The question to display.
      * @param {string} defaultText - The default answer text.
+     * @param {Window.PromptOptions} [options] - How the prompt looks.
      * @returns {string} The text that the user entered if they select "OK", otherwise "".
      * @example <caption>Ask the user a question requiring a text answer.</caption>
      * var answer = Window.prompt("Question", "answer");
@@ -121,7 +122,16 @@ public slots:
      *     print("User answer: " + answer);
      * }
      */
-    QVariant prompt(const QString& message, const QString& defaultText);
+    QVariant prompt(const QString& message, const QString& defaultText, const QVariantMap& options = QVariantMap());
+
+    /**jsdoc
+     * How a {@link Window.prompt|prompt} or {@link Window.promptAsync|promptAsync} dialog looks.
+     * @typedef {object} Window.PromptOptions
+     * @property {string} [placeholderText=""] - Grey words in the empty text box, such as an example of what to type.
+     * @property {string} [buttonText="OK"] - The words on the button that answers.
+     * @property {boolean} [monospace=false] - <code>true</code> to show the text in a fixed-width face, for paths and
+     *     addresses.
+     */
 
     /**jsdoc
      * Prompts the user to enter some text. Displays a non-modal dialog with a message and a text box, plus "OK" and "Cancel" 
@@ -130,6 +140,7 @@ public slots:
      * @function Window.promptAsync
      * @param {string} [message=""] - The question to display.
      * @param {string} [defaultText=""] - The default answer text.
+     * @param {Window.PromptOptions} [options] - How the prompt looks.
      * @example <caption>Ask the user a question requiring a text answer without waiting for the answer.</caption>
      * function onPromptTextChanged(text) {
      *     print("User answer: " + text);
@@ -139,7 +150,7 @@ public slots:
      * Window.promptAsync("Question", "answer");
      * print("Script continues without waiting");
      */
-    void promptAsync(const QString& message = "", const QString& defaultText = "");
+    void promptAsync(const QString& message = "", const QString& defaultText = "", const QVariantMap& options = QVariantMap());
 
     /**jsdoc
      * Prompts the user to choose a directory. Displays a modal dialog that navigates the directory tree.
@@ -573,6 +584,34 @@ public slots:
     float domainLoadingProgress();
 
     /**jsdoc
+     * The state of whole-world loading. A domain's owner can ask (its settings, Loading) that visitors see a loading
+     * screen on arrival until the whole world has arrived and its models and textures have loaded.
+     * @typedef {object} Window.WorldLoading
+     * @property {boolean} active - <code>true</code> while the loading screen should be up.
+     * @property {number} received - The entities received so far (while <code>active</code>).
+     * @property {number} ready - Of those, the ones drawn and ready for physics.
+     * @property {boolean} serverDone - <code>true</code> once the entity server has sent the whole world, so
+     *     <code>received</code> is the world's total.
+     * @property {number} seconds - The seconds since loading began.
+     * @property {number} secondsLeft - The seconds until the time limit lifts the loading screen anyway.
+     * @property {number} timeLimit - The domain's time limit, in seconds.
+     * @property {number} radius - The distance in metres within which the screen waits for models and textures
+     *     (<code>0</code>: everywhere); <code>ready</code> counts the farther ones as ready.
+     */
+    /**jsdoc
+     * Gets the state of whole-world loading.
+     * @function Window.getWorldLoading
+     * @returns {Window.WorldLoading} The state; only <code>active</code> when no loading screen is wanted.
+     */
+    QVariantMap getWorldLoading();
+
+    /**jsdoc
+     * Lifts the whole-world loading screen now ("Show me now"); the rest of the world streams in as usual.
+     * @function Window.showWorldNow
+     */
+    void showWorldNow();
+
+    /**jsdoc
      * Gets the number of display plugins currently available.
      * @function Window.getDisplayPluginCount
      * @returns {number} The number of display plugins currently available.
@@ -627,10 +666,19 @@ public slots:
      * Shows, updates or hides Darkride's loading screen over the window (<code>WorldLoadingScreen.qml</code>). A field
      * left out keeps its last value.
      * @function Window.setLoadingScreen
-     * @param {object} state - <code>up</code> (boolean), and the strings <code>world</code>, <code>author</code>,
-     *     <code>picture</code> (a URL) and <code>status</code>.
+     * @param {object} state - <code>up</code> (boolean), the strings <code>world</code>, <code>author</code>,
+     *     <code>picture</code> (a URL) and <code>status</code>, <code>progress</code>: 0 to 1 and the bar fills, or
+     *     negative and it glides, and the buttons it offers, <code>canCancel</code> and <code>canShowNow</code> (booleans).
      */
     void setLoadingScreen(const QVariantMap& state);
+
+    /**jsdoc
+     * Says that a button on the loading screen was pressed; the screen calls it, and scripts hear it as
+     * {@link Window.loadingScreenButtonPressed|loadingScreenButtonPressed}.
+     * @function Window.pressLoadingScreenButton
+     * @param {string} button - <code>"cancel"</code> or <code>"showNow"</code>.
+     */
+    void pressLoadingScreenButton(const QString& button);
 
 
 private slots:
@@ -665,6 +713,15 @@ signals:
     void loadingScreenChanged(const QVariantMap& state);
 
     /**jsdoc
+     * Triggered when a button on the loading screen is pressed.
+     * @function Window.loadingScreenButtonPressed
+     * @param {string} button - <code>"cancel"</code> (go back where you came from) or <code>"showNow"</code> (stop
+     *     waiting for the whole world).
+     * @returns {Signal}
+     */
+    void loadingScreenButtonPressed(const QString& button);
+
+    /**jsdoc
      * Triggered when you try to navigate to a *.json, *.svo, or *.svo.json URL in a Web browser within Interface.
      * @function Window.svoImportRequested
      * @param {string} url - The URL of the file to import.
@@ -683,6 +740,15 @@ signals:
     void domainConnectionRefused(const QString& reasonMessage, int reasonCode, const QString& extraInfo);
 
     /**jsdoc
+     * Triggered when a domain you're visiting or connected to hasn't answered for long enough that Interface gives up
+     * on it for now and shows its connection failure window (or goes to the error domain). The connection keeps being
+     * tried: if the domain answers later, {@link Window.domainChanged} follows.
+     * @function Window.domainConnectionTimedOut
+     * @returns {Signal}
+     */
+    void domainConnectionTimedOut();
+
+    /**jsdoc
      * Triggered when you try to visit a domain but are redirected into the error state.
      * @function Window.redirectErrorStateChanged
      * @param {boolean} isInErrorState - <code>true</code> if the user has been redirected to the error URL, <code>false</code> 
@@ -699,6 +765,15 @@ signals:
      * @returns {Signal}
      */
     void interstitialModeChanged(bool interstitialMode);
+
+    /**jsdoc
+     * Triggered when whole-world loading starts or ends.
+     * @function Window.worldLoadingChanged
+     * @param {boolean} loading - <code>true</code> when the loading screen should go up, <code>false</code> when it
+     *     should lift.
+     * @returns {Signal}
+     */
+    void worldLoadingChanged(bool loading);
 
     /**jsdoc
      * Triggered when a still snapshot has been taken by calling {@link Window.takeSnapshot|takeSnapshot} with 

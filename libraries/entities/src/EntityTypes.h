@@ -74,8 +74,6 @@ public:
      *       <td>{@link Entities.EntityProperties-Line|EntityProperties-Line}</td></tr>
      *     <tr><td><code>"PolyLine"</code></td><td>A sequence of one or more textured straight lines.</td>
      *       <td>{@link Entities.EntityProperties-PolyLine|EntityProperties-PolyLine}</td></tr>
-     *     <tr><td><code>"PolyVox"</code></td><td>A set of textured voxels.</td>
-     *       <td>{@link Entities.EntityProperties-PolyVox|EntityProperties-PolyVox}</td></tr>
      *     <tr><td><code>"Grid"</code></td><td>A grid of lines in a plane.</td>
      *       <td>{@link Entities.EntityProperties-Grid|EntityProperties-Grid}</td></tr>
      *     <tr><td><code>"Gizmo"</code></td><td>A gizmo intended for UI.</td>
@@ -106,7 +104,7 @@ public:
         ParticleEffect,
         Line,
         PolyLine,
-        PolyVox,
+        RemovedPolyVox,   // the PolyVox entity, removed 2026-10-23: its number is kept so the types after it keep theirs
         Grid,
         Gizmo,
         Light,

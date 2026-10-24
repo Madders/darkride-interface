@@ -15,4 +15,9 @@ include_hifi_library_headers(procedural)
 
 target_opengl()
 
+if (APPLE)
+    # the display's refresh signal (DisplayLink.cpp: CVDisplayLink, the display under the window)
+    target_link_libraries(${TARGET_NAME} "-framework CoreVideo" "-framework CoreGraphics")
+endif()
+
 GroupSources("src/display-plugins")

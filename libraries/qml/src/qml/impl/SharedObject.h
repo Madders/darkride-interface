@@ -99,14 +99,12 @@ private:
     mutable QMutex _mutex;
     QWaitCondition _cond;
 
-#ifndef DISABLE_QML
     QWindow* _proxyWindow { nullptr };
     RenderControl* _renderControl { nullptr };
     RenderEventHandler* _renderObject { nullptr };
 
     QTimer* _renderTimer { nullptr };
     QThread* _renderThread { nullptr };
-#endif
 
     uint64_t _lastRenderTime { 0 };
     QSize _size { 100, 100 };

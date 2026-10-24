@@ -6,6 +6,7 @@
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 #include "RenderScriptingInterface.h"
+#include <plugins/DisplayPlugin.h>
 
 #include "LightingModel.h"
 #include "AntialiasingEffect.h"
@@ -40,6 +41,7 @@ void RenderScriptingInterface::loadSettings() {
     _renderSettingLock.withReadLock([&] {
         _renderMethod = (_renderMethodSetting.get());
         _shadowsEnabled = (_shadowsEnabledSetting.get());
+        _vsyncEnabled = (_vsyncEnabledSetting.get());   // the display plugin applies it when it activates
         _ambientOcclusionEnabled = (_ambientOcclusionEnabledSetting.get());
         _antialiasingMethod = (_antialiasingMethodSetting.get());
         _msaaSamples = (_msaaSamplesSetting.get());
@@ -181,6 +183,30 @@ void RenderScriptingInterface::forceShadowsEnabled(bool enabled) {
             secondaryLightingModelConfig->setShadow(enabled);
         }
     });
+}
+
+bool RenderScriptingInterface::getVsyncEnabled() const {
+    return _vsyncEnabled;
+}
+
+void RenderScriptingInterface::setVsyncEnabled(bool enabled) {
+    if (_vsyncEnabled != enabled) {
+        forceVsyncEnabled(enabled);
+        emit settingsChanged();
+    }
+}
+
+void RenderScriptingInterface::forceVsyncEnabled(bool enabled) {
+    _renderSettingLock.withWriteLock([&] {
+        _vsyncEnabled = enabled;
+        _vsyncEnabledSetting.set(enabled);
+    });
+    // the active display plugin's present thread applies it from its next present (one activated later reads the
+    // setting itself); only a change comes here, never the load, which would start the display early
+    auto displayPlugin = qApp->getActiveDisplayPlugin();
+    if (displayPlugin) {
+        displayPlugin->setVsyncWanted(enabled);
+    }
 }
 
 bool RenderScriptingInterface::getAmbientOcclusionEnabled() const {

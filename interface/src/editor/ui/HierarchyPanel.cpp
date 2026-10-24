@@ -10,9 +10,12 @@
 
 #include <QtCore/QItemSelectionModel>
 #include <QtCore/QSortFilterProxyModel>
+#include <QtGui/QGuiApplication>
+#include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QStyle>
+#include <QtWidgets/QToolButton>
 #include <QtWidgets/QTreeView>
 #include <QtWidgets/QVBoxLayout>
 
@@ -58,6 +61,19 @@ HierarchyPanel::HierarchyPanel(QWidget* parent) : QDockWidget("Hierarchy", paren
     _proxy->setDynamicSortFilter(true);
     connect(_search, &QLineEdit::textChanged, _proxy, &QSortFilterProxyModel::setFilterFixedString);
 
+    // a row that is not loaded can't be selected for editing; a plain click takes the camera to it, and it is
+    // selected when it arrives
+    connect(_tree, &QTreeView::clicked, this, [this](const QModelIndex& index) {
+        auto modifiers = QGuiApplication::keyboardModifiers();
+        if (index.data(EntityTreeModel::LoadedRole).toBool()
+            || (modifiers & (Qt::ShiftModifier | Qt::ControlModifier | Qt::MetaModifier))) {
+            return;
+        }
+        QUuid id = idAt(index);
+        if (!id.isNull()) {
+            emit goToRequested(id);
+        }
+    });
     connect(_tree, &QTreeView::doubleClicked, this, [this](const QModelIndex& index) {
         QUuid id = idAt(index);
         if (!id.isNull()) {
@@ -79,10 +95,46 @@ HierarchyPanel::HierarchyPanel(QWidget* parent) : QDockWidget("Hierarchy", paren
     _banner->setWordWrap(true);
     _banner->hide();
 
+    _counts = new QLabel(body);
+    _counts->setObjectName("EditorHierarchyCounts");
+    _counts->setWordWrap(true);
+    _refresh = new QToolButton(body);
+    _refresh->setObjectName("EditorHierarchyRefresh");
+    _refresh->setText("Refresh");
+    _refresh->setToolTip("Ask the server again for everything in the world");
+    connect(_refresh, &QToolButton::clicked, this, &HierarchyPanel::refreshRequested);
+    auto countsRow = new QHBoxLayout();
+    countsRow->setContentsMargins(0, 0, 0, 0);
+    countsRow->addWidget(_counts, 1);
+    countsRow->addWidget(_refresh, 0, Qt::AlignTop);
+
+    _countsTimer.setSingleShot(true);
+    _countsTimer.setInterval(150);
+    connect(&_countsTimer, &QTimer::timeout, this, &HierarchyPanel::updateCounts);
+
     layout->addWidget(_banner);
     layout->addWidget(_search);
     layout->addWidget(_tree, 1);
+    layout->addLayout(countsRow);
     setWidget(body);
+}
+
+void HierarchyPanel::setListNote(const QString& note) {
+    _listNote = note;
+    updateCounts();
+}
+
+void HierarchyPanel::updateCounts() {
+    if (!_model) {
+        return;
+    }
+    int loaded = _model->loadedCount();
+    QString text = _model->hasList() ? QString("%1 entities, %2 loaded").arg(_model->count()).arg(loaded)
+                                     : QString("%1 loaded").arg(loaded);
+    if (!_listNote.isEmpty()) {
+        text += "\n" + _listNote;
+    }
+    _counts->setText(text);
 }
 
 void HierarchyPanel::setReadOnly(bool readOnly, const QString& reason) {
@@ -104,6 +156,16 @@ void HierarchyPanel::setModel(EntityTreeModel* model) {
     _tree->setModel(_proxy);
     _proxy->setSortRole(EntityTreeModel::CreatedRole);   // siblings in the order they were made, as in Unity
     _proxy->sort(0, Qt::AscendingOrder);
+    auto recount = [this] {
+        if (!_countsTimer.isActive()) {
+            _countsTimer.start();
+        }
+    };
+    connect(model, &QAbstractItemModel::rowsInserted, this, recount);
+    connect(model, &QAbstractItemModel::rowsRemoved, this, recount);
+    connect(model, &QAbstractItemModel::modelReset, this, recount);
+    connect(model, &QAbstractItemModel::dataChanged, this, recount);
+    updateCounts();
     connect(_tree->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this] {
         if (!_settingSelection) {
             _wantedIds = selectedIds();

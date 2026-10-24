@@ -15,6 +15,7 @@
 #include <queue>
 
 #include <QEventLoop>
+#include <QProcessEnvironment>
 #include <QScriptSyntaxCheckResult>
 #include <QThreadPool>
 #include <QSet>
@@ -223,19 +224,33 @@ void EntityTreeRenderer::stopDomainAndNonOwnedEntities() {
     // unload and stop the engine
     if (_entitiesScriptEngine) {
         QList<EntityItemID> entitiesWithEntityScripts = _entitiesScriptEngine->getListOfEntityScriptIDs();
+        int unloaded = 0, unloadedGone = 0, kept = 0;
 
         foreach (const EntityItemID& entityID,  entitiesWithEntityScripts) {
             EntityItemPointer entityItem = getTree()->findEntityByEntityItemID(entityID);
 
-            if (entityItem && !entityItem->getScript().isEmpty()) {
+            // a script whose entity is no longer in the tree is a domain entity's (local and avatar entities stay): it
+            // goes too, or it runs on with no entity (Tivoli Town's hideByDistance.js after a Cancel, 10-22)
+            if (!entityItem) {
+                _entitiesScriptEngine->unloadEntityScript(entityID, true);
+                unloadedGone++;
+                continue;
+            }
+            if (!entityItem->getScript().isEmpty()) {
                 if (!(entityItem->isLocalEntity() || entityItem->isMyAvatarEntity())) {
                     if (_currentEntitiesInside.contains(entityID)) {
                         _entitiesScriptEngine->callEntityScriptMethod(entityID, "leaveEntity");
                     }
                     _entitiesScriptEngine->unloadEntityScript(entityID, true);
+                    unloaded++;
+                } else {
+                    kept++;
                 }
             }
         }
+        qCDebug(entitiesrenderer) << "leaving the world's entities: of" << entitiesWithEntityScripts.size()
+                                 << "entity scripts listed," << unloaded << "unloaded," << unloadedGone
+                                 << "unloaded whose entities were already gone," << kept << "kept (local or avatar)";
     }
 }
 
@@ -268,6 +283,12 @@ void EntityTreeRenderer::clearDomainAndNonOwnedEntities() {
     }
 
     OctreeProcessor::clearDomainAndNonOwnedEntities();
+
+    // the world's entities are erased now: a script that started on the script thread since the unloads above were
+    // asked for (a load queued before the world was left) is unloaded after them
+    if (_entitiesScriptEngine) {
+        _entitiesScriptEngine->unloadEntityScriptsOfGoneEntities();
+    }
 }
 
 void EntityTreeRenderer::clear() {
@@ -409,6 +430,17 @@ void EntityTreeRenderer::addPendingEntities(const render::ScenePointer& scene, r
             }
 
             auto entityID = entity->getEntityItemID();
+            // One renderer per entity: an entity can be asked for again after its renderer was made (SafeLanding asks
+            // for a renderer for a nearby entity that has none yet, and then the tree's own queued addingEntity comes
+            // in). A second renderer was not kept in _entitiesInScene, yet its first update gave the entity its own
+            // model, so the kept renderer's model was never readied or added and neither drew: Tivoli Town's ground,
+            // cliffs and grass, one arrival in three (2026-10-22)
+            auto existing = _entitiesInScene.find(entityID);
+            if (existing != _entitiesInScene.end() && existing->second && existing->second->getEntity() == entity) {
+                qCDebug(entitiesrenderer) << "not making a second renderer for" << entity->getName() << entityID;
+                processedIds.insert(entityID);
+                continue;
+            }
             auto renderable = EntityRenderer::addToScene(*this, entity, scene, transaction);
             if (renderable) {
                 _entitiesInScene.insert({ entityID, renderable });
@@ -434,7 +466,9 @@ void EntityTreeRenderer::updateChangedEntities(const render::ScenePointer& scene
     });
     // bool selectionPriority = false;
 
-    _renderablesToUpdate.clear();
+    // the renderables the last frame's time budget left over stay for this one, as High Fidelity had it (the sort below
+    // ages them up): cleared here from 2020 on, they were lost, and a far model put off while its textures loaded was
+    // never updated again (Tivoli Town's far trees on arrival, 2026-10-21)
     _priorityRenderablesToUpdate.clear();
 
     {   // build list of renderables and priority renderables. 
@@ -573,6 +607,15 @@ void EntityTreeRenderer::updateChangedEntities(const render::ScenePointer& scene
                         renderable->updateInScene(scene, transaction);
                     }
                     _renderablesToUpdate.erase(renderable);
+                }
+
+                // TIVOLI_UPDATE_DIAG in the environment: a log line a second while the budget leaves renderables over
+                static const bool UPDATE_DIAG = QProcessEnvironment::systemEnvironment().contains("TIVOLI_UPDATE_DIAG");
+                static uint64_t lastUpdateDiag = 0;
+                if (UPDATE_DIAG && !_renderablesToUpdate.empty() && updateStart - lastUpdateDiag > USECS_PER_SECOND) {
+                    lastUpdateDiag = updateStart;
+                    qCDebug(entitiesrenderer) << "renderable updates:" << _renderablesToUpdate.size() << "of"
+                        << sortedRenderables.size() << "left for the next frame (budget" << timeBudget << "us)";
                 }
 
                 // compute average per-renderable update cost

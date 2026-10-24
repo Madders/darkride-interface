@@ -23,8 +23,6 @@ HIFI_QML_DEF(AddressBarDialog)
 
 AddressBarDialog::AddressBarDialog(QQuickItem* parent) : OffscreenQmlDialog(parent) {
     auto addressManager = DependencyManager::get<AddressManager>();
-    connect(addressManager.data(), &AddressManager::lookupResultIsOffline, this, &AddressBarDialog::displayAddressOfflineMessage);
-    connect(addressManager.data(), &AddressManager::lookupResultIsNotFound, this, &AddressBarDialog::displayAddressNotFoundMessage);
     connect(addressManager.data(), &AddressManager::goBackPossible, this, [this] (bool isPossible) {
         if (isPossible != _backEnabled) {
             _backEnabled = isPossible;
@@ -72,14 +70,6 @@ void AddressBarDialog::loadBack() {
 void AddressBarDialog::loadForward() {
     qDebug() << "Called LoadForward";
     DependencyManager::get<AddressManager>()->goForward();
-}
-
-void AddressBarDialog::displayAddressOfflineMessage() {
-    OffscreenUi::asyncCritical("", "That user or place is currently offline");
-}
-
-void AddressBarDialog::displayAddressNotFoundMessage() {
-    OffscreenUi::asyncCritical("", "There is no address information for that user or place");
 }
 
 void AddressBarDialog::observeShownChanged(bool visible) {

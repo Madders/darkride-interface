@@ -14,6 +14,7 @@
 #define hifi_networking_ResourceScriptingInterface_h
 
 #include <QtCore/QObject>
+#include <QtCore/QVariant>
 
 #include <DependencyManager.h>
 
@@ -49,6 +50,40 @@ public:
     Q_INVOKABLE void restoreUrlPrefix(const QString& prefix) {
         overrideUrlPrefix(prefix, "");
     }
+
+    /**jsdoc
+     * Every file whose load failed for good this run, one entry per address (its latest failure), the newest last: a
+     * list to work through. A file that loads later leaves it.
+     * @function Resources.getFailures
+     * @returns {Resources.Failure[]} The failures.
+     */
+    /**jsdoc
+     * @typedef {object} Resources.Failure
+     * @property {string} url - The file's address.
+     * @property {string} type - <code>"model"</code>, <code>"texture"</code>, <code>"material"</code>,
+     *     <code>"animation"</code>, <code>"shader"</code> or <code>"file"</code>.
+     * @property {string} reason - Why, e.g. <code>"404 not found"</code>, <code>"host not found: example.com"</code>,
+     *     <code>"could not be read"</code>.
+     * @property {number} time - When, in milliseconds since the epoch.
+     */
+    Q_INVOKABLE QVariantList getFailures() const;
+
+    /**jsdoc
+     * Empties the list of failures (Resources.getFailures), to start a fresh pass.
+     * @function Resources.clearFailures
+     */
+    Q_INVOKABLE void clearFailures();
+
+signals:
+    /**jsdoc
+     * Triggered when a file's load fails for good.
+     * @function Resources.resourceFailed
+     * @param {string} url - The file's address.
+     * @param {string} type - What kind of file (see Resources.Failure).
+     * @param {string} reason - Why.
+     * @returns {Signal}
+     */
+    void resourceFailed(const QString& url, const QString& type, const QString& reason);
 };
 
 

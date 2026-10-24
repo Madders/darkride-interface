@@ -22,7 +22,6 @@ void CompositeHUD::run(const RenderContextPointer& renderContext, const gpu::Fra
     }
 
     // Grab the HUD texture
-#if !defined(DISABLE_QML)
     gpu::doInBatch("CompositeHUD", renderContext->args->_context, [&](gpu::Batch& batch) {
         glm::mat4 projMat;
         Transform viewMat;
@@ -37,7 +36,6 @@ void CompositeHUD::run(const RenderContextPointer& renderContext, const gpu::Fra
             renderContext->args->_hudOperator(batch, renderContext->args->_hudTexture);
         }
     });
-#endif
 }
 
 void RenderHUDLayerTask::build(JobModel& task, const render::Varying& input, render::Varying& output) {

@@ -12,10 +12,12 @@
 #include "EntityItemProperties.h"
 #include "EntityItemPropertiesMacros.h"
 
-void ZoneCullingPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties, QScriptEngine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
+template <typename Value, typename Engine>
+void ZoneCullingPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties, Engine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
 }
 
-void ZoneCullingPropertyGroup::copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) {
+template <typename Value>
+void ZoneCullingPropertyGroup::copyFromScriptValue(const Value& object, bool& _defaultSettings) {
 }
 
 void ZoneCullingPropertyGroup::merge(const ZoneCullingPropertyGroup& other) {
@@ -81,3 +83,5 @@ int ZoneCullingPropertyGroup::readEntitySubclassDataFromBuffer(const unsigned ch
     int bytesRead = 0;
     return bytesRead;
 }
+
+INSTANTIATE_PROPERTY_GROUP_CONVERSIONS(ZoneCullingPropertyGroup)

@@ -150,26 +150,6 @@ void AssetScriptingInterface::downloadData(QString urlString, QScriptValue callb
     assetRequest->start();
 }
 
-void AssetScriptingInterface::setBakingEnabled(QString path, bool enabled, QScriptValue callback) {
-    auto setBakingEnabledRequest = DependencyManager::get<AssetClient>()->createSetBakingEnabledRequest({ path }, enabled);
-
-    Promise deferred = jsPromiseReady(makePromise(__FUNCTION__), thisObject(), callback);
-    if (!deferred) {
-        return;
-    }
-
-    connect(setBakingEnabledRequest, &SetBakingEnabledRequest::finished, setBakingEnabledRequest, [deferred](SetBakingEnabledRequest* request) {
-        Q_ASSERT(QThread::currentThread() == request->thread());
-        // we are now on the "Resource Manager" thread
-
-        QString error = request->getErrorString();
-        // forward thread-safe values back to our thread
-        deferred->handle(error, {});
-        request->deleteLater();
-    });
-    setBakingEnabledRequest->start();
-}
-
 #if (PR_BUILD || DEV_BUILD)
 void AssetScriptingInterface::sendFakedHandshake() {
     auto nodeList = DependencyManager::get<NodeList>();
@@ -715,20 +695,6 @@ QVariant AssetScriptingInterface::downloadData(const QString& urlString, const S
         request->deleteLater();
     });
     assetRequest->start();
-    return QVariant();
-}
-
-QVariant AssetScriptingInterface::setBakingEnabled(const QString& path, bool enabled, const ScriptCallback& callback) {
-    if (!callback.isValid()) {
-        return verifyFailed(NO_CALLBACK);
-    }
-    auto setBakingEnabledRequest = DependencyManager::get<AssetClient>()->createSetBakingEnabledRequest({ path }, enabled);
-    Promise deferred = callbackReady(makePromise(__FUNCTION__), callback);
-    connect(setBakingEnabledRequest, &SetBakingEnabledRequest::finished, setBakingEnabledRequest, [deferred](SetBakingEnabledRequest* request) {
-        deferred->handle(request->getErrorString(), {});
-        request->deleteLater();
-    });
-    setBakingEnabledRequest->start();
     return QVariant();
 }
 

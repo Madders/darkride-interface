@@ -104,6 +104,10 @@ public:
     void processTransaction(Transaction& transaction);
 
     void stepSimulation();
+    // the period the presents are paced at, in seconds, 0 while they are not, and the periods this update covers
+    // (the intervals between the present that posted it and the one before; 0 = count them from the wall clock):
+    // the paced clock then advances by whole periods (stepSimulation)
+    void setPresentPeriod(float seconds, int periods = 0) { _presentPeriod = seconds; _presentPeriods = periods; }
     void harvestPerformanceStats();
     void printPerformanceStatsToFile(const QString& filename);
     void updateContactMap();
@@ -216,6 +220,14 @@ private:
     float _timeShiftPending { 0.0f };   // s of simulation still to add (or, negative, to leave out) by time dilation
     float _smoothedFrameDuration { 0.0f }; // the paced clock's frame (see stepSimulation)
     float _pacedClockLead { 0.0f }; // how far the paced clock is ahead of the wall clock
+    float _presentPeriod { 0.0f }; // the period the presents are paced at, else 0
+    int _presentPeriods { 0 }; // the periods this update covers, 0 to count them from the wall clock
+    float _smoothedClockLead { 0.0f }; // the lead's slow average, what the eased correction follows when paced
+    // the paced clock's record for the log: frames of two or more periods, leads taken out at once, since the last line
+    uint64_t _pacedLogTime { 0 };
+    uint32_t _pacedMultiFrames { 0 };
+    uint32_t _pacedSnaps { 0 };
+    float _pacedSnapTotal { 0.0f };
     float _lastStepDuration { 0.0f };
     uint32_t _numSubsteps { 0 };
     uint32_t _debugDrawMode { 0 };

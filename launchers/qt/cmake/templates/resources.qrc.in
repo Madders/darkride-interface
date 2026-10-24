@@ -1,5 +1,0 @@
-<!DOCTYPE RCC><RCC version="1.0">
-<qresource prefix="@QRC_PREFIX_PATH@">
-@QRC_CONTENTS@
-</qresource>
-</RCC>

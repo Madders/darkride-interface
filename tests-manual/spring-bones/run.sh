@@ -22,4 +22,6 @@ echo "avatar: $AVATAR"
 echo "results: $R"
 XDG_CONFIG_HOME="$R/config" TIVOLI_APP_DATA_DIR="$R/data" HIFI_METAVERSE_URL=https://vr.darkride.ai \
     "$BIN" --allowMultipleInstances --url "file://$WORLD" --testScript "$R/spring-check.js" --testResultsLocation "$R" > "$R/client.log" 2>&1 || true
+# the client's texture cache (data/ktx_cache, up to 1.5 GB a run) goes; its log and samples stay
+rm -rf "$R/data/ktx_cache"
 grep "SPRING-CHECK\|spring bones" "$R/client.log" || { echo "no summary in $R/client.log" >&2; exit 1; }

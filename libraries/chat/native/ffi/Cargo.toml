@@ -1,0 +1,16 @@
+# The C interface of the viewer's chat (CHAT.md 4.5): include/darkride_chat.h, the static library darkride_chat.
+[package]
+name = "darkride-chat-ffi"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.96"
+
+[lib]
+name = "darkride_chat"
+crate-type = ["staticlib"]
+
+[dependencies]
+darkride-chat-core = { path = "../core" }
+serde_json = "1"

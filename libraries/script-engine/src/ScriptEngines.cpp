@@ -8,13 +8,14 @@
 
 #include "ScriptEngines.h"
 
+#include <QtCore/QFileInfo>
+
 #include <QtCore/QStandardPaths>
 
 #include <QtWidgets/QApplication>
 
 #include <shared/QtHelpers.h>
 #include <SettingHandle.h>
-#include <UserActivityLogger.h>
 #include <PathUtils.h>
 #include <shared/FileUtils.h>
 #include <NetworkingConstants.h>
@@ -340,6 +341,14 @@ void ScriptEngines::loadScripts() {
     for (auto script : runningScripts) {
         auto url = script.toUrl();
         if (!url.isEmpty()) {
+            // a script of the app's own that the app no longer has (deleted from the repo, as the old Create app's
+            // system/create/edit.js was, 10-24) is left out, and so drops off the list when it is next saved
+            const QUrl normalized = normalizeScriptURL(url);
+            if (normalized.scheme() == "file" && normalized.path().startsWith("/~/") &&
+                !QFileInfo::exists(expandScriptPath(normalized.path()))) {
+                qCDebug(scriptengine) << "A saved script the app no longer has is left out:" << url;
+                continue;
+            }
             if (defaultScriptsOverrideSet && url == DEFAULT_SCRIPTS_LOCATION) {
                 _defaultScriptsWasRunning = true;
             } else {
@@ -563,7 +572,6 @@ ScriptEnginePointer ScriptEngines::getScriptEngine(const QUrl& rawScriptURL) {
 
 // FIXME - change to new version of ScriptCache loading notification
 void ScriptEngines::onScriptEngineLoaded(const QString& rawScriptURL) {
-    UserActivityLogger::getInstance().loadedScript(rawScriptURL);
     QSharedPointer<BaseScriptEngine> baseScriptEngine = qobject_cast<ScriptEngine*>(sender())->sharedFromThis();
     ScriptEnginePointer scriptEngine = qSharedPointerCast<ScriptEngine>(baseScriptEngine);
 

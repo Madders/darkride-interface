@@ -97,6 +97,8 @@ public:
     /// Whether the JavaScript guest module is there (a build can be made without one). Without it JavaScript stays
     /// on the QtScript engine whatever the setting says, with one warning in the log.
     static bool hasJavaScriptGuest();
+    /// The JavaScript guest module, compiled once per process (the edit-filter engine instantiates it too).
+    static std::shared_ptr<WasmModule> javascriptGuestModule(QString& error);
 
     bool runsJavaScript() const { return _runsJavaScript; }
 
@@ -152,7 +154,7 @@ public:
     // and an entity script's sandbox URL bounds what a local file may include.
     /// The script itself: {"fileName", "source"}.
     Q_INVOKABLE QVariantMap scriptSource() const;
-    /// The plain-value objects the hosts put on the global object (DriveKeys, PickType): name to map.
+    /// The plain values the hosts register (registerGlobalValue: TREE_SCALE, DriveKeys, PickType): name to value.
     Q_INVOKABLE QVariantMap scriptGlobalValues() const;
     /// Script.resolvePath with the parent given.
     Q_INVOKABLE QString resolvePathFrom(const QString& path, const QString& parentUrl) const;
@@ -177,7 +179,6 @@ public:
     void postCallback(const ModuleInstancePointer& instance, int32_t callback, const QVariantList& arguments);
 
 private:
-    void adoptScriptGlobals();
     bool fetchModuleBytes();
     ModuleInstancePointer makeInstance(const QString& name, const std::shared_ptr<WasmModule>& module,
                                        const WasmInstance::Limits& limits, QString& error);
@@ -186,11 +187,16 @@ private:
     void stopAll();
     void loop();
     void onModuleFailure(const ModuleInstancePointer& instance, const QString& entry, const QString& error);
-    void installSerializer(ValueCodec& codec);
+    /// A call into the JavaScript guest ended at the time limit (HostInterface::TimeLimitHandler): the entity script
+    /// that was running is stopped and the others run on; when the script itself was running, it is stopped as a
+    /// failure stops it.
+    void onCallTimeLimit(const ModuleInstancePointer& instance, const QString& entry, const QString& entity, const QString& reason);
+    /// Stops an entity script that misbehaved: its status an error with the reason, its object, timers, signal
+    /// handlers and callbacks dropped (entity_unload, queued), its unload method not called.
+    void stopEntityScript(const EntityItemID& entityID, const QString& errorInfo);
     int addTimer(const ScriptCallback& callback, int intervalMS, bool singleShot);
     void removeTimer(int id);
     void stopTimers();
-    static std::shared_ptr<WasmModule> javascriptGuestModule(QString& error);
 
     // entity scripts
     void entityScriptReady(const EntityItemID& entityID, const QString& url, const QVariant& sourceOrBytes, bool success,

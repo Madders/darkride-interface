@@ -462,12 +462,18 @@ void pickTypesFromScriptValue(const QScriptValue& object, PickQuery::PickType& p
 }
 
 void PickScriptingInterface::registerMetaTypes(QScriptEngine* engine) {
-    QScriptValue pickTypes = engine->newObject();
+    // PickType through the engine's registration, so that every script engine sees it (on QtScript the same plain
+    // object of the types' values as before)
+    QVariantMap pickTypes;
     auto metaEnum = QMetaEnum::fromType<PickQuery::PickType>();
     for (int i = 0; i < PickQuery::PickType::NUM_PICK_TYPES; ++i) {
-        pickTypes.setProperty(metaEnum.key(i), metaEnum.value(i));
+        pickTypes[metaEnum.key(i)] = metaEnum.value(i);
     }
-    engine->globalObject().setProperty("PickType", pickTypes);
+    if (auto scriptEngine = qobject_cast<ScriptEngine*>(engine)) {
+        scriptEngine->registerGlobalValue("PickType", pickTypes);
+    } else {
+        engine->globalObject().setProperty("PickType", engine->toScriptValue(pickTypes));
+    }
 
     qScriptRegisterMetaType(engine, pickTypesToScriptValue, pickTypesFromScriptValue);
 }

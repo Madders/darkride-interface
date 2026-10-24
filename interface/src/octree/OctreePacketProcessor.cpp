@@ -56,7 +56,7 @@ void OctreePacketProcessor::processPacket(QSharedPointer<ReceivedMessage> messag
     // immediately following them inside the same packet. So, we process the PacketType_OCTREE_STATS first
     // then process any remaining bytes as if it was another packet
     if (octreePacketType == PacketType::OctreeStats) {
-        int statsMessageLength = qApp->processOctreeStats(*message, sendingNode);
+        int statsMessageLength = qApp->getDomainSession().processOctreeStats(*message, sendingNode);
 
         wasStatsPacket = true;
         int piggybackBytes = message->getSize() - statsMessageLength;
@@ -94,7 +94,7 @@ void OctreePacketProcessor::processPacket(QSharedPointer<ReceivedMessage> messag
     }
 
     if (packetType != PacketType::EntityQueryInitialResultsComplete) {
-        qApp->trackIncomingOctreePacket(*message, sendingNode, wasStatsPacket);
+        qApp->getDomainSession().trackIncomingOctreePacket(*message, sendingNode, wasStatsPacket);
     }
     
     // seek back to beginning of packet after tracking

@@ -21,7 +21,6 @@
 #endif
 
 #include <DependencyManager.h>
-// #include <UserActivityLogger.h>
 #include <QThreadPool>
 
 #include "RuntimePlugin.h"
@@ -98,7 +97,14 @@ int PluginManager::instantiate() {
 #if defined(Q_OS_ANDROID)
         QString pluginPath = QCoreApplication::applicationDirPath() + "/";
 #elif defined(Q_OS_MACOS)
-        QString pluginPath = QCoreApplication::applicationDirPath() + "/../PlugIns/";
+        // An app bundle keeps its plug-ins in Contents/PlugIns; the servers are bare executables with theirs beside them
+        // in plugins/ (SetupHifiClientServerPlugin.cmake's SERVER_PLUGIN_PATH), as on the other platforms. Until 10-23
+        // every executable looked in ../PlugIns, which for a server in a build tree is the tree's own plugins/ folder
+        // (the file system ignores case), with no plug-in in it: an audio mixer on a Mac loaded no codec at all, and
+        // every client of it sent and got raw PCM.
+        const QString applicationDir = QCoreApplication::applicationDirPath();
+        QString pluginPath = applicationDir.endsWith("/Contents/MacOS") ? applicationDir + "/../PlugIns/"
+                                                                        : applicationDir + "/plugins/";
 #else
         QString pluginPath = QCoreApplication::applicationDirPath() + "/plugins/";
 #endif
@@ -191,38 +197,6 @@ const CodecPluginList& PluginManager::getCodecPlugins() {
     return codecPlugins;
 }
 
-const SteamClientPluginPointer PluginManager::getSteamClientPlugin() {
-    static SteamClientPluginPointer steamClientPlugin;
-    static std::once_flag once;
-    std::call_once(once, [&] {
-        // Now grab the dynamic plugins
-        for (auto loader : getLoadedPlugins()) {
-            SteamClientProvider* steamClientProvider = qobject_cast<SteamClientProvider*>(loader->instance());
-            if (steamClientProvider) {
-                steamClientPlugin = steamClientProvider->getSteamClientPlugin();
-                break;
-            }
-        }
-    });
-    return steamClientPlugin;
-}
-
-const OculusPlatformPluginPointer PluginManager::getOculusPlatformPlugin() {
-    static OculusPlatformPluginPointer oculusPlatformPlugin;
-    static std::once_flag once;
-    std::call_once(once, [&] {
-        // Now grab the dynamic plugins
-        for (auto loader : getLoadedPlugins()) {
-            OculusPlatformProvider* oculusPlatformProvider = qobject_cast<OculusPlatformProvider*>(loader->instance());
-            if (oculusPlatformProvider) {
-                oculusPlatformPlugin = oculusPlatformProvider->getOculusPlatformPlugin();
-                break;
-            }
-        }
-    });
-    return oculusPlatformPlugin;
-}
-
 const TeaProtocolPluginPointer PluginManager::getTeaProtocolPlugin() {
     static TeaProtocolPluginPointer teaProtocolPlugin;
     static std::once_flag once;
@@ -247,11 +221,9 @@ DisplayPluginList PluginManager::getAllDisplayPlugins() {
     static std::once_flag once;
     static auto deviceAddedCallback = [](QString deviceName) {
         qCDebug(plugins) << "Added device: " << deviceName;
-        // UserActivityLogger::getInstance().connectedDevice("display", deviceName);
     };
     static auto subdeviceAddedCallback = [](QString pluginName, QString deviceName) {
         qCDebug(plugins) << "Added subdevice: " << deviceName;
-        // UserActivityLogger::getInstance().connectedDevice("display", pluginName + " | " + deviceName);
     };
 
     std::call_once(once, [&] {
@@ -294,11 +266,9 @@ const InputPluginList& PluginManager::getInputPlugins() {
         QStringList runningDevices = getRunningInputDeviceNames();
         bool isDeviceRunning = runningDevices.indexOf(deviceName) >= 0;
         emit inputDeviceRunningChanged(deviceName, isDeviceRunning, runningDevices);
-        // UserActivityLogger::getInstance().connectedDevice("input", deviceName);
     };
     static auto subdeviceAddedCallback = [](QString pluginName, QString deviceName) {
         qCDebug(plugins) << "Added subdevice: " << deviceName;
-        // UserActivityLogger::getInstance().connectedDevice("input", pluginName + " | " + deviceName);
     };
 
     std::call_once(once, [&] {

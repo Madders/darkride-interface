@@ -31,4 +31,4 @@ URL="hifi://localhost:$PORT"
 [ "$PORT" = "serverless" ] && URL="file://$D/world.json"
 echo "client: $BIN"; echo "world: $URL"; echo "results: $R"
 client driver --url "$URL" --testScript "$R/seat-jitter.js" --testResultsLocation "$R/driver" || true
-grep -h "SEAT-JITTER" "$R/driver.log" | sed 's/.*SEAT-JITTER //' | tail -30
+grep -h "SEAT-JITTER" "$R/driver.log" | sed 's/.*SEAT-JITTER //' | tail -40

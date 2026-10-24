@@ -9,7 +9,8 @@
 //
 //  The ABI (version 1). Every pointer is an offset in the module's exported memory; a byte range is a CBOR
 //  item. A host function that returns bytes has the guest allocate them (the guest's exported
-//  `alloc(size) -> ptr`) and returns `(ptr << 32) | len` as an i64; the guest frees them when done.
+//  `alloc(size) -> ptr`) and returns `(ptr << 32) | len` as an i64; the guest frees them when done. A result of
+//  0 is nothing (a method that returns nothing, a property write that worked): no bytes cross.
 //
 //    imports, module "darkride":
 //      version() -> i32                                  this ABI's version
@@ -19,11 +20,15 @@
 //                                                        invoke a method: the result, or {"@error": {type, message}}
 //      get(object, name_ptr, name_len) -> i64            read a property: the value, or an error record
 //      set(object, name_ptr, name_len, value_ptr, value_len) -> i64
-//                                                        write a property: null, or an error record
+//                                                        write a property: nothing, or an error record
 //      connect(object, signal_ptr, signal_len) -> i32    subscribe: the connection id, 0 on failure (logged)
 //      disconnect(connection)
 //      release(object)                                   forget a handle
 //      log(level, text_ptr, text_len)                    0 print, 1 info, 2 warning, 3 error, 4 debug
+//      interrupted() -> i32                              1 when the running call should stop now (a stop, a time
+//                                                        limit): asked often by a module compiled for cooperative
+//                                                        interruption (WasmRuntime::Interruption), which then
+//                                                        unwinds by itself
 //
 //    exports the host calls:
 //      alloc(size) -> ptr, free(ptr, size)
@@ -43,6 +48,8 @@
 //      entity_has(ptr, len) -> i32        {"entity": id, "method": name}: 1 when the method exists
 //      entity_call(ptr, len) -> i64       {"entity": id, "method": name, "args": [...], "remoteCallerID"?: id};
 //                                         the method's result packed, or 0
+//      interrupted_entity() -> i64        the entity script that was running when the host last interrupted a
+//                                         call (the time limit), as a packed text, taken once; 0 for none
 //
 //  A method is named by its name ("getEntityProperties"; the overloads are tried in order, the first whose
 //  arguments convert wins), its signature ("add(int,int)") or its index from the description ("#12").
@@ -56,8 +63,11 @@
 
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 #include <QtCore/QByteArray>
+#include <QtCore/QCborArray>
+#include <QtCore/QCborValue>
 #include <QtCore/QHash>
 #include <QtCore/QMetaMethod>
 #include <QtCore/QString>
@@ -66,11 +76,11 @@
 #include <QtCore/QVector>
 
 #include "ObjectTable.h"
+#include "WasmRuntime.h"
 
 class QMetaObject;
 class SignalRelay;
 class ValueCodec;
-class WasmInstance;
 
 class HostInterface {
 public:
@@ -84,6 +94,11 @@ public:
     /// Told when a call into the module fails (a trap, a time limit, a missing export): the entry that failed
     /// and the error. The engine decides what to do with the script.
     using FailureHandler = std::function<void(const QString& entry, const QString& error)>;
+    /// Told when a call into a cooperative module ended at the module's time limit: the module unwound by itself
+    /// and runs on. `entity` is the entity script the module says was running (through its interrupted_entity
+    /// export; empty when the script itself was, or the module does not say). Without one, the failure handler
+    /// is told instead. The engine decides what to do with the script.
+    using TimeLimitHandler = std::function<void(const QString& entry, const QString& entity, const QString& reason)>;
 
     /// The relay must live on the thread the instance is used from.
     HostInterface(WasmInstance& instance, ObjectTable& objects, ValueCodec& codec, SignalRelay& relay);
@@ -91,6 +106,7 @@ public:
 
     void setLogger(Logger logger) { _logger = std::move(logger); }
     void setFailureHandler(FailureHandler handler) { _failureHandler = std::move(handler); }
+    void setTimeLimitHandler(TimeLimitHandler handler) { _timeLimitHandler = std::move(handler); }
 
     /// Defines the imports on the instance. Before instantiate().
     void install();
@@ -113,6 +129,9 @@ public:
     /// freed through the guest's free and decoded into `result` (invalid when there is none; an i32 result
     /// is given as an int). Failures reach the failure handler.
     bool callWithPayload(const QString& name, const QVariant& payload, QVariant& result, QString& error);
+    /// The same call with the result as the CBOR item the guest wrote (undefined for none; an i32 result as an
+    /// integer): for a caller that keeps the order of a map's keys or reads nulls as the guest sent them.
+    bool callWithPayload(const QString& name, const QVariant& payload, QCborValue& result, QString& error);
 
     // --- the operations behind the imports, also usable from C++ ------------------------------------------
     /// The registered globals: name to handle.
@@ -146,25 +165,50 @@ private:
         QVector<int> indices;
     };
 
+    bool enterGuest(const QString& name, const std::vector<WasmValue>& args, std::vector<WasmValue>& results, QString& error);
     QByteArray readBytes(int32_t pointer, int32_t length, QString& error);
     /// Encodes and places the bytes in the guest's memory through its alloc; 0 with the error when it cannot.
     int64_t writeToGuest(const QVariant& value, QString& error);
     int64_t writeResult(const QVariant& value);
+    bool callForResultBytes(const QString& name, const QVariant& payload, QByteArray& bytes, bool& hasBytes,
+                            int32_t& small, bool& isSmall, QString& error);
     void log(int level, const QString& text) const;
     void fail(const QString& entry, const QString& error);
 
     const QVector<int>& candidates(const QMetaObject* meta, const QByteArray& name);
-    bool convertArguments(const QMetaMethod& method, const QVariantList& arguments, QVariantList& converted, int& cost,
-                          QString& error);
-    QVariant invoke(QObject* object, int methodIndex, QVariantList& converted, QString& error);
+    /// A method's parameter types, resolved once (a type no library has registered yet is looked up again next time).
+    QVector<int> parameterTypes(const QMetaObject* meta, int methodIndex);
+    /// A property's index by name, looked up once per class (-1 when it has none).
+    int propertyIndex(const QMetaObject* meta, const QByteArray& name) const;
+    QVariant getByName(ObjectTable::Handle handle, const QByteArray& propertyName, QString& error) const;
+    /// The value as it came from the guest, decoded straight to the property's type.
+    bool setWithCbor(ObjectTable::Handle handle, const QByteArray& name, const QCborValue& value, QString& error);
+    /// The arguments as they came from the guest, each decoded straight to its parameter's type.
+    QVariant callWithCbor(ObjectTable::Handle handle, const QByteArray& methodName, const QCborArray& arguments, QString& error);
+    bool convertArguments(const QMetaMethod& method, const QVector<int>& types, const QCborArray& arguments,
+                          QVariantList& converted, int& cost, QString& error);
+    QVariant invoke(QObject* object, int methodIndex, const QVector<int>& types, QVariantList& converted, QString& error);
 
     WasmInstance& _instance;
     ObjectTable& _objects;
     ValueCodec& _codec;
     SignalRelay& _relay;
+    /// After a call ended at the module's time limit: the entity script the module names as the one that was
+    /// running (its interrupted_entity export, when it has one), cleared in the module.
+    QString takeInterruptedEntity();
+
     Logger _logger;
     FailureHandler _failureHandler;
+    TimeLimitHandler _timeLimitHandler;
+    bool _timeLimitHit { false };   // the call that just failed ended at the time limit, not by a stop or a trap
+    // The JavaScript error type of the last failed call, as QtScript names the same failure: SyntaxError when every
+    // candidate took more arguments than were given, TypeError for anything else
+    QString _callErrorType;
+    QString _timeLimitEntity;
     QHash<QPair<const QMetaObject*, QByteArray>, QVector<int>> _candidates;
+    QHash<QPair<const QMetaObject*, int>, QVector<int>> _parameterTypes;
+    mutable QHash<QPair<const QMetaObject*, QByteArray>, int> _propertyIndices;
+    std::vector<WasmValue> _allocResults;
     Statistics _statistics;
 };
 

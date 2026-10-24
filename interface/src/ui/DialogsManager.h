@@ -55,9 +55,6 @@ public slots:
     void showDomainConnectionDialog();
     void toggleAddressBar();
     
-    // Application Update
-    void showUpdateDialog();
-
 signals:
     void addressBarShown(bool visible);
     void setUseFeed(bool useFeed);

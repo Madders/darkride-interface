@@ -1,5 +1,4 @@
 import hifi_utils
-import hifi_android
 import hashlib
 import os
 import platform
@@ -60,8 +59,6 @@ endif()
         else:
             defaultBasePath = os.path.expanduser('~/tivoli/vcpkg')
             self.basePath = os.getenv('TIVOLI_VCPKG_BASE', defaultBasePath)
-            if self.args.android:
-                self.basePath = os.path.join(self.basePath, 'android')
             if (not os.path.isdir(self.basePath)):
                 os.makedirs(self.basePath)
             self.path = os.path.join(self.basePath, self.id)
@@ -145,11 +142,7 @@ endif()
                 self.buildEnv["VCPKG_FORCE_SYSTEM_BINARIES"] = "1"
                 self.hostTriplet = "arm64-linux"
 
-        if self.args.android:
-            self.triplet = 'arm64-android'
-            self.androidPackagePath = os.getenv('HIFI_ANDROID_PRECOMPILED', os.path.join(self.path, 'android'))
-        else:
-            self.triplet = self.hostTriplet
+        self.triplet = self.hostTriplet
 
     def patchVcpkgScripts(self):
         # This vcpkg fetches pkg-config from MSYS2's 32-bit MinGW repository, which MSYS2 has retired:
@@ -558,12 +551,6 @@ endif()
 
         self.copyEnvToVcpkg()
 
-        # Special case for android, grab a bunch of binaries
-        # FIXME remove special casing for android builds eventually
-        if self.args.android:
-            print("Installing Android binaries")
-            self.setupAndroidDependencies()
-
         if platform.system() == 'Windows':
             self.patchVcpkgScripts()
 
@@ -575,12 +562,12 @@ endif()
         # otherwise detect the host as x64-osx and build host tools for the wrong architecture.
         self.run(['install', '--triplet', hostTriplet, '--host-triplet', hostTriplet, 'hifi-host-tools'])
 
-        # If not android, install the hifi-client-deps libraries
-        if not self.args.android:
-            print("Installing build dependencies")
-            if (self.vcpkgBuildType):
-                self.copyTripletForBuildType(self.triplet)
-            self.run(['install', '--triplet', self.getTripletWithBuildType(self.triplet), '--host-triplet', hostTriplet, 'hifi-client-deps'])
+        # The servers need hifi-deps only; the client's SDKs (VR, gamepads, crash reporting) are hifi-client-deps.
+        print("Installing build dependencies")
+        if (self.vcpkgBuildType):
+            self.copyTripletForBuildType(self.triplet)
+        deps = 'hifi-deps' if getattr(self.args, 'server_only', False) else 'hifi-client-deps'
+        self.run(['install', '--triplet', self.getTripletWithBuildType(self.triplet), '--host-triplet', hostTriplet, deps])
 
     def cleanBuilds(self):
         if self.noClean:
@@ -614,28 +601,6 @@ endif()
                 shutil.rmtree(filePath, ignore_errors=True)
             else:
                 os.remove(filePath)
-
-    def setupAndroidDependencies(self):
-        # vcpkg prebuilt
-        if not os.path.isdir(os.path.join(self.path, 'installed', 'arm64-android')):
-            dest = os.path.join(self.path, 'installed')
-            url = "https://cdn.tivolicloud.com/dependencies/vcpkg/vcpkg-arm64-android.tar.gz"
-            # FIXME I don't know why the hash check frequently fails here.  If you examine the file later it has the right hash
-            #hash = "832f82a4d090046bdec25d313e20f56ead45b54dd06eee3798c5c8cbdd64cce4067692b1c3f26a89afe6ff9917c10e4b601c118bea06d23f8adbfe5c0ec12bc3"
-            #hifi_utils.downloadAndExtract(url, dest, hash)
-            hifi_utils.downloadAndExtract(url, dest)
-
-        print("Installing additional android archives")
-        androidPackages = hifi_android.getPlatformPackages()
-        for packageName in androidPackages:
-            package = androidPackages[packageName]
-            dest = os.path.join(self.androidPackagePath, packageName)
-            if os.path.isdir(dest):
-                continue
-            url = hifi_android.getPackageUrl(package)
-            zipFile = package['file'].endswith('.zip')
-            print("Android archive {}".format(package['file']))
-            hifi_utils.downloadAndExtract(url, dest, isZip=zipFile, hash=package['checksum'], hasher=hashlib.md5())
 
     def writeTag(self):
         if self.noClean:
@@ -675,16 +640,9 @@ endif()
         # Write out the configuration for use by CMake
         cmakeScript = os.path.join(self.path, 'scripts/buildsystems/vcpkg.cmake')
         installPath = os.path.join(self.path, 'installed', self.getTripletWithBuildType(self.triplet))
-        if self.args.android:
-            installPath = os.path.join(self.path, 'installed', self.triplet)
         toolsPath = os.path.join(self.path, 'installed', self.getTripletWithBuildType(self.hostTriplet), 'tools')
 
-        cmakeTemplate = VcpkgRepo.CMAKE_TEMPLATE
-        if self.args.android:
-            precompiled = os.path.realpath(self.androidPackagePath)
-            cmakeTemplate += 'set(HIFI_ANDROID_PRECOMPILED "{}")\n'.format(precompiled)
-        else:
-            cmakeTemplate += VcpkgRepo.CMAKE_TEMPLATE_NON_ANDROID
+        cmakeTemplate = VcpkgRepo.CMAKE_TEMPLATE + VcpkgRepo.CMAKE_TEMPLATE_NON_ANDROID
         cmakeConfig = cmakeTemplate.format(cmakeScript, cmakeScript, installPath, toolsPath, self.getTripletWithBuildType(self.hostTriplet)).replace('\\', '/')
         with open(self.configFilePath, 'w') as f:
             f.write(cmakeConfig)

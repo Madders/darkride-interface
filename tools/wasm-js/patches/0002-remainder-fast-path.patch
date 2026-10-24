@@ -1,0 +1,76 @@
+The remainder operator: a fast path for numbers, integer arithmetic for integers
+
+x % y with a float64 operand went through js_binary_arith_slow; it now has the same inline path as * and /. And
+the remainder of two integers that a double holds exactly is computed in integer arithmetic, which is exact as
+fmod is, and much faster than the bit-by-bit loop of most fmod implementations (time stamps, hashes and indices
+beyond 32 bits are such integers).
+
+diff --git a/quickjs.c b/quickjs.c
+index bc27479..0658422 100644
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -1642,6 +1642,26 @@ static inline bool js_arith_to_float64(JSValue v, double *pd)
+     return true;
+ }
+ 
++/* fmod(x, y), in integer arithmetic when both are integers that a double
++   holds exactly: the remainder is exact either way, and this is faster
++   than the bit-by-bit loop of most fmod implementations. */
++static inline double js_fmod(double x, double y)
++{
++    const double max_safe = 9007199254740992.0; /* 2^53 */
++    int64_t a, b, r;
++
++    if (fabs(x) <= max_safe && fabs(y) <= max_safe && y != 0) {
++        a = (int64_t)x;
++        b = (int64_t)y;
++        if (a == x && b == y) {
++            r = a % b;
++            /* a zero remainder has the sign of x, as fmod gives it */
++            return r != 0 ? (double)r : copysign(0.0, x);
++        }
++    }
++    return fmod(x, y);
++}
++
+ static JSValue __JS_NewShortBigInt(JSContext *ctx, int32_t d)
+ {
+     (void)&ctx;
+@@ -15469,7 +15489,7 @@ static no_inline __exception int js_binary_arith_slow(JSContext *ctx, JSValue *s
+         case OP_mod:
+             if (v1 < 0 || v2 <= 0) {
+                 JS_X87_FPCW_SAVE_AND_ADJUST(fpcw);
+-                sp[-2] = js_number(fmod(v1, v2));
++                sp[-2] = js_number(js_fmod(v1, v2));
+                 JS_X87_FPCW_RESTORE(fpcw);
+                 return 0;
+             } else {
+@@ -15546,7 +15566,7 @@ static no_inline __exception int js_binary_arith_slow(JSContext *ctx, JSValue *s
+             dr = d1 / d2;
+             break;
+         case OP_mod:
+-            dr = fmod(d1, d2);
++            dr = js_fmod(d1, d2);
+             break;
+         case OP_pow:
+             dr = js_math_pow(d1, d2);
+@@ -20314,6 +20334,19 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
+                     r = v1 % v2;
+                     sp[-2] = js_int32(r);
+                     sp--;
++                } else if (JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(op1)) ||
++                           JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(op2))) {
++                    /* numbers, at least one float64: as in
++                       js_binary_arith_slow */
++                    double d1, d2, d;
++                    if (!js_arith_to_float64(op1, &d1) ||
++                        !js_arith_to_float64(op2, &d2))
++                        goto binary_arith_slow;
++                    JS_X87_FPCW_SAVE_AND_ADJUST(fpcw);
++                    d = js_fmod(d1, d2);
++                    JS_X87_FPCW_RESTORE(fpcw);
++                    sp[-2] = js_float64(d);
++                    sp--;
+                 } else {
+                     goto binary_arith_slow;
+                 }

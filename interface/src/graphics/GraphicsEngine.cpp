@@ -9,6 +9,8 @@
 //
 #include "GraphicsEngine.h"
 
+#include <MeshPartPayload.h>
+
 #include <shared/GlobalAppProperties.h>
 
 #include "WorldBox.h"
@@ -32,6 +34,8 @@
 #include <SecondaryCamera.h>
 
 #include "RenderEventHandler.h"
+
+#include <StartupProfiler.h>
 
 #include <gpu/Batch.h>
 #include <gpu/Context.h>
@@ -85,6 +89,7 @@ namespace {
 void GraphicsEngine::initializeRender() {
 
     // Set up the render engine
+    int graphStep = StartupProfiler::begin("initializeRender: the task graph");
     render::CullFunctor cullFunctor = LODManager::shouldRender;
     _renderEngine->addJob<UpdateSceneTask>("UpdateScene");
     // the terrain layer sets' slices due this frame, drawn before any view: their batch leaves its framebuffer and
@@ -98,7 +103,12 @@ void GraphicsEngine::initializeRender() {
     // the mirrors' pictures, drawn before the main view shows them
     _renderEngine->addJob<RenderMirrorsTask>("RenderMirrors", cullFunctor);
     _renderEngine->addJob<RenderViewTask>("RenderMainView", cullFunctor, render::ItemKey::TAG_BITS_0, render::ItemKey::TAG_BITS_0);
-    _renderEngine->load();
+    StartupProfiler::end(graphStep);
+    {
+        StartupProfiler::Scope step("initializeRender: load (every pipeline's shaders)");
+        _renderEngine->load();
+    }
+    int mirrorsStep = StartupProfiler::begin("initializeRender: the mirror views' configuration");
     // a mirror's view: no ambient occlusion, bloom, selection outline or HUD; no local light shadows (an atlas for
     // each would cost too much); a linear tone curve, since the picture is tone mapped again in the main view
     auto configuration = _renderEngine->getConfiguration();
@@ -135,10 +145,14 @@ void GraphicsEngine::initializeRender() {
         }
         Mirrors::instance().setSlotView(slot, configuration->getJobConfig("RenderMirrors.MirrorView" + std::to_string(slot)));
     }
+    StartupProfiler::end(mirrorsStep);
     _renderEngine->registerScene(_renderScene);
 
     // Now that OpenGL is initialized, we are sure we have a valid context and can create the various pipeline shaders with success.
-    DependencyManager::get<GeometryCache>()->initializeShapePipelines();
+    {
+        StartupProfiler::Scope step("initializeRender: the shape pipelines (GeometryCache)");
+        DependencyManager::get<GeometryCache>()->initializeShapePipelines();
+    }
 }
 
 void GraphicsEngine::startup() {
@@ -184,6 +198,7 @@ void GraphicsEngine::render_runRenderFrame(RenderArgs* renderArgs) {
     }
 
     {
+        MeshPartPayload::beginFrame();   // the draw dump's frame count (Test.dumpDraws), on the thread that draws
         _renderEngine->getRenderContext()->args = renderArgs;
         _renderEngine->run();
     }
@@ -232,6 +247,9 @@ void GraphicsEngine::render_performFrame() {
     // Some plugins process message events, allowing paintGL to be called reentrantly.
 
     _renderFrameCount++;
+    if (_renderFrameCount == 1) {
+        StartupProfiler::instant("first frame rendered");
+    }
 
     auto lastPaintBegin = usecTimestampNow();
     PROFILE_RANGE_EX(render, __FUNCTION__, 0xff0000ff, (uint64_t)_renderFrameCount);
@@ -316,7 +334,7 @@ void GraphicsEngine::render_performFrame() {
 
     // Until the viewer goes in (Application::isSignInPending), the window shows only Darkride's navy and the user
     // interface over it, where the sign-in screen is: no avatar in an empty world before that screen is up, at the start
-    // or after signing out. A headset still gets the 3D view, where its sign-in screen is (Application::createLoginDialog).
+    // or after signing out. A headset still gets the 3D view, where its sign-in screen is (SignInGate::createLoginDialog).
     const bool signInCover = qApp->isSignInPending() && !displayPlugin->isHmd();
     auto drawSignInNavy = [&](gpu::Batch& batch) {
         if (!_signInNavy) {
@@ -338,7 +356,7 @@ void GraphicsEngine::render_performFrame() {
         displayPlugin->getHUDOperator()(batch, _signInNavy);
     };
 
-    std::queue<Application::SnapshotOperator> snapshotOperators;
+    std::queue<SnapshotRequests::Operator> snapshotOperators;
     if (signInCover && !_programsCompiled.load()) {
         gpu::doInBatch("signInFrame", _gpuContext, drawSignInNavy);
     } else if (signInCover) {
@@ -383,7 +401,7 @@ void GraphicsEngine::render_performFrame() {
             PROFILE_RANGE(render, "/runRenderFrame");
             renderArgs._hudOperator = displayPlugin->getHUDOperator();
             renderArgs._hudTexture = qApp->getApplicationOverlay().getOverlayTexture();
-            renderArgs._takingSnapshot = qApp->takeSnapshotOperators(snapshotOperators);
+            renderArgs._takingSnapshot = qApp->getSnapshotRequests().take(snapshotOperators);
             renderArgs._blitFramebuffer = finalFramebuffer;
             FrameDiag::beginFrame();
             render_runRenderFrame(&renderArgs);
@@ -395,7 +413,7 @@ void GraphicsEngine::render_performFrame() {
                     glm::vec3 center = item.getBound().calcCenter();
                     std::lock_guard<std::mutex> lock(_traceMutex);
                     if (_traceSamples.size() < 200000) {
-                        _traceSamples.push_back({ usecTimestampNow(), viewFrustum.getPosition(), center });
+                        _traceSamples.push_back({ usecTimestampNow(), viewFrustum.getPosition(), center, _renderFrameCount });
                     }
                 }
             }
@@ -435,14 +453,12 @@ void GraphicsEngine::render_performFrame() {
     renderArgs._blitFramebuffer.reset();
     renderArgs._context->enableStereo(false);
 
-#if !defined(DISABLE_QML)
     {
         auto stats = Stats::getInstance();
         if (stats) {
             stats->setRenderDetails(renderArgs._details);
         }
     }
-#endif
 
     uint64_t lastPaintDuration = usecTimestampNow() - lastPaintBegin;
     _frameTimingsScriptingInterface.addValue(lastPaintDuration);

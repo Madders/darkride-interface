@@ -16,6 +16,7 @@ https://git.tivolicloud.com/tivolicloud/interface/-/tree/main/.gitlab
 -   [cmake](https://cmake.org/download)
 -   [Python](https://www.python.org/downloads)
 -   [Node.js](https://nodejs.org/en) v10.13 or higher
+-   [Rust](https://rustup.rs) through rustup: chat's library (`libraries/chat/native`) is written in Rust. The build installs the version that library's `rust-toolchain.toml` names the first time
 
 # CMake
 

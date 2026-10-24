@@ -73,6 +73,9 @@ if (DEFINED QT_CMAKE_PREFIX_PATH)
 endif()
 
 set(EXTRA_PREBUILD_ARGS "")
+if (SERVER_ONLY)
+  list(APPEND EXTRA_PREBUILD_ARGS --server-only)
+endif()
 
 if(VCPKG_BUILD_TYPE)
   list(APPEND EXTRA_PREBUILD_ARGS --vcpkg-build-type ${VCPKG_BUILD_TYPE})
@@ -81,13 +84,9 @@ else()
   list(APPEND EXTRA_PREBUILD_ARGS --vcpkg-build-type release)
 endif()
   
-if(HIFI_ANDROID)
-  list(APPEND EXTRA_PREBUILD_ARGS --android ${HIFI_ANDROID_APP})
-else()
-  # squelch the Policy CMP0074 warning without requiring an update to cmake 3.12.
-  if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.12)
-    cmake_policy(SET CMP0074 NEW)
-  endif()
+# squelch the Policy CMP0074 warning without requiring an update to cmake 3.12.
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.12)
+  cmake_policy(SET CMP0074 NEW)
 endif()
 
 # on Windows, hifi_vcpkg.py builds the vcpkg tool with the same CMake, generator and toolset
@@ -106,18 +105,10 @@ if(NOT EXISTS "${CMAKE_BINARY_DIR}/vcpkg.cmake")
 endif()
 include("${CMAKE_BINARY_DIR}/vcpkg.cmake")
 
-if (HIFI_ANDROID)
-  if (DEFINED HIFI_ANDROID_PRECOMPILED)
-      set(ENV{HIFI_ANDROID_PRECOMPILED} ${HIFI_ANDROID_PRECOMPILED})
-  endif()
-
-  set(QT_CMAKE_PREFIX_PATH "$ENV{HIFI_ANDROID_PRECOMPILED}/qt/lib/cmake")
-else() 
-  if(NOT EXISTS "${CMAKE_BINARY_DIR}/qt.cmake")
-      message(FATAL_ERROR "qt configuration missing.")
-  endif()
-  include("${CMAKE_BINARY_DIR}/qt.cmake")
+if(NOT EXISTS "${CMAKE_BINARY_DIR}/qt.cmake")
+    message(FATAL_ERROR "qt configuration missing.")
 endif()
+include("${CMAKE_BINARY_DIR}/qt.cmake")
 
 option(VCPKG_APPLOCAL_DEPS OFF)
 
@@ -137,12 +128,6 @@ if (NOT DEFINED SERVER_ONLY)
   set(SERVER_ONLY 0)
 endif()
 
-if (ANDROID OR UWP)
-  set(MOBILE 1)
-else()
-  set(MOBILE 0)
-endif()
-
 # Use default time server if none defined in environment
 set_from_env(TIMESERVER_URL TIMESERVER_URL "http://sha256timestamp.ws.symantec.com/sha256/timestamp")
 
@@ -154,14 +139,6 @@ set(BUILD_MANUAL_TESTS_OPTION ${BUILD_TESTS_OPTION})
 set(BUILD_TOOLS_OPTION ON)
 set(BUILD_INSTALLER_OPTION ON)
 set(GLES_OPTION OFF)
-set(DISABLE_QML_OPTION OFF)
-set(DOWNLOAD_SERVERLESS_CONTENT_OPTION OFF)
-
-if (ANDROID OR UWP)
-  set(BUILD_SERVER_OPTION OFF)
-  set(BUILD_TOOLS_OPTION OFF)
-  set(BUILD_INSTALLER OFF)
-endif()
 
 if (CLIENT_ONLY)
   set(BUILD_SERVER_OPTION OFF)
@@ -172,43 +149,7 @@ if (SERVER_ONLY)
   set(BUILD_TESTS_OPTION OFF)
 endif()
 
-if (ANDROID)
-  set(GLES_OPTION ON)
-  set(PLATFORM_QT_COMPONENTS AndroidExtras WebView)
-  add_definitions(-DHIFI_ANDROID_APP=\"${HIFI_ANDROID_APP}\")
-  if (
-      (${HIFI_ANDROID_APP} STREQUAL "questInterface") OR
-      (${HIFI_ANDROID_APP} STREQUAL "questFramePlayer") OR
-      (${HIFI_ANDROID_APP} STREQUAL "framePlayer")
-    )
-    # We know the quest hardware has this extension, so we can force the use of instanced stereo
-    add_definitions(-DHAVE_EXT_clip_cull_distance)
-    # We can also use multiview stereo techniques
-    add_definitions(-DHAVE_OVR_multiview2)
-    add_definitions(-DHAVE_OVR_multiview)
-    # We can also use our own foveated textures
-    add_definitions(-DHAVE_QCOM_texture_foveated)
-
-    # if set, the application itself or some library it depends on MUST implement
-    # `DisplayPluginList getDisplayPlugins()` and `InputPluginList getInputPlugins()`
-    add_definitions(-DCUSTOM_INPUT_PLUGINS)
-    add_definitions(-DCUSTOM_DISPLAY_PLUGINS)
-    set(PLATFORM_PLUGIN_LIBRARIES oculusMobile oculusMobilePlugin)
-  endif()
-
-  # Allow client code to use preprocessor macros to distinguish between quest and non-quest builds
-  if (${HIFI_ANDROID_APP} STREQUAL "questInterface")
-    add_definitions(-DANDROID_APP_QUEST_INTERFACE)
-  elseif(${HIFI_ANDROID_APP} STREQUAL "interface")
-    add_definitions(-DANDROID_APP_INTERFACE)
-  endif()
-else ()
-  set(PLATFORM_QT_COMPONENTS WebEngine Xml)
-endif ()
-
-if (USE_GLES AND (NOT ANDROID))
-  set(DISABLE_QML_OPTION ON)
-endif()
+set(PLATFORM_QT_COMPONENTS WebEngine Xml)
 
 option(HIFI_USE_OPTIMIZED_IK "Use optimized IK" ${HIFI_USE_OPTIMIZED_IK_OPTION})
 option(BUILD_CLIENT "Build client components" ${BUILD_CLIENT_OPTION})
@@ -219,15 +160,8 @@ option(BUILD_TOOLS "Build tools" ${BUILD_TOOLS_OPTION})
 option(BUILD_INSTALLER "Build installer" ${BUILD_INSTALLER_OPTION})
 option(USE_GLES "Use OpenGL ES" ${GLES_OPTION})
 option(USE_KHR_ROBUSTNESS "Use KHR_robustness" OFF)
-option(DISABLE_QML "Disable QML" ${DISABLE_QML_OPTION})
 option(DISABLE_KTX_CACHE "Disable KTX Cache" OFF)
 option(DISABLE_PCM_CODEC "Disable PCM codec" OFF)
-option(DISABLE_HIFI_CODEC "Disable Hifi codec" OFF)
-option(
-  DOWNLOAD_SERVERLESS_CONTENT
-  "Download and setup default serverless content beside Interface"
-  ${DOWNLOAD_SERVERLESS_CONTENT_OPTION}
-)
 
 if (NOT OpenGL_GL_PREFERENCE)
   set(OpenGL_GL_PREFERENCE GLVND)
@@ -259,12 +193,6 @@ MESSAGE(STATUS "Build tests:           " ${BUILD_TESTS})
 MESSAGE(STATUS "Build tools:           " ${BUILD_TOOLS})
 MESSAGE(STATUS "Build installer:       " ${BUILD_INSTALLER})
 MESSAGE(STATUS "GL ES:                 " ${USE_GLES})
-MESSAGE(STATUS "DL serverless content: " ${DOWNLOAD_SERVERLESS_CONTENT})
-
-if (DISABLE_QML)
-  MESSAGE(STATUS "QML disabled!")
-  add_definitions(-DDISABLE_QML)
-endif()
 
 if (DISABLE_KTX_CACHE)
   MESSAGE(STATUS "KTX cache disabled!")
@@ -283,10 +211,9 @@ add_custom_target(cmake SOURCES ${CMAKE_SRC})
 GroupSources("cmake")
 unset(CMAKE_SRC)
 
-file(GLOB_RECURSE JS_SRC scripts/*.js unpublishedScripts/*.js)
+file(GLOB_RECURSE JS_SRC scripts/*.js)
 add_custom_target(js SOURCES ${JS_SRC})
 GroupSources("scripts")
-GroupSources("unpublishedScripts")
 unset(JS_SRC)
 
 set_packaging_parameters()
@@ -319,17 +246,6 @@ setup_externals_binary_dir()
 
 option(USE_NSIGHT "Attempt to find the nSight libraries" 1)
 
-# FIXME hack to work on the proper Android toolchain
-if (ANDROID)
-  add_subdirectory(android/apps/${HIFI_ANDROID_APP})
-  return()
-endif()
-
-if (BUILD_GPU_FRAME_PLAYER_ONLY)
-    # This is for CI build testing
-    add_subdirectory(tools/gpu-frame-player)
-else()
-
 # add subdirectories for all targets
 if (BUILD_SERVER)
   add_subdirectory(assignment-client)
@@ -344,20 +260,16 @@ if (BUILD_CLIENT)
   add_subdirectory(interface)
   set_target_properties(interface PROPERTIES FOLDER "Apps")
 
-  option(USE_SIXENSE "Build Interface with sixense library/plugin" OFF)
 endif()
 
 if (BUILD_CLIENT OR BUILD_SERVER)
   add_subdirectory(plugins)
-  # add_subdirectory(server-console)
 endif()
 
 # BUILD_TOOLS option will be handled inside the tools's CMakeLists.txt because 'scribe' tool is required for build anyway
 add_subdirectory(tools)
 
 add_subdirectory(tivoli-scripts)
-
-endif()
 
 if (BUILD_TESTS)
   # Turn on testing so that add_test works

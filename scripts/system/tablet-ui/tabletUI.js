@@ -12,7 +12,7 @@
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 
-/* global Script, HMD, WebTablet, UIWebTablet, UserActivityLogger, Settings, Entities, Messages, Tablet, Overlays,
+/* global Script, HMD, WebTablet, UIWebTablet, Settings, Entities, Messages, Tablet, Overlays,
    MyAvatar, Menu, AvatarInputs, Vec3, cleanUpOldMaterialEntities */
 
 (function() { // BEGIN LOCAL_SCOPE
@@ -231,10 +231,8 @@
         // check for change in tablet scale.
 
         if (HMD.showTablet && !tabletShown && !toolbarMode) {
-            UserActivityLogger.openedTablet(false);
             showTabletUI();
         } else if (!HMD.showTablet && tabletShown) {
-            UserActivityLogger.closedTablet();
             hideTabletUI();
         }
 
