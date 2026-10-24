@@ -45,8 +45,8 @@
 #include "ui/DialogsManager.h"
 #include "ui/HMDToolsDialog.h"
 #if defined(Q_OS_WIN)
-#include <VersionHelpers.h>
 #include <Windows.h>
+#include <VersionHelpers.h>
 #endif
 
 using namespace std;

@@ -50,8 +50,8 @@
 #include <PickManager.h>
 #include <PointerManager.h>
 #if defined(Q_OS_WIN)
-#include <VersionHelpers.h>
 #include <Windows.h>
+#include <VersionHelpers.h>
 #endif
 #if defined(Q_OS_ANDROID)
 #include <android/log.h>

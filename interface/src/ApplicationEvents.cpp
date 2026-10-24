@@ -13,6 +13,10 @@
 //  Distributed under the MIT License.
 //
 
+#ifdef _WIN32
+// winsock2.h before anything includes Windows.h, which would pull in the old winsock.h
+#include <winsock2.h>
+#endif
 #include "Application.h"
 #include <thread>
 #include <glm/glm.hpp>

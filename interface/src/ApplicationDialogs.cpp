@@ -38,9 +38,10 @@
 #if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
 #endif
 #include "ui/DialogsManager.h"
+#include <MainWindow.h>
 #if defined(Q_OS_WIN)
-#include <VersionHelpers.h>
 #include <Windows.h>
+#include <VersionHelpers.h>
 #endif
 #if defined(Q_OS_ANDROID)
 #include <android/log.h>

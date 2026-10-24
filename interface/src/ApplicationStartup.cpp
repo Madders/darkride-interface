@@ -101,8 +101,8 @@
 #include <raypick/RayPick.h>
 #include <raypick/MouseTransformNode.h>
 #if defined(Q_OS_WIN)
-#include <VersionHelpers.h>
 #include <Windows.h>
+#include <VersionHelpers.h>
 #endif
 #if defined(Q_OS_ANDROID)
 #include <android/log.h>

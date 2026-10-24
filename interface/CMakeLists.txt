@@ -195,6 +195,12 @@ if (WIN32)
   set_property(TARGET ${TARGET_NAME} APPEND_STRING PROPERTY LINK_FLAGS_DEBUG "/OPT:NOREF /OPT:NOICF")
 endif()
 
+# darkride_chat and wasmtime are both Rust static libraries, each with its own copy of Rust's runtime
+# (rust_eh_personality and so on), which link.exe otherwise refuses as multiply defined
+if (MSVC)
+  set_property(TARGET ${TARGET_NAME} APPEND_STRING PROPERTY LINK_FLAGS " /FORCE:MULTIPLE")
+endif()
+
 # link required hifi libraries
 link_hifi_libraries(
   shared workload task octree ktx gpu gl procedural graphics graphics-scripting render
