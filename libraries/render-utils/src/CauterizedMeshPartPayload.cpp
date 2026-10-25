@@ -26,7 +26,8 @@ void CauterizedMeshPartPayload::updateClusterBuffer(const std::vector<glm::mat4>
                                                     const std::vector<glm::mat4>& cauterizedClusterMatrices) {
     ModelMeshPartPayload::updateClusterBuffer(clusterMatrices);
 
-    if (cauterizedClusterMatrices.size() > 1) {
+    // for a mesh skinned to one joint too, as ModelMeshPartPayload::updateClusterBuffer
+    if (!cauterizedClusterMatrices.empty()) {
         if (!_cauterizedClusterBuffer) {
             _cauterizedClusterBuffer = std::make_shared<gpu::Buffer>(cauterizedClusterMatrices.size() * sizeof(glm::mat4),
                 (const gpu::Byte*) cauterizedClusterMatrices.data());
@@ -41,7 +42,7 @@ void CauterizedMeshPartPayload::updateClusterBuffer(const std::vector<Model::Tra
                                                     const std::vector<Model::TransformDualQuaternion>& cauterizedClusterDualQuaternions) {
     ModelMeshPartPayload::updateClusterBuffer(clusterDualQuaternions);
 
-    if (cauterizedClusterDualQuaternions.size() > 1) {
+    if (!cauterizedClusterDualQuaternions.empty()) {
         if (!_cauterizedClusterBuffer) {
             _cauterizedClusterBuffer = std::make_shared<gpu::Buffer>(cauterizedClusterDualQuaternions.size() * sizeof(Model::TransformDualQuaternion),
                 (const gpu::Byte*) cauterizedClusterDualQuaternions.data());
