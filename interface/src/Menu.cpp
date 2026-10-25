@@ -10,6 +10,8 @@
 //
 
 #include "Menu.h"
+
+#include <functional>
 #include "ClientOptions.h"
 
 #include <gpu/Context.h>
@@ -260,6 +262,9 @@ Menu::Menu() {
     addCheckableActionToQMenuAndActionHash(viewMenu, MenuOption::CenterPlayerInView,
         0, true, qApp, SLOT(rotationModeChanged()));
 
+    // View > Camera Collision: the third-person camera stops short of walls instead of going through them
+    addCheckableActionToQMenuAndActionHash(viewMenu, MenuOption::CameraCollision, 0, true);
+
     // View > Enter First Person Mode in HMD
     addCheckableActionToQMenuAndActionHash(viewMenu, MenuOption::FirstPersonHMD, 0, true);
 
@@ -295,22 +300,33 @@ Menu::Menu() {
         // Build > Create: every entity kind in the editor's catalogue, grouped as it says
         MenuWrapper* createMenu = buildMenu->addMenu("Create");
         QHash<QString, MenuWrapper*> groups;
+        // a group's submenu, made the first time it's named, inside its parent's ("Special items/Vehicles")
+        std::function<MenuWrapper*(const QString&, bool)> groupMenu = [&](const QString& path, bool separator) {
+            if (!groups.contains(path)) {
+                int slash = path.lastIndexOf('/');
+                MenuWrapper* parent = slash < 0 ? createMenu : groupMenu(path.left(slash), separator);
+                if (slash < 0 && separator) {
+                    createMenu->addSeparator();
+                }
+                groups[path] = parent->addMenu(path.mid(slash + 1));
+            }
+            return groups[path];
+        };
         for (const auto& item : EditorCreate::items()) {
             MenuWrapper* target = createMenu;
             if (!item.group.isEmpty()) {
-                if (!groups.contains(item.group)) {
-                    if (item.separatorBefore) {
-                        createMenu->addSeparator();
-                    }
-                    groups[item.group] = createMenu->addMenu(item.group);
-                }
-                target = groups[item.group];
+                target = groupMenu(item.group, item.separatorBefore);
             } else if (item.separatorBefore) {
                 createMenu->addSeparator();
             }
             QAction* action = addActionToQMenuAndActionHash(target, item.label, 0, editor.data(), SLOT(createFromMenu()));
             action->setData(item.key);
-            editor->addMenuAction(action);
+            action->setToolTip(item.tooltip);
+            if (item.disabled) {
+                action->setEnabled(false);   // a kind the engine can't make yet: never enabled with build mode
+            } else {
+                editor->addMenuAction(action);
+            }
         }
         buildMenu->addSeparator();
 
@@ -380,6 +396,24 @@ Menu::Menu() {
         false));
     startupLocatiopnGroup->addAction(addCheckableActionToQMenuAndActionHash(startupLocationMenu, MenuOption::LastLocation, 0, 
         true));
+
+    // Navigate > Walk Through Walls: your avatar not colliding with the world (noclip; Caity, 10-25: it belongs where the
+    // settings are, with a key). The same switch as MyAvatar.collisionsEnabled, the Avatar panel's "Collide with the
+    // world" and Settings > General's: the item follows it whichever way it changes
+    navigateMenu->addSeparator();
+    {
+        auto myAvatar = DependencyManager::get<AvatarManager>()->getMyAvatar();
+        QAction* walkThroughWalls = addCheckableActionToQMenuAndActionHash(navigateMenu, MenuOption::WalkThroughWalls,
+            [](bool checked) {
+                DependencyManager::get<AvatarManager>()->getMyAvatar()->setCollisionsEnabled(!checked);
+            },
+            Qt::CTRL | Qt::SHIFT | Qt::Key_N, myAvatar && !myAvatar->getCollisionsEnabled());
+        if (myAvatar) {
+            connect(myAvatar.get(), &MyAvatar::collisionsEnabledChanged, walkThroughWalls, [walkThroughWalls](bool enabled) {
+                walkThroughWalls->setChecked(!enabled);
+            });
+        }
+    }
 
     // Settings menu ----------------------------------
     MenuWrapper* settingsMenu = addMenu("Settings");

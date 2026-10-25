@@ -8,6 +8,7 @@
 
 #include "WasmRuntimeTests.h"
 
+#include <atomic>
 #include <thread>
 
 #include <QtCore/QElapsedTimer>
@@ -275,6 +276,39 @@ void WasmRuntimeTests::testCooperativeTimeLimit() {
         QString reason = instance->takeInterruptionReason();
         QVERIFY2(reason.contains("limit of 40 ms"), qPrintable(reason));
     }
+}
+
+// A call past its warning time is reported once and goes on: here until a stop is asked for, well after the warning.
+void WasmRuntimeTests::testCallWarningGoesOn() {
+    auto runtime = makeRuntime();
+    WasmInstance::Limits limits;
+    limits.callTimeout = std::chrono::milliseconds(0);
+    limits.callWarning = std::chrono::milliseconds(30);
+    auto instance = makeCooperativeInstance(runtime, limits);
+    QVERIFY(instance);
+    std::atomic<int> warnings { 0 };
+    std::atomic<qint64> warnedAt { 0 };
+    instance->setCallWarningHandler([&warnings, &warnedAt](std::chrono::milliseconds elapsed) {
+        ++warnings;
+        warnedAt = elapsed.count();
+    });
+    WasmInstance* raw = instance.get();
+    std::thread stopper([raw] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        raw->requestStop();
+    });
+    std::vector<WasmValue> results;
+    QString error;
+    QElapsedTimer timer;
+    timer.start();
+    QVERIFY2(instance->call("until_told", {}, results, error), qPrintable(error));
+    const qint64 elapsed = timer.elapsed();
+    stopper.join();
+    QCOMPARE(warnings.load(), 1);
+    QVERIFY2(warnedAt.load() >= 30, qPrintable(QString("warned at %1 ms").arg(warnedAt.load())));
+    QVERIFY2(elapsed >= 140, qPrintable(QString("the call ended after %1 ms, before the stop").arg(elapsed)));
+    const QString reason = instance->takeInterruptionReason();
+    QVERIFY2(reason.contains("stopped"), qPrintable(reason));
 }
 
 namespace {

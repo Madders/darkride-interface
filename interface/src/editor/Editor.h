@@ -291,6 +291,12 @@ private:
     void createModelAt(const glm::vec3& point);
     void pasteAt(const glm::vec3& target);
     QList<QUuid> place(EntityItemProperties properties, const QString& text, const glm::vec3& point);
+    // reads an entity file as an add takes it (importEntities, createPreset)
+    bool readEntityFile(const QString& url, QVector<EntityItemProperties>& properties, QList<QUuid>& ids, AABox& bounds,
+                        int& count);
+    // one of the app's ready-made families of entities (Create > Special items > Vehicles): the file's ground (y 0)
+    // on the point, at least ahead metres from the camera, facing the way the camera looks; one undo step
+    bool createPreset(const QString& presetUrl, const QString& label, const glm::vec3& point, float ahead);
     void placeModel(const QUrl& url, const glm::vec3& point);
     void placeImage(const QUrl& url, const glm::vec3& point);
     void beginUpload(const QString& localPath, const glm::vec3& point, bool image);

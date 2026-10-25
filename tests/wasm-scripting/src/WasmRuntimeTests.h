@@ -25,6 +25,7 @@ private slots:
     void testRequestStop();
     void testCooperativeStop();
     void testCooperativeTimeLimit();
+    void testCallWarningGoesOn();
     void testTimeLimitCountsModuleTimeOnly();
     void testMemoryLimit();
     void testMemoryReadWrite();

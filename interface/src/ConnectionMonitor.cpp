@@ -34,6 +34,9 @@ void ConnectionMonitor::init() {
     connect(&domainHandler, &DomainHandler::connectedToDomain, this, &ConnectionMonitor::stopTimer);
     connect(&domainHandler, &DomainHandler::domainConnectionRefused, this, &ConnectionMonitor::stopTimer);
     connect(&domainHandler, &DomainHandler::redirectToErrorDomainURL, this, &ConnectionMonitor::stopTimer);
+    // left on purpose (the sign-in screen after a logout, #34): no time-out, no connection-failure window over it. Queued
+    // after leave()'s resetting, so the timer that one started ends stopped
+    connect(&domainHandler, &DomainHandler::left, this, &ConnectionMonitor::stopTimer);
     connect(this, &ConnectionMonitor::setRedirectErrorState, &domainHandler, &DomainHandler::setRedirectErrorState);
 
     _timer.setSingleShot(true);

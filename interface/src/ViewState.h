@@ -29,6 +29,8 @@
 #define hifi_ViewState_h
 
 #include <QtCore/QMutex>
+#include <QtCore/QUuid>
+#include <QtCore/QVector>
 
 #include <glm/glm.hpp>
 
@@ -70,8 +72,19 @@ public:
     void setModeKeepingPrevious(CameraMode mode);   // the sign-in gate's: this mode now, the one before kept
     void restorePreviousMode();                     // the kept mode back
 
+    // camera collision's test (View > Camera Collision), the third-person camera's and Camera.collideBoom's: how far
+    // from the pivot toward where the camera wants to be it can stand without going into what would stop you, seeing
+    // through the ignored entities and their children; the whole length when nothing is in the way or the option is
+    // off. On the main thread (the physics' queries). clearPivot, when given, is set to the pivot moved out of what the
+    // probe overlaps there, and the length is then measured from it.
+    float allowedBoomLength(const glm::vec3& pivot, const glm::vec3& wanted, const QVector<QUuid>& ignore,
+                            glm::vec3* clearPivot = nullptr) const;
+
 private:
     void addSecondaryCameraView();   // the secondary camera's frustum among the conical views (was updateSecondaryCameraViewFrustum)
+    // camera collision for the third-person boom (View > Camera Collision): from the pivot toward where the camera
+    // wants to be, the camera stops short of what would stop you; it moves in at once and eases back out
+    glm::vec3 collideCameraBoom(const glm::vec3& pivot, const glm::vec3& wanted, float deltaTime);
 
     FancyCamera _camera;   // my view onto the world
     mutable QMutex _mutex{ QMutex::Recursive };
@@ -87,6 +100,10 @@ private:
     // the third-person camera in a headset: the boom from the head, kept while the mode lasts
     glm::vec3 _thirdPersonHMDCameraBoom{ 0.0f, 0.0f, -1.0f };
     bool _thirdPersonHMDCameraBoomValid{ true };
+    // camera collision: the boom's length now (-1 when no third-person boom was placed last frame), and whether it is
+    // short of the wanted length because something held it in (it then eases back out)
+    float _boomLength{ -1.0f };
+    bool _boomHeldIn{ false };
 };
 
 #endif // hifi_ViewState_h

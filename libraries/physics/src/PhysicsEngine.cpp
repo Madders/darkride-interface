@@ -885,3 +885,62 @@ void PhysicsEngine::castRayAll(const glm::vec3& start, const glm::vec3& end, int
     }
     std::sort(results.begin(), results.end(), [](const RayHit& a, const RayHit& b) { return a.fraction < b.fraction; });
 }
+
+// the nearest of one cast in the root world and in each frame's world, made in that world's coordinates
+template <typename Frames, typename Cast>
+static bool closestInAllWorlds(const PhysicsWorld* root, const Frames& frames,
+                               const glm::vec3& start, const glm::vec3& end, const Cast& cast, RayHit& result) {
+    result = RayHit();
+    if (root) {
+        cast(root, start, end, result);
+    }
+    for (const auto& entry : frames) {
+        const PhysicsWorld* world = entry.second.get();
+        RayHit hit;
+        if (cast(world, world->toLocal(start), world->toLocal(end), hit) && (!result.hit || hit.fraction < result.fraction)) {
+            hit.point = world->toParent(hit.point);
+            hit.normal = world->getFrameRotation() * hit.normal;
+            result = hit;
+        }
+    }
+    return result.hit;
+}
+
+glm::vec3 PhysicsEngine::sphereOutOfOverlapsAllWorlds(const glm::vec3& center, float radius, int32_t group, int32_t mask,
+                                                      const JPH::BodyFilter* bodyFilter) const {
+    const int ROUNDS = 4;
+    const float SLOP = 0.002f;   // m, past the surface, so the next round finds it clear
+    glm::vec3 position = center;
+    for (int round = 0; round < ROUNDS; ++round) {
+        glm::vec3 push(0.0f);
+        if (_rootWorld) {
+            push += _rootWorld->sphereOverlapPush(position, radius, group, mask, bodyFilter);
+        }
+        for (const auto& entry : _frameWorlds) {
+            const PhysicsWorld* world = entry.second.get();
+            push += world->getFrameRotation() * world->sphereOverlapPush(world->toLocal(position), radius, group, mask, bodyFilter);
+        }
+        float length = glm::length(push);
+        if (length < EPSILON) {
+            break;
+        }
+        position += push * ((length + SLOP) / length);
+    }
+    return position;
+}
+
+bool PhysicsEngine::castRayClosestAllWorlds(const glm::vec3& start, const glm::vec3& end, int32_t group, int32_t mask,
+                                            const JPH::BodyFilter* bodyFilter, RayHit& result) const {
+    return closestInAllWorlds(_rootWorld.get(), _frameWorlds, start, end,
+                              [&](const PhysicsWorld* world, const glm::vec3& a, const glm::vec3& b, RayHit& hit) {
+                                  return world->castRayClosest(a, b, group, mask, bodyFilter, hit);
+                              }, result);
+}
+
+bool PhysicsEngine::castSphereClosestAllWorlds(const glm::vec3& start, const glm::vec3& end, float radius, int32_t group,
+                                               int32_t mask, const JPH::BodyFilter* bodyFilter, RayHit& result) const {
+    return closestInAllWorlds(_rootWorld.get(), _frameWorlds, start, end,
+                              [&](const PhysicsWorld* world, const glm::vec3& a, const glm::vec3& b, RayHit& hit) {
+                                  return world->castSphereClosest(a, b, radius, group, mask, bodyFilter, hit);
+                              }, result);
+}

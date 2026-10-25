@@ -15,13 +15,13 @@
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
-#include <QtCore/QStandardPaths>
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
 
 #include <AccountManager.h>
 #include <GLMHelpers.h>
 #include <NetworkingConstants.h>
+#include <PathUtils.h>
 #include <ViewFrustum.h>
 
 #include "Application.h"
@@ -179,7 +179,9 @@ void AvatarThumbnails::shoot(Done done) {
 }
 
 QString AvatarThumbnails::keep(const QByteArray& jpeg, QString& error) const {
-    QDir folder(QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/avatar-thumbnails");
+    // in the app's data folder, like the editor's thumbnails, so a client given its own (TIVOLI_APP_DATA_DIR, a
+    // walled-off test client) keeps its pictures there and not among the main installation's
+    QDir folder(PathUtils::getAppLocalDataPath() + "avatar-thumbnails");
     if (!folder.mkpath(".")) {
         error = "couldn't make a folder for the picture";
         return QString();

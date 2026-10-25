@@ -35,10 +35,17 @@
 #include <Windows.h>
 #endif
 
+#ifdef Q_OS_MACOS
+#include "MacAutoFill.h"
+#endif
+
 int main(int argc, const char* argv[]) {
     StartupProfiler::start();
     StartupProfiler::phase("main: surface format, application name, command line");
 #ifdef Q_OS_MACOS
+    // before anything of AppKit's runs: AutoFill is set up when the app first becomes active
+    disableMacAutoFill();
+
     auto format = getDefaultOpenGLSurfaceFormat();
     // Deal with some weirdness in the chromium context sharing on Mac.
     // The primary share context needs to be 3.2, so that the Chromium will

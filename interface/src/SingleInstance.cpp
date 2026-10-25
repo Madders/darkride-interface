@@ -21,6 +21,7 @@
 
 SingleInstance::SingleInstance(bool allowMultiple, bool hasUrl, const QString& url, QObject* parent) :
     QObject(parent),
+    _allowMultiple(allowMultiple),
     _server(this)
 #ifdef Q_OS_WIN
     , _sharedMemory(getInterfaceSharedMemoryName())
@@ -67,6 +68,9 @@ SingleInstance::SingleInstance(bool allowMultiple, bool hasUrl, const QString& u
 }
 
 void SingleInstance::listen() {
+    if (_allowMultiple) {
+        return;
+    }
     const QString& name = getInterfaceSharedMemoryName();
     // We failed to connect to a local server, so we remove any existing servers.
     _server.removeServer(name);

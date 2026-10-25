@@ -52,6 +52,7 @@ struct Guest {
     QStringList failures;
     QStringList timeLimits;    // "<entry> <entity> <reason>" for each call ended at the time limit
     QVariantList carried;      // what the script handed to Probe.carry
+    QHash<QString, QObject*> extraGlobals;  // more host globals, by name, registered before the script starts
     std::chrono::milliseconds callTimeout { 10000 };
     bool nameTimeLimits { false }; // with a time-limit handler, a limit is not a failure
 
@@ -87,6 +88,9 @@ struct Guest {
         objects.registerGlobal("Script", &script);
         objects.registerGlobal("Probe", &probe);
         objects.registerGlobal("Assets", &assets);
+        for (auto global = extraGlobals.begin(); global != extraGlobals.end(); ++global) {
+            objects.registerGlobal(global.key(), global.value());
+        }
         QObject::connect(&probe, &Probe::carried, [this](const QVariant& value) { carried << value; });
         script.source = source;
         if (!instance->instantiate(error)) {
@@ -419,6 +423,61 @@ void JavaScriptGuestTests::testObjectsAreReleased() {
     guest.objects.releaseOwned();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     QCOMPARE(Other::alive, aliveBefore);
+}
+
+int FakeRequest::alive = 0;
+
+// The guest's XMLHttpRequest lets a request go once it is done: two hundred fire-and-forget posts leave nothing behind
+// in the guest or the host. A request's signal connections kept it reachable, so the host never deleted it; a body
+// that posts what it hears ran out of memory on both sides in two hours (2026-10-25).
+void JavaScriptGuestTests::testRequestsAreReleased() {
+    ValueCodec::registerType(qRegisterMetaType<FakeRequest*>(),
+        [](const ValueCodec& codec, const QVariant& value) { return codec.toCborOwned(value.value<FakeRequest*>()); },
+        [](const ValueCodec& codec, const QCborValue& value, QVariant& out) {
+            out = QVariant::fromValue(qobject_cast<FakeRequest*>(codec.fromCbor(value).value<QObject*>()));
+            return true;
+        });
+    const int aliveBefore = FakeRequest::alive;
+    Guest guest;
+    FakeHttp http;
+    guest.extraGlobals.insert("Http", &http);
+    const QString source = R"(
+        (function () {
+            for (var i = 0; i < 200; i++) {
+                var request = new XMLHttpRequest();
+                request.open("POST", "http://127.0.0.1:9/hear", true);
+                request.send(new ArrayBuffer(16000));
+            }
+        })();
+        var kept = new XMLHttpRequest();
+        kept.onreadystatechange = function () {
+            if (kept.readyState === kept.DONE) { Probe.carry(["kept", kept.responseText]); }
+        };
+        kept.open("GET", "http://127.0.0.1:9/kept", true);
+        kept.send();
+        Script.setTimeout(function () { gc(); }, 0);
+    )";
+    START_OR_SKIP(guest, source);
+    QVERIFY2(guest.errors.isEmpty(), qPrintable(guest.errors.join(" | ")));
+    QCOMPARE(http.made.size(), 201);
+    // the replies come
+    for (auto& request : http.made) {
+        QVERIFY(request && request->sent);
+        request->finish();
+    }
+    QCOMPARE(guest.carried.size(), 1);
+    QCOMPARE(guest.carried[0].toList()[1].toString(), QString("ok"));
+    // the script's timer, fired as the engine would: it collects the garbage, and the guest lets the requests go
+    QString error;
+    QCOMPARE(guest.script.timers.size(), 1);
+    QVERIFY2(guest.host->deliverCallback(guest.script.timers.begin().value().id, QVariantList(), error), qPrintable(error));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    // the 200 dropped requests were released and deleted; the kept one stays
+    QCOMPARE(FakeRequest::alive - aliveBefore, 1);
+    guest.stop();
+    guest.objects.releaseOwned();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QCOMPARE(FakeRequest::alive, aliveBefore);
 }
 
 void JavaScriptGuestTests::testScopedCallbacks() {

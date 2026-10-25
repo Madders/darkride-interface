@@ -121,6 +121,10 @@ public:
         /// the module's own: what it spends in host functions does not count, so a slow download or a long host
         /// call is not a runaway module.
         std::chrono::milliseconds callTimeout { 5000 };
+        /// A call into the instance that runs longer than this, of the module's own time on the same clock, is
+        /// reported once through the call warning handler and goes on; zero is no warning. For a module whose
+        /// runaway hurts only itself, in place of callTimeout.
+        std::chrono::milliseconds callWarning { 0 };
     };
 
     explicit WasmInstance(std::shared_ptr<WasmModule> module);
@@ -161,6 +165,9 @@ public:
     /// Why a cooperative module was told to stop since this was last asked (it unwinds and returns normally, so
     /// the host reports the reason); empty when it was not.
     QString takeInterruptionReason();
+    /// Called once in an outermost call that runs longer than Limits::callWarning, with the module's own time so
+    /// far, on the thread running the call and while it runs: it must not call into this instance.
+    void setCallWarningHandler(std::function<void(std::chrono::milliseconds elapsed)> handler);
 
     /// Samples the module's stack at every epoch tick while a call runs (wasmtime's guest profiler) until
     /// finishProfiling(), which returns the profile in the Firefox Profiler's format. For measurements.

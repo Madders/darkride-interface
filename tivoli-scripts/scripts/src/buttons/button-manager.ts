@@ -531,6 +531,13 @@ export class ButtonManager {
 		return button;
 	}
 
+	// every panel closed: the sign-in screen is coming up (ui/SignInGate.cpp) and must not sit under one
+	closeAll() {
+		for (const button of this.buttons) {
+			button.close();
+		}
+	}
+
 	cleanup() {
 		for (let button of this.buttons) {
 			this.tablet.removeButton(button.button);

@@ -64,7 +64,8 @@ const int MAX_SCRIPT_ENDING_TIME_MS = 3000;  // for the scriptEnding handlers, b
 const int DEFAULT_SCRIPT_CALL_LIMIT_MS = 5000;  // a call into a JavaScript script, of the script's own time
 
 // A call into a JavaScript script may run this long of the script's own time (what it spends in host functions,
-// a download among them, does not count): DARKRIDE_SCRIPT_CALL_LIMIT_MS, 0 for no limit; 5 s otherwise.
+// a download among them, does not count): DARKRIDE_SCRIPT_CALL_LIMIT_MS, 0 for no limit; 5 s otherwise. An entity
+// script is stopped past it; a client script or an agent is warned about once and goes on.
 std::chrono::milliseconds scriptCallTimeLimit() {
     bool ok = false;
     const int fromEnvironment = qEnvironmentVariableIntValue("DARKRIDE_SCRIPT_CALL_LIMIT_MS", &ok);
@@ -167,9 +168,17 @@ WasmScriptEngine::WasmScriptEngine(Context context, const QString& scriptContent
         _limits.memoryBytes = int64_t(1024) * 1024 * 1024;
     }
     if (_runsJavaScript) {
-        // a call into a script may run this long of the script's own time; a runaway is interrupted and, in an
-        // entities engine, that entity script alone is stopped (onCallTimeLimit); stop() interrupts a call as before
-        _limits.callTimeout = scriptCallTimeLimit();
+        // a call into a script may run this long of the script's own time. An entities engine hosts every entity
+        // script of the world on one thread, so a runaway there holds them all: it is interrupted and that entity
+        // script alone is stopped (onCallTimeLimit). A client script or an agent runs on its own, and its runaway
+        // holds only itself: the call is reported in the log once and goes on, as on QtScript (Caity's choice,
+        // 2026-10-24). stop() interrupts a call as before.
+        if (_isEntitiesEngine) {
+            _limits.callTimeout = scriptCallTimeLimit();
+        } else {
+            _limits.callTimeout = std::chrono::milliseconds(0);
+            _limits.callWarning = scriptCallTimeLimit();
+        }
     }
 }
 
@@ -444,9 +453,12 @@ void WasmScriptEngine::run() {
         DependencyManager::get<EntityScriptingInterface>()->init();
         registerStandardGlobals();
     }
-    // the network objects XMLHttpRequest and WebSocket are built on in the guest
+    // the network objects XMLHttpRequest and WebSocket are built on in the guest, and an agent's WebSocketServer
     registerGlobalObject("Http", _http);
     registerGlobalObject("Sockets", _sockets);
+    if (_context == Context::AGENT_SCRIPT) {
+        registerGlobalObject("WebSocketServers", new WebSocketServerFactory(this));
+    }
     // two globals the QtScript engine gives as a native constructor and a plain object
     registerGlobalObject("AudioEffectOptions", _audioEffectOptions);
     registerGlobalObject("Resource", _resourceStates);
@@ -488,6 +500,15 @@ WasmScriptEngine::ModuleInstancePointer WasmScriptEngine::makeInstance(const QSt
         instanceLimits.callTimeout = std::chrono::milliseconds(0);
     }
     instance->instance = std::make_unique<WasmInstance>(module, instanceLimits);
+    if (instanceLimits.callWarning.count() > 0) {
+        // logged at once, from inside the long call: a message queued to this thread would wait for the call to end
+        const QString scriptName = name;
+        instance->instance->setCallWarningHandler([this, scriptName](std::chrono::milliseconds elapsed) {
+            scriptWarningMessage(QString("%1: a call into the script has run %2 ms of its own time and goes on; "
+                                         "it may be stuck (a client script or an agent is not stopped)")
+                                     .arg(scriptName).arg(elapsed.count()));
+        });
+    }
     instance->host = std::make_unique<HostInterface>(*instance->instance, *_objects, *instance->codec, *_relay);
     instance->host->setLogger([this](int level, const QString& text) {
         switch (level) {
@@ -617,6 +638,11 @@ void WasmScriptEngine::loop() {
         } else {
             QCoreApplication::processEvents();
         }
+        // What was deleted later inside that loop goes now. Qt runs a deferred delete only once a loop lower than the
+        // one it was asked for in has control, and this thread runs no other loop: a request's network reply, and an
+        // object the script let go of while a reply was being delivered, would otherwise stay for good (an agent
+        // posting what it hears grew without end, 2026-10-25).
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         if (_isFinished) {
             break;
         }
@@ -734,6 +760,7 @@ void WasmScriptEngine::stopEntityScript(const EntityItemID& entityID, const QStr
     std::weak_ptr<ModuleInstance> host = _entityHosts.value(entityID);
     _entityHosts.remove(entityID);
     _callbackHandlers.remove(entityID);
+    _stoppedByTimeLimit.insert(entityID, details.scriptText);
     EntityScriptDetails stopped;
     stopped.scriptText = details.scriptText;
     stopped.definingSandboxURL = details.definingSandboxURL;
@@ -937,6 +964,24 @@ void WasmScriptEngine::loadEntityScript(const EntityItemID& entityID, const QStr
     if (isStopping() || !scriptEngines || scriptEngines->isStopped()) {
         return;
     }
+    // a script the time limit stopped stays stopped, with its error showing, until its entity names another script
+    // or a reload is forced
+    auto stopped = _stoppedByTimeLimit.find(entityID);
+    if (stopped != _stoppedByTimeLimit.end()) {
+        if (!forceRedownload && stopped.value() == entityScript) {
+            return;
+        }
+        _stoppedByTimeLimit.erase(stopped);
+    }
+    // the same script asked for again while it loads or runs is the one under way: a second load would run the
+    // script twice, as two objects with their own timers. Requests queue up while the engine is busy (a call that
+    // runs long, a runaway until the limit stops it), and the first may have finished loading when the second comes.
+    // A reload unloads the script first or is forced.
+    EntityScriptDetails current;
+    if (!forceRedownload && getEntityScriptDetails(entityID, current) && current.scriptText == entityScript &&
+        (current.status == EntityScriptStatus::LOADING || current.status == EntityScriptStatus::RUNNING)) {
+        return;
+    }
     if (!hasEntityScriptDetails(entityID)) {
         updateEntityScriptStatus(entityID, EntityScriptStatus::PENDING, "...pending...");
     }
@@ -1065,6 +1110,9 @@ void WasmScriptEngine::unloadEntityScript(const EntityItemID& entityID, bool sho
     if (QThread::currentThread() != thread()) {
         QMetaObject::invokeMethod(this, "unloadEntityScript", Q_ARG(const EntityItemID&, entityID), Q_ARG(bool, shouldRemoveFromMap));
         return;
+    }
+    if (shouldRemoveFromMap) {
+        _stoppedByTimeLimit.remove(entityID);
     }
     EntityScriptDetails oldDetails;
     if (!getEntityScriptDetails(entityID, oldDetails)) {

@@ -92,7 +92,8 @@ Item {
         id: mainContainer
         width: root.width
         height: root.height
-        onHeightChanged: d.resize(); onWidthChanged: d.resize();
+        // later, not in the change itself: resize() sets root's size, which this item's binds to (a binding loop)
+        onHeightChanged: Qt.callLater(d.resize); onWidthChanged: Qt.callLater(d.resize);
 
         LoginDialog.LoginDialogLightbox {
             id: lightboxPopup;

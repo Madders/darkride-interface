@@ -15,6 +15,8 @@ export class Buttons {
 	readonly exploreChannel = "com.tivolicloud.explore";
 	// the Explore panel asks for someone's profile: it saves the person and the tab, and People reads them as it opens
 	readonly peopleChannel = "Darkride-People";
+	// the sign-in screen asks for every panel to close here (ui/SignInGate.cpp), with "close"
+	readonly panelsChannel = "Darkride-Panels";
 
 	constructor() {
 		// old order from hifi
@@ -81,6 +83,7 @@ export class Buttons {
 			});
 		Messages.subscribe(this.exploreChannel);
 		Messages.subscribe(this.peopleChannel);
+		Messages.subscribe(this.panelsChannel);
 		this.signalManager.connect(
 			Messages.messageReceived,
 			(channel: string, message: string, senderID: Uuid, localOnly: boolean) => {
@@ -95,6 +98,9 @@ export class Buttons {
 				if (channel == this.peopleChannel && localOnly && message == "profile") {
 					people.close();
 					people.open();
+				}
+				if (channel == this.panelsChannel && localOnly && message == "close") {
+					this.buttonManager.closeAll();
 				}
 			},
 		);
@@ -124,6 +130,7 @@ export class Buttons {
 		Controller.disableMapping(this.exploreMappingName);
 		Messages.unsubscribe(this.exploreChannel);
 		Messages.unsubscribe(this.peopleChannel);
+		Messages.unsubscribe(this.panelsChannel);
 
 		this.buttonManager.cleanup();
 		this.signalManager.cleanup();

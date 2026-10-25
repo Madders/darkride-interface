@@ -223,6 +223,10 @@ private:
     ModuleInstancePointer _main;
     QHash<QString, ModuleInstancePointer> _entityModules;              // .wasm entity scripts by URL
     QHash<EntityItemID, std::weak_ptr<ModuleInstance>> _entityHosts;  // which instance runs each entity's script
+    // the entity scripts the time limit stopped, with the script each ran: not started again for the same script
+    // unless a reload is forced (the entities engines load a script again whenever its entity changes and the script
+    // is not running, which would start a runaway again and again)
+    QHash<EntityItemID, QString> _stoppedByTimeLimit;
     std::atomic<int> _callDepth { 0 };
 
     struct Timer {

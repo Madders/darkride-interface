@@ -162,6 +162,17 @@ public:
                         const JPH::BodyFilter* bodyFilter, RayHit& result) const;
     void castRayAll(const glm::vec3& start, const glm::vec3& end, int32_t group, int32_t mask,
                     std::vector<RayHit>& results) const;
+    // The nearest hit of a ray, or of a sphere of the radius swept along it (PhysicsWorld::castSphereClosest), in the
+    // root world and in every frame's world (inside a moving cabin), as castRayAll goes; the hit comes back in root
+    // world coordinates.
+    bool castRayClosestAllWorlds(const glm::vec3& start, const glm::vec3& end, int32_t group, int32_t mask,
+                                 const JPH::BodyFilter* bodyFilter, RayHit& result) const;
+    bool castSphereClosestAllWorlds(const glm::vec3& start, const glm::vec3& end, float radius, int32_t group,
+                                    int32_t mask, const JPH::BodyFilter* bodyFilter, RayHit& result) const;
+    // a sphere of the radius at the centre moved out of what it overlaps, in the root world and every frame's world, a
+    // few rounds (a corner pushes it out of one wall into the next): where it can stand, in root world coordinates
+    glm::vec3 sphereOutOfOverlapsAllWorlds(const glm::vec3& center, float radius, int32_t group, int32_t mask,
+                                           const JPH::BodyFilter* bodyFilter) const;
 
     // Worlds. The root is the domain; a frame's world is made the first time something asks for it and
     // dropped when it is empty.

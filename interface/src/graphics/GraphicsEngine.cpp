@@ -110,10 +110,21 @@ void GraphicsEngine::initializeRender() {
     }
     int mirrorsStep = StartupProfiler::begin("initializeRender: the mirror views' configuration");
     // a mirror's view: no ambient occlusion, bloom, selection outline or HUD; no local light shadows (an atlas for
-    // each would cost too much); a linear tone curve, since the picture is tone mapped again in the main view
+    // each would cost too much); the picture kept linear, since it is tone mapped again in the main view
     auto configuration = _renderEngine->getConfiguration();
     for (int slot = 0; slot < Mirrors::SLOT_COUNT; ++slot) {
         std::string view = "RenderMirrors.MirrorView" + std::to_string(slot) + ".";
+        // the jobs both branches have, by their full paths: a bare name finds the deferred branch's only. Gamma22 is
+        // the linear curve (the sRGB write and read cancel); None raises the colour to 2.2 for debugging, which drew
+        // deferred mirrors darker, most of all where the ambient light alone lights them
+        for (const char* branch : { "DeferredForwardSwitch.RenderDeferredTask.", "DeferredForwardSwitch.RenderForwardTask." }) {
+            if (auto config = configuration->getConfig<ToneMapAndResample>(view + branch + "ToneMapping")) {
+                config->setCurve((int)ToneCurve::Gamma22);
+            }
+            if (auto config = configuration->getJobConfig(view + branch + "RenderHUDLayer")) {
+                config->setEnabled(false);
+            }
+        }
         if (auto config = configuration->getConfig<AmbientOcclusionEffect>(view + "AmbientOcclusion")) {
             config->setEnabled(false);
         }
@@ -128,12 +139,6 @@ void GraphicsEngine::initializeRender() {
         }
         if (auto config = configuration->getConfig<DrawHighlightTask>(view + "DrawHighlightForward")) {
             config->setEnabled(false);
-        }
-        if (auto config = configuration->getJobConfig(view + "RenderHUDLayer")) {
-            config->setEnabled(false);
-        }
-        if (auto config = configuration->getConfig<ToneMapAndResample>(view + "ToneMapping")) {
-            config->setCurve((int)ToneCurve::None);
         }
         if (auto config = configuration->getConfig<RenderLocalShadowSetup>(view + "LocalShadowSetup")) {
             config->setLocalLights(false);

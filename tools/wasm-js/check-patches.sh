@@ -1,7 +1,7 @@
 #!/bin/sh
 # Checks the changes to QuickJS-NG (patches/*.patch) natively, against the unpatched release.
 #
-#   tools/wasm-js/check-patches.sh [setup|build|test|compare|time|all]...    (all when none is given)
+#   tools/wasm-js/check-patches.sh [setup|build|test|compare|time|test262|all]...    (all when none is given)
 #
 #   setup    unpacks the release twice under build/check/: pristine/ and patched/, the second with the patches
 #            applied, as a git repository with one commit per patch (where a new patch is made), and configures a
@@ -13,6 +13,10 @@
 #            be the same.
 #   time     times check/timing.cases on both sources (check/timing.c, the engine compiled in), three rounds in
 #            turn, and prints the fastest of each with the ratio, unpatched to patched.
+#   test262  JavaScript's conformance tests (tc39/test262, at the commit QuickJS-NG's release pins) on both builds,
+#            in strict and sloppy mode: the unpatched build should fail only what test262_errors.txt lists, and the
+#            patched build the same tests. The tests are read from test262-<commit>/test262 in the downloads folder
+#            beside the checkout, or from $TEST262_DIR; $TEST262_THREADS threads (6 unless given). Not part of all.
 #
 # A new patch: edit build/check/patched/quickjs-<version>/, then build, test, compare and time; commit it there,
 # and write patches/<nnnn>-<name>.patch: what it changes and why, an empty line, then the output of
@@ -26,6 +30,10 @@ ARCHIVE_NAME=quickjs-ng-v$QUICKJS_VERSION.tar.gz
 C=$D/build/check
 PRISTINE=$C/pristine/quickjs-$QUICKJS_VERSION
 PATCHED=$C/patched/quickjs-$QUICKJS_VERSION
+# the commit the release's test262 submodule pins (github.com/quickjs-ng/quickjs, test262 at v0.17.0): a new
+# QUICKJS_VERSION needs its own
+TEST262_COMMIT=5ef1e5723be95296f36afb0386676fed0205869c
+TEST262_DIR=${TEST262_DIR:-$D/../../../downloads/test262-$(echo "$TEST262_COMMIT" | cut -c1-8)/test262}
 
 find_archive() {
     for DIR in "$D/../../../downloads/quickjs-ng-v$QUICKJS_VERSION" \
@@ -110,6 +118,34 @@ compare() {
     [ $DIFFERENT = 0 ] || exit 1
 }
 
+run_test262() {
+    [ -f "$TEST262_DIR/harness/assert.js" ] || {
+        echo "no test262 at $TEST262_DIR: unpack https://codeload.github.com/tc39/test262/tar.gz/$TEST262_COMMIT there" >&2
+        exit 1
+    }
+    for TREE in pristine patched; do
+        T=$C/$TREE/quickjs-$QUICKJS_VERSION
+        # the release carries an empty test262/ where the repository has the submodule: point it at the tests
+        if [ ! -L "$T/test262" ]; then
+            rmdir "$T/test262" && ln -s "$TEST262_DIR" "$T/test262"
+        fi
+        # the exit status only says whether anything differs from test262_errors.txt; the log says what
+        (cd "$T" && nice -n 10 "$C/native-$TREE/run-test262" -m -c test262.conf -a -t "${TEST262_THREADS:-6}" \
+            > "$C/test262-$TREE.log" 2>&1) || true
+        echo "test262 on the $TREE build: $(grep '^Result' "$C/test262-$TREE.log" | tail -1)"
+        # every outcome that differs from the error file, one line each: the file, its line, the mode, the message
+        grep -E ': (strict mode: )?(unexpected error|expected error|previous error|OK, )' "$C/test262-$TREE.log" |
+            sort > "$C/test262-$TREE.differences.txt" || true
+    done
+    if cmp -s "$C/test262-pristine.differences.txt" "$C/test262-patched.differences.txt"; then
+        echo "the patched build fails the same tests as the unpatched one"
+    else
+        echo "the builds DIFFER (< unpatched, > patched):"
+        diff "$C/test262-pristine.differences.txt" "$C/test262-patched.differences.txt" | head -40
+        exit 1
+    fi
+}
+
 timing() {
     for TREE in pristine patched; do
         clang -O2 -w -D_GNU_SOURCE -I "$C/$TREE/quickjs-$QUICKJS_VERSION" -o "$C/timing-$TREE" "$D/check/timing.c" \
@@ -140,7 +176,8 @@ for STEP in "$@"; do
         test) run_tests ;;
         compare) compare ;;
         time) timing ;;
+        test262) run_test262 ;;
         all) setup; build; run_tests; compare; timing ;;
-        *) echo "usage: $0 [setup|build|test|compare|time|all]..." >&2; exit 2 ;;
+        *) echo "usage: $0 [setup|build|test|compare|time|test262|all]..." >&2; exit 2 ;;
     esac
 done

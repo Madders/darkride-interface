@@ -269,6 +269,9 @@ struct WasmInstance::Impl {
     std::chrono::steady_clock::time_point guestSince;
     std::chrono::nanoseconds guestTime { 0 };
     bool limitReported { false };  // the time limit is reported once per outermost call
+    std::chrono::milliseconds callWarning { 0 };
+    bool warningReported { false };  // and the warning once per outermost call
+    std::function<void(std::chrono::milliseconds)> warningHandler;
     wasmtime_guestprofiler_t* profiler { nullptr };
     std::chrono::steady_clock::time_point lastSample;
     QString interruptionReason; // why a cooperative module was last told to stop, until taken
@@ -291,6 +294,7 @@ struct WasmInstance::Impl {
             guestTime = std::chrono::nanoseconds(0);
             inGuest = false;
             limitReported = false;
+            warningReported = false;
             wasmtime_context_set_epoch_deadline(context, 1);
         }
     }
@@ -336,6 +340,19 @@ struct WasmInstance::Impl {
         }
     }
 
+    // The warning of a call that has run past callWarning, once per outermost call; the call goes on.
+    void checkWarning() {
+        if (callWarning.count() > 0 && !warningReported) {
+            const std::chrono::milliseconds elapsed = guestElapsed();
+            if (elapsed > callWarning) {
+                warningReported = true;
+                if (warningHandler) {
+                    warningHandler(elapsed);
+                }
+            }
+        }
+    }
+
     // Why the running call must stop now, or nothing.
     QString interruption() const {
         if (stopRequested.load()) {
@@ -354,6 +371,7 @@ struct WasmInstance::Impl {
         if (self->profiler) {
             self->sample(std::chrono::nanoseconds(0));
         }
+        self->checkWarning();
         QString reason = self->interruption();
         if (!reason.isEmpty()) {
             QByteArray text = reason.toUtf8();
@@ -456,6 +474,7 @@ WasmInstance::WasmInstance(std::shared_ptr<WasmModule> module, const Limits& lim
     _impl->store = wasmtime_store_new(engine, nullptr, nullptr);
     _impl->context = wasmtime_store_context(_impl->store);
     _impl->callTimeout = limits.callTimeout;
+    _impl->callWarning = limits.callWarning;
     wasmtime_store_limiter(_impl->store, limits.memoryBytes, -1, -1, -1, -1);
     wasmtime_store_epoch_deadline_callback(_impl->store, &Impl::onDeadline, _impl.get(), nullptr);
     _impl->linker = wasmtime_linker_new(engine);
@@ -636,6 +655,7 @@ bool WasmInstance::interruptRequested() {
     if (_impl->profiler) {
         _impl->sample(_module->runtime()->settings().epochTick);
     }
+    _impl->checkWarning();
     QString reason = _impl->interruption();
     if (reason.isEmpty()) {
         return false;
@@ -650,6 +670,10 @@ bool WasmInstance::interruptRequested() {
         _impl->limitReported = true;
     }
     return true;
+}
+
+void WasmInstance::setCallWarningHandler(std::function<void(std::chrono::milliseconds elapsed)> handler) {
+    _impl->warningHandler = std::move(handler);
 }
 
 QString WasmInstance::takeInterruptionReason() {

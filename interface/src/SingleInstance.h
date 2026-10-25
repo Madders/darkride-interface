@@ -34,7 +34,9 @@ public:
     bool anotherIsRunning() const { return _anotherIsRunning; }
 
     // Once the application exists: receive the hand-offs of later launches, replacing the socket a crashed client
-    // left. Each one signals connected() at once and urlHandedOff() when its address has arrived.
+    // left. Each one signals connected() at once and urlHandedOff() when its address has arrived. Not when several
+    // clients are allowed: such a client (a walled-off test client) would otherwise take the socket from the user's
+    // own running client and receive its later launches' addresses (2026-10-25).
     void listen();
     // Stops receiving (the application's event loop has ended).
     void close() { _server.close(); }
@@ -44,6 +46,7 @@ signals:
     void urlHandedOff(const QString& url);
 
 private:
+    bool _allowMultiple { false };
     bool _anotherIsRunning { false };
     QLocalServer _server;
 #ifdef Q_OS_WIN

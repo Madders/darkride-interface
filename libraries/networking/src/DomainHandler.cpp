@@ -142,6 +142,14 @@ void DomainHandler::hardReset(QString reason) {
     _pendingPath.clear();
 }
 
+void DomainHandler::leave(QString reason) {
+    hardReset(reason);
+    // hardReset's soft reset starts the refresh timer, for a connection that is meant to come back; this one isn't
+    _apiRefreshTimer.stop();
+    // after resetting: the connection monitor, which starts its time-out on that, stops it on this (metaverse, 10-25)
+    emit left();
+}
+
 bool DomainHandler::isHardRefusal(int reasonCode) {
     return (reasonCode == (int)ConnectionRefusedReason::ProtocolMismatch ||
             reasonCode == (int)ConnectionRefusedReason::TooManyUsers ||

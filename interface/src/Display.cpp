@@ -14,6 +14,7 @@
 //
 
 #include "Display.h"
+#include "TestClientIcon.h"
 
 #include <thread>
 #include <glm/glm.hpp>
@@ -137,6 +138,10 @@ static const QString& clientLabel() {
 
 QString labelledTitle(const QString& title) {   // the start-up, the UI bring-up and the sign-in gate read it too
     return clientLabel().isEmpty() ? title : clientLabel() + " | " + title;
+}
+
+void applyClientLabelIcon() {   // the start-up calls it before the window shows: a test client's Dock icon (TestClientIcon.h)
+    setTestClientIcon(clientLabel());
 }
 
 void Display::initializePlugins() {

@@ -92,7 +92,6 @@ const QVector<EditorCreate::Item>& EditorCreate::items() {
         { "empty", "Empty", "", EntityTypes::Shape },
         { "model", "Model…", "", EntityTypes::Model, true },
         { "cube", "Cube", "Shape", EntityTypes::Shape, true },
-        { "mirror", "Mirror", "Shape", EntityTypes::Shape },
         { "sphere", "Sphere", "Shape", EntityTypes::Shape },
         { "cylinder", "Cylinder", "Shape", EntityTypes::Shape },
         { "cone", "Cone", "Shape", EntityTypes::Shape },
@@ -114,6 +113,20 @@ const QVector<EditorCreate::Item>& EditorCreate::items() {
         { "terrain", "Terrain", "", EntityTypes::Terrain },
         { "track", "Track", "", EntityTypes::Track },
         { "trackcar", "Track Car", "", EntityTypes::Shape },
+        // ready-made things (Caity, 10-24): a mirror, and vehicles to drive at once, the Test Track's own as physics
+        // tuned them (tests-manual/physics-baseline: landrover.js, aircraft-rig.js, airship-rig.js; the monorail's
+        // loop and car). Later here: a scripted-avatar slot, a sound emitter, a wind source
+        { "mirror", "Mirror", "Special items", EntityTypes::Shape, true },
+        { "vehicle-car", "Car", "Special items/Vehicles", EntityTypes::Box, false, "editor/vehicles/car.json", 0.0f, false,
+          "A four-wheeled car: get in its driver's seat to drive" },
+        { "vehicle-rail", "Rail", "Special items/Vehicles", EntityTypes::Track, false, "editor/vehicles/rail.json", 20.0f,
+          false, "A loop of monorail track with a car that stops at its station: walk up the ramp to the platform to board" },
+        { "vehicle-airship", "Airship", "Special items/Vehicles", EntityTypes::Box, false, "editor/vehicles/airship.json",
+          25.0f, false, "A small airship with a deck to walk on, 36 m long: it goes 25 m ahead of you" },
+        { "vehicle-aircraft", "Aircraft", "Special items/Vehicles", EntityTypes::Box, false, "editor/vehicles/aircraft.json",
+          6.0f, false, "A small aircraft with a flight assistant. It flies best in a world with the physics server on" },
+        { "vehicle-watercraft", "Watercraft (coming later)", "Special items/Vehicles", EntityTypes::Box, false, "", 0.0f,
+          true, "Boats need water physics, which isn't built yet" },
     };
     return ITEMS;
 }

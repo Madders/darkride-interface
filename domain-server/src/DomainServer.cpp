@@ -71,11 +71,9 @@ const QString DomainServer::REPLACEMENT_FILE_EXTENSION = ".replace";
 
 int const DomainServer::EXIT_CODE_REBOOT = 234923;
 
-#if USE_STABLE_GLOBAL_SERVICES
-const QString ICE_SERVER_DEFAULT_HOSTNAME = "ice.tivolicloud.com";
-#else
-const QString ICE_SERVER_DEFAULT_HOSTNAME = "ice.tivolicloud.com";
-#endif
+// no ICE server by default: Darkride runs none, and Tivoli's (ice.tivolicloud.com) is gone. One can be given with -i;
+// without it, a server set to full automatic networking works as IP only (setupAutomaticNetworking)
+const QString ICE_SERVER_DEFAULT_HOSTNAME = "";
 
 QString DomainServer::_iceServerAddr { ICE_SERVER_DEFAULT_HOSTNAME };
 int DomainServer::_iceServerPort { ICE_SERVER_DEFAULT_PORT };
@@ -597,7 +595,7 @@ void DomainServer::handleTempDomainSuccess(QNetworkReply* requestReply) {
         qDebug() << "The temporary domain ID is" << id;
 
         // store the new domain ID and auto network setting immediately
-        QString newSettingsJSON = QString("{\"metaverse\": { \"id\": \"%1\", \"automatic_networking\": \"full\"}}").arg(id);
+        QString newSettingsJSON = QString("{\"metaverse\": { \"id\": \"%1\", \"automatic_networking\": \"ip\"}}").arg(id);
         auto settingsDocument = QJsonDocument::fromJson(newSettingsJSON.toUtf8());
         _settingsManager.recurseJSONObjectAndOverwriteSettings(settingsDocument.object(), DomainSettings);
 
@@ -858,6 +856,14 @@ void DomainServer::setupAutomaticNetworking() {
     _automaticNetworkingSetting =
         _settingsManager.valueOrDefaultValueForKeyPath(METAVERSE_AUTOMATIC_NETWORKING_KEY_PATH).toString();
 
+    // full goes through an ICE server: without one, IP only, so the server is still reached through its forwarded ports
+    // (a config saved when full was the default keeps working)
+    if (_automaticNetworkingSetting == FULL_AUTOMATIC_NETWORKING_VALUE && _iceServerAddr.isEmpty()) {
+        qCWarning(domain_server_ice) << "Automatic networking is set to full, but there is no ICE server (-i host:port):"
+                                     << "using IP only";
+        _automaticNetworkingSetting = IP_ONLY_AUTOMATIC_NETWORKING_VALUE;
+    }
+
     qDebug() << "Configuring automatic networking in domain-server as" << _automaticNetworkingSetting;
 
     if (_automaticNetworkingSetting != DISABLED_AUTOMATIC_NETWORKING_VALUE) {
@@ -909,6 +915,9 @@ void DomainServer::setupHeartbeatToMetaverse() {
 }
 
 void DomainServer::setupICEHeartbeatForFullNetworking() {
+    if (_iceServerAddr.isEmpty()) {
+        return; // no ICE server to heartbeat with
+    }
     auto limitedNodeList = DependencyManager::get<LimitedNodeList>();
 
     // lookup the available ice-server hosts now
@@ -1411,6 +1420,10 @@ void DomainServer::sendHeartbeatToMetaverse(const QString& networkAddress) {
     if (!networkAddress.isEmpty()) {
         static const QString PUBLIC_NETWORK_ADDRESS_KEY = "network_address";
         domainObject[PUBLIC_NETWORK_ADDRESS_KEY] = networkAddress;
+        // with it the UDP port this server listens on, the one a home server forwards on its router: the metaverse
+        // otherwise lists 40102 for every world, whatever its Local UDP Port (a string, as the metaverse's API takes it)
+        static const QString PUBLIC_NETWORK_PORT_KEY = "network_port";
+        domainObject[PUBLIC_NETWORK_PORT_KEY] = QString::number(DependencyManager::get<LimitedNodeList>()->getSocketLocalPort());
     }
 
     static const QString AUTOMATIC_NETWORKING_KEY = "automatic_networking";
