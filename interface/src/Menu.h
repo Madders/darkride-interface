@@ -69,6 +69,7 @@ namespace MenuOption {
     const QString BuildRemoveImpostor = "Remove Impostor";
     const QString BuildUndo = "Undo";
     const QString CalibrateCamera = "Calibrate Camera";
+    const QString CameraCollision = "Camera Collision";
     const QString CenterPlayerInView = "Center Player In View";
     const QString Chat = "Chat...";
     const QString ClearDiskCaches = "Clear Disk Caches (requires restart)";
@@ -117,6 +118,7 @@ namespace MenuOption {
     const QString EchoServerAudio = "Echo Server Audio";
     const QString EnableFlying = "Enable Flying";
     const QString EnableAvatarCollisions = "Enable Avatar Collisions";
+    const QString WalkThroughWalls = "Walk Through Walls";
     const QString EnableInverseKinematics = "Enable Inverse Kinematics";
     const QString EntityScriptServerLog = "Entity Script Server Log";
     const QString ExpandMyAvatarSimulateTiming = "Expand /myAvatar/simulation";

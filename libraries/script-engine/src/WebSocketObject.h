@@ -74,7 +74,8 @@ class WebSocketFactory : public QObject {
 public:
     explicit WebSocketFactory(QObject* parent = nullptr) : QObject(parent) {}
 
-    Q_INVOKABLE QObject* createWebSocket(const QString& url);
+    /// A socket the script owns (ValueCodec: an owned object), so that one it has let go of is deleted.
+    Q_INVOKABLE WebSocketObject* createWebSocket(const QString& url);
     /// Deletes a socket this factory made, once the script is done with it.
     Q_INVOKABLE void dispose(QObject* socket);
 };
@@ -114,7 +115,8 @@ class WebSocketServerFactory : public QObject {
 public:
     explicit WebSocketServerFactory(QObject* parent = nullptr) : QObject(parent) {}
 
-    Q_INVOKABLE QObject* createWebSocketServer(const QString& serverName, int port);
+    /// A server the script owns, as a socket is.
+    Q_INVOKABLE WebSocketServerObject* createWebSocketServer(const QString& serverName, int port);
 };
 
 #endif // hifi_WebSocketObject_h

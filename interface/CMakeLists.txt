@@ -119,6 +119,35 @@ if (APPLE)
   # set how the icon shows up in the Info.plist file
   set(MACOSX_BUNDLE_ICON_FILE "${INTERFACE_ICON_FILENAME}")
 
+  # Only a PRODUCTION build (a download) claims the tivoli: and tivoliapp: links, so macOS never hands a link to one of
+  # the many dev and test builds on a developer's Mac (10-25: 35 were registered, and links went to stale ones).
+  # -DCLAIM_URL_SCHEMES=ON makes a dev build claim them, to test links.
+  option(CLAIM_URL_SCHEMES "the Mac bundle handles tivoli: and tivoliapp: links (on for PRODUCTION builds)" OFF)
+  if (PRODUCTION_BUILD OR CLAIM_URL_SCHEMES)
+    set(MACOSX_BUNDLE_URL_TYPES "\t<key>CFBundleURLTypes</key>
+\t<array>
+\t\t<dict>
+\t\t\t<key>CFBundleURLName</key>
+\t\t\t<string>${MACOSX_BUNDLE_BUNDLE_NAME} URL</string>
+\t\t\t<key>CFBundleURLSchemes</key>
+\t\t\t<array>
+\t\t\t\t<string>tivoli</string>
+\t\t\t</array>
+\t\t</dict>
+\t\t<dict>
+\t\t\t<key>CFBundleURLName</key>
+\t\t\t<string>${MACOSX_BUNDLE_BUNDLE_NAME} APP URL</string>
+\t\t\t<key>CFBundleURLSchemes</key>
+\t\t\t<array>
+\t\t\t\t<string>tivoliapp</string>
+\t\t\t</array>
+\t\t</dict>
+\t</array>
+")
+  else ()
+    set(MACOSX_BUNDLE_URL_TYPES "")
+  endif ()
+
   # set where in the bundle to put the resources file
   set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/icon/${INTERFACE_ICON_FILENAME} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 

@@ -26,9 +26,15 @@ namespace EditorCreate {
     struct Item {
         QString key;                    // "cube", "spot", "model" ...
         QString label;                  // the menu text
-        QString group;                  // a submenu, or empty for the top level
+        QString group;                  // a submenu, or empty for the top level; "/" nests ("Special items/Vehicles")
         EntityTypes::EntityType type;
         bool separatorBefore { false }; // a separator above this item (or above its group)
+        // a ready-made family of entities: an entity file in the app's resources, placed whole (Editor::createPreset)
+        QString preset {};
+        float ahead { 0.0f };           // a big one goes at least this far from the camera (the airship)
+        // greyed in the menu with this as its tooltip (a kind the engine can't make yet); or a tooltip for one it can
+        bool disabled { false };
+        QString tooltip {};
     };
     const QVector<Item>& items();
     const Item* item(const QString& key);

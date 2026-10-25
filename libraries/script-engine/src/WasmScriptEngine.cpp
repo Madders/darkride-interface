@@ -642,6 +642,11 @@ void WasmScriptEngine::loop() {
         } else {
             QCoreApplication::processEvents();
         }
+        // What was deleted later inside that loop goes now. Qt runs a deferred delete only once a loop lower than the
+        // one it was asked for in has control, and this thread runs no other loop: a request's network reply, and an
+        // object the script let go of while a reply was being delivered, would otherwise stay for good (an agent
+        // posting what it hears grew without end, 2026-10-25).
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         if (_isFinished) {
             break;
         }

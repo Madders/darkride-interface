@@ -20,6 +20,7 @@
 #include <DependencyManager.h>
 #include <MainWindow.h>
 #include <OffscreenUi.h>
+#include <QtQuick/QQuickItem>
 #include <StatTracker.h>
 #include <Trace.h>
 
@@ -424,6 +425,51 @@ QString TestScriptingInterface::editorLoadProblem(const QUuid& id) {
         return result;
     }
     return DependencyManager::get<Editor>()->loadProblem(id);
+}
+
+void TestScriptingInterface::showSignInScreen() {
+    if (QThread::currentThread() != thread()) {
+        BLOCKING_INVOKE_METHOD(this, "showSignInScreen");
+        return;
+    }
+    // as the logout path does (ApplicationStartup.cpp, AccountManager::logoutComplete)
+    qApp->getSignInGate().pauseUntilLoginDetermined();
+    qApp->getSignInGate().showLoginScreen();
+}
+
+// a QML panel's item by its objectName, in the desktop (the panels are its windows)
+static QObject* findPanelItem(const QString& objectName) {
+    auto offscreenUi = DependencyManager::get<OffscreenUi>();
+    QQuickItem* desktop = offscreenUi ? offscreenUi->getDesktop() : nullptr;
+    return desktop ? desktop->findChild<QObject*>(objectName) : nullptr;
+}
+
+bool TestScriptingInterface::setPanelText(const QString& objectName, const QString& text) {
+    if (QThread::currentThread() != thread()) {
+        bool result = false;
+        BLOCKING_INVOKE_METHOD(this, "setPanelText", Q_RETURN_ARG(bool, result), Q_ARG(QString, objectName), Q_ARG(QString, text));
+        return result;
+    }
+    QObject* field = findPanelItem(objectName);
+    return field && field->setProperty("text", text);
+}
+
+bool TestScriptingInterface::acceptPanelText(const QString& objectName) {
+    if (QThread::currentThread() != thread()) {
+        bool result = false;
+        BLOCKING_INVOKE_METHOD(this, "acceptPanelText", Q_RETURN_ARG(bool, result), Q_ARG(QString, objectName));
+        return result;
+    }
+    QObject* field = findPanelItem(objectName);
+    return field && QMetaObject::invokeMethod(field, "accepted");
+}
+
+void TestScriptingInterface::editorCreate(const QString& key) {
+    if (QThread::currentThread() != thread()) {
+        BLOCKING_INVOKE_METHOD(this, "editorCreate", Q_ARG(QString, key));
+        return;
+    }
+    DependencyManager::get<Editor>()->create(key);
 }
 
 bool TestScriptingInterface::saveWindowPicture(const QString& path) {

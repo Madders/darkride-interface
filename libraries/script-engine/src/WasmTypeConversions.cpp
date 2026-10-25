@@ -35,10 +35,12 @@
 #include "MenuItemProperties.h"
 #include "MIDIEvent.h"
 #include "MouseEvent.h"
+#include "HttpRequestObject.h"
 #include "ScriptAudioInjector.h"
 #include "SpatialEvent.h"
 #include "TouchEvent.h"
 #include "WebSocketClass.h"
+#include "WebSocketObject.h"
 #include "WheelEvent.h"
 
 namespace {
@@ -524,6 +526,13 @@ bool injectorLingers(QObject* object) {
     return injector && injector->isPlaying();
 }
 
+// A request the script let go of while it was still under way (sent, its reply not yet come) is kept until it is
+// done; one opened and never sent is not.
+bool requestLingers(QObject* object) {
+    auto request = qobject_cast<HttpRequestObject*>(object);
+    return request && request->isSending();
+}
+
 QCborValue encodeSound(const ValueCodec& codec, const SharedSoundPointer& sound) {
     // a new wrapper for each crossing, which the script owns (soundSharedPointerToScriptValue)
     return codec.toCborOwned(new SoundScriptingInterface(sound));
@@ -602,7 +611,9 @@ QCborValue encodeEntityPropertyFlags(const ValueCodec&, const EntityPropertyFlag
     return QCborMap();  // EntityItemProperties::entityPropertyFlagsToScriptValue gives an empty object
 }
 
-// EntityItemProperties::entityPropertyFlagsFromScriptValue: a property name or a list of them
+// EntityItemProperties::entityPropertyFlagsFromScriptValue: a property name or a list of them, by its rule
+// (addPropertyFlagsByName): a property's name ("position", "grab.grabbable") names one flag, a group's name alone
+// ("grab", "vehicle") every property of the group
 bool decodeEntityPropertyFlags(const ValueCodec& codec, const QCborValue& value, EntityPropertyFlags& flags) {
     QStringList names;
     if (value.isString()) {
@@ -616,6 +627,10 @@ bool decodeEntityPropertyFlags(const ValueCodec& codec, const QCborValue& value,
         EntityPropertyInfo propertyInfo;
         if (EntityItemProperties::getPropertyInfo(name, propertyInfo)) {
             flags << propertyInfo.propertyEnum;
+        } else if (!name.contains('.')) {
+            for (EntityPropertyList property : EntityItemProperties::getPropertiesOfGroup(name)) {
+                flags << property;
+            }
         }
     }
     return true;
@@ -919,6 +934,11 @@ void WasmTypeConversions::registerAll() {
         add<AnimationDetails>(&encodeAnimationDetails, &decodeNothing);
         addOwnedObject<ScriptableResource>();
         addOwnedObject<WebSocketClass>();
+        // what the new engine's network objects are made of (the guest's XMLHttpRequest, WebSocket, WebSocketServer):
+        // the script owns them, so one it has let go of is deleted, as QtScript collected its own
+        addOwnedObject<HttpRequestObject>(&requestLingers);
+        addOwnedObject<WebSocketObject>();
+        addOwnedObject<WebSocketServerObject>();
 
         add<AnimationPointer>(&encodeAnimation, &decodeAnimation);
         add<HFMAnimationFrame>(&encodeAnimationFrame, &decodeAnimationFrame);

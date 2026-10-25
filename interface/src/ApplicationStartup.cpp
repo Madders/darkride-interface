@@ -116,6 +116,7 @@ using namespace std;
 
 QSharedPointer<OffscreenUi> getOffscreenUI();            // Application.cpp's
 QString labelledTitle(const QString& title);             // Display.cpp's: a window title with the client label
+void applyClientLabelIcon();                            // Display.cpp's: a test client's Dock icon, from the label
 
 QTimer locationUpdateTimer;   // started by the constructor, stopped in ApplicationShutdown.cpp
 
@@ -502,6 +503,7 @@ void Application::startServices() {
 
     StartupProfiler::phase("constructor: node list thread, address manager");
     _window->setWindowTitle(labelledTitle("Darkride"));
+    applyClientLabelIcon();
 
     Model::setAbstractViewStateInterface(this); // The model class will sometimes need to know view state details from us
 
@@ -1779,8 +1781,23 @@ void Application::initializeGL() {
     // Enable autoplay
     chromiumFlags << "--autoplay-policy=no-user-gesture-required";
 
+#ifdef Q_OS_MACOS
+    // The web views' GPU start-up opened VideoToolbox's decoder and encoder services to list the hardware's video
+    // formats, and that pair (~30 MB) stayed alive after the client quit, one per launch, until logout (bug #29,
+    // performance 2026-10-25). Nothing is lost: this QtWebEngine has no H.264, and VP8/VP9 decode in software anyway
+    // (a 1080p VP9 Web entity measured the same with and without).
+    chromiumFlags << "--disable-accelerated-video-decode" << "--disable-accelerated-video-encode";
+#endif
+
     // Enable this for debugging chromium
     // chromiumFlags << "--enable-logging" << "--log-level=0" << "--v=1";
+
+    // DARKRIDE_CHROMIUM_FLAGS adds switches of the caller's: QTWEBENGINE_CHROMIUM_FLAGS is set here, so switches on the
+    // command line or in that variable from outside never reach the web views (performance's VT-service tests, 10-25)
+    const QString extraChromiumFlags = qEnvironmentVariable("DARKRIDE_CHROMIUM_FLAGS").trimmed();
+    if (!extraChromiumFlags.isEmpty()) {
+        chromiumFlags << extraChromiumFlags.split(' ', Qt::SkipEmptyParts);
+    }
 
     // Ensure all Qt webengine processes launched from us have the appropriate command line flags
     if (!chromiumFlags.empty()) {

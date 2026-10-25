@@ -23,6 +23,7 @@
 #include <display-plugins/CompositorHelper.h>
 #include <EntityScriptingInterface.h>
 #include <MainWindow.h>
+#include <MessagesClient.h>
 #include <PathUtils.h>
 #include <ScriptEngines.h>
 #include <shared/GlobalAppProperties.h>
@@ -32,12 +33,16 @@
 #include "avatar/AvatarManager.h"
 #include "ClientOptions.h"
 #include "ui/Skins.h"
+#include "editor/Editor.h"
 #include "ui/SystemToolbar.h"
 #include "ui/DialogsManager.h"
 #include "ui/Keyboard.h"
 #include "ui/LoginDialog.h"
 
 QString labelledTitle(const QString& title);   // Display.cpp's: a window title with the client label
+
+// the local channel the bar's script (tivoli-scripts buttons.ts) closes every panel on, with the message "close"
+static const QString PANELS_CHANNEL = "Darkride-Panels";
 
 // the mappings the pause swaps: the standard one off, one without movement on
 static const QString STANDARD_TO_ACTION_MAPPING_NAME = "Standard to Action";
@@ -57,6 +62,13 @@ void SignInGate::showLoginScreen() {
         SystemToolbar::instance()->setAllowed(false);   // either bar, floating or on a side
     }
     DependencyManager::get<Skins>()->setHeld(true);     // no skin on the sign-in screen
+    // the screen takes the whole window: build mode would squeeze it into its centre view, and a panel window (Explore,
+    // Settings) would sit on top of it (Caity, 10-25: signed out in build mode, the screen was hidden under Explore). The
+    // bar's script closes its panels on this local message
+    if (DependencyManager::isSet<Editor>()) {
+        DependencyManager::get<Editor>()->setActive(false);
+    }
+    DependencyManager::get<MessagesClient>()->sendLocalMessage(PANELS_CHANNEL, "close");
 
     _poppedUp = true;
     _poppedUpSetting.set(_poppedUp);
@@ -100,6 +112,7 @@ void SignInGate::pauseUntilLoginDetermined() {
     menu->getMenu("View")->setVisible(false);
     menu->getMenu("Navigate")->setVisible(false);
     menu->getMenu("Settings")->setVisible(false);
+    menu->getMenu("Build")->setVisible(false);   // build mode, under the sign-in screen, is for after it
     _developerMenuVisible = menu->getMenu("Developer")->isVisible();
     menu->setIsOptionChecked(MenuOption::Stats, false);
     if (_developerMenuVisible) {
@@ -107,8 +120,10 @@ void SignInGate::pauseUntilLoginDetermined() {
     }
     qApp->getViewState().setModeKeepingPrevious(CAMERA_MODE_FIRST_PERSON_LOOK_AT);
 
-    // disconnect domain handler.
-    nodeList->getDomainHandler().disconnect("Pause until login determined");
+    // out of the domain, and not trying it again until the resume goes to the starting location: a plain disconnect
+    // kept checking in, and the API refresh went back to the last world every 2.5 s while the sign-in screen was up
+    // (#34; Caity, 10-25, after a logout from a world that had gone down). On the node list's thread, as its handler is
+    QMetaObject::invokeMethod(&nodeList->getDomainHandler(), "leave", Q_ARG(QString, "Pause until login determined"));
 
     // From now on, it's permissible to call resumeAfterLoginDialogActionTaken()
     _resumeSafeToRun = true;
@@ -193,6 +208,7 @@ void SignInGate::resumeAfterLoginDialogActionTaken() {
     menu->getMenu("View")->setVisible(true);
     menu->getMenu("Navigate")->setVisible(true);
     menu->getMenu("Settings")->setVisible(true);
+    menu->getMenu("Build")->setVisible(true);
     menu->getMenu("Developer")->setVisible(_developerMenuVisible);
     qApp->getViewState().restorePreviousMode();
     _startUpFinished = true;

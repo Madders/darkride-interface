@@ -79,6 +79,25 @@ public slots:
      */
     Q_DECL_DEPRECATED void setCameraEntity(QUuid entityID) { set_parentID(entityID); }
 
+    /**jsdoc
+     * Gets how far from a pivot toward where it wants to be a camera can stand without going into a wall: the test the
+     * third-person camera makes for camera collision (View &gt; Camera Collision), for a script that places the camera
+     * itself, such as a vehicle's chase camera. What would stop your avatar stops the camera, except glass (a shape entity
+     * you can see through), things under a metre that move, and the entities you name, with their children. Move the
+     * camera in to this length at once and back out eased, as the third-person camera does (a time constant of 0.12 s).
+     * @function Camera.collideBoom
+     * @param {Vec3} pivot - Where the boom starts: a point the camera looks at, say just above the vehicle.
+     * @param {Vec3} wanted - Where the camera wants to be.
+     * @param {Uuid[]} ignore - The entities the camera sees through, with their children: the vehicle you drive.
+     * @returns {number} The boom's length allowed, from <code>pivot</code> toward <code>wanted</code>: its whole length when
+     *     nothing is in the way or View &gt; Camera Collision is off.
+     * @example <caption>A chase camera kept out of walls.</caption>
+     * var length = Vec3.distance(pivot, wanted);
+     * var allowed = Camera.collideBoom(pivot, wanted, [vehicleID]);
+     * Camera.position = Vec3.sum(pivot, Vec3.multiply(allowed / length, Vec3.subtract(wanted, pivot)));
+     */
+    float collideBoom(const glm::vec3& pivot, const glm::vec3& wanted, const QVector<QUuid>& ignore);
+
 private:
     SpatiallyNestableWeakPointer _parent;
 };

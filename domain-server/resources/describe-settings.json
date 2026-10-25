@@ -21,14 +21,14 @@
         },
         {
           "name": "automatic_networking",
-          "label": "How visitors reach this server",
-          "help": "Leave this on <strong>Automatic</strong> unless you know you need something else: Darkride then finds a way through your router for visitors by itself.",
-          "default": "full",
+          "label": "Automatic Networking",
+          "help": "This defines how other nodes in the Darkride metaverse will be able to reach your server.<br/>IP Only suits most servers: forward the world's UDP ports on your router. Full needs an ICE server of your own (the domain-server's -i option): Darkride runs none, and without one Full works as IP Only.",
+          "default": "ip",
           "type": "select",
           "options": [
             {
               "value": "full",
-              "label": "Automatic: Darkride finds a way through your router (recommended)"
+              "label": "Full: connection through an ICE server (needs your own ICE server)"
             },
             {
               "value": "ip",

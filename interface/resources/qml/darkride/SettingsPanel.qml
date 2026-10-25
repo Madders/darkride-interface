@@ -63,6 +63,7 @@ Page {
         property bool statistics: false
         property real yawSpeed: 100   // MyAvatar.cpp YAW_SPEED_DEFAULT
         property real pitchSpeed: 75   // PITCH_SPEED_DEFAULT
+        property bool collisions: true
 
         function refresh() {
             startAtLastPlace = MenuInterface.isOptionChecked("Last Location");
@@ -71,6 +72,7 @@ Page {
             statistics = MenuInterface.isOptionChecked("Show Statistics");
             yawSpeed = MyAvatar.yawSpeed;
             pitchSpeed = MyAvatar.pitchSpeed;
+            collisions = MyAvatar.collisionsEnabled;
         }
 
         Component.onCompleted: refresh()
@@ -168,6 +170,17 @@ Page {
                 ResetButton {
                     needed: Math.round(general.pitchSpeed) !== 75
                     onClicked: { MyAvatar.pitchSpeed = 75; general.refresh(); }
+                }
+            }
+            ListRow {
+                // noclip (Caity, 10-25: "should be" in Settings); also the Avatar panel's, and Navigate > Walk Through
+                // Walls with its key
+                label: "Collide with the world"
+                // the menu's Ctrl is the Command key on a Mac
+                detail: "off: walk through walls (noclip). Key: " + (Qt.platform.os === "osx" ? "⌘ Shift N" : "Ctrl+Shift+N")
+                Toggle {
+                    checked: general.collisions
+                    onToggled: { MyAvatar.collisionsEnabled = checked; general.refresh(); }
                 }
             }
             ListRow {

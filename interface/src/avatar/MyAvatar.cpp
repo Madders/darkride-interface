@@ -2519,7 +2519,17 @@ void MyAvatar::setSkeletonModelURL(const QUrl& skeletonModelURL) {
     _skeletonModel->setGroupCulled(true);
     _skeletonModel->setVisibleInScene(true, qApp->getMain3DScene());
 
-    _headBoneSet.clear();
+    if (_skeletonModel->isLoaded()) {
+        // nothing to load: the same model again (Model::setURL keeps it, so skeletonLoaded doesn't come and the
+        // handler below never runs). Clearing the head's bones here left them empty for good, and with them hiding
+        // your own head and body from a camera right at it (a client that set its avatar twice at start)
+        qCDebug(interfaceapp) << "the avatar's model is" << getSkeletonModelURL() << "again, already loaded";
+        initHeadBones();
+        _skeletonModel->setCauterizeBoneSet(_headBoneSet);
+        _prevShouldDrawBody = true;
+    } else {
+        _headBoneSet.clear();
+    }
     _cauterizationNeedsUpdate = true;
 
     std::shared_ptr<QMetaObject::Connection> skeletonConnection = std::make_shared<QMetaObject::Connection>();
@@ -2536,6 +2546,7 @@ void MyAvatar::setSkeletonModelURL(const QUrl& skeletonModelURL) {
 
             initHeadBones();
             _skeletonModel->setCauterizeBoneSet(_headBoneSet);
+            _prevShouldDrawBody = true;   // the new model has the head's bones only: preDisplaySide hides the rest again
             _fstAnimGraphOverrideUrl = _skeletonModel->getNetworkModel()->getAnimGraphOverrideUrl();
             initAnimGraph();
             if (getFlowEnabled()) initFlowFromFST();
@@ -3514,21 +3525,37 @@ void MyAvatar::postUpdate(float deltaTime, const render::ScenePointer& scene) {
 }
 
 void MyAvatar::preDisplaySide(const RenderArgs* renderArgs) {
+    updateCloseCamera(renderArgs->getViewFrustum().getPosition());
 
     // toggle using the cauterizedBones depending on where the camera is and the rendering pass type.
     const bool shouldDrawHead = shouldRenderHead(renderArgs);
-    if (shouldDrawHead != _prevShouldDrawHead) {
+    const bool shouldDrawBody = _closeCamera != CloseCamera::Body;
+    if (shouldDrawHead != _prevShouldDrawHead || shouldDrawBody != _prevShouldDrawBody) {
         _cauterizationNeedsUpdate = true;
-        _skeletonModel->setEnableCauterization(!shouldDrawHead);
+        // the whole body is hidden the way the head is, every bone collapsed to the neck in your own view only:
+        // shadows and the secondary camera still draw it whole (CauterizedMeshPartPayload::bindTransform), and
+        // simulate() hides the entities on any of its joints, as it does those on the head's
+        if (shouldDrawBody) {
+            _skeletonModel->setCauterizeBoneSet(_headBoneSet);
+        } else {
+            std::unordered_set<int> allBones;
+            for (int i = 0; i < _skeletonModel->getJointStateCount(); i++) {
+                allBones.insert(i);
+            }
+            _skeletonModel->setCauterizeBoneSet(allBones);
+        }
+        _skeletonModel->setEnableCauterization(!shouldDrawHead || !shouldDrawBody);
 
         for (int i = 0; i < _attachmentData.size(); i++) {
-            if (_attachmentData[i].jointName.compare("Head", Qt::CaseInsensitive) == 0 ||
+            bool onHead = _attachmentData[i].jointName.compare("Head", Qt::CaseInsensitive) == 0 ||
                 _attachmentData[i].jointName.compare("Neck", Qt::CaseInsensitive) == 0 ||
                 _attachmentData[i].jointName.compare("LeftEye", Qt::CaseInsensitive) == 0 ||
                 _attachmentData[i].jointName.compare("RightEye", Qt::CaseInsensitive) == 0 ||
                 _attachmentData[i].jointName.compare("HeadTop_End", Qt::CaseInsensitive) == 0 ||
-                _attachmentData[i].jointName.compare("Face", Qt::CaseInsensitive) == 0) {
-                uint8_t modelRenderTagBits = shouldDrawHead ? render::hifi::TAG_ALL_VIEWS : render::hifi::TAG_SECONDARY_VIEW;
+                _attachmentData[i].jointName.compare("Face", Qt::CaseInsensitive) == 0;
+            if (onHead || shouldDrawBody != _prevShouldDrawBody) {
+                bool draw = shouldDrawBody && (!onHead || shouldDrawHead);
+                uint8_t modelRenderTagBits = draw ? render::hifi::TAG_ALL_VIEWS : render::hifi::TAG_SECONDARY_VIEW;
 
                 _attachmentModels[i]->setTagMask(modelRenderTagBits);
                 _attachmentModels[i]->setGroupCulled(false);
@@ -3538,6 +3565,94 @@ void MyAvatar::preDisplaySide(const RenderArgs* renderArgs) {
         }
     }
     _prevShouldDrawHead = shouldDrawHead;
+    _prevShouldDrawBody = shouldDrawBody;
+}
+
+void MyAvatar::updateCloseCamera(const glm::vec3& cameraPosition) {
+    // not in first person, which hides the head already and shows the body on purpose, nor in the HMD's own view.
+    // No neck, nothing to collapse to (initHeadBones leaves the set empty)
+    const CameraMode mode = qApp->getCamera().getMode();
+    const bool firstPerson = mode == CAMERA_MODE_FIRST_PERSON || mode == CAMERA_MODE_FIRST_PERSON_LOOK_AT;
+    if (firstPerson || qApp->isHMDMode() || !_skeletonModel || !_skeletonModel->isLoaded() || _headBoneSet.empty()) {
+        _closeCamera = CloseCamera::None;
+        return;
+    }
+    // the head goes as soon as the camera nears anything on it: big hair stands well out from the head, and the
+    // camera passes through it on its way in (Caity's test, 10-25). In meters, as the near plane (DEFAULT_NEAR_CLIP,
+    // 0.08) is: anything nearer than that is cut open. This works for any camera, a script's (independent, entity)
+    // as well as the third-person ones
+    const float SHAPES_IN = 0.15f;
+    const float SHAPES_OUT = 0.22f;
+    const bool nearShapes = cameraNearHeadShapes(cameraPosition, _closeCamera != CloseCamera::None ? SHAPES_OUT : SHAPES_IN);
+
+    // the third-person cameras also by their distance from the point they swing around (ViewState: the eyes in third
+    // person, a point at eye height on the avatar's upright axis in look-at and selfie), in the avatar's own size.
+    // Zoomed by hand it is never under ZOOM_MIN (0.5; at the minimum the view turns first person), so anything nearer
+    // is camera collision holding it in. Hidden once nearer than IN, shown again only past OUT, so it doesn't flicker as
+    // the camera eases back out after a wall; all stay under ZOOM_MIN. The camera is behind the head in third person and
+    // look-at; in selfie it faces you, and your face may come closer before anything is cut.
+    const bool boom = mode == CAMERA_MODE_THIRD_PERSON || mode == CAMERA_MODE_LOOK_AT || mode == CAMERA_MODE_SELFIE;
+    const bool selfie = mode == CAMERA_MODE_SELFIE;
+    const float HEAD_IN = selfie ? 0.3f : 0.4f;
+    const float HEAD_OUT = selfie ? 0.36f : 0.46f;
+    const float BODY_IN = 0.15f;
+    const float BODY_OUT = 0.2f;
+    const glm::vec3 pivot = mode == CAMERA_MODE_THIRD_PERSON ? getDefaultEyePosition() : getLookAtPivotPoint();
+    const float distance = boom ? glm::distance(cameraPosition, pivot) / getModelScale() : FLT_MAX;
+
+    const CloseCamera was = _closeCamera;
+    if (distance < (_closeCamera == CloseCamera::Body ? BODY_OUT : BODY_IN)) {
+        _closeCamera = CloseCamera::Body;
+    } else if (nearShapes || distance < (_closeCamera != CloseCamera::None ? HEAD_OUT : HEAD_IN)) {
+        _closeCamera = CloseCamera::Head;
+    } else {
+        _closeCamera = CloseCamera::None;
+    }
+    if (_closeCamera != was) {
+        static const char* NAMES[] = { "nothing", "the head", "the whole avatar" };
+        qCDebug(interfaceapp) << "the camera is" << distance << "from its pivot (camera mode" << (int)mode
+                              << ", the avatar's size" << getModelScale() << (nearShapes ? ", near the head's shapes" : "")
+                              << "): hiding" << NAMES[(int)_closeCamera];
+    }
+}
+
+bool MyAvatar::cameraNearHeadShapes(const glm::vec3& cameraPosition, float margin) const {
+    const Rig& rig = _skeletonModel->getRig();
+    const HFMModel& hfmModel = _skeletonModel->getHFMModel();
+    const int headJointIndex = rig.indexOfJoint("Head");
+    AnimPose headPose;
+    if (headJointIndex < 0 || !rig.getAbsoluteJointPoseInRigFrame(headJointIndex, headPose)) {
+        return false;
+    }
+    // the head's frame without its scale, so the box and the margin are in meters, as the rig's frame is (the
+    // camera goes into the rig's frame as in cameraInsideHead)
+    const AnimPose rigToHead = AnimPose(headPose.rot(), headPose.trans()).inverse();
+    const AnimPose rigToWorld = AnimPose(getWorldOrientation() * Quaternions::Y_180, getWorldPosition());
+    const glm::vec3 camera = rigToHead * (rigToWorld.inverse() * cameraPosition);
+
+    // each bone's shape is the extreme points of the vertices it moves (HFMModel::computeKdops), in its own frame
+    glm::vec3 minimum(FLT_MAX);
+    glm::vec3 maximum(-FLT_MAX);
+    bool any = false;
+    for (int jointIndex : _headBoneSet) {
+        if (jointIndex < 0 || jointIndex >= (int)hfmModel.joints.size()) {
+            continue;
+        }
+        const std::vector<glm::vec3>& points = hfmModel.joints[jointIndex].shapeInfo.points;
+        AnimPose jointPose;
+        if (points.empty() || !rig.getAbsoluteJointPoseInRigFrame(jointIndex, jointPose)) {
+            continue;
+        }
+        const AnimPose jointToHead = rigToHead * jointPose;
+        for (const glm::vec3& point : points) {
+            const glm::vec3 inHead = jointToHead * point;
+            minimum = glm::min(minimum, inHead);
+            maximum = glm::max(maximum, inHead);
+            any = true;
+        }
+    }
+    return any && glm::all(glm::greaterThan(camera, minimum - glm::vec3(margin))) &&
+        glm::all(glm::lessThan(camera, maximum + glm::vec3(margin)));
 }
 
 int MyAvatar::sendAvatarDataPacket(bool sendAll) {
@@ -3606,7 +3721,7 @@ bool MyAvatar::shouldRenderHead(const RenderArgs* renderArgs) const {
     bool firstPerson = qApp->getCamera().getMode() == CAMERA_MODE_FIRST_PERSON_LOOK_AT ||
                        qApp->getCamera().getMode() == CAMERA_MODE_FIRST_PERSON;
     bool overrideAnim = _skeletonModel ? _skeletonModel->getRig().isPlayingOverrideAnimation() : false;
-    bool insideHead = cameraInsideHead(renderArgs->getViewFrustum().getPosition());
+    bool insideHead = cameraInsideHead(renderArgs->getViewFrustum().getPosition()) || _closeCamera != CloseCamera::None;
     return !defaultMode || (!firstPerson && !insideHead) || (overrideAnim && !insideHead);
 }
 

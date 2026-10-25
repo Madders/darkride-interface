@@ -6,7 +6,8 @@
 //  QtScript engine) with QVariant values and signals in place of QScriptValue callbacks, so that a script
 //  on the WebAssembly engine reaches it by reflection. The JavaScript shim wraps one of these as an
 //  XMLHttpRequest; a native module can use it as it is. HttpRequestFactory is the "Http" global that
-//  makes them; a request lives until the factory is told to dispose of it or the engine stops.
+//  makes them. The script owns a request it made: it is deleted when the script lets it go (once it is done), when
+//  the factory is told to dispose of it, or when the engine stops.
 //
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
@@ -52,6 +53,8 @@ public:
     int status() const;
     QString statusText() const;
     int readyState() const { return _readyState; }
+    /// Whether it was sent and its reply has not come yet.
+    bool isSending() const { return _reply != nullptr; }
     int errorCode() const { return _errorCode; }
     int timeout() const { return _timeout; }
     void setTimeout(int timeout) { _timeout = timeout; }
@@ -111,7 +114,8 @@ class HttpRequestFactory : public QObject {
 public:
     explicit HttpRequestFactory(QObject* parent = nullptr) : QObject(parent) {}
 
-    Q_INVOKABLE QObject* createRequest();
+    /// A request the script owns (ValueCodec: an owned object), so that one it has let go of is deleted.
+    Q_INVOKABLE HttpRequestObject* createRequest();
     /// Deletes a request this factory made, once the script is done with it.
     Q_INVOKABLE void dispose(QObject* request);
 };

@@ -66,6 +66,11 @@
         attempt("getEntityProperties(id).grab keys in order", function () { return Object.keys(Entities.getEntityProperties(id).grab); });
         attempt("getEntityProperties(id, [position]) keys", function () { return Object.keys(Entities.getEntityProperties(id, ["position"])).sort(); });
         attempt("getEntityProperties(id, position) keys", function () { return Object.keys(Entities.getEntityProperties(id, "position")).sort(); });
+        // a group's name alone asks for the whole group, alone or among other names (vehicles.js asks for
+        // ["vehicle", "parentID", ...]; the new engine dropped the group until 2026-10-25)
+        attempt("getEntityProperties(id, [grab]) keys", function () { return Object.keys(Entities.getEntityProperties(id, ["grab"])).sort(); });
+        attempt("getEntityProperties(id, [grab, position]) keys", function () { return Object.keys(Entities.getEntityProperties(id, ["grab", "position"])).sort(); });
+        attempt("getEntityProperties(id, grab).grab keys", function () { return Object.keys(Entities.getEntityProperties(id, "grab").grab || {}).sort(); });
         attempt("getEntityProperties position", function () { return Entities.getEntityProperties(id, ["position"]).position; });
         attempt("getEntityProperties color", function () { return Entities.getEntityProperties(id, ["color"]).color; });
         attempt("getEntityProperties dimensions type", function () { var d = Entities.getEntityProperties(id, ["dimensions"]).dimensions; return [typeof d.x, d.x]; });

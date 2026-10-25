@@ -2820,6 +2820,14 @@ private:
     bool findAvatarEntity(const QString& modelURL, const QString& jointName, QUuid& entityID);
 
     bool cameraInsideHead(const glm::vec3& cameraPosition) const;
+    // how much of your own avatar to hide from your own view because the third-person camera is right at it (camera
+    // collision pulls it in as far as the eyes in a corner, and the near plane would cut the avatar open): nothing, the
+    // head, or all of it; set each frame by updateCloseCamera, with a margin so it doesn't flicker as the camera eases out
+    enum class CloseCamera { None, Head, Body };
+    void updateCloseCamera(const glm::vec3& cameraPosition);
+    // whether the camera is within margin (meters) of the box around the head and everything on it (hair, ears, eyes:
+    // the shapes of every bone in _headBoneSet, as they are posed now), in the head's frame
+    bool cameraNearHeadShapes(const glm::vec3& cameraPosition, float margin) const;
 
     void updateEyeContactTarget(float deltaTime);
     glm::vec3 restTheGaze(const glm::vec3& spot, float deltaTime);  // the gaze style's rests and glances
@@ -3057,6 +3065,8 @@ private:
     std::unordered_set<int> _headBoneSet;
     std::unordered_set<SpatiallyNestablePointer> _cauterizedChildrenOfHead;
     bool _prevShouldDrawHead;
+    CloseCamera _closeCamera { CloseCamera::None };
+    bool _prevShouldDrawBody { true };
     bool _rigEnabled { true };
 
     bool _enableDebugDrawBaseOfSupport { false };

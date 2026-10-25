@@ -32,6 +32,14 @@ vec4 unpackPositionFromZeye(vec2 texcoord) {
     int side = int(check2);
     texcoord.x *= 1.0 + check;
 
+    // the sky (the far plane's depth, where nothing was drawn): as far along the pixel's ray as the forward skybox
+    // puts it (skybox.slf), rather than on the far plane, which a mirror's oblique projection tilts towards the eye
+    // (MIRRORS.md 5); the ray from the near plane's point, in front of the eye in every view
+    const float SKYBOX_DISTANCE = 32000.0;
+    if (-Zeye >= 0.999 * getPosLinearDepthFar()) {
+        return vec4(normalize(evalEyePositionFromZdb(side, 1.0, texcoord)) * SKYBOX_DISTANCE, 1.0);
+    }
+
     return vec4(evalEyePositionFromZeye(side, Zeye, texcoord), 1.0);
 }
 

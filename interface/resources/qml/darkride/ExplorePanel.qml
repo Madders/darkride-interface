@@ -125,8 +125,12 @@ Page {
                 done();
             });
             if (pending === 2) {
-                // the worlds that open as instances are listed with the online ones, whether or not anyone is in them
-                MetaverseRequests.send("GET", "/api/worlds?search=" + encodeURIComponent(search), null,
+                // the worlds that open as instances are listed with the online ones, whether or not anyone is in them.
+                // The protocol tells the metaverse this is a client that greys out other versions' worlds itself: a
+                // list asked without it (1.0.2's Explore) leaves out the always-on worlds that run ahead, the beta's
+                // Test Track first (Caity, 10-25: "hide it")
+                MetaverseRequests.send("GET", "/api/worlds?search=" + encodeURIComponent(search) +
+                                       "&protocol=" + encodeURIComponent(root.protocol), null,
                                        function (error, code, data) {
                     withInstances = !error && Array.isArray(data) ? data : [];
                     done();
@@ -253,6 +257,30 @@ Page {
                 picture: world.id ? picture(world.id) : ""
             }));
             root.closePanel();
+        }
+        // what was typed in the search, when it's an address rather than words to look for (Caity, 10-25: she typed
+        // hifi://localhost:42102 and got "No world goes by that name"; Explore is where the address shortcut goes now):
+        // hifi://..., a host with its port (localhost:42102, 10.0.0.5:40102/spot), or a /path in this world. "" if not
+        function address(text) {
+            var typed = String(text || "").trim();
+            if (/^hifi:\/\//i.test(typed) || /^\/\S*$/.test(typed)) {
+                return typed;
+            }
+            if (/^[A-Za-z0-9.-]+:\d{1,5}(\/\S*)?$/.test(typed)) {
+                return "hifi://" + typed;
+            }
+            return "";
+        }
+        // goes to a typed address, with the loading screen as a hop has it
+        function goToAddress(typed) {
+            var where = address(typed);
+            if (where === "") {
+                return false;
+            }
+            hoppingWorld = "";
+            hopStart({ label: where });
+            AddressManager.handleLookupString(where);
+            return true;
         }
         function joinWorld(world) {
             hoppingWorld = world.id;
@@ -387,7 +415,7 @@ Page {
         SearchBar {
             id: worldBar
             settingsKey: "io.darkride.explorePanel.worlds"
-            placeholder: "Search worlds"
+            placeholder: "Search worlds, or type an address"
             sorts: [
                 { text: "Relevance", value: "relevance", by: null },
                 { text: "Likes", value: "likes", by: function (a, b) {
@@ -397,6 +425,7 @@ Page {
                     return String(a.label || "").toLowerCase().localeCompare(String(b.label || "").toLowerCase()); } }
             ]
             onSearchChanged: { explore.search = search; explore.load(true); }
+            onAccepted: explore.goToAddress(text)
             onViewChanged: explore.focused = null
             onSortChanged: scrollToTop()
 
@@ -714,6 +743,7 @@ Page {
         tile: Component { WorldTile { world: entry } }
         row: Component { WorldRow { world: entry } }
         empty: explore.loading ? "…" : explore.status !== "" ? explore.status
+            : explore.address(explore.search) !== "" ? "Press Return to go to " + explore.address(explore.search) + "."
             : explore.search !== "" ? "No world goes by that name."
             : root.currentTab === 1 ? "Worlds you like show here." : root.currentTab === 2 ? "Your private worlds show here."
             : "No worlds are open right now."

@@ -59,7 +59,7 @@ void WebSocketObject::close(int code, const QString& reason) {
 
 // --- the factory ---------------------------------------------------------------------------------------------------
 
-QObject* WebSocketFactory::createWebSocket(const QString& url) {
+WebSocketObject* WebSocketFactory::createWebSocket(const QString& url) {
     return new WebSocketObject(url, this);
 }
 
@@ -91,6 +91,6 @@ void WebSocketServerObject::close() {
     _server.close();
 }
 
-QObject* WebSocketServerFactory::createWebSocketServer(const QString& serverName, int port) {
+WebSocketServerObject* WebSocketServerFactory::createWebSocketServer(const QString& serverName, int port) {
     return new WebSocketServerObject(serverName, port, this);
 }

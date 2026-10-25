@@ -963,7 +963,12 @@
         this.onabort = null;
         this.onloadend = null;
         Object.defineProperty(this, "_request", { value: request });
-        request.readyStateChanged.connect(function () {
+        // The request's signals are connected only while it can still report something, from open() until it is
+        // done or aborted. A connection keeps its handlers, and through them this object and the host's request,
+        // reachable; held for good, every request a script ever made would stay, in the guest's memory and the
+        // host's (a body that posts what it hears ran out of both in two hours).
+        var connected = false;
+        function onReadyStateChanged() {
             if (typeof self.onreadystatechange === "function") {
                 try { self.onreadystatechange.call(self); } catch (e) { reportError("in onreadystatechange", e); }
             }
@@ -975,13 +980,30 @@
                 if (typeof self.onloadend === "function") {
                     try { self.onloadend.call(self); } catch (e) { reportError("in onloadend", e); }
                 }
+                disconnectRequest();
             }
-        });
-        request.timedOut.connect(function () {
+        }
+        function onTimedOut() {
             if (typeof self.ontimeout === "function") {
                 try { self.ontimeout.call(self); } catch (e) { reportError("in ontimeout", e); }
             }
-        });
+        }
+        function connectRequest() {
+            if (!connected) {
+                connected = true;
+                request.readyStateChanged.connect(onReadyStateChanged);
+                request.timedOut.connect(onTimedOut);
+            }
+        }
+        function disconnectRequest() {
+            if (connected) {
+                connected = false;
+                request.readyStateChanged.disconnect(onReadyStateChanged);
+                request.timedOut.disconnect(onTimedOut);
+            }
+        }
+        Object.defineProperty(this, "_connect", { value: connectRequest });
+        Object.defineProperty(this, "_disconnect", { value: disconnectRequest });
     }
     XMLHttpRequest.UNSENT = UNSENT;
     XMLHttpRequest.OPENED = OPENED;
@@ -1003,6 +1025,7 @@
         });
     });
     xhrProto.open = function (method, url, async, username, password) {
+        this._connect();  // again for a request opened after it was done
         this._request.open(String(method), String(url), async === undefined ? true : !!async, username === undefined ? "" : String(username), password === undefined ? "" : String(password));
     };
     xhrProto.send = function (data) {
@@ -1014,7 +1037,8 @@
             this._request.send(String(data));
         }
     };
-    xhrProto.abort = function () { this._request.abort(); };
+    // an aborted request reports nothing more (the host drops its reply), so its signals go now
+    xhrProto.abort = function () { this._request.abort(); this._disconnect(); };
     xhrProto.setRequestHeader = function (name, value) { this._request.setRequestHeader(String(name), String(value)); };
     xhrProto.getAllResponseHeaders = function () { return this._request.getAllResponseHeaders(); };
     xhrProto.getResponseHeader = function (name) { return this._request.getResponseHeader(String(name)); };
@@ -1022,6 +1046,7 @@
 
     // --- WebSocket over the engine's Sockets object ---------------------------------------------------------------------
     // the script's side of a host socket: its on* handlers, fired from the socket's signals
+    // (connected until the socket has closed, as a request's are until it is done: then the socket can be collected)
     function attachSocket(target, socket) {
         target.onopen = null;
         target.onmessage = null;
@@ -1034,10 +1059,20 @@
                 try { event === undefined ? handler.call(target) : handler.call(target, event); } catch (e) { reportError("in " + name, e); }
             }
         }
-        socket.opened.connect(function () { fire("onopen"); });
-        socket.messageReceived.connect(function (message) { fire("onmessage", { data: message }); });
-        socket.errored.connect(function () { fire("onerror"); });
-        socket.closedWith.connect(function (code, reason, wasClean) { fire("onclose", { code: code, reason: reason, wasClean: wasClean }); });
+        function onOpened() { fire("onopen"); }
+        function onMessage(message) { fire("onmessage", { data: message }); }
+        function onErrored() { fire("onerror"); }
+        function onClosed(code, reason, wasClean) {
+            fire("onclose", { code: code, reason: reason, wasClean: wasClean });
+            socket.opened.disconnect(onOpened);
+            socket.messageReceived.disconnect(onMessage);
+            socket.errored.disconnect(onErrored);
+            socket.closedWith.disconnect(onClosed);
+        }
+        socket.opened.connect(onOpened);
+        socket.messageReceived.connect(onMessage);
+        socket.errored.connect(onErrored);
+        socket.closedWith.connect(onClosed);
     }
     function WebSocket(url) {
         if (!global.Sockets) {
@@ -1085,18 +1120,21 @@
                 connect: function (handler) { if (typeof handler === "function") { handlers.push(handler); } },
                 disconnect: function (handler) { var i = handlers.indexOf(handler); if (i >= 0) { handlers.splice(i, 1); } }
             };
-            server.newConnection.connect(function (socket) {
+            var onNewConnection = function (socket) {
                 var client = Object.create(WebSocket.prototype);
                 attachSocket(client, socket);
                 handlers.slice().forEach(function (handler) {
                     try { handler.call(self, client); } catch (e) { reportError("in newConnection", e); }
                 });
-            });
+            };
+            server.newConnection.connect(onNewConnection);
+            // a closed server takes no more connections; its signal goes with close(), so it can be collected
+            Object.defineProperty(this, "_disconnect", { value: function () { server.newConnection.disconnect(onNewConnection); } });
         };
         ["url", "port", "listening"].forEach(function (name) {
             Object.defineProperty(WebSocketServer.prototype, name, { get: function () { return this._server[name]; }, enumerable: true });
         });
-        WebSocketServer.prototype.close = function () { this._server.close(); };
+        WebSocketServer.prototype.close = function () { this._server.close(); this._disconnect(); };
         global.WebSocketServer = WebSocketServer;
     }
 

@@ -2884,23 +2884,18 @@ void Editor::importEntitiesFromUrl() {
     }
 }
 
-bool Editor::importEntities(const QString& url) {
-    if (!_active) {
-        setActive(true);
-    }
-    if (!_active || _gizmo.isDragging() || !editable()) {
-        return false;
-    }
-    QString name = QUrl(url).fileName();
-    if (name.isEmpty()) {
-        name = url;
-    }
-    setStatus("Importing " + name + "…");
+// reads an entity file (an export, the old Create app's, one of the app's presets) as an add takes it: every property
+// set, parents before children, a child in its parent's frame; bounds is the top level's footprint. false when it can't
+// be read (count -1) or holds none it can place; count is how many it holds (more than ids when a parent loop left
+// some out)
+bool Editor::readEntityFile(const QString& url, QVector<EntityItemProperties>& properties, QList<QUuid>& ids,
+                            AABox& bounds, int& count) {
+    count = 0;
     // the entities' clipboard reads the file, of any of the formats the old Create app took, with model links
     // relative to the file resolved; the scripts' Clipboard.importEntities reads into the same tree
     auto& clipboard = qApp->getEntityClipboard();
     if (!clipboard.importEntities(url)) {
-        setStatus("Could not read " + name + " as entities", STATUS_CLEAR_MS);
+        count = -1;
         return false;
     }
     auto tree = clipboard.tree();
@@ -2915,18 +2910,17 @@ bool Editor::importEntities(const QString& url) {
             return true;
         });
     });
+    count = found.size();
     if (found.isEmpty()) {
-        setStatus(name + " holds no entities", STATUS_CLEAR_MS);
         return false;
     }
 
     // as an add takes them (EditorUndo::capture's marking): every property set, a child placed in its parent's
     // frame; parents first, so the add can put each child on its new parent. An entity attached to a parent the
     // file lacks (an avatar's, or one outside an export) comes in at the top level
-    QVector<EntityItemProperties> properties;
-    QList<QUuid> ids;
+    properties.clear();
+    ids.clear();
     QSet<QUuid> placed;
-    AABox bounds;
     bool hasBounds = false;
     while (ids.size() < found.size()) {
         int before = ids.size();
@@ -2967,6 +2961,32 @@ bool Editor::importEntities(const QString& url) {
         }
     }
 
+    return !ids.isEmpty();
+}
+
+bool Editor::importEntities(const QString& url) {
+    if (!_active) {
+        setActive(true);
+    }
+    if (!_active || _gizmo.isDragging() || !editable()) {
+        return false;
+    }
+    QString name = QUrl(url).fileName();
+    if (name.isEmpty()) {
+        name = url;
+    }
+    setStatus("Importing " + name + "…");
+    QVector<EntityItemProperties> properties;
+    QList<QUuid> ids;
+    AABox bounds;
+    int found = 0;
+    if (!readEntityFile(url, properties, ids, bounds, found)) {
+        setStatus(found < 0 ? "Could not read " + name + " as entities"
+                  : found == 0 ? name + " holds no entities"
+                  : "Could not place " + name + "'s entities: their parents make a loop", STATUS_CLEAR_MS);
+        return false;
+    }
+
     // the footprint's middle lands under the cursor, as a paste's does; a whole world (the old Create app's 10 km
     // rule) stays where its positions put it
     const float WHOLE_WORLD_SIZE = 10000.0f;
@@ -2988,7 +3008,7 @@ bool Editor::importEntities(const QString& url) {
         _selection.set(created);
     }
     stack->endMacro();
-    int skipped = found.size() - ids.size();
+    int skipped = found - ids.size();
     setStatus(QString("Imported %1 entit%2 from %3%4").arg(ids.size()).arg(ids.size() == 1 ? "y" : "ies").arg(name)
         .arg(skipped > 0 ? QString(" (%1 in a parent loop left out)").arg(skipped) : QString()), STATUS_CLEAR_MS);
     return !created.isEmpty();
@@ -3116,27 +3136,36 @@ QMenu* Editor::buildCreateMenu(QWidget* parent, const QPoint* viewportPos) {
     bool atClick = viewportPos != nullptr;
     glm::vec3 clickPoint = atClick ? placementPoint(viewportPos) : glm::vec3(0.0f);
     QHash<QString, QMenu*> groups;
+    // a group's submenu, made the first time it's named, inside its parent's ("Special items/Vehicles")
+    std::function<QMenu*(const QString&, bool)> groupMenu = [&](const QString& path, bool separator) {
+        if (!groups.contains(path)) {
+            int slash = path.lastIndexOf('/');
+            QMenu* parent = slash < 0 ? menu : groupMenu(path.left(slash), separator);
+            if (slash < 0 && separator) {
+                menu->addSeparator();
+            }
+            groups[path] = parent->addMenu(path.mid(slash + 1));
+            groups[path]->setToolTipsVisible(true);
+        }
+        return groups[path];
+    };
     for (const auto& item : EditorCreate::items()) {
         QMenu* target = menu;
         if (!item.group.isEmpty()) {
-            if (!groups.contains(item.group)) {
-                if (item.separatorBefore) {
-                    menu->addSeparator();
-                }
-                groups[item.group] = menu->addMenu(item.group);
-            }
-            target = groups[item.group];
+            target = groupMenu(item.group, item.separatorBefore);
         } else if (item.separatorBefore) {
             menu->addSeparator();
         }
         QString key = item.key;
-        target->addAction(item.label, this, [this, key, atClick, clickPoint] {
+        QAction* action = target->addAction(item.label, this, [this, key, atClick, clickPoint] {
             if (atClick) {
                 createAt(key, clickPoint);
             } else {
                 create(key);
             }
         });
+        action->setToolTip(item.tooltip);
+        action->setEnabled(!item.disabled);
     }
     return menu;
 }
@@ -3161,7 +3190,11 @@ void Editor::createAt(const QString& key, const glm::vec3& point) {
         return;
     }
     auto item = EditorCreate::item(key);
-    if (!item) {
+    if (!item || item->disabled) {
+        return;
+    }
+    if (!item->preset.isEmpty()) {
+        createPreset(PathUtils::resourcesUrl(item->preset).toString(), item->label, point, item->ahead);
         return;
     }
     EntityItemProperties properties = EditorCreate::properties(key, point, cameraYaw());
@@ -3228,6 +3261,82 @@ glm::vec3 Editor::placementPoint(const QPoint* viewportPos) const {
 float Editor::cameraYaw() const {
     glm::vec3 forward = _camera.orientation() * Vectors::FRONT;
     return std::atan2(-forward.x, -forward.z);
+}
+
+bool Editor::createPreset(const QString& presetUrl, const QString& label, const glm::vec3& point, float ahead) {
+    if (!editable()) {
+        qCWarning(interfaceapp) << "editor: no rez rights here, not creating" << label;
+        return false;
+    }
+    QVector<EntityItemProperties> properties;
+    QList<QUuid> ids;
+    AABox bounds;
+    int count = 0;
+    if (!readEntityFile(presetUrl, properties, ids, bounds, count)) {
+        qCWarning(interfaceapp) << "editor: could not read the preset" << presetUrl << count;
+        setStatus("Could not make the " + label, STATUS_CLEAR_MS);
+        return false;
+    }
+    // the file's ground is its y 0, and its front -z (as the Track's rigs face): turned to face the way the camera
+    // looks, about the footprint's middle, so you see it from behind, ready to get in
+    glm::vec3 center = bounds.calcCenter();
+    glm::vec3 anchor(center.x, 0.0f, center.z);
+    glm::quat turn = glm::angleAxis(cameraYaw(), Vectors::UP);
+    QSet<QUuid> inFile(ids.begin(), ids.end());
+    for (auto& entry : properties) {
+        if (entry.getParentID().isNull() || !inFile.contains(entry.getParentID())) {
+            glm::vec3 position = anchor + turn * (entry.getPosition() - anchor);
+            glm::quat rotation = turn * entry.getRotation();
+            entry.setPosition(position);
+            entry.setLocalPosition(position);
+            entry.setRotation(rotation);
+            entry.setLocalRotation(rotation);
+            entry.setLocalRotationChanged(false);
+        }
+    }
+    // a big one far enough out that it doesn't swallow the camera: along the view, on the level of the point
+    glm::vec3 target = point;
+    if (ahead > 0.0f) {
+        glm::vec3 flat = target - _camera.position();
+        flat.y = 0.0f;
+        glm::vec3 forward = viewDirection();
+        forward.y = 0.0f;
+        if (glm::length(forward) > EPSILON && glm::length(flat) < ahead) {
+            glm::vec3 out = _camera.position() + glm::normalize(forward) * ahead;
+            target = glm::vec3(out.x, point.y, out.z);
+        }
+    }
+    // on the surface under it: the view's middle can miss every surface (a level view hits nothing), and a vehicle
+    // made in the air drops onto whatever is below
+    const float GROUND_SEARCH_ABOVE = 0.5f;
+    PickRay down(target + Vectors::UP * GROUND_SEARCH_ABOVE, -Vectors::UP);
+    auto ground = DependencyManager::get<EntityScriptingInterface>()->evalRayIntersectionVector(down, worldPickFilter(),
+        QVector<EntityItemID>(), QVector<EntityItemID>());
+    if (ground.intersects && ground.distance < MAX_PLACEMENT_DISTANCE) {
+        target = ground.intersection;
+    }
+    if (snapActive()) {
+        // on the grid across, staying on the ground
+        glm::vec3 snapped = snapVector(target, _moveSnap);
+        target.x = snapped.x;
+        target.z = snapped.z;
+    }
+    EditorClipboard family;
+    family.set(properties, ids, anchor);
+    const QString text = "Create " + label;
+    auto stack = _undo.stack();
+    stack->beginMacro(text);   // every entity of it and its selection are one step
+    QList<QUuid> created = family.paste(_undo, text, target - anchor);
+    if (!created.isEmpty()) {
+        _selection.set(created);
+    }
+    stack->endMacro();
+    if (created.isEmpty()) {
+        setStatus("Could not make the " + label, STATUS_CLEAR_MS);
+        return false;
+    }
+    setTool(EditorToolBar::Tool::Move);
+    return true;
 }
 
 QList<QUuid> Editor::place(EntityItemProperties properties, const QString& text, const glm::vec3& point) {
