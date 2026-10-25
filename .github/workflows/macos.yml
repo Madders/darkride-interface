@@ -1,0 +1,178 @@
+#
+#  macos.yml
+#  .github/workflows
+#
+#  Copyright 2026 Darkride.
+#
+#  Distributed under the MIT License.
+#  See the accompanying file LICENSE-MIT or https://opensource.org/licenses/MIT
+#
+# Builds the client (interface) for Apple silicon Macs for every push to any branch and every pull request, on
+# GitHub's runners. A red check means the change doesn't build on macOS. It publishes nothing and uses no secrets:
+# the token is read-only, so a pull request from anyone's fork runs safely. Linux is linux.yml and Windows is Build
+# (build.yml); this file is only macOS. It builds, and doesn't package: RELEASING.md's macOS steps make the app.
+#
+# Qt 5.15 with WebEngine for arm64 comes prebuilt from MacPorts: Qt's own 5.15.2 is Intel only, and Homebrew's qt@5
+# has no WebEngine. MacPorts builds for the macOS it runs on, so this is macOS 14 Sonoma. Installing MacPorts' Qt
+# installs about 150 other ports into /opt/local, which CMake searches by default on macOS, so the configure here and
+# the ports (hifi_vcpkg.py's triplet) both ignore /opt/local; Qt is found by its own path, /opt/local/libexec/qt5.
+# CMake is pinned to 3.31 (CMake 4 refuses the 2021 ports' scripts) and Python to 3.11 (prebuild.py fails on 3.14).
+# The same job has built the Mac disk image on Martin's fork (darkride-builds) since 18 October.
+#
+# Caches: vcpkg's packages (keyed by the ports and hifi_vcpkg.py, so a ports change starts cold: an hour or two on a
+# runner) and ccache. Pushes save them; pull requests only restore, so they can't crowd out the 10 GB GitHub gives
+# each repository. MacPorts' Qt isn't cached: its prebuilt archives download in a few minutes, and /opt/local is
+# root's, which actions/cache can't restore into. A push that changes only Markdown builds nothing.
+
+name: macOS
+
+on:
+  push:
+    paths-ignore: ['**.md']
+  pull_request:
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# a newer push to the same branch or pull request replaces a build that's still running; builds of main all finish
+concurrency:
+  group: macos-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  client:
+    name: macOS client
+    runs-on: macos-14
+    timeout-minutes: 330
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      # CMake 4 refuses the 2021 ports' cmake_minimum_required(); vcpkg runs ports in this environment on macOS
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+      QT_CMAKE_PREFIX_PATH: /opt/local/libexec/qt5/lib/cmake
+      QT_PORTS: >-
+        qt5-qtbase qt5-qtdeclarative qt5-qtquickcontrols qt5-qtquickcontrols2 qt5-qtgraphicaleffects qt5-qtsvg
+        qt5-qtscript qt5-qtmultimedia qt5-qtwebsockets qt5-qtwebchannel qt5-qtwebengine qt5-qtxmlpatterns
+        qt5-qtimageformats qt5-qtmacextras qt5-qtlocation qt5-qttools
+      CCACHE_MAXSIZE: 1500M
+      CACHE_SAVE: ${{ github.event_name == 'push' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # under $HOME, so the cache actions can save and restore them
+      - name: Work folder
+        run: |
+          w="$HOME/w"
+          {
+            echo "WORK=$w"
+            echo "TIVOLI_VCPKG_BASE=$w/vcpkg"
+            echo "VCPKG_DOWNLOADS=$w/downloads"
+            echo "BUILD_DIR=$w/build"
+            echo "CCACHE_DIR=$w/ccache"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$w/downloads" "$w/ccache"
+          sw_vers; uname -m; df -h "$HOME"
+
+      # -b: MacPorts' prebuilt archives only, never a build from source (WebEngine would take many hours). MacPorts'
+      # bin stays off PATH, so its pkg-config and libraries aren't picked up by the ports.
+      - name: MacPorts and Qt
+        run: |
+          curl -fsSL --retry 3 -o MacPorts.pkg https://github.com/macports/macports-base/releases/download/v2.12.7/MacPorts-2.12.7-14-Sonoma.pkg
+          sudo installer -pkg MacPorts.pkg -target /
+          rm MacPorts.pkg
+          sudo /opt/local/bin/port -q selfupdate
+          sudo /opt/local/bin/port -N -b install $QT_PORTS
+          test -d "$QT_CMAKE_PREFIX_PATH/Qt5WebEngine"
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # vcpkg builds the ports with the first CMake on PATH, and the runner's is CMake 4, which refuses a
+      # CMakeLists.txt without cmake_minimum_required() at all (tbb's), whatever CMAKE_POLICY_VERSION_MINIMUM says
+      - name: Tools
+        run: |
+          brew install ninja ccache
+          python -m pip install cmake==3.31.10
+          cmake --version | head -1
+          which python; python --version
+
+      - name: Restore vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/w/vcpkg
+          key: vcpkg-macos-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/w/ccache
+          key: ccache-macos-${{ github.sha }}
+          restore-keys: ccache-macos-
+
+      # vcpkg builds (or finds) the dependencies here, as part of configuring
+      - name: Configure
+        run: |
+          py=$(which python)
+          cmake -S . -B "$BUILD_DIR" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_IGNORE_PREFIX_PATH=/opt/local \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DHIFI_PYTHON_EXEC="$py" -DPython3_EXECUTABLE="$py" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      # without the build trees and downloads: they're large and only needed while a port builds
+      - name: Trim vcpkg for its cache
+        if: env.CACHE_SAVE == 'true' && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        run: |
+          rm -rf "$TIVOLI_VCPKG_BASE"/*/buildtrees "$TIVOLI_VCPKG_BASE"/*/packages
+          du -sh "$TIVOLI_VCPKG_BASE"
+
+      - name: Save vcpkg packages
+        if: env.CACHE_SAVE == 'true' && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/w/vcpkg
+          key: vcpkg-macos-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+
+      # On its own, and briefly: it has stalled silently inside a build until the job's time ran out. Unbuffered, with
+      # every thread's stack printed every five minutes, so a stall shows where it is.
+      - name: Generate shaders
+        timeout-minutes: 30
+        env:
+          PYTHONUNBUFFERED: 1
+          SHADERGEN_STACK_DUMP: 300
+        run: ninja -C "$BUILD_DIR" shadergen
+
+      - name: Build
+        timeout-minutes: 300
+        run: |
+          ccache --zero-stats
+          ninja -C "$BUILD_DIR" interface
+          ccache --show-stats
+          find "$BUILD_DIR/interface" -maxdepth 2 -name '*.app' -type d
+
+      - name: Save ccache
+        if: always() && env.CACHE_SAVE == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/w/ccache
+          key: ccache-macos-${{ github.sha }}
+
+      - name: Keep the logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-logs
+          path: |
+            ~/w/vcpkg/*/buildtrees/**/*.log
+            ~/w/build/CMakeFiles/CMakeOutput.log
+            ~/w/build/CMakeFiles/CMakeError.log
+          retention-days: 7
+          if-no-files-found: ignore
