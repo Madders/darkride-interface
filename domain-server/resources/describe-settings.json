@@ -21,18 +21,18 @@
         },
         {
           "name": "automatic_networking",
-          "label": "Automatic Networking",
-          "help": "This defines how other nodes in the Darkride metaverse will be able to reach your server.<br/>IP Only suits most servers: forward the world's UDP ports on your router. Full needs an ICE server of your own (the domain-server's -i option): Darkride runs none, and without one Full works as IP Only.",
+          "label": "How visitors reach this server",
+          "help": "<strong>My address only</strong> suits most servers: open the server's UDP ports on your router. <strong>Through an ICE server</strong> needs an ICE server of your own (the server's -i option): Darkride runs none, and without one the server works as My address only.",
           "default": "ip",
           "type": "select",
           "options": [
             {
               "value": "full",
-              "label": "Full: connection through an ICE server (needs your own ICE server)"
+              "label": "Through an ICE server: only with an ICE server of your own"
             },
             {
               "value": "ip",
-              "label": "My address only: I've opened the server's port on my router myself"
+              "label": "My address only: I've opened the server's ports on my router myself (recommended)"
             },
             {
               "value": "disabled",
@@ -1247,7 +1247,7 @@
         },
         {
           "name": "codec_preference_order",
-"label": "Audio codecs, best first",
+          "label": "Audio codecs, best first",
           "help": "The sound formats the server prefers, in order, by name.",
           "placeholder": "opus,zlib,pcm",
           "default": "opus,zlib,pcm",
