@@ -16,13 +16,13 @@
 #include "RenderableParticleEffectEntityItem.h"
 #include "RenderableLineEntityItem.h"
 #include "RenderablePolyLineEntityItem.h"
-#include "RenderablePolyVoxEntityItem.h"
 #include "RenderableGridEntityItem.h"
 #include "RenderableGizmoEntityItem.h"
 #include "RenderableLightEntityItem.h"
 #include "RenderableZoneEntityItem.h"
 #include "RenderableMaterialEntityItem.h"
 #include "RenderableTerrainEntityItem.h"
+#include "RenderableTrackEntityItem.h"
 #include "ImpostorCard.h"
 
 using namespace render;
@@ -30,8 +30,8 @@ using namespace render::entities;
 
 void EntityRenderer::initEntityRenderers() {
     REGISTER_ENTITY_TYPE_WITH_FACTORY(Model, RenderableModelEntityItem::factory)
-    REGISTER_ENTITY_TYPE_WITH_FACTORY(PolyVox, RenderablePolyVoxEntityItem::factory)
     REGISTER_ENTITY_TYPE_WITH_FACTORY(Terrain, RenderableTerrainEntityItem::factory)
+    REGISTER_ENTITY_TYPE_WITH_FACTORY(Track, RenderableTrackEntityItem::factory)
 }
 
 const Transform& EntityRenderer::getModelTransform() const {
@@ -267,10 +267,6 @@ EntityRenderer::Pointer EntityRenderer::addToScene(EntityTreeRenderer& renderer,
             result = make_renderer<PolyLineEntityRenderer>(entity);
             break;
 
-        case Type::PolyVox:
-            result = make_renderer<PolyVoxEntityRenderer>(entity);
-            break;
-
         case Type::Grid:
             result = make_renderer<GridEntityRenderer>(entity);
             break;
@@ -293,6 +289,10 @@ EntityRenderer::Pointer EntityRenderer::addToScene(EntityTreeRenderer& renderer,
 
         case Type::Terrain:
             result = make_renderer<TerrainEntityRenderer>(entity);
+            break;
+
+        case Type::Track:
+            result = make_renderer<TrackEntityRenderer>(entity);
             break;
 
         default:

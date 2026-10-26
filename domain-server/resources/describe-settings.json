@@ -21,13 +21,13 @@
         {
           "name": "automatic_networking",
           "label": "Automatic Networking",
-          "help": "This defines how other nodes in the Darkride metaverse will be able to reach your server.<br/>If you don't want to deal with any network settings, use full automatic networking.",
-          "default": "full",
+          "help": "This defines how other nodes in the Darkride metaverse will be able to reach your server.<br/>IP Only suits most servers: forward the world's UDP ports on your router. Full needs an ICE server of your own (the domain-server's -i option): Darkride runs none, and without one Full works as IP Only.",
+          "default": "ip",
           "type": "select",
           "options": [
             {
               "value": "full",
-              "label": "Full: automatic connection establishment using ICE protocol"
+              "label": "Full: connection through an ICE server (needs your own ICE server)"
             },
             {
               "value": "ip",
@@ -1232,8 +1232,8 @@
           "name": "codec_preference_order",
           "label": "Audio Codec Preference Order",
           "help": "List of codec names in order of preferred usage",
-          "placeholder": "hifiAC,zlib,pcm",
-          "default": "hifiAC,zlib,pcm",
+          "placeholder": "opus,zlib,pcm",
+          "default": "opus,zlib,pcm",
           "advanced": true
         }
       ]
@@ -1378,6 +1378,36 @@
       ]
     },
     {
+      "name": "loading",
+      "label": "Loading",
+      "assignment-types": [ 2 ],
+      "settings": [
+        {
+          "name": "whole_world",
+          "type": "checkbox",
+          "label": "Load the Whole World First",
+          "help": "Visitors see a loading screen until the whole world has arrived and its models and textures have loaded, instead of watching it stream in around them. They can skip it with Show me now, and it lifts by itself after the time limit below.",
+          "default": false
+        },
+        {
+          "name": "time_limit",
+          "type": "int",
+          "label": "Loading Time Limit (seconds)",
+          "help": "With Load the Whole World First on: after this many seconds the loading screen lifts and the rest of the world streams in as usual, so a big world keeps nobody waiting for ever. Between 10 and 600.",
+          "placeholder": "60",
+          "default": "60"
+        },
+        {
+          "name": "radius",
+          "type": "int",
+          "label": "Wait for Models Within (meters)",
+          "help": "With Load the Whole World First on: the whole world always arrives, but the loading screen waits only for the models and textures within this distance of where visitors arrive; farther ones finish loading after it lifts. 0 waits for every model in the world.",
+          "placeholder": "100",
+          "default": "100"
+        }
+      ]
+    },
+    {
       "name": "entity_server_settings",
       "label": "Entities",
       "assignment-types": [
@@ -1388,22 +1418,6 @@
           "name": "maxTmpLifetime",
           "label": "Maximum Lifetime of Temporary Entities",
           "help": "The maximum number of seconds for the lifetime of an entity which will be considered \"temporary\".",
-          "placeholder": "3600",
-          "default": "3600",
-          "advanced": true
-        },
-        {
-          "name": "dynamicDomainVerificationTimeMin",
-          "label": "Dynamic Domain Verification Time (seconds) - Minimum",
-          "help": "The lower limit on the amount of time that passes before Dynamic Domain Verification on entities occurs. Units are seconds.",
-          "placeholder": "2700",
-          "default": "2700",
-          "advanced": true
-        },
-        {
-          "name": "dynamicDomainVerificationTimeMax",
-          "label": "Dynamic Domain Verification Time (seconds) - Maximum",
-          "help": "The upper limit on the amount of time that passes before Dynamic Domain Verification on entities occurs. Units are seconds.",
           "placeholder": "3600",
           "default": "3600",
           "advanced": true

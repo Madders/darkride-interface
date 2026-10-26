@@ -28,6 +28,10 @@
 
 #include <QtGui/QImage>
 #include <QtCore/QBuffer>
+#include <QtCore/QJsonArray>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
+#include <QtCore/QtEndian>
 
 // disabled because it causes crashes with Assimp::DefaultLogger::WriteToStreams
 // #define ENABLE_ASSIMP_LOGGING
@@ -498,9 +502,11 @@ void AssimpSerializer::processBones() {
     if (!hasBones) return;
 
     // multiple skin deformers will affect other models unfortunately
-    uint32_t skinDeformerIndex = hfmModel->skinDeformers.size(); 
+    uint32_t skinDeformerIndex = hfmModel->skinDeformers.size();
     hfmModel->skinDeformers.emplace_back();
     hfm::SkinDeformer* skinDeformer = &hfmModel->skinDeformers.back();
+
+    QHash<size_t, Extents> skinnedMeshExtents; // by mesh index, at the bind pose
 
     for (size_t meshIndex = 0; meshIndex < scene->mNumMeshes; meshIndex++) {
         aiMesh* mMesh = scene->mMeshes[meshIndex];
@@ -575,6 +581,42 @@ void AssimpSerializer::processBones() {
                 meshPtr->clusterIndices.push_back(0);
                 meshPtr->clusterWeights.push_back(0);
             }
+        }
+
+        // the mesh at its bind pose, where its clusters put it; a vertex with no bone weights stays by its node
+        const glm::mat4 nodeTransform = shapes.isEmpty() ? hfmModel->offset : hfmModel->joints[shapes.first()->joint].globalTransform;
+        Extents bindPoseExtents;
+        for (size_t vertexIndex = 0; vertexIndex < mMesh->mNumVertices && vertexIndex < (size_t)meshPtr->vertices.size(); vertexIndex++) {
+            const glm::vec4 vertex(meshPtr->vertices[(int)vertexIndex], 1.0f);
+            glm::vec3 bindPosition(0.0f);
+            float totalWeight = 0.0f;
+            auto influences = clusterMap.constFind(vertexIndex);
+            if (influences != clusterMap.constEnd()) {
+                for (const auto& influence : influences.value()) {
+                    const hfm::Cluster& influenceCluster = skinDeformer->clusters[influence.first];
+                    const glm::mat4 bindMatrix =
+                        hfmModel->joints[influenceCluster.jointIndex].globalTransform * influenceCluster.inverseBindMatrix;
+                    bindPosition += influence.second * glm::vec3(bindMatrix * vertex);
+                    totalWeight += influence.second;
+                }
+            }
+            bindPoseExtents.addPoint(totalWeight > 0.0f ? bindPosition / totalWeight : glm::vec3(nodeTransform * vertex));
+        }
+        if (bindPoseExtents.isValid()) {
+            skinnedMeshExtents[meshIndex] = bindPoseExtents;
+        }
+    }
+
+    // The model's extents (its natural dimensions, the head's clip distance) take a skinned mesh at its bind pose.
+    // processNode took every mesh through its node, which doesn't place a skinned one: a glTF armature at 1/100 scale
+    // left the model a hundredth of its body, so it read about 2 cm. The meshes' and shapes' own extents keep the
+    // node's frame, as hfm::Shape::transformedExtents documents.
+    hfmModel->meshExtents.reset();
+    for (int meshIndex = 0; meshIndex < (int)hfmModel->meshes.size(); meshIndex++) {
+        auto skinned = skinnedMeshExtents.constFind((size_t)meshIndex);
+        const Extents& extents = skinned != skinnedMeshExtents.constEnd() ? skinned.value() : hfmModel->meshes[meshIndex].meshExtents;
+        if (extents.isValid()) {
+            hfmModel->meshExtents.addExtents(extents);
         }
     }
 }
@@ -736,6 +778,45 @@ void AssimpSerializer::processScene(const hifi::VariantHash& mapping) {
     processAnimations();
 }
 
+// Assimp drops glTF "extras" (e.g., Blender custom properties), so read the nodes' and materials' extras from the file's
+// JSON and match them to the joints and materials by name.
+void AssimpSerializer::processGltfExtras(const hifi::ByteArray& data) {
+    hifi::ByteArray json = data;
+    if (data.startsWith("glTF")) {
+        // A .glb is a 12-byte header, then the JSON chunk: its length, its type, and the JSON itself.
+        const int JSON_LENGTH_OFFSET = 12;
+        const int JSON_OFFSET = 20;
+        if (data.size() < JSON_OFFSET) {
+            return;
+        }
+        auto jsonLength = qFromLittleEndian<quint32>(data.constData() + JSON_LENGTH_OFFSET);
+        json = data.mid(JSON_OFFSET, jsonLength);
+    }
+    QJsonObject gltf = QJsonDocument::fromJson(json).object();
+
+    auto getExtrasByName = [](const QJsonArray& items) {
+        QHash<QString, QVariantMap> extrasByName;
+        for (const auto& item : items) {
+            QJsonObject object = item.toObject();
+            QString name = object["name"].toString();
+            QJsonObject extras = object["extras"].toObject();
+            if (!name.isEmpty() && !extras.isEmpty()) {
+                extrasByName[name] = extras.toVariantMap();
+            }
+        }
+        return extrasByName;
+    };
+
+    auto nodeExtras = getExtrasByName(gltf["nodes"].toArray());
+    for (auto& joint : hfmModel->joints) {
+        joint.extras = nodeExtras.value(joint.name);
+    }
+    auto materialExtras = getExtrasByName(gltf["materials"].toArray());
+    for (auto& material : hfmModel->materials) {
+        material.extras = materialExtras.value(material.name);
+    }
+}
+
 #ifdef ENABLE_ASSIMP_LOGGING
 class TivoliLogStream : public Assimp::LogStream {
 public:
@@ -757,7 +838,8 @@ HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi
         url = hifi::URL(QFileInfo(localFileName).absoluteFilePath());
     }
 
-    ext = QFileInfo(url.path()).completeSuffix();
+    // what follows the last dot, as the format registry chose this reader by: Blender's Tree.001.glb is a "glb"
+    ext = QFileInfo(url.path()).suffix();
 
     // qCDebug(modelformat) << "AssimpSerializer::read url"<<url<<ext;
 
@@ -811,6 +893,9 @@ HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi
     }
 
     processScene(mapping);
+    if (ext == "gltf" || ext == "glb") {
+        processGltfExtras(data);
+    }
 
 #ifdef ENABLE_ASSIMP_LOGGING
     Assimp::DefaultLogger::get()->detachStream(&tivoliLogStream, errorSeverity);

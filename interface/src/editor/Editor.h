@@ -14,6 +14,7 @@
 #define hifi_Editor_h
 
 #include <QtCore/QByteArray>
+#include <QtGui/QColor>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QHash>
 #include <QtCore/QList>
@@ -43,6 +44,7 @@
 
 #include "EditorGizmo.h"
 #include "EditorLightGizmos.h"
+#include "EditorTrackGizmos.h"
 #include "EditorVehicleGizmos.h"
 #include "EditorGrid.h"
 #include "EditorSelection.h"
@@ -50,6 +52,7 @@
 #include "EditorUndo.h"
 #include "ui/EditorToolBar.h"
 
+class EditorEntityList;
 class QAction;
 class QDropEvent;
 class QKeyEvent;
@@ -123,6 +126,17 @@ public:
     QMenu* buildCreateMenu(QWidget* parent, const QPoint* viewportPos = nullptr);
     // a file or URL dropped on the viewport: models and images are placed where it landed
     bool handleDrop(QDropEvent* event);
+    // an entities file or URL (.json, .json.gz, .svo) into the world: placed under the cursor as a paste is (a whole
+    // world's file, 10 km or more across, where its positions say), selected, one undo step; build mode comes on for
+    // it. The menu's imports, and a file dropped on the window or opened by its address, come here
+    bool importEntities(const QString& url);
+    // the selection and its descendants to an entities file at this path (Build > Export Selected Entities… once a
+    // path is chosen); how many entities were written, -1 when nothing was
+    int exportSelectionTo(const QString& path);
+    // what the entity could not load, as its Hierarchy row says (refreshLoadProblems); empty when nothing has failed
+    QString loadProblem(const QUuid& id) const;
+    // the colour of the entity's Hierarchy row (EntityTreeModel::rowColor), invalid for the panel's own
+    QColor hierarchyRowColor(const QUuid& id) const;
     // a Build menu item that only works while build mode is on
     void addMenuAction(QAction* action);
 
@@ -130,12 +144,24 @@ public:
 
     // the whole Inspector as drawn, scrolled or not (a scripted test's picture of it, Test.saveInspectorPicture)
     QPixmap inspectorPicture() const;
+    // a gizmo drag of the selection driven by a scripted test (Test.editorDrag): begin captures the selection as a
+    // press on the gizmo would (a move handle, or a rotate ring when rotate), every call applies the delta or the
+    // rotation about the selection's centre as the pointer's motion would, final takes the undo step as the release would
+    void dragSelectionForTest(const glm::vec3& delta, const glm::quat& rotationDelta, bool rotate, bool begin, bool final);
 
 public slots:
     void setActive(bool active);
     void toggleActive() { setActive(!_active); }
     // selects these entities, turning build mode on first (a scripted test, Test.selectInEditor)
     void select(const QList<QUuid>& ids);
+    // a Track's control points, for scripted tests (Test.chooseTrackPoint and the others): what a click on a point's
+    // diamond, Shift+click on the curve and Delete do
+    void chooseTrackPoint(int index, bool fromInspector);
+    int chosenTrackPoint() const { return _trackPointChosen; }
+    // an Inspector edit of the selection, begun and committed as a list's + button does (Test.commitInspectorEdit)
+    void testInspectorEdit(const QString& key, const QVariant& value);
+    void insertTrackPoint(float arcLength);
+    void deleteTrackPoint();
     void setGridVisible(bool visible);
     void setTool(EditorToolBar::Tool tool);
     void setLocalSpace(bool local);
@@ -145,7 +171,19 @@ public slots:
     void redo();
     // docks the panels back where they started, for a panel that was torn off and lost
     void resetLayout();
+    // the panels' style sheet (styles/editor.qss) on the window, its colours the skin's while one is on
+    // (PanelTheme::getSkin): called once the panels exist and again whenever the skin changes
+    void applyStyle();
     void frameSelection();
+    // flies the build camera to a Hierarchy row that is not loaded, so the stream brings it; it is selected when it
+    // arrives (NATIVE-EDITOR.md 8). A loaded entity is selected and framed
+    void goToListed(const QUuid& id);
+    // asks the entity server again for its list of every entity (the Hierarchy's Refresh)
+    void refreshEntityList();
+    // the Hierarchy's rows in all and loaded, and the list's state, for scripted tests (Test.getHierarchyCounts)
+    QVariantMap hierarchyCounts() const;
+    // what a click on the entity's row in the Hierarchy does (Test.clickHierarchyRow)
+    void clickHierarchyRow(const QUuid& id);
     void goToSelection();           // Shift+F: frame it and take the avatar there
     void bringSelectionHere();      // Option+Shift+F: move it to the avatar
     void create(const QString& key);
@@ -157,6 +195,12 @@ public slots:
     void cutSelection();
     void paste();
     void selectAll();
+    // Build > Import Entities… / Import Entities from URL…: an entities file (.json, .json.gz, .svo, as Export writes
+    // and world backups are) placed under the cursor like a paste, selected, one undo step; Build > Export Selected
+    // Entities…: the selection with its descendants, to a .json file (the old Create app's Import and Export)
+    void importEntitiesFromFile();
+    void importEntitiesFromUrl();
+    void exportSelection();
     // Build > Use Stable Links: every link in the world to one of the user's own files by its path becomes the file's
     // stable link, read from a fresh listing of My Files; one undo step, and a report of what could not be matched
     // (NATIVE-EDITOR.md section 7.4)
@@ -175,7 +219,7 @@ signals:
     void marqueeChanged();
 
 private:
-    enum class DragKind { None, Move, Rotate, Scale };
+    enum class DragKind { None, Move, Rotate, Scale, TrackPoint };   // TrackPoint: a Track's chosen control point, by the Move gizmo
 
     void createPanels();
     void placeToolBars();
@@ -198,6 +242,10 @@ private:
 
     // the Inspector: snapshots of the selection, and edits coming back from its fields
     void refreshInspector(bool selectionChanged);
+    // the Hierarchy's rows and the Inspector say what failed to load (EntityRenderer::loadFailures), once a second
+    void refreshLoadProblems();
+    // the selected entities' load failures, one line each (named when several are selected)
+    QString selectionLoadProblem() const;
     bool selectionSnapshots(QVector<EntityItemProperties>& snapshots, EntityTypes::EntityType& type, bool& multiple) const;
     void onInspectorEditBegan(const QString& key);
     void onInspectorLiveEdit(const QString& key, const QVariant& value);
@@ -243,6 +291,12 @@ private:
     void createModelAt(const glm::vec3& point);
     void pasteAt(const glm::vec3& target);
     QList<QUuid> place(EntityItemProperties properties, const QString& text, const glm::vec3& point);
+    // reads an entity file as an add takes it (importEntities, createPreset)
+    bool readEntityFile(const QString& url, QVector<EntityItemProperties>& properties, QList<QUuid>& ids, AABox& bounds,
+                        int& count);
+    // one of the app's ready-made families of entities (Create > Special items > Vehicles): the file's ground (y 0)
+    // on the point, at least ahead metres from the camera, facing the way the camera looks; one undo step
+    bool createPreset(const QString& presetUrl, const QString& label, const glm::vec3& point, float ahead);
     void placeModel(const QUrl& url, const glm::vec3& point);
     void placeImage(const QUrl& url, const glm::vec3& point);
     void beginUpload(const QString& localPath, const glm::vec3& point, bool image);
@@ -272,6 +326,15 @@ private:
     void updateLightGizmos();
     // a selected vehicle's wheels, seats and force points, the part chosen in the Inspector bright (EditorVehicleGizmos.h)
     void updateVehicleGizmos();
+    // the tracks' curves, and the handles of a Track selected on its own (EditorTrackGizmos.h)
+    void updateTrackGizmos();
+    // the Track selected on its own, whose points can be chosen and moved; false when the selection is anything else
+    bool trackPointTrack(QUuid& id) const;
+    // (chooseTrackPoint, insertTrackPoint and deleteTrackPoint are public, above: a click chooses a point, bright in
+    // the viewport with the Move gizmo on it and the Inspector's Points list on its row; Shift+click on the curve
+    // inserts one at an arc length; Delete removes the chosen one)
+    // the Track's box grown or shrunk to hold its curve and guideway, as an edit of its dimensions
+    void fitTrackBox(const EntityItemPointer& track, const QVector<glm::vec3>& points, EntityItemProperties& properties) const;
     void setGizmosVisible(bool visible);
     // what a click there selects: a light's icon, or else the surface under it
     QUuid pickAt(const QPoint& viewportPos) const;
@@ -284,6 +347,11 @@ private:
 
     bool _ready { false };
     bool _active { false };
+    // a build mode toggle's timing, for its log line (Caity, 10-24: toggles took 0.5-2 s at times): when the Build
+    // Mode shortcut's key was made (the system's clock, ms since start-up) and reached the client (the steady clock)
+    int64_t _toggleKeyMadeMs { -1 };
+    int64_t _toggleKeyArrivedMs { -1 };
+    void reportToggleTiming(bool active, int64_t startMs, int64_t endMs);
     bool _gridVisible { true };
     EditorCamera _camera;
     EditorGrid _grid;
@@ -307,6 +375,7 @@ private:
     glm::quat _axesOrientation;
     bool _axesValid { false };
     int _frameCounter { 0 };
+    float _loadCheckSeconds { 0.0f };   // since the last refreshLoadProblems
 
     // a click or a marquee in the viewport
     bool _clickPending { false };
@@ -364,6 +433,15 @@ private:
     EditorBounds _bounds;
     std::vector<EditorBoundsShape> _boundsShapes;
     EditorLightGizmos _lightGizmos;
+    EditorTrackGizmos _trackGizmos;
+    QVector<QUuid> _nearbyTracks;       // the tracks round the camera, looked for every so often
+    int _trackSearchFrame { -1 };
+    int _trackPointChosen { -1 };       // the control point chosen in the Track selected on its own, -1 for none
+    QUuid _trackPointTrack;             // that track
+    // a drag of the chosen point: the track's points and transform when it began
+    QVector<glm::vec3> _dragTrackPoints;
+    glm::vec3 _dragTrackPosition;
+    glm::quat _dragTrackRotation;
     EditorVehicleGizmos _vehicleGizmos;
     std::vector<EditorVehicleGizmoVehicle> _vehicleGizmoVehicles;
     QHash<QString, int> _vehiclePartChosen;   // the row selected in each of the Inspector's vehicle lists, by key ("vehicle.wheels")
@@ -383,6 +461,7 @@ private:
     QVector<glm::vec3> _inspectorNatural;
 
     bool _panelsCreated { false };
+    QString _styleSource;     // styles/editor.qss as shipped (applyStyle)
     bool _syncingSelection { false };
     HierarchyPanel* _hierarchy { nullptr };
     InspectorPanel* _inspector { nullptr };
@@ -395,6 +474,17 @@ private:
     QStatusBar* _statusBar { nullptr };   // the bottom of the window, in build mode: notes go there
     QLabel* _statusLabel { nullptr };
     EntityTreeModel* _treeModel { nullptr };
+    // the entity server's list for the Hierarchy, and the rows chosen there that are on their way: they join the
+    // selection as they arrive
+    EditorEntityList* _entityList { nullptr };
+    QList<QUuid> _arrivalIds;
+    bool _selectingArrival { false };
+    QUuid _goingTo;                       // the row the camera flew to, for the status bar
+    QString _goingToName;
+    QTimer _arrivalTimer;
+    void onHierarchySelection(const QList<QUuid>& ids);
+    void onEntityLoaded(const QUuid& id);
+    void updateListNote();
     Setting::Handle<QByteArray> _layoutSetting { "editor/layout3", QByteArray() };   // 2: the panels no longer float; 3: the Assets dock
     // build mode narrows the field of view; the user's own is kept here so it survives a crash
     Setting::Handle<float> _fovBeforeBuild { "editor/fovBeforeBuild", 0.0f };

@@ -11,6 +11,7 @@
 
 #include <gpu/Batch.h>
 #include <DependencyManager.h>
+#include <DeferredLightingEffect.h>
 #include <GeometryCache.h>
 #include <Mirrors.h>
 #include <StencilMaskPass.h>
@@ -554,7 +555,12 @@ void ShapeEntityRenderer::doRender(RenderArgs* args) {
         auto procedural = std::static_pointer_cast<graphics::ProceduralMaterial>(materials.top().material);
         outColor = procedural->getColor(outColor);
         outColor.a *= procedural->isFading() ? Interpolate::calculateFadeRatio(procedural->getFadeStartTime()) : 1.0f;
-        procedural->prepare(batch, _position, _dimensions, _orientation, _created, ProceduralProgramKey(outColor.a < 1.0f));
+        const bool forward = DeferredLightingEffect::isForwardLit(args);
+        procedural->prepare(batch, _position, _dimensions, _orientation, _created,
+                            ProceduralProgramKey(outColor.a < 1.0f, false, false, forward));
+        if (forward) {
+            DependencyManager::get<DeferredLightingEffect>()->setupForwardLightingBatch(args, batch);
+        }
 
         if (render::ShapeKey(args->_globalShapeKey).isWireframe() || primitiveMode == PrimitiveMode::LINES) {
             geometryCache->renderWireShape(batch, geometryShape, outColor);

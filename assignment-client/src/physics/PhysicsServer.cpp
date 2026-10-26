@@ -27,6 +27,7 @@
 #include "../AssignmentDynamicFactory.h"
 #include "../entities/AssignmentParentFinder.h"
 #include "ServerTerrainEntityItem.h"
+#include "ServerTrackEntityItem.h"
 
 namespace {
     const QString PHYSICS_SERVER_LOGGING_NAME = "physics-server";
@@ -78,8 +79,10 @@ void PhysicsServer::run() {
 
     _entityEditSender.setPacketsPerSecond(EDIT_PACKETS_PER_SECOND);
 
-    // this server's Terrain entities hold the ground's collision mesh (round 6); the plain one is only its properties
+    // this server's Terrain entities hold the ground's collision mesh (round 6); the plain one is only its properties.
+    // Its Track entities hold their guideway's (the beam and pylons) the same way.
     EntityTypes::registerEntityType(EntityTypes::Terrain, "Terrain", ServerTerrainEntityItem::factory);
+    EntityTypes::registerEntityType(EntityTypes::Track, "Track", ServerTrackEntityItem::factory);
 
     _entityViewer.init();
     EntityTreePointer tree = _entityViewer.getTree();
@@ -252,15 +255,18 @@ void PhysicsServer::publishTrainStates() {
     }
 }
 
-// The Terrain entities fetch their files and build their meshes from here, once a second.
+// The Terrain entities fetch their files and build their meshes from here, once a second; the Track entities build
+// their guideways' the same way.
 void PhysicsServer::updateTerrains() {
     EntityTreePointer tree = _entityViewer.getTree();
     if (!tree) {
         return;
     }
     QVector<QUuid> terrainIDs;
+    QVector<QUuid> trackIDs;
     unsigned int searchFilter = PickFilter::getBitMask(PickFilter::FlagBit::DOMAIN_ENTITIES);
     std::vector<std::shared_ptr<ServerTerrainEntityItem>> terrains;
+    std::vector<std::shared_ptr<ServerTrackEntityItem>> tracks;
     tree->withReadLock([&] {
         tree->evalEntitiesInSphereWithType(Vectors::ZERO, (float)TREE_SCALE, EntityTypes::Terrain, PickFilter(searchFilter), terrainIDs);
         for (const QUuid& id : terrainIDs) {
@@ -268,9 +274,18 @@ void PhysicsServer::updateTerrains() {
                 terrains.push_back(terrain);
             }
         }
+        tree->evalEntitiesInSphereWithType(Vectors::ZERO, (float)TREE_SCALE, EntityTypes::Track, PickFilter(searchFilter), trackIDs);
+        for (const QUuid& id : trackIDs) {
+            if (auto track = std::dynamic_pointer_cast<ServerTrackEntityItem>(tree->findEntityByID(id))) {
+                tracks.push_back(track);
+            }
+        }
     });
     for (auto& terrain : terrains) {
         terrain->update();
+    }
+    for (auto& track : tracks) {
+        track->update();
     }
 }
 

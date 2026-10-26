@@ -27,9 +27,6 @@ HMDScriptingInterface::HMDScriptingInterface() {
     connect(qApp, &Application::activeDisplayPluginChanged, [this]{
         emit displayModeChanged(isHMDMode());
     });
-    connect(qApp, &Application::miniTabletEnabledChanged, [this](bool enabled) {
-        emit miniTabletEnabledChanged(enabled);
-    });
     connect(qApp, &Application::awayStateWhenFocusLostInVRChanged, [this](bool enabled) {
         emit awayStateWhenFocusLostInVRChanged(enabled);
     });
@@ -114,10 +111,7 @@ void  HMDScriptingInterface::closeTablet() {
     _showTablet = false;
     _tabletContextualMode = false;
 
-    QMetaObject::invokeMethod(
-        qApp, "updateSystemCursor", Qt::DirectConnection,
-        Q_ARG(const Qt::CursorShape, Qt::CursorShape::ArrowCursor)
-    );
+    qApp->getWindowCursor().setSystemShape(Qt::CursorShape::ArrowCursor);
 }
 
 void HMDScriptingInterface::openTablet(bool contextualMode) {
@@ -135,14 +129,6 @@ void HMDScriptingInterface::setShouldShowTablet(bool value) {
         _tabletContextualMode = false;
         emit showTabletChanged(value);
     }
-}
-
-void HMDScriptingInterface::setMiniTabletEnabled(bool enabled) {
-    qApp->setMiniTabletEnabled(enabled);
-}
-
-bool HMDScriptingInterface::getMiniTabletEnabled() {
-    return qApp->getMiniTabletEnabled();
 }
 
 void HMDScriptingInterface::setAwayStateWhenFocusLostInVREnabled(bool enabled) {

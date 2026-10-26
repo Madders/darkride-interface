@@ -52,6 +52,9 @@ public:
     virtual render::Item::Bound getBound() const;
     virtual render::ShapeKey getShapeKey() const;
     virtual void render(RenderArgs* args);
+    // GPU instancing (INSTANCING.md 3): a plain part draws alone
+    virtual render::Instancing getInstancing(RenderArgs* args) { return render::Instancing(); }
+    virtual void renderInstances(RenderArgs* args, const render::Transforms& transforms) { render(args); }
 
     // ModelMeshPartPayload functions to perform render
     void drawCall(gpu::Batch& batch) const;
@@ -84,10 +87,20 @@ public:
     static bool enableMaterialProceduralShaders; // set from menu/settings
     static bool sceneIsReady; // set from entity tree renderer
 
+    // A diagnostic (Test.dumpDraws(frames)): for that many frames, every main-view draw of a model part logs what it
+    // drew and where (INSTANCING-DUMP lines), so a frame with GPU instancing on can be diffed against one with it off
+    // (tests-manual/instancing/diff-dump.py). beginFrame is called once a frame on the render thread, before the frame.
+    static std::atomic<int> dumpDrawFrames;
+    static void beginFrame();
+    static bool dumping() { return _dumpingFrame.load(std::memory_order_relaxed); }
+    static int dumpFrame() { return _dumpFrame.load(std::memory_order_relaxed); }
+
 protected:
     render::ItemKey _itemKey{ render::ItemKey::Builder::opaqueShape().build() };
     bool _cullWithParent{ false };
     uint64_t _created;
+    static std::atomic<bool> _dumpingFrame;
+    static std::atomic<int> _dumpFrame;
 };
 
 namespace render {
@@ -124,9 +137,20 @@ public:
     // dual quaternion skinning
     void updateClusterBuffer(const std::vector<Model::TransformDualQuaternion>& clusterDualQuaternions);
 
+    // A skinned part's culling bound, from the clusters that place its vertices rather than from its mesh node: a
+    // glTF armature exported at 1/100 scale left the node's bound a hundredth of the drawn body, at its feet.
+    void updateSkinnedBound(const Transform& modelTransform, const std::vector<glm::mat4>& clusterMatrices);
+    void updateSkinnedBound(const Transform& modelTransform,
+                            const std::vector<Model::TransformDualQuaternion>& clusterDualQuaternions);
+
     // Render Item interface
     render::ShapeKey getShapeKey() const override;
     void render(RenderArgs* args) override;
+    // GPU instancing (INSTANCING.md 3): settles the pass's level of detail and impostor choice, and says whether this
+    // part can share a draw (its key: the mesh, the part and level, the material by content, the ShapeKey);
+    // renderInstances then draws the part once for every transform of its group
+    render::Instancing getInstancing(RenderArgs* args) override;
+    void renderInstances(RenderArgs* args, const render::Transforms& transforms) override;
 
     void setShapeKey(bool invalidateShapeKey, PrimitiveMode primitiveMode, bool useDualQuaternionSkinning);
     void setCauterized(bool cauterized) { _cauterized = cauterized; }
@@ -182,6 +206,14 @@ private:
     std::vector<float> _lodErrors;                 // each level's error, in the mesh's units
     int _mainViewLodLevel { 0 };
     std::atomic<int> _shownLodLevel { 0 };
+
+    // GPU instancing: what getInstancing settled, and the pass it settled it for (render::Args::_instancingPass)
+    uint32_t _settledPass { 0 };
+    int _settledLodLevel { 0 };
+    // the drawn material by content (INSTANCING.md 3.2), recomputed after the materials change; 0 until computed
+    uint64_t _materialContentKey { 0 };
+    bool _materialContentKeyDirty { true };
+    QString _modelFileForLog;   // the model file's name, for the draw dump
 };
 
 namespace render {
@@ -193,6 +225,10 @@ template <>
 const ShapeKey shapeGetShapeKey(const ModelMeshPartPayload::Pointer& payload);
 template <>
 void payloadRender(const ModelMeshPartPayload::Pointer& payload, RenderArgs* args);
+template <>
+Instancing payloadGetInstancing(const ModelMeshPartPayload::Pointer& payload, RenderArgs* args);
+template <>
+void payloadRenderInstances(const ModelMeshPartPayload::Pointer& payload, RenderArgs* args, const Transforms& transforms);
 }  // namespace render
 
 #endif  // hifi_MeshPartPayload_h

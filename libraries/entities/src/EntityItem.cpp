@@ -3504,38 +3504,6 @@ void EntityItem::somethingChangedNotification() {
     });
 }
 
-// static
-void EntityItem::retrieveMarketplacePublicKey() {
-    // QNetworkAccessManager& networkAccessManager = NetworkAccessManager::getInstance();
-    // QNetworkRequest networkRequest;
-    // networkRequest.setAttribute(QNetworkRequest::FollowRedirectsAttribute, true);
-    // QUrl requestURL = NetworkingConstants::METAVERSE_SERVER_URL();
-    // requestURL.setPath("/api/v1/commerce/marketplace_key");
-    // QJsonObject request;
-    // networkRequest.setUrl(requestURL);
-
-    // QNetworkReply* networkReply = NULL;
-    // networkReply = networkAccessManager.get(networkRequest);
-
-    // connect(networkReply, &QNetworkReply::finished, [=]() {
-    //     QJsonObject jsonObject = QJsonDocument::fromJson(networkReply->readAll()).object();
-    //     jsonObject = jsonObject["data"].toObject();
-
-    //     if (networkReply->error() == QNetworkReply::NoError) {
-    //         if (!jsonObject["public_key"].toString().isEmpty()) {
-    //             EntityItem::_marketplacePublicKey = jsonObject["public_key"].toString();
-    //             qCWarning(entities) << "Marketplace public key has been set to" << _marketplacePublicKey;
-    //         } else {
-    //             qCWarning(entities) << "Marketplace public key is empty!";
-    //         }
-    //     } else {
-    //         qCWarning(entities) << "Call to" << networkRequest.url() << "failed! Error:" << networkReply->error();
-    //     }
-
-    //     networkReply->deleteLater();
-    // });
-}
-
 void EntityItem::collectChildrenForDelete(std::vector<EntityItemPointer>& entitiesToDelete, const QUuid& sessionID) const {
     // Deleting an entity has consequences for its children, however there are rules dictating what can be deleted.
     // This method helps enforce those rules: not for this entity, but for its children.

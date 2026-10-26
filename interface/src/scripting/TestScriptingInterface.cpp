@@ -7,6 +7,8 @@
 //
 #include "TestScriptingInterface.h"
 
+#include <MeshPartPayload.h>
+
 #include <SpringBones.h>
 
 #include <QtCore/QCoreApplication>
@@ -18,13 +20,18 @@
 #include <DependencyManager.h>
 #include <MainWindow.h>
 #include <OffscreenUi.h>
+#include <QtQuick/QQuickItem>
 #include <StatTracker.h>
 #include <Trace.h>
 
 #include "Application.h"
 #include <QtGui/QPixmap>
+#include <plugins/DisplayPlugin.h>
+#include <display-plugins/DisplayLink.h>
+#include <display-plugins/OpenGLDisplayPlugin.h>
 
 #include "editor/Editor.h"
+#include "ui/Skins.h"
 #include "graphics/GraphicsEngine.h"
 #include <EntityTreeRenderer.h>
 #include <RenderableEntityItem.h>
@@ -288,6 +295,183 @@ bool TestScriptingInterface::saveInspectorPicture(const QString& path) {
     return !picture.isNull() && picture.save(path);
 }
 
+void TestScriptingInterface::setPresentLoad(int microseconds) {
+    OpenGLDisplayPlugin::setPresentLoad(microseconds);
+}
+
+float TestScriptingInterface::getPresentPeriod() {
+    return qApp->getPresentPeriod();
+}
+
+void TestScriptingInterface::holdPresents(int milliseconds) {
+    OpenGLDisplayPlugin::holdPresents(milliseconds);
+}
+
+void TestScriptingInterface::chooseTrackPoint(int index) {
+    if (QThread::currentThread() != thread()) {
+        BLOCKING_INVOKE_METHOD(this, "chooseTrackPoint", Q_ARG(int, index));
+        return;
+    }
+    DependencyManager::get<Editor>()->chooseTrackPoint(index, false);
+}
+
+int TestScriptingInterface::chosenTrackPoint() {
+    if (QThread::currentThread() != thread()) {
+        int result = -1;
+        BLOCKING_INVOKE_METHOD(this, "chosenTrackPoint", Q_RETURN_ARG(int, result));
+        return result;
+    }
+    return DependencyManager::get<Editor>()->chosenTrackPoint();
+}
+
+void TestScriptingInterface::insertTrackPoint(float arcLength) {
+    if (QThread::currentThread() != thread()) {
+        BLOCKING_INVOKE_METHOD(this, "insertTrackPoint", Q_ARG(float, arcLength));
+        return;
+    }
+    DependencyManager::get<Editor>()->insertTrackPoint(arcLength);
+}
+
+void TestScriptingInterface::deleteTrackPoint() {
+    if (QThread::currentThread() != thread()) {
+        BLOCKING_INVOKE_METHOD(this, "deleteTrackPoint");
+        return;
+    }
+    DependencyManager::get<Editor>()->deleteTrackPoint();
+}
+
+void TestScriptingInterface::setBuildMode(bool on) {
+    if (QThread::currentThread() != thread()) {
+        BLOCKING_INVOKE_METHOD(this, "setBuildMode", Q_ARG(bool, on));
+        return;
+    }
+    DependencyManager::get<Editor>()->setActive(on);
+}
+
+QVariantMap TestScriptingInterface::getHierarchyCounts() {
+    if (QThread::currentThread() != thread()) {
+        QVariantMap result;
+        BLOCKING_INVOKE_METHOD(this, "getHierarchyCounts", Q_RETURN_ARG(QVariantMap, result));
+        return result;
+    }
+    return DependencyManager::get<Editor>()->hierarchyCounts();
+}
+
+void TestScriptingInterface::clickHierarchyRow(const QUuid& id) {
+    if (QThread::currentThread() != thread()) {
+        BLOCKING_INVOKE_METHOD(this, "clickHierarchyRow", Q_ARG(QUuid, id));
+        return;
+    }
+    DependencyManager::get<Editor>()->clickHierarchyRow(id);
+}
+
+void TestScriptingInterface::commitInspectorEdit(const QString& key, const QVariant& value) {
+    if (QThread::currentThread() != thread()) {
+        BLOCKING_INVOKE_METHOD(this, "commitInspectorEdit", Q_ARG(QString, key), Q_ARG(QVariant, value));
+        return;
+    }
+    DependencyManager::get<Editor>()->testInspectorEdit(key, value);
+}
+
+void TestScriptingInterface::editorUndo() {
+    if (QThread::currentThread() != thread()) {
+        BLOCKING_INVOKE_METHOD(this, "editorUndo");
+        return;
+    }
+    DependencyManager::get<Editor>()->undo();
+}
+
+QString TestScriptingInterface::hierarchyRowColor(const QUuid& id) {
+    if (QThread::currentThread() != thread()) {
+        QString result;
+        BLOCKING_INVOKE_METHOD(this, "hierarchyRowColor", Q_RETURN_ARG(QString, result), Q_ARG(QUuid, id));
+        return result;
+    }
+    QColor color = DependencyManager::get<Editor>()->hierarchyRowColor(id);
+    return color.isValid() ? color.name() : QString();
+}
+
+QString TestScriptingInterface::setSkin(const QString& id) {
+    if (QThread::currentThread() != thread()) {
+        QString result;
+        BLOCKING_INVOKE_METHOD(this, "setSkin", Q_RETURN_ARG(QString, result), Q_ARG(QString, id));
+        return result;
+    }
+    return DependencyManager::get<Skins>()->setCurrent(id);
+}
+
+bool TestScriptingInterface::editorImportEntities(const QString& url) {
+    if (QThread::currentThread() != thread()) {
+        bool result = false;
+        BLOCKING_INVOKE_METHOD(this, "editorImportEntities", Q_RETURN_ARG(bool, result), Q_ARG(QString, url));
+        return result;
+    }
+    return DependencyManager::get<Editor>()->importEntities(url);
+}
+
+int TestScriptingInterface::editorExportSelection(const QString& path) {
+    if (QThread::currentThread() != thread()) {
+        int result = -1;
+        BLOCKING_INVOKE_METHOD(this, "editorExportSelection", Q_RETURN_ARG(int, result), Q_ARG(QString, path));
+        return result;
+    }
+    return DependencyManager::get<Editor>()->exportSelectionTo(path);
+}
+
+QString TestScriptingInterface::editorLoadProblem(const QUuid& id) {
+    if (QThread::currentThread() != thread()) {
+        QString result;
+        BLOCKING_INVOKE_METHOD(this, "editorLoadProblem", Q_RETURN_ARG(QString, result), Q_ARG(QUuid, id));
+        return result;
+    }
+    return DependencyManager::get<Editor>()->loadProblem(id);
+}
+
+void TestScriptingInterface::showSignInScreen() {
+    if (QThread::currentThread() != thread()) {
+        BLOCKING_INVOKE_METHOD(this, "showSignInScreen");
+        return;
+    }
+    // as the logout path does (ApplicationStartup.cpp, AccountManager::logoutComplete)
+    qApp->getSignInGate().pauseUntilLoginDetermined();
+    qApp->getSignInGate().showLoginScreen();
+}
+
+// a QML panel's item by its objectName, in the desktop (the panels are its windows)
+static QObject* findPanelItem(const QString& objectName) {
+    auto offscreenUi = DependencyManager::get<OffscreenUi>();
+    QQuickItem* desktop = offscreenUi ? offscreenUi->getDesktop() : nullptr;
+    return desktop ? desktop->findChild<QObject*>(objectName) : nullptr;
+}
+
+bool TestScriptingInterface::setPanelText(const QString& objectName, const QString& text) {
+    if (QThread::currentThread() != thread()) {
+        bool result = false;
+        BLOCKING_INVOKE_METHOD(this, "setPanelText", Q_RETURN_ARG(bool, result), Q_ARG(QString, objectName), Q_ARG(QString, text));
+        return result;
+    }
+    QObject* field = findPanelItem(objectName);
+    return field && field->setProperty("text", text);
+}
+
+bool TestScriptingInterface::acceptPanelText(const QString& objectName) {
+    if (QThread::currentThread() != thread()) {
+        bool result = false;
+        BLOCKING_INVOKE_METHOD(this, "acceptPanelText", Q_RETURN_ARG(bool, result), Q_ARG(QString, objectName));
+        return result;
+    }
+    QObject* field = findPanelItem(objectName);
+    return field && QMetaObject::invokeMethod(field, "accepted");
+}
+
+void TestScriptingInterface::editorCreate(const QString& key) {
+    if (QThread::currentThread() != thread()) {
+        BLOCKING_INVOKE_METHOD(this, "editorCreate", Q_ARG(QString, key));
+        return;
+    }
+    DependencyManager::get<Editor>()->create(key);
+}
+
 bool TestScriptingInterface::saveWindowPicture(const QString& path) {
     if (QThread::currentThread() != thread()) {
         bool result = false;
@@ -300,6 +484,10 @@ bool TestScriptingInterface::saveWindowPicture(const QString& path) {
     }
     QPixmap picture = window->grab();
     return !picture.isNull() && picture.save(path);
+}
+
+void TestScriptingInterface::dumpDraws(int frames) {
+    MeshPartPayload::dumpDrawFrames.store(std::max(0, frames));
 }
 
 bool TestScriptingInterface::traceRenderedEntity(const QUuid& entityID) {
@@ -324,7 +512,64 @@ QVariantList TestScriptingInterface::takeRenderTrace() {
     QVariantList list;
     for (const auto& sample : qApp->getGraphicsEngine().takeRenderTrace()) {
         list << QVariant(QVariantList { (double)sample.time * 1.0e-3, (double)sample.camera.x, (double)sample.camera.y, (double)sample.camera.z,
-                                        (double)sample.item.x, (double)sample.item.y, (double)sample.item.z });
+                                        (double)sample.item.x, (double)sample.item.y, (double)sample.item.z, (double)sample.frameIndex });
     }
     return list;
+}
+
+void TestScriptingInterface::tracePresents(bool on) {
+    auto displayPlugin = qApp->getActiveDisplayPlugin();
+    if (displayPlugin) {
+        displayPlugin->setPresentTracing(on);
+    }
+}
+
+QVariantList TestScriptingInterface::takePresentTrace() {
+    QVariantList list;
+    auto displayPlugin = qApp->getActiveDisplayPlugin();
+    if (displayPlugin) {
+        for (const auto& sample : displayPlugin->takePresentTrace()) {
+            list << QVariant(QVariantList { (double)sample.time * 1.0e-3, (double)sample.frameIndex, sample.newFrame ? 1.0 : 0.0,
+                                            (double)sample.presentUsecs * 1.0e-3, (double)sample.swapUsecs * 1.0e-3, (double)sample.gpuMs });
+        }
+    }
+    return list;
+}
+
+void TestScriptingInterface::traceRefreshes(bool on) {
+    DisplayLink::instance().setTracing(on);
+}
+
+QVariantList TestScriptingInterface::takeRefreshTrace() {
+    QVariantList list;
+    for (uint64_t time : DisplayLink::instance().takeTrace()) {
+        list << QVariant((double)time * 1.0e-3);
+    }
+    return list;
+}
+
+float TestScriptingInterface::getDisplayRefreshRate() {
+    auto window = qApp->getWindow();
+    if (!window || !window->windowHandle() || !window->windowHandle()->screen()) {
+        return 0.0f;
+    }
+    return (float)window->windowHandle()->screen()->refreshRate();
+}
+
+bool TestScriptingInterface::isVsyncEnabled() {
+    auto displayPlugin = qApp->getActiveDisplayPlugin();
+    return displayPlugin && displayPlugin->isVsyncEnabled();
+}
+
+void TestScriptingInterface::editorDrag(const glm::vec3& delta, float yawDegrees, float rollDegrees, bool begin, bool final) {
+    if (QThread::currentThread() != thread()) {
+        BLOCKING_INVOKE_METHOD(this, "editorDrag", Q_ARG(glm::vec3, delta), Q_ARG(float, yawDegrees), Q_ARG(float, rollDegrees),
+                               Q_ARG(bool, begin), Q_ARG(bool, final));
+        return;
+    }
+    // a rotate ring's drag when any rotation is asked for: the kind is the handle's, not the size of the first step
+    // (the first step of a slow drag is a degree or two)
+    bool rotate = yawDegrees != 0.0f || rollDegrees != 0.0f;
+    glm::quat rotation = glm::quat(glm::radians(glm::vec3(0.0f, yawDegrees, rollDegrees)));
+    DependencyManager::get<Editor>()->dragSelectionForTest(delta, rotation, rotate, begin, final);
 }

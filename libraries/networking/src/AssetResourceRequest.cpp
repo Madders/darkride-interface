@@ -34,7 +34,18 @@ AssetResourceRequest::AssetResourceRequest(
     _lastProgressDebug = p_high_resolution_clock::now() - std::chrono::seconds(DOWNLOAD_PROGRESS_LOG_INTERVAL_SECONDS);
 }
 
+// How long a mapping may go unanswered. An answer can be lost without a trace: an asset server answering a node whose
+// socket it has not activated yet drops the reply ("sendPacketList called without active socket ... Not sending"), as
+// at a world's start when a node asks the moment it has the asset server (an entity script server's atp: script, on
+// about one start in five, 10-24), and the request had no timeout, so it waited for good. Failed as a Timeout, it is
+// asked again by the callers' retries (ScriptCache, ResourceCache), by which time both sides' sockets are active.
+static const int MAPPING_TIMEOUT_MS = 15000;
+
 AssetResourceRequest::~AssetResourceRequest() {
+    if (_mappingTimer) {
+        _mappingTimer->stop();
+        _mappingTimer->deleteLater();
+    }
     if (_assetRequest || _assetMappingRequest) {
         if (_assetMappingRequest) {
             _assetMappingRequest->deleteLater();
@@ -89,6 +100,9 @@ void AssetResourceRequest::requestMappingForPath(const AssetUtils::AssetPath& pa
         
         Q_ASSERT(_state == InProgress);
         Q_ASSERT(request == _assetMappingRequest);
+        if (_mappingTimer) {
+            _mappingTimer->stop();
+        }
 
         bool failed = false;
 
@@ -145,7 +159,33 @@ void AssetResourceRequest::requestMappingForPath(const AssetUtils::AssetPath& pa
         _assetMappingRequest = nullptr;
     });
 
+    if (!_mappingTimer) {
+        _mappingTimer = new QTimer();
+        _mappingTimer->setSingleShot(true);
+        connect(_mappingTimer, &QTimer::timeout, this, &AssetResourceRequest::onMappingTimeout);
+    }
+    _mappingTimer->start(MAPPING_TIMEOUT_MS);
+
     _assetMappingRequest->start();
+}
+
+void AssetResourceRequest::onMappingTimeout() {
+    if (_state != InProgress || !_assetMappingRequest) {
+        return;
+    }
+    qCDebug(networking) << "Timeout, no answer for the mapping of" << _url.toString() << "in" << MAPPING_TIMEOUT_MS / 1000 << "s";
+    // the request is let go (its destructor cancels it in AssetClient, so a late answer finds nobody waiting)
+    _assetMappingRequest->disconnect(this);
+    _assetMappingRequest->deleteLater();
+    _assetMappingRequest = nullptr;
+
+    _result = Timeout;
+    _state = Finished;
+    emit finished();
+
+    auto statTracker = DependencyManager::get<StatTracker>();
+    statTracker->incrementStat(STAT_ATP_MAPPING_REQUEST_FAILED);
+    statTracker->incrementStat(STAT_ATP_REQUEST_FAILED);
 }
 
 void AssetResourceRequest::requestHash(const AssetUtils::AssetHash& hash) {

@@ -9,6 +9,7 @@
 
 #include <functional>
 #include <atomic>
+#include <vector>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -133,6 +134,28 @@ public:
     virtual float getTargetFrameRate() const { return 1.0f; }
     virtual bool hasAsyncReprojection() const { return false; }
 
+    // Frame pacing (PHYSICS.md "The driver's stutter"): with vsync the swap waits for the display's refresh, so each
+    // present, and the game-loop update it triggers, sits on the display's clock. Wanted = the Render.vsyncEnabled
+    // setting (TIVOLI_VSYNC in the environment forces it); the present thread applies it, at activation and on a change
+    virtual bool isVsyncEnabled() const { return false; }
+    virtual void setVsyncWanted(bool wanted) { Q_UNUSED(wanted); }
+    // the period the presents are paced at, in seconds, so the simulation can advance by whole periods per frame
+    // (PhysicsEngine::setPresentPeriod); 0 when they are not paced (vsync, an HMD, a window in the background)
+    virtual float getPresentPeriod() const { return 0.0f; }
+
+    // a scripted test's record of the presents (Test.tracePresents / Test.takePresentTrace): one sample per present,
+    // taken on the present thread once the swap has returned
+    struct PresentSample {
+        uint64_t time { 0 };          // usecs
+        uint32_t frameIndex { 0 };    // the rendered frame shown (gpu::Frame::frameIndex), 0 when none
+        bool newFrame { false };      // a frame not shown before, or the last one shown again
+        uint32_t presentUsecs { 0 };  // the whole present, from its start to the swap's return
+        uint32_t swapUsecs { 0 };     // the swap alone (with vsync, its wait for the display)
+        float gpuMs { 0.0f };         // the GPU's time per frame, averaged, as the context measures it
+    };
+    virtual void setPresentTracing(bool on) { Q_UNUSED(on); }
+    virtual std::vector<PresentSample> takePresentTrace() { return {}; }
+
     /// Returns a boolean value indicating whether the display is currently visible
     /// to the user.  For monitor displays, false might indicate that a screensaver,
     /// or power-save mode is active.  For HMDs it may reflect a sensor indicating
@@ -221,12 +244,17 @@ public:
 signals:
     void recommendedFramebufferSizeChanged(const QSize& size);
     void resetSensorsRequested();
-    void presented(quint32 frame);
+    // the frame count and the present's slot: the refresh interval the present is paced into, counted by the
+    // display plugin (one per present as a rule, more when a present lost a refresh), so the game loop's update
+    // can advance the simulation by the refreshes its frame covers rather than by a wall clock the main thread's
+    // own lateness disturbs
+    void presented(quint32 frame, quint64 slot);
 
 protected:
     void incrementPresentCount();
 
     gpu::ContextPointer _gpuContext;
+    std::atomic<uint64_t> _presentSlot { 0 };   // the slot of the present under way (see presented)
 
     MovingAverage<float, 10> _movingAveragePresent;
 

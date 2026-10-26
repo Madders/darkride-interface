@@ -834,7 +834,9 @@ void AssetsPanel::setActive(bool active) {
     _active = active;
     if (active) {
         updateBanner();
-        _files->refresh();
+        // a listing of a minute or less is still good: a large My Files took the main thread for a while at each one,
+        // and build mode asked for one every time it came on (the panel's Refresh, and its own changes, list at once)
+        _files->refreshIfStale(60 * 1000);
     }
 }
 
@@ -866,10 +868,13 @@ void AssetsPanel::onListed() {
     while (_folder != QStringLiteral("/") && !_files->find(_folder)) {
         _folder = UserFile::folderOf(_folder);
     }
+    QElapsedTimer rebuildTimer;
+    rebuildTimer.start();
     rebuildTree();
     rebuildCrumbs();
     rebuildGrid();
     updateQuota();
+    qCDebug(interfaceapp) << "My Files shown in" << rebuildTimer.elapsed() << "ms";
     if (!_editAfterListing.isEmpty()) {
         QStandardItem* item = _gridItems.value(_editAfterListing);
         _editAfterListing.clear();

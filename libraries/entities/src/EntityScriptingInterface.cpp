@@ -1232,7 +1232,29 @@ RayToEntityIntersectionResult EntityScriptingInterface::findRayIntersection(cons
     PROFILE_RANGE(script_entities, __FUNCTION__);
     QVector<EntityItemID> entitiesToInclude = qVectorEntityItemIDFromScriptValue(entityIdsToInclude);
     QVector<EntityItemID> entitiesToDiscard = qVectorEntityItemIDFromScriptValue(entityIdsToDiscard);
+    return findRayIntersectionInLists(ray, precisionPicking, entitiesToInclude, entitiesToDiscard, visibleOnly, collidableOnly);
+}
 
+RayToEntityIntersectionResult EntityScriptingInterface::findRayIntersectionVector(const PickRay& ray, bool precisionPicking,
+                                                                                  const QVector<QUuid>& entityIdsToInclude,
+                                                                                  const QVector<QUuid>& entityIdsToDiscard,
+                                                                                  bool visibleOnly, bool collidableOnly) const {
+    PROFILE_RANGE(script_entities, __FUNCTION__);
+    QVector<EntityItemID> entitiesToInclude;
+    QVector<EntityItemID> entitiesToDiscard;
+    for (const QUuid& id : entityIdsToInclude) {
+        entitiesToInclude << EntityItemID(id);
+    }
+    for (const QUuid& id : entityIdsToDiscard) {
+        entitiesToDiscard << EntityItemID(id);
+    }
+    return findRayIntersectionInLists(ray, precisionPicking, entitiesToInclude, entitiesToDiscard, visibleOnly, collidableOnly);
+}
+
+RayToEntityIntersectionResult EntityScriptingInterface::findRayIntersectionInLists(const PickRay& ray, bool precisionPicking,
+                                                                                   const QVector<EntityItemID>& entitiesToInclude,
+                                                                                   const QVector<EntityItemID>& entitiesToDiscard,
+                                                                                   bool visibleOnly, bool collidableOnly) const {
     unsigned int searchFilter = PickFilter::getBitMask(PickFilter::FlagBit::DOMAIN_ENTITIES) |
                                 PickFilter::getBitMask(PickFilter::FlagBit::AVATAR_ENTITIES);
 
@@ -1317,18 +1339,25 @@ bool EntityScriptingInterface::reloadServerScripts(const QUuid& entityID) {
 bool EntityPropertyMetadataRequest::script(EntityItemID entityID, QScriptValue handler) {
     using LocalScriptStatusRequest = QFutureWatcher<QVariant>;
 
+    // The answer arrives after this request is gone (it lives on queryPropertyMetadata's stack), so the lambda keeps
+    // the engine itself; reading _engine there read through a dangling this, which crashed the client.
+    QPointer<BaseScriptEngine> engine = _engine;
     LocalScriptStatusRequest* request = new LocalScriptStatusRequest;
     QObject::connect(request, &LocalScriptStatusRequest::finished, _engine, [=]() mutable {
+        if (!engine) {
+            request->deleteLater();
+            return;
+        }
         auto details = request->result().toMap();
         QScriptValue err, result;
         if (details.contains("isError")) {
             if (!details.contains("message")) {
                 details["message"] = details["errorInfo"];
             }
-            err = _engine->makeError(_engine->toScriptValue(details));
+            err = engine->makeError(engine->toScriptValue(details));
         } else {
             details["success"] = true;
-            result = _engine->toScriptValue(details);
+            result = engine->toScriptValue(details);
         }
         callScopedHandlerObject(handler, err, result);
         request->deleteLater();
@@ -1353,7 +1382,7 @@ bool EntityPropertyMetadataRequest::serverScripts(EntityItemID entityID, QScript
     auto request = client->createScriptStatusRequest(entityID);
     QPointer<BaseScriptEngine> engine = _engine;
     QObject::connect(request, &GetScriptStatusRequest::finished, _engine, [=](GetScriptStatusRequest* request) mutable {
-        auto engine = _engine;
+        // the engine captured above: this request is gone by now, as in script()
         if (!engine) {
             qCDebug(entities) << __FUNCTION__ << " -- engine destroyed while inflight" << entityID;
             return;
@@ -1427,6 +1456,80 @@ bool EntityScriptingInterface::queryPropertyMetadata(const QUuid& entityID,
         engine->maybeEmitUncaughtException(__FUNCTION__);
         return false;
     }
+}
+
+bool EntityScriptingInterface::getServerScriptStatus(const QUuid& entityID, const ScriptCallback& callback) {
+    auto client = DependencyManager::get<EntityScriptClient>();
+    auto request = client->createScriptStatusRequest(entityID);
+    connect(request, &GetScriptStatusRequest::finished, this, [callback](GetScriptStatusRequest* request) {
+        const QString status = EntityScriptStatus_::valueToKey(request->getStatus()).toLower();
+        callback.post({ request->getResponseReceived(), request->getIsRunning(), status, request->getErrorInfo() });
+        request->deleteLater();
+    });
+    request->start();
+    return true;
+}
+
+bool EntityScriptingInterface::queryPropertyMetadata(const QUuid& entityID, const QString& property, const ScriptCallback& callback) {
+    // as EntityPropertyMetadataRequest answers a QtScript handler, with the error's fields and the result as maps
+    if (property == "script") {
+        using LocalScriptStatusRequest = QFutureWatcher<QVariant>;
+        LocalScriptStatusRequest* request = new LocalScriptStatusRequest;
+        QObject::connect(request, &LocalScriptStatusRequest::finished, this, [request, callback]() {
+            QVariantMap details = request->result().toMap();
+            if (details.contains("isError")) {
+                if (!details.contains("message")) {
+                    details["message"] = details["errorInfo"];
+                }
+                callback.post({ details, QVariant() });
+            } else {
+                details["success"] = true;
+                callback.post({ QVariant(), details });
+            }
+            request->deleteLater();
+        });
+        withEntitiesScriptEngine([&](QSharedPointer<EntitiesScriptEngineProvider> entitiesScriptEngine) {
+            if (entitiesScriptEngine) {
+                request->setFuture(entitiesScriptEngine->getLocalEntityScriptDetails(entityID));
+            }
+        });
+        if (!request->isStarted()) {
+            request->deleteLater();
+            QVariantMap error;
+            error["message"] = "Entities Scripting Provider unavailable";
+            error["name"] = "InternalError";
+            callback.post({ error, QVariant() });
+            return false;
+        }
+        return true;
+    }
+    if (property == "serverScripts") {
+        auto client = DependencyManager::get<EntityScriptClient>();
+        auto request = client->createScriptStatusRequest(entityID);
+        QObject::connect(request, &GetScriptStatusRequest::finished, this, [callback](GetScriptStatusRequest* request) {
+            QVariantMap details;
+            details["success"] = request->getResponseReceived();
+            details["isRunning"] = request->getIsRunning();
+            details["status"] = EntityScriptStatus_::valueToKey(request->getStatus()).toLower();
+            details["errorInfo"] = request->getErrorInfo();
+            if (!details["success"].toBool()) {
+                if (!details.contains("message") && details.contains("errorInfo")) {
+                    details["message"] = details["errorInfo"];
+                }
+                if (details["message"].toString().isEmpty()) {
+                    details["message"] = "entity server script details not found";
+                }
+                callback.post({ details, QVariant() });
+            } else {
+                callback.post({ QVariant(), details });
+            }
+            request->deleteLater();
+        });
+        request->start();
+        return true;
+    }
+    // any other property: the module's runtime throws before it calls this, as the QtScript form throws
+    return false;
 }
 
 bool EntityScriptingInterface::getServerScriptStatus(const QUuid& entityID, QScriptValue callback) {
@@ -1504,30 +1607,6 @@ void RayToEntityIntersectionResultFromScriptValue(const QScriptValue& object, Ra
     value.extraInfo = object.property("extraInfo").toVariant().toMap();
 }
 
-bool EntityScriptingInterface::polyVoxWorker(QUuid entityID, std::function<bool(PolyVoxEntityItem&)> actor) {
-    PROFILE_RANGE(script_entities, __FUNCTION__);
-
-    if (!_entityTree) {
-        return false;
-    }
-
-    EntityItemPointer entity = _entityTree->findEntityByEntityItemID(entityID);
-    if (!entity) {
-        qCDebug(entities) << "EntityScriptingInterface::setVoxels no entity with ID" << entityID;
-        return false;
-    }
-
-    EntityTypes::EntityType entityType = entity->getType();
-    if (entityType != EntityTypes::PolyVox) {
-        return false;
-    }
-
-    auto polyVoxEntity = std::dynamic_pointer_cast<PolyVoxEntityItem>(entity);
-    bool result;
-    _entityTree->withWriteLock([&] { result = actor(*polyVoxEntity); });
-    return result;
-}
-
 bool EntityScriptingInterface::setPoints(QUuid entityID, std::function<bool(LineEntityItem&)> actor) {
     PROFILE_RANGE(script_entities, __FUNCTION__);
 
@@ -1564,50 +1643,6 @@ bool EntityScriptingInterface::setPoints(QUuid entityID, std::function<bool(Line
 
     queueEntityMessage(PacketType::EntityEdit, entityID, properties);
     return success;
-}
-
-bool EntityScriptingInterface::setVoxelSphere(const QUuid& entityID, const glm::vec3& center, float radius, int value) {
-    PROFILE_RANGE(script_entities, __FUNCTION__);
-    return polyVoxWorker(entityID, [center, radius, value](PolyVoxEntityItem& polyVoxEntity) {
-        return polyVoxEntity.setSphere(center, radius, value);
-    });
-}
-
-bool EntityScriptingInterface::setVoxelCapsule(const QUuid& entityID,
-                                               const glm::vec3& start,
-                                               const glm::vec3& end,
-                                               float radius,
-                                               int value) {
-    PROFILE_RANGE(script_entities, __FUNCTION__);
-
-    return polyVoxWorker(entityID, [start, end, radius, value](PolyVoxEntityItem& polyVoxEntity) {
-        return polyVoxEntity.setCapsule(start, end, radius, value);
-    });
-}
-
-bool EntityScriptingInterface::setVoxel(const QUuid& entityID, const glm::vec3& position, int value) {
-    PROFILE_RANGE(script_entities, __FUNCTION__);
-
-    return polyVoxWorker(entityID, [position, value](PolyVoxEntityItem& polyVoxEntity) {
-        return polyVoxEntity.setVoxelInVolume(position, value);
-    });
-}
-
-bool EntityScriptingInterface::setAllVoxels(const QUuid& entityID, int value) {
-    PROFILE_RANGE(script_entities, __FUNCTION__);
-
-    return polyVoxWorker(entityID, [value](PolyVoxEntityItem& polyVoxEntity) { return polyVoxEntity.setAll(value); });
-}
-
-bool EntityScriptingInterface::setVoxelsInCuboid(const QUuid& entityID,
-                                                 const glm::vec3& lowPosition,
-                                                 const glm::vec3& cuboidSize,
-                                                 int value) {
-    PROFILE_RANGE(script_entities, __FUNCTION__);
-
-    return polyVoxWorker(entityID, [lowPosition, cuboidSize, value](PolyVoxEntityItem& polyVoxEntity) {
-        return polyVoxEntity.setCuboid(lowPosition, cuboidSize, value);
-    });
 }
 
 bool EntityScriptingInterface::setAllPoints(const QUuid& entityID, const QVector<glm::vec3>& points) {
@@ -1794,42 +1829,6 @@ EntityItemPointer EntityScriptingInterface::checkForTreeEntityAndTypeMatch(const
     }
 
     return entity;
-}
-
-glm::vec3 EntityScriptingInterface::voxelCoordsToWorldCoords(const QUuid& entityID, glm::vec3 voxelCoords) {
-    if (auto entity = checkForTreeEntityAndTypeMatch(entityID, EntityTypes::PolyVox)) {
-        auto polyVoxEntity = std::dynamic_pointer_cast<PolyVoxEntityItem>(entity);
-        return polyVoxEntity->voxelCoordsToWorldCoords(voxelCoords);
-    } else {
-        return glm::vec3(0.0f);
-    }
-}
-
-glm::vec3 EntityScriptingInterface::worldCoordsToVoxelCoords(const QUuid& entityID, glm::vec3 worldCoords) {
-    if (auto entity = checkForTreeEntityAndTypeMatch(entityID, EntityTypes::PolyVox)) {
-        auto polyVoxEntity = std::dynamic_pointer_cast<PolyVoxEntityItem>(entity);
-        return polyVoxEntity->worldCoordsToVoxelCoords(worldCoords);
-    } else {
-        return glm::vec3(0.0f);
-    }
-}
-
-glm::vec3 EntityScriptingInterface::voxelCoordsToLocalCoords(const QUuid& entityID, glm::vec3 voxelCoords) {
-    if (auto entity = checkForTreeEntityAndTypeMatch(entityID, EntityTypes::PolyVox)) {
-        auto polyVoxEntity = std::dynamic_pointer_cast<PolyVoxEntityItem>(entity);
-        return polyVoxEntity->voxelCoordsToLocalCoords(voxelCoords);
-    } else {
-        return glm::vec3(0.0f);
-    }
-}
-
-glm::vec3 EntityScriptingInterface::localCoordsToVoxelCoords(const QUuid& entityID, glm::vec3 localCoords) {
-    if (auto entity = checkForTreeEntityAndTypeMatch(entityID, EntityTypes::PolyVox)) {
-        auto polyVoxEntity = std::dynamic_pointer_cast<PolyVoxEntityItem>(entity);
-        return polyVoxEntity->localCoordsToVoxelCoords(localCoords);
-    } else {
-        return glm::vec3(0.0f);
-    }
 }
 
 int EntityScriptingInterface::getJointParent(const QUuid& entityID, int index) {
@@ -2074,6 +2073,15 @@ QStringList EntityScriptingInterface::getJointNames(const QUuid& entityID) {
     return result;
 }
 
+QVariantMap EntityScriptingInterface::getModelExtras(const QUuid& entityID) {
+    if (!_entityTree) {
+        return QVariantMap();
+    }
+    QVariantMap result;
+    _entityTree->withReadLock([&] { result = _entityTree->getModelExtras(entityID); });
+    return result;
+}
+
 QVector<QUuid> EntityScriptingInterface::getChildrenIDs(const QUuid& parentID) {
     QVector<QUuid> result;
     if (!_entityTree) {
@@ -2243,6 +2251,20 @@ bool EntityScriptingInterface::AABoxIntersectsCapsule(const glm::vec3& low,
     glm::vec3 penetration;
     AABox aaBox(low, dimensions);
     return aaBox.findCapsulePenetration(start, end, radius, penetration);
+}
+
+void EntityScriptingInterface::getMeshes(const QUuid& entityID, const ScriptCallback& callback) {
+    PROFILE_RANGE(script_entities, __FUNCTION__);
+    EntityItemPointer entity = static_cast<EntityItemPointer>(_entityTree->findEntityByEntityItemID(entityID));
+    MeshProxyList result;
+    if (!entity) {
+        qCDebug(entities) << "EntityScriptingInterface::getMeshes no entity with ID" << entityID;
+    }
+    if (entity && entity->getMeshes(result)) {
+        callback.call({ QVariant::fromValue(result), true });
+    } else {
+        callback.call({ QVariant(), false });
+    }
 }
 
 void EntityScriptingInterface::getMeshes(const QUuid& entityID, QScriptValue callback) {

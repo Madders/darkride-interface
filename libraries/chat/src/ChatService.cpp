@@ -1,0 +1,398 @@
+//
+//  ChatService.cpp
+//  libraries/chat/src
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//
+
+#include "ChatService.h"
+
+#include <QtCore/QDir>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QUrl>
+#include <QtNetwork/QNetworkReply>
+
+#include <AccountManager.h>
+#include <PathUtils.h>
+
+#include <darkride_chat.h>
+
+#include "ChatLogging.h"
+
+static const QString CHAT_TOKEN_PATH = "/api/v1/user/chat-token";
+// the metaverse's chat token lasts two minutes; one older than this is asked for again rather than risked
+static const qint64 CHAT_TOKEN_FRESH_MS = 90 * 1000;
+// sign-ins the homeserver may refuse in a row before chat stops trying by itself
+static const int MAX_SIGN_IN_ATTEMPTS = 3;
+static const int RETRY_AFTER_REFUSAL_MS = 5 * 1000;
+static const int RETRY_AFTER_NETWORK_ERROR_MS = 30 * 1000;
+static const int RETRY_WHILE_CHAT_IS_OFF_MS = 5 * 60 * 1000;
+// at quit, how long a sign-out may take to reach the homeserver
+static const unsigned int SIGN_OUT_AT_QUIT_MS = 3000;
+
+ChatService::ChatService() {
+    _retryTimer.setSingleShot(true);
+    connect(&_retryTimer, &QTimer::timeout, this, [this] {
+        if (_started && DependencyManager::get<AccountManager>()->isLoggedIn()) {
+            requestChatToken();
+        }
+    });
+}
+
+ChatService::~ChatService() {
+    freeLibrary();
+}
+
+void ChatService::start() {
+    if (_started) {
+        return;
+    }
+    _started = true;
+    auto accountManager = DependencyManager::get<AccountManager>();
+    connect(accountManager.data(), &AccountManager::loginComplete, this, &ChatService::onAccountLoggedIn);
+    connect(accountManager.data(), &AccountManager::logoutComplete, this, &ChatService::onAccountLoggedOut);
+    if (accountManager->isLoggedIn()) {
+        onAccountLoggedIn();
+    } else {
+        setState(State::SignedOut, "Sign in to Darkride to use chat.");
+    }
+}
+
+void ChatService::stop(bool forget) {
+    _started = false;
+    _retryTimer.stop();
+    if (_chat && forget && _libraryState == "ready") {
+        qCDebug(chat_service) << "signing out of chat at quit: the account isn't remembered on this computer";
+        command({ { "op", "logout" } });
+        darkride_chat_wait_idle(_chat, SIGN_OUT_AT_QUIT_MS);
+    }
+    freeLibrary();
+}
+
+void ChatService::onAccountLoggedIn() {
+    // a new sign-in, perhaps as someone else: the token says which chat account is wanted, and settle() compares
+    _signInAttempts = 0;
+    requestChatToken();
+}
+
+void ChatService::onAccountLoggedOut() {
+    _retryTimer.stop();
+    _token.clear();
+    _expectedUser.clear();
+    settle();
+    if (!_chat) {
+        setState(State::SignedOut, "Sign in to Darkride to use chat.");
+    }
+}
+
+void ChatService::requestChatToken() {
+    if (_tokenRequested) {
+        return;
+    }
+    _tokenRequested = true;
+    if (_state != State::Ready) {
+        setState(State::SigningIn, "Signing in to chat…");
+    }
+    JSONCallbackParameters callback(this, "chatTokenReceived", "chatTokenFailed");
+    DependencyManager::get<AccountManager>()->sendRequest(CHAT_TOKEN_PATH, AccountManagerAuth::Required,
+                                                          QNetworkAccessManager::PostOperation, callback);
+}
+
+void ChatService::chatTokenReceived(QNetworkReply* reply) {
+    _tokenRequested = false;
+    QJsonObject data = QJsonDocument::fromJson(reply->readAll()).object().value("data").toObject();
+    QString token = data.value("token").toString();
+    QString homeserver = data.value("homeserver").toString();
+    if (!_started || !DependencyManager::get<AccountManager>()->isLoggedIn()) {
+        return;
+    }
+    if (token.isEmpty() || homeserver.isEmpty()) {
+        setState(State::Unavailable, "Darkride didn't send a chat sign-in. Try again later.");
+        return;
+    }
+    _token = token;
+    _tokenAge.start();
+    _expectedUser = data.value("user_id").toString();
+    if (_chat && homeserver != _homeserver) {
+        freeLibrary();
+    }
+    if (!_chat) {
+        createLibrary(homeserver);
+    }
+    settle();
+}
+
+void ChatService::chatTokenFailed(QNetworkReply* reply) {
+    _tokenRequested = false;
+    if (!_started) {
+        return;
+    }
+    int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    QString message = QJsonDocument::fromJson(reply->readAll()).object().value("message").toString();
+    qCWarning(chat_service) << "no chat token:" << status << reply->errorString() << message;
+    if (status == 503) {
+        setState(State::Unavailable, "Chat is off on Darkride for now.");
+        _retryTimer.start(RETRY_WHILE_CHAT_IS_OFF_MS);
+    } else if (status == 401 || status == 403) {
+        // banned, not verified, or an AI resident's account (chat is for people for now)
+        setState(State::Unavailable, message.isEmpty() ? "This account can't use chat." : message);
+    } else {
+        setState(State::Unavailable, "Can't reach Darkride. Trying again shortly.");
+        _retryTimer.start(RETRY_AFTER_NETWORK_ERROR_MS);
+    }
+}
+
+static QString systemName() {
+#if defined(Q_OS_MACOS)
+    return "macOS";
+#elif defined(Q_OS_WIN)
+    return "Windows";
+#else
+    return "Linux";
+#endif
+}
+
+void ChatService::createLibrary(const QString& homeserver) {
+    // a folder per homeserver, so a development server's session never meets the real one's
+    QUrl url(homeserver);
+    QString folder = url.host() + (url.port() > 0 ? "_" + QString::number(url.port()) : QString());
+    QString dataDir = QDir(PathUtils::getAppDataPath()).filePath("chat/" + folder);
+    QJsonObject config {
+        { "homeserver", homeserver },
+        { "data_dir", QDir::toNativeSeparators(dataDir) },
+        // other people can see a device's name, so it says what it is and not whose computer it runs on
+        { "device_name", "Darkride viewer (" + systemName() + ")" },
+    };
+    QByteArray json = QJsonDocument(config).toJson(QJsonDocument::Compact);
+    _libraryState.clear();
+    _libraryUser.clear();
+    _chat = darkride_chat_new(json.constData(), &ChatService::receiveEvent, this);
+    if (!_chat) {
+        qCWarning(chat_service) << "the chat library didn't start with" << json;
+        setState(State::Unavailable, "Chat couldn't start.");
+        return;
+    }
+    _homeserver = homeserver;
+    qCDebug(chat_service) << "chat library" << darkride_chat_version() << "on" << homeserver << "in" << dataDir;
+}
+
+void ChatService::freeLibrary() {
+    if (_chat) {
+        // no event comes after this returns; those already posted are dropped with their target if it goes too
+        darkride_chat_free(_chat);
+        _chat = nullptr;
+    }
+    _libraryState.clear();
+    _libraryUser.clear();
+    _syncState.clear();
+    _rooms = QJsonArray();
+    _spaces = QJsonArray();
+    _profileName.clear();
+    _profileAvatar.clear();
+}
+
+void ChatService::receiveEvent(const char* event, void* userData) {
+    // on one of the library's threads, and the text lasts only for this call
+    auto self = static_cast<ChatService*>(userData);
+    QByteArray json(event);
+    QMetaObject::invokeMethod(self, [self, json] { self->handleEvent(json); }, Qt::QueuedConnection);
+}
+
+void ChatService::handleEvent(const QByteArray& json) {
+    QJsonObject event = QJsonDocument::fromJson(json).object();
+    QString kind = event.value("event").toString();
+    if (kind == "state") {
+        _libraryState = event.value("state").toString();
+        _libraryUser = event.value("user").toString();
+        QString reason = event.value("reason").toString();
+        qCDebug(chat_service) << "chat library:" << _libraryState << _libraryUser << reason;
+        settle();
+    } else if (kind == "sync") {
+        _syncState = event.value("state").toString();
+        emit syncStateChanged(_syncState);
+    } else if (kind == "rooms") {
+        _rooms = event.value("rooms").toArray();
+        _spaces = event.value("spaces").toArray();
+        if (_state == State::Ready) {
+            emit roomsChanged(_rooms);
+        }
+    } else if (kind == "timeline") {
+        if (_state == State::Ready) {
+            emit timelineChanged(event.value("room").toString(), event.value("items").toArray());
+        }
+    } else if (kind == "profile") {
+        _profileName = event.value("name").toString();
+        _profileAvatar = event.value("avatar").toString();
+        emit profileChanged();
+    } else if (kind == "media") {
+        emit mediaReady(event.value("key").toString(), event.value("path").toString(), event.value("error").toString());
+    } else if (kind == "done") {
+        emit commandDone(event);
+    } else if (kind == "error") {
+        QString op = event.value("op").toString();
+        QString message = event.value("message").toString();
+        qCWarning(chat_service) << "chat:" << op << message;
+        if (op == "login_jwt") {
+            _lastSignInError = message;
+        }
+        emit commandFailed(op, message);
+    }
+}
+
+void ChatService::settle() {
+    if (!_chat || _libraryState.isEmpty() || _libraryState == "starting") {
+        // waiting for a token (which starts the library), or for the library to say where it stands
+        return;
+    }
+    bool wanted = _started && DependencyManager::get<AccountManager>()->isLoggedIn();
+    if (!wanted) {
+        if (_libraryState == "ready") {
+            // out of Darkride, out of chat: the library forgets the session and its keys too
+            command({ { "op", "logout" } });
+        }
+        _userId.clear();
+        setState(State::SignedOut, "Sign in to Darkride to use chat.");
+        return;
+    }
+    if (_libraryState == "ready") {
+        if (_expectedUser.isEmpty() || _libraryUser == _expectedUser) {
+            _token.clear();
+            _signInAttempts = 0;
+            _userId = _libraryUser;
+            setState(State::Ready);
+            emit roomsChanged(_rooms);
+        } else {
+            // a session kept from another account: out of it first; signed out, the token signs in this one
+            qCDebug(chat_service) << "the kept chat session is" << _libraryUser << "and the account is" << _expectedUser;
+            _userId.clear();
+            command({ { "op", "logout" } });
+            setState(State::SigningIn, "Signing in to chat…");
+        }
+        return;
+    }
+    // signed out
+    _userId.clear();
+    if (_signInAttempts >= MAX_SIGN_IN_ATTEMPTS) {
+        setState(State::Unavailable, "Chat refused the sign-in" +
+                                         (_lastSignInError.isEmpty() ? QString(".") : ": " + _lastSignInError));
+        return;
+    }
+    if (!_token.isEmpty() && _tokenAge.elapsed() < CHAT_TOKEN_FRESH_MS) {
+        _signInAttempts++;
+        command({ { "op", "login_jwt" }, { "token", _token } });
+        _token.clear();
+        setState(State::SigningIn, "Signing in to chat…");
+    } else if (_signInAttempts > 0) {
+        // refused, or a session the server ended: a new token in a moment
+        setState(State::SigningIn, "Signing in to chat…");
+        _retryTimer.start(RETRY_AFTER_REFUSAL_MS);
+    } else {
+        requestChatToken();
+    }
+}
+
+void ChatService::setState(State state, const QString& text) {
+    if (state == _state && text == _stateText) {
+        return;
+    }
+    _state = state;
+    _stateText = text;
+    qCDebug(chat_service) << "chat:" << state << text;
+    emit stateChanged(state);
+}
+
+void ChatService::command(const QJsonObject& command) {
+    if (!_chat) {
+        return;
+    }
+    QByteArray json = QJsonDocument(command).toJson(QJsonDocument::Compact);
+    darkride_chat_command(_chat, json.constData());
+}
+
+void ChatService::open(const QString& room, int count) {
+    if (_state == State::Ready) {
+        command({ { "op", "open" }, { "room", room }, { "count", count } });
+    }
+}
+
+void ChatService::close(const QString& room) {
+    if (_state == State::Ready) {
+        command({ { "op", "close" }, { "room", room } });
+    }
+}
+
+void ChatService::loadOlder(const QString& room, int count) {
+    if (_state == State::Ready) {
+        command({ { "op", "back" }, { "room", room }, { "count", count } });
+    }
+}
+
+void ChatService::send(const QString& room, const QString& body) {
+    if (_state == State::Ready && !body.trimmed().isEmpty()) {
+        command({ { "op", "send" }, { "room", room }, { "body", body } });
+    }
+}
+
+void ChatService::createDm(const QString& userId) {
+    if (_state == State::Ready && !userId.isEmpty()) {
+        command({ { "op", "create_dm" }, { "user", userId } });
+    }
+}
+
+void ChatService::react(const QString& room, const QString& id, const QString& key) {
+    if (_state == State::Ready && !id.isEmpty() && !key.isEmpty()) {
+        command({ { "op", "react" }, { "room", room }, { "id", id }, { "key", key } });
+    }
+}
+
+void ChatService::edit(const QString& room, const QString& id, const QString& body) {
+    if (_state == State::Ready && !id.isEmpty() && !body.trimmed().isEmpty()) {
+        command({ { "op", "edit" }, { "room", room }, { "id", id }, { "body", body } });
+    }
+}
+
+void ChatService::deleteMessage(const QString& room, const QString& id) {
+    if (_state == State::Ready && !id.isEmpty()) {
+        command({ { "op", "delete" }, { "room", room }, { "id", id } });
+    }
+}
+
+void ChatService::markRead(const QString& room) {
+    if (_state == State::Ready) {
+        command({ { "op", "read" }, { "room", room } });
+    }
+}
+
+void ChatService::join(const QString& room) {
+    if (_state == State::Ready) {
+        command({ { "op", "join" }, { "room", room } });
+    }
+}
+
+void ChatService::leave(const QString& room) {
+    if (_state == State::Ready) {
+        command({ { "op", "leave" }, { "room", room } });
+    }
+}
+
+void ChatService::fetchMedia(const QString& key, const QJsonValue& source, int width, int height, bool crop) {
+    if (_state != State::Ready) {
+        return;
+    }
+    QJsonObject command { { "op", "media" }, { "key", key }, { "source", source } };
+    if (width > 0 && height > 0) {
+        command["width"] = width;
+        command["height"] = height;
+        command["crop"] = crop;
+    }
+    this->command(command);
+}
+
+void ChatService::retry() {
+    _signInAttempts = 0;
+    _lastSignInError.clear();
+    if (_started && DependencyManager::get<AccountManager>()->isLoggedIn()) {
+        requestChatToken();
+    }
+}

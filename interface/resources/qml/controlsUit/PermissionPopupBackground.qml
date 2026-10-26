@@ -8,6 +8,9 @@ Rectangle {
     visible: false
     property string securityOrigin: 'none'
     property string feature: 'none'
+    // the popup's scale: larger on a big page, as a screen in the world is seen from further away; a window on the
+    // desktop sets 1, the size of every other popup there
+    property real unit: Math.max(1.25, Math.min(3, width / 400, height / 300))
     signal sendPermission(string securityOrigin, string feature, bool shouldGivePermission)
 
     onFeatureChanged: {
@@ -22,6 +25,8 @@ Rectangle {
 
     PermissionPopup {
         id: permissionPopupItem
+        requestingOrigin: root.securityOrigin
+        unit: root.unit
         onPermissionButtonPressed: {
             if (buttonNumber === 0) {
                 root.sendPermission(securityOrigin, feature, false);

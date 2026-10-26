@@ -8,6 +8,8 @@
 
 #include "SignalRelayTests.h"
 
+#include <limits>
+
 #include <QtCore/QCoreApplication>
 #include <QtCore/QThread>
 
@@ -213,6 +215,94 @@ void SignalRelayTests::testRelayDeleted() {
     // the relay's destructor dropped the connection: no call, no crash
     probe.setCount(2);
     QCOMPARE(received.size(), 1);
+}
+
+void SignalRelayTests::testSlotsAreReused() {
+    // A long-running script subscribes and unsubscribes without end (two per web request). Qt keeps the slot's index in
+    // 16 bits, so without reuse the 65,531st subscription wrapped onto QObject's own methods: an agent crashed after
+    // about 32,700 requests (2026-10-25).
+    Probe probe;
+    SignalRelay relay;
+    QString error;
+    int delivered = 0;
+    for (int round = 0; round < 70000; ++round) {
+        bool called = false;
+        int connection = relay.connect(&probe, "countChanged", [&](int, const QVariantList&) { called = true; }, error);
+        QVERIFY2(connection > 0, qPrintable(QString("round %1: %2").arg(round).arg(error)));
+        probe.setCount(round);
+        if (!called) {
+            QFAIL(qPrintable(QString("round %1: no call").arg(round)));
+        }
+        ++delivered;
+        QVERIFY(relay.disconnect(connection));
+        if (round % 100 == 0) {
+            QCoreApplication::sendPostedEvents(&relay);  // a frame's events, as the engine's run loop has them
+        }
+    }
+    QCOMPARE(delivered, 70000);
+    QCOMPARE(relay.connectionCount(), 0);
+}
+
+void SignalRelayTests::testLateQueuedEmissionDropped() {
+    // An emission queued from another thread before an unsubscription must not reach whoever has the slot next.
+    QThread thread;
+    thread.start();
+    auto probe = new Probe();
+    probe->moveToThread(&thread);
+    SignalRelay relay;
+    QList<Received> first, second, third;
+    QString error;
+    int one = relay.connect(probe, "countChanged", collect(first), error);
+    QVERIFY(one > 0);
+    QVERIFY(QMetaObject::invokeMethod(probe, "setCount", Qt::BlockingQueuedConnection, Q_ARG(int, 1)));
+    // the emission is queued to this thread now; end the subscription before it arrives, and start another
+    QVERIFY(relay.disconnect(one));
+    int two = relay.connect(probe, "countChanged", collect(second), error);
+    QVERIFY(two > 0);
+    QCoreApplication::sendPostedEvents(&relay);
+    QCOMPARE(first.size(), 0);
+    QCOMPARE(second.size(), 0);
+    // the first slot is free now; its next subscription hears only what comes after it
+    int three = relay.connect(probe, "countChanged", collect(third), error);
+    QVERIFY(three > 0);
+    QVERIFY(QMetaObject::invokeMethod(probe, "setCount", Qt::QueuedConnection, Q_ARG(int, 2)));
+    QTRY_COMPARE(third.size(), 1);
+    QCOMPARE(second.size(), 1);
+    QCOMPARE(third[0].arguments, QVariantList { 2 });
+
+    QMetaObject::invokeMethod(probe, "deleteLater", Qt::QueuedConnection);
+    thread.quit();
+    thread.wait();
+}
+
+void SignalRelayTests::testTooManyAtOnce() {
+    // 65,531 slots fit Qt's 16 bits; past them a subscription is refused instead of wrapping
+    auto probe = new Probe();
+    SignalRelay relay;
+    QList<Received> received;
+    QString error;
+    const int available = std::numeric_limits<ushort>::max() + 1 - QObject::staticMetaObject.methodCount();
+    int first = 0;
+    for (int i = 0; i < available; ++i) {
+        int connection = relay.connect(probe, "countChanged", collect(received), error);
+        if (connection <= 0) {
+            QFAIL(qPrintable(QString("subscription %1: %2").arg(i).arg(error)));
+        }
+        first = first ? first : connection;
+    }
+    error.clear();
+    QCOMPARE(relay.connect(probe, "countChanged", collect(received), error), 0);
+    QVERIFY(error.contains("too many"));
+    // a slot comes back once its end has been through the event queue
+    QVERIFY(relay.disconnect(first));
+    QCOMPARE(relay.connect(probe, "countChanged", collect(received), error), 0);
+    QCoreApplication::sendPostedEvents(&relay);
+    int last = relay.connect(probe, "countChanged", collect(received), error);
+    QVERIFY(last > 0);
+    probe->setCount(7);
+    QCOMPARE(received.size(), available);
+    QCOMPARE(received.last().connection, last);
+    delete probe;  // before the relay: the sender's end drops its connections at once
 }
 
 // TestObjects.h has no source file of its own, so its moc output is pulled in here.

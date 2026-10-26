@@ -23,7 +23,7 @@ void DisplayPlugin::incrementPresentCount() {
         _presentCondition.wakeAll();
     }
 
-    emit presented(_presentedFrameIndex);
+    emit presented(_presentedFrameIndex, _presentSlot.load());
 }
 
 void DisplayPlugin::waitForPresent() {

@@ -31,6 +31,19 @@ void EditorClipboard::copy(const QList<QUuid>& ids, const glm::vec3& anchor) {
     }
 }
 
+void EditorClipboard::set(const QVector<EntityItemProperties>& properties, const QList<QUuid>& ids, const glm::vec3& anchor) {
+    _properties = properties;
+    _ids = ids;
+    _topLevel.clear();
+    _anchor = anchor;
+    QSet<QUuid> inBatch(ids.begin(), ids.end());
+    for (int i = 0; i < _properties.size() && i < _ids.size(); ++i) {
+        if (!inBatch.contains(_properties[i].getParentID())) {
+            _topLevel.insert(_ids[i]);
+        }
+    }
+}
+
 QList<QUuid> EditorClipboard::paste(EditorUndo& undo, const QString& text, const glm::vec3& offset) const {
     if (_properties.isEmpty()) {
         return QList<QUuid>();

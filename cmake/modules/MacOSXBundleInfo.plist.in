@@ -34,26 +34,7 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>${MACOSX_BUNDLE_COPYRIGHT}</string>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleURLName</key>
-			<string>${MACOSX_BUNDLE_BUNDLE_NAME} URL</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>tivoli</string>
-			</array>
-		</dict>
-		<dict>
-			<key>CFBundleURLName</key>
-			<string>${MACOSX_BUNDLE_BUNDLE_NAME} APP URL</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>tivoliapp</string>
-			</array>
-		</dict>
-	</array>
-	<key>LSEnvironment</key>
+${MACOSX_BUNDLE_URL_TYPES}	<key>LSEnvironment</key>
 	<dict>
 		<!-- Launches from Finder/Dock use the production metaverse; a terminal launch can still override it. -->
 		<key>HIFI_METAVERSE_URL</key>

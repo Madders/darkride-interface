@@ -19,14 +19,16 @@
 
 const float AmbientLightPropertyGroup::DEFAULT_AMBIENT_LIGHT_INTENSITY = 0.5f;
 
-void AmbientLightPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties,
-    QScriptEngine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
+template <typename Value, typename Engine>
+void AmbientLightPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties,
+    Engine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
     
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_AMBIENT_LIGHT_INTENSITY, AmbientLight, ambientLight, AmbientIntensity, ambientIntensity);
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_AMBIENT_LIGHT_URL, AmbientLight, ambientLight, AmbientURL, ambientURL);
 }
 
-void AmbientLightPropertyGroup::copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) {
+template <typename Value>
+void AmbientLightPropertyGroup::copyFromScriptValue(const Value& object, bool& _defaultSettings) {
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(ambientLight, ambientIntensity, float, setAmbientIntensity);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(ambientLight, ambientURL, QString, setAmbientURL);
     
@@ -152,3 +154,5 @@ int AmbientLightPropertyGroup::readEntitySubclassDataFromBuffer(const unsigned c
 
     return bytesRead;
 }
+
+INSTANTIATE_PROPERTY_GROUP_CONVERSIONS(AmbientLightPropertyGroup)

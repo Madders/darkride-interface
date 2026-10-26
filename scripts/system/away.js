@@ -173,8 +173,6 @@ function goAway(fromStartup) {
     if (!previousBubbleState) {
         Users.toggleIgnoreRadius();
     }
-    UserActivityLogger.privacyShieldToggled(Users.getIgnoreRadiusEnabled());
-    UserActivityLogger.toggledAway(true);
     MyAvatar.isAway = true;
 }
 
@@ -183,12 +181,10 @@ function goActive() {
         return;
     }
 
-    UserActivityLogger.toggledAway(false);
     MyAvatar.isAway = false;
 
     if (Users.getIgnoreRadiusEnabled() !== previousBubbleState) {
         Users.toggleIgnoreRadius();
-        UserActivityLogger.privacyShieldToggled(Users.getIgnoreRadiusEnabled());
     }
 
     if (!Window.hasFocus()) {

@@ -13,6 +13,7 @@
 #define hifi_ResourceCache_h
 
 #include <atomic>
+#include <cmath>
 #include <mutex>
 
 #include <QtCore/QHash>
@@ -24,6 +25,7 @@
 #include <QtCore/QWeakPointer>
 #include <QtCore/QReadWriteLock>
 #include <QtCore/QQueue>
+#include <QtCore/QVector>
 
 #include <QtNetwork/QNetworkReply>
 #include <QtNetwork/QNetworkRequest>
@@ -224,6 +226,32 @@ public:
     Q_INVOKABLE QVariantList getResourceList();
 
     static void setRequestLimit(uint32_t limit);
+
+    // The hosts whose names did not resolve, dead for DEAD_HOST_MSECS from the failure: a link to one fails at once,
+    // with no request (Resource::makeRequest). Old worlds carry hundreds of links to hosts that are gone.
+    static bool isHostDead(const QString& host);
+    static void markHostDead(const QString& host);
+    // A host that has answered this run: sent the headers of a reply (any status, a redirect included, from the network
+    // or the disk cache). A request that times out with nothing received makes its host dead only if the host has never
+    // answered: an address where nothing listens, not a live host on a slow or busy link (Resource::handleFailedRequest).
+    static bool hasHostAnswered(const QString& host);
+    static void markHostAnswered(const QString& host);
+
+    // Every file whose load failed for good this run, one entry per address (the latest failure), the newest last: a
+    // list to work through in a debug pass (Caity, 10-24), read by scripts and panels as Resources.getFailures(). A
+    // file that loads later leaves the list. At most MAX_FAILURES are kept, the oldest dropped first.
+    struct Failure {
+        QUrl url;
+        QString type;       // "model", "texture", "material", "animation", "shader" or "file"
+        QString reason;     // Resource::getFailureReason
+        qint64 time { 0 };  // when, msecs since the epoch
+    };
+    static QVector<Failure> failures();
+    static void clearFailures();
+    static void recordFailure(const QUrl& url, const QString& resourceType, const QString& reason);
+    static void forgetFailure(const QUrl& url);
+    static const int MAX_FAILURES = 2000;
+    static const qint64 DEAD_HOST_MSECS = 2 * 60 * 1000;
     static uint32_t getRequestLimit() { return DependencyManager::get<ResourceCacheSharedItems>()->getRequestLimit(); }
     
     void setUnusedResourceCacheSize(qint64 unusedResourcesMaxSize);
@@ -448,11 +476,19 @@ public:
     /// Returns the highest load priority across all owners.
     float getLoadPriority();
 
+    /// The load priority as a QThreadPool priority, for the work done on the resource once it has arrived (reading,
+    /// decoding), so the nearest and most wanted are also processed first
+    int getThreadPoolPriority() { return (int)std::lround(10.0f * getLoadPriority()); }
+
     /// Checks whether the resource has loaded.
     virtual bool isLoaded() const { return _loaded; }
 
     /// Checks whether the resource has failed to download.
     virtual bool isFailed() const { return _failedToLoad; }
+
+    // why it failed, for people ("404 Not Found", "403 Access Denied", "host not found: cdn.example.com", "could not be
+    // read"); empty unless it has failed. Build mode shows it on the entities whose model, image or texture this is
+    QString getFailureReason() const { return _failureReason; }
 
     /// For loading resources, returns the number of bytes received.
     qint64 getBytesReceived() const { return _bytesReceived; }
@@ -548,6 +584,7 @@ protected:
     // mips are being download.
     bool _startedLoading = false;
     bool _failedToLoad = false;
+    QString _failureReason;   // getFailureReason()
     bool _loaded = false;
 
     QHash<QPointer<QObject>, float> _loadPriorities;

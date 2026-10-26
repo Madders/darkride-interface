@@ -6,6 +6,7 @@ vcpkg_from_github(
     HEAD_REF master
     PATCHES
         draco-with-vcpkg.patch
+        gltf2-sparse-bounds.patch
 )
 
 file(REMOVE_RECURSE ${SOURCE_PATH}/contrib/draco)

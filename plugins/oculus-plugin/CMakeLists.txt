@@ -8,10 +8,6 @@
 
 if (WIN32 AND (NOT USE_GLES))
 
-  # if we were passed an Oculus App ID for entitlement checks, send that along
-  if (DEFINED ENV{OCULUS_APP_ID})
-    add_definitions(-DOCULUS_APP_ID="$ENV{OCULUS_APP_ID}")
-  endif ()
 
   set(TARGET_NAME oculus-plugin)
   setup_hifi_plugin(Multimedia)
@@ -30,9 +26,4 @@ if (WIN32 AND (NOT USE_GLES))
   target_link_libraries(${TARGET_NAME} ${OVR_LIBRARIES})
   target_link_libraries(${TARGET_NAME} Winmm.lib)
 
-  find_library(OVR_PLATFORM_LIBRARY_RELEASE LibOVRPlatform64_1 PATHS ${VCPKG_INSTALL_ROOT}/lib NO_DEFAULT_PATH)
-  find_library(OVR_PLATFORM_LIBRARY_DEBUG LibOVRPlatform64_1 PATHS ${VCPKG_INSTALL_ROOT}/debug/lib NO_DEFAULT_PATH)
-  select_library_configurations(OVR_PLATFORM)
-  target_include_directories(${TARGET_NAME} PRIVATE ${VCPKG_INSTALL_ROOT}/include)
-  target_link_libraries(${TARGET_NAME} ${OVR_PLATFORM_LIBRARIES})
 endif()

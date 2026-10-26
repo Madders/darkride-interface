@@ -74,6 +74,9 @@ public:
 
     // the impostor switch of this entity's card (ImpostorCard, IMPOSTORS.md 2.3-2.4): null without an "impostor" entry
     std::shared_ptr<ImpostorSwitch> getImpostorSwitch() const;
+    // what this entity could not load (its model, image or textures), one line each with the reason, for build mode's
+    // Hierarchy and Inspector; empty when nothing has failed. Read on the main thread, where the renderer is updated
+    virtual QStringList loadFailures() const { return QStringList(); }
     // the switch an entity's models follow: its own card's, or the nearest ancestor's (a group's card, Unity's empty
     // parent with Model children, stands in for its children's models); null when none has a card
     static std::shared_ptr<ImpostorSwitch> findImpostorSwitch(const EntityItemPointer& entity);

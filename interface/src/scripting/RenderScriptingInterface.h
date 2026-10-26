@@ -42,6 +42,7 @@ class RenderScriptingInterface : public QObject {
     Q_OBJECT
     Q_PROPERTY(RenderMethod renderMethod READ getRenderMethod WRITE setRenderMethod NOTIFY settingsChanged)
     Q_PROPERTY(bool shadowsEnabled READ getShadowsEnabled WRITE setShadowsEnabled NOTIFY settingsChanged)
+    Q_PROPERTY(bool vsyncEnabled READ getVsyncEnabled WRITE setVsyncEnabled NOTIFY settingsChanged)
     Q_PROPERTY(bool ambientOcclusionEnabled READ getAmbientOcclusionEnabled WRITE setAmbientOcclusionEnabled NOTIFY settingsChanged)
     Q_PROPERTY(AntialiasingMethod antialiasingMethod READ getAntialiasingMethod WRITE setAntialiasingMethod NOTIFY settingsChanged)
     Q_PROPERTY(int msaaSamples READ getMsaaSamples WRITE setMsaaSamples NOTIFY settingsChanged)
@@ -194,6 +195,22 @@ public slots:
     void setShadowsEnabled(bool enabled);
 
     /**jsdoc
+     * Gets whether vsync is on: the swap waits for the display's refresh. Off, the default, the frames are paced at the
+     * display's rate and the compositor shows the newest at each refresh, which is even; on macOS the GL swap's wait is
+     * two refreshes with the odd frame queued without a wait, so vsync there is uneven.
+     * @function Render.getVsyncEnabled
+     * @returns {boolean} <code>true</code> if vsync is on, <code>false</code> if off.
+     */
+    bool getVsyncEnabled() const;
+
+    /**jsdoc
+     * Sets whether vsync is on. Default off. <code>TIVOLI_VSYNC</code> in the environment overrides it.
+     * @function Render.setVsyncEnabled
+     * @param {boolean} enabled - <code>true</code> for vsync, <code>false</code> for paced presents without a wait.
+     */
+    void setVsyncEnabled(bool enabled);
+
+    /**jsdoc
      * Gets whether or not ambient occlusion is enabled.
      * @function Render.getAmbientOcclusionEnabled
      * @returns {boolean} <code>true</code> if ambient occlusion is enabled, <code>false</code> if it's disabled.
@@ -294,14 +311,6 @@ public slots:
      */
     void setNametagsShowSelf(bool enabled);
 
-    // /**jsdoc
-    //  * Sets a tonemapping curve and exposure to be used in a given zone.
-    //  * @function Render.setTonemappingMode
-    //  * @param {int} curve - The tonemapping curve {0:RGB, 1:SRGB, 2:Reinhard, 3:Filmic} 
-    //  * @param {float} exposure - The exposure level affecting the tonemap -4 to 4
-    //  */
-    //  // void setToneMappingMode(int curve, float exposure);
-
     /**jsdoc
      * Gets the maxmium texture memory in MB.
      * @function Render.getMaximumTextureMemory
@@ -383,6 +392,7 @@ private:
     // ambient occlusion, temporal antialiasing, subsurface scattering
     int _renderMethod{ render::Args::RenderMethod::FORWARD };
     bool _shadowsEnabled{ true };
+    bool _vsyncEnabled{ false };
     bool _ambientOcclusionEnabled{ true };
     int _antialiasingMethod{ AntialiasingMethod::NONE };
     int _msaaSamples{ 4 };
@@ -397,6 +407,8 @@ private:
     // Actual settings saved on disk
     Setting::Handle<int> _renderMethodSetting{ "renderMethod", _renderMethod };
     Setting::Handle<bool> _shadowsEnabledSetting{ "shadowsEnabled", _shadowsEnabled };
+    // the display plugin reads this key itself when it activates (OpenGLDisplayPlugin::activate)
+    Setting::Handle<bool> _vsyncEnabledSetting{ "vsyncEnabled", _vsyncEnabled };
     Setting::Handle<bool> _ambientOcclusionEnabledSetting{ "ambientOcclusionEnabled", _ambientOcclusionEnabled };
     Setting::Handle<int> _antialiasingMethodSetting{ "antialiasingMethod", _antialiasingMethod };
     Setting::Handle<int> _msaaSamplesSetting{ "msaaSamples", _msaaSamples };
@@ -413,6 +425,7 @@ private:
     // Force assign both setting AND runtime value to the parameter value
     void forceRenderMethod(RenderMethod renderMethod);
     void forceShadowsEnabled(bool enabled);
+    void forceVsyncEnabled(bool enabled);
     void forceAmbientOcclusionEnabled(bool enabled);
     void forceMsaaSamples(int samples);
     void forceAntialiasingMethod(AntialiasingMethod antialiasingMethod);

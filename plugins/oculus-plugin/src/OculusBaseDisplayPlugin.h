@@ -13,9 +13,6 @@
 
 #include <OVR_CAPI_GL.h>
 
-#define OVRPL_DISABLED
-#include <OVR_Platform.h>
-
 #include <graphics/Geometry.h>
 
 class OculusBaseDisplayPlugin : public HmdDisplayPlugin {

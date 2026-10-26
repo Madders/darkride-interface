@@ -11,18 +11,18 @@
 
 #include "RecurseOctreeToMapOperator.h"
 
+#include <PlainScriptValue.h>
+
 #include "EntityItemProperties.h"
 
 RecurseOctreeToMapOperator::RecurseOctreeToMapOperator(QVariantMap& map,
                                                        const OctreeElementPointer& top,
-                                                       QScriptEngine* engine,
                                                        bool skipDefaultValues,
                                                        bool skipThoseWithBadParents,
                                                        std::shared_ptr<AvatarData> myAvatar) :
         RecurseOctreeOperator(),
         _map(map),
         _top(top),
-        _engine(engine),
         _skipDefaultValues(skipDefaultValues),
         _skipThoseWithBadParents(skipThoseWithBadParents),
         _myAvatar(myAvatar)
@@ -56,12 +56,8 @@ bool RecurseOctreeToMapOperator::postRecursion(const OctreeElementPointer& eleme
         }
 
         EntityItemProperties properties = entityItem->getProperties();
-        QScriptValue qScriptValues;
-        if (_skipDefaultValues) {
-            qScriptValues = EntityItemNonDefaultPropertiesToScriptValue(_engine, properties);
-        } else {
-            qScriptValues = EntityItemPropertiesToScriptValue(_engine, properties);
-        }
+        PlainScriptEngine engine;
+        PlainScriptValue values = properties.copyToScriptValue(&engine, _skipDefaultValues);
 
         // handle parentJointName for wearables
         if (_myAvatar && entityItem->getParentID() == AVATAR_SELF_ID &&
@@ -70,11 +66,11 @@ bool RecurseOctreeToMapOperator::postRecursion(const OctreeElementPointer& eleme
             auto jointNames = _myAvatar->getJointNames();
             auto parentJointIndex = entityItem->getParentJointIndex();
         	if (parentJointIndex < jointNames.count()) {
-                qScriptValues.setProperty("parentJointName", jointNames.at(parentJointIndex));
+                values.setProperty("parentJointName", jointNames.at(parentJointIndex));
         	}
         }
 
-        entitiesQList << qScriptValues.toVariant();
+        entitiesQList << values.toVariant();
     });
 
     _map["Entities"] = entitiesQList;

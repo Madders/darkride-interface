@@ -40,9 +40,12 @@ using namespace cache;
 static const char DIR_SEP = '/';
 static const char EXT_SEP = '.';
 
-const size_t FileCache::DEFAULT_MAX_SIZE { GB_TO_BYTES(5) };
+// The KTX cache is the one file cache: every texture the client loads, a PNG or JPG converted with its mips or a
+// baked KTX, lives here and the GPU reads it from here. One large world fills about 3 GB of it, so 5 GB evicted a
+// world's textures on the visit to the next one; and a disk that is nearly full gives the space back first.
+const size_t FileCache::DEFAULT_MAX_SIZE { GB_TO_BYTES(10) };
 const size_t FileCache::MAX_MAX_SIZE { GB_TO_BYTES(100) };
-const size_t FileCache::DEFAULT_MIN_FREE_STORAGE_SPACE { GB_TO_BYTES(1) };
+const size_t FileCache::DEFAULT_MIN_FREE_STORAGE_SPACE { GB_TO_BYTES(5) };
 
 
 std::string getCacheName(const std::string& dirname_str) {

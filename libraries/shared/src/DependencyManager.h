@@ -22,6 +22,8 @@
 #include <functional>
 #include <typeinfo>
 
+#include "StartupProfiler.h"
+
 #define SINGLETON_DEPENDENCY \
     friend class ::DependencyManager;
 
@@ -140,7 +142,11 @@ QSharedPointer<T> DependencyManager::set(Args&&... args) {
         iter.value().clear();
     }
 
-    QSharedPointer<T> newInstance(new T(args...), &T::customDeleter);
+    QSharedPointer<T> newInstance;
+    {
+        StartupProfiler::Scope step(typeid(T));   // at start-up, the service's constructor is a row of the profile
+        newInstance = QSharedPointer<T>(new T(args...), &T::customDeleter);
+    }
     manager()._instanceHash.insert(hashCode, newInstance);
 
     return newInstance;
@@ -157,7 +163,11 @@ QSharedPointer<T> DependencyManager::set(Args&&... args) {
         iter.value().clear();
     }
 
-    QSharedPointer<T> newInstance(new I(args...), &I::customDeleter);
+    QSharedPointer<T> newInstance;
+    {
+        StartupProfiler::Scope step(typeid(I));
+        newInstance = QSharedPointer<T>(new I(args...), &I::customDeleter);
+    }
     manager()._instanceHash.insert(hashCode, newInstance);
 
     return newInstance;

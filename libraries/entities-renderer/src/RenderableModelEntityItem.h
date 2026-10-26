@@ -42,6 +42,7 @@ class ModelEntityWrapper : public ModelEntityItem {
 protected:
     ModelEntityWrapper(const EntityItemID& entityItemID) : Parent(entityItemID) {}
     void setModel(const ModelPointer& model);
+    void clearModel(const ModelPointer& model);
     ModelPointer getModel() const;
     bool isModelLoaded() const;
 
@@ -57,6 +58,12 @@ class RenderableModelEntityItem : public ModelEntityWrapper {
     using Parent = ModelEntityWrapper;
 public:
     static EntityItemPointer factory(const EntityItemID& entityID, const EntityItemProperties& properties);
+
+    // for the arrival's log (SafeLanding): whether the renderer has made the model, and its geometry's and textures' state
+    QString loadStateForLog() const;
+    // the model and all its textures have loaded, whether or not the renderer has updated since (SafeLanding: a far model
+    // nothing else updates can keep its "not drawn" flag long after it has loaded)
+    bool isModelLoadedWithTextures() const;
 
     RenderableModelEntityItem(const EntityItemID& entityItemID, bool dimensionsInitialized);
     virtual ~RenderableModelEntityItem();
@@ -119,6 +126,7 @@ public:
 
     virtual int getJointIndex(const QString& name) const override;
     virtual QStringList getJointNames() const override;
+    virtual QVariantMap getModelExtras() const override;
 
 private:
     bool needsUpdateModelBounds() const;
@@ -152,6 +160,8 @@ public:
     static void setShowModelsStillLoading(bool show) { _showModelsStillLoading = show; }
     // the model, for the impostor bake (ImpostorBaker): null until it is set
     ModelPointer getModelForBake() const { return _model; }
+    // its model file or textures that failed (Model::loadFailures)
+    QStringList loadFailures() const override { return _model ? _model->loadFailures() : QStringList(); }
     // the mesh waits behind the impostor card (ENTITY-STREAMING.md 3.1): not fetched yet
     bool isMeshDeferred() const { return resultWithReadLock<bool>([&] { return _meshDeferred; }); }
     bool needsImpostorStandIn() const override;
@@ -220,6 +230,7 @@ private:
     // the mesh waiting behind the impostor card (ENTITY-STREAMING.md 3.1)
     bool shouldDeferMesh(const TypedEntityPointer& entity, ImpostorStandIn& standIn);
     void reportImpostorStandIn(const TypedEntityPointer& entity);
+    void updateVisuallyReady(const TypedEntityPointer& entity, bool deferMesh, bool atlasesLoaded);
     bool _meshDeferred { false };
     int _reportedStandIn { -1 };   // what the card's owner was last told: -1 nothing yet
     bool _meshFetched { false };   // setURL was called: the mesh never waits again

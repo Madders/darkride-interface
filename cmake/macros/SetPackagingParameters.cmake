@@ -79,8 +79,6 @@ macro(SET_PACKAGING_PARAMETERS)
     add_definitions(-DDEV_BUILD)
   endif ()
 
-  set(NITPICK_BUNDLE_NAME "nitpick")
-  set(NITPICK_ICON_PREFIX "nitpick")
 
   string(TIMESTAMP BUILD_TIME "%d/%m/%Y")
 
@@ -157,7 +155,6 @@ macro(SET_PACKAGING_PARAMETERS)
 
     set(CONSOLE_INSTALL_DIR       ${DMG_SUBFOLDER_NAME})
     set(INTERFACE_INSTALL_DIR     ${DMG_SUBFOLDER_NAME})
-    set(NITPICK_INSTALL_DIR       ${DMG_SUBFOLDER_NAME})
 
     if (CLIENT_ONLY)
       set(CONSOLE_EXEC_NAME "Console.app")
@@ -173,14 +170,11 @@ macro(SET_PACKAGING_PARAMETERS)
     
     set(INTERFACE_INSTALL_APP_PATH "${CONSOLE_INSTALL_DIR}/${INTERFACE_BUNDLE_NAME}.app")
     set(INTERFACE_ICON_FILENAME "${INTERFACE_ICON_PREFIX}.icns")
-    set(NITPICK_ICON_FILENAME "${NITPICK_ICON_PREFIX}.icns")
   else ()
     if (WIN32)
       set(CONSOLE_INSTALL_DIR "server-console")
-      set(NITPICK_INSTALL_DIR "nitpick")
     else ()
       set(CONSOLE_INSTALL_DIR ".")
-      set(NITPICK_INSTALL_DIR ".")
     endif ()
 
     set(COMPONENT_INSTALL_DIR ".")
@@ -190,7 +184,6 @@ macro(SET_PACKAGING_PARAMETERS)
   if (WIN32)
     set(INTERFACE_EXEC_PREFIX "Darkride")
     set(INTERFACE_ICON_FILENAME "${INTERFACE_ICON_PREFIX}.ico")
-    set(NITPICK_ICON_FILENAME "${NITPICK_ICON_PREFIX}.ico")
 
     set(CONSOLE_EXEC_NAME "server-console.exe")
 

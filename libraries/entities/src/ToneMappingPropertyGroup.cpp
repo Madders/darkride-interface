@@ -16,11 +16,13 @@
 #include "EntityItemProperties.h"
 #include "EntityItemPropertiesMacros.h"
 
-void ToneMappingPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties, QScriptEngine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
+template <typename Value, typename Engine>
+void ToneMappingPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties, Engine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_TONE_MAPPING_EXPOSURE, ToneMapping, tonemapping, Exposure, exposure);
 }
 
-void ToneMappingPropertyGroup::copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) {
+template <typename Value>
+void ToneMappingPropertyGroup::copyFromScriptValue(const Value& object, bool& _defaultSettings) {
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(toneMapping, exposure, float, setExposure);
 }
 
@@ -110,3 +112,5 @@ int ToneMappingPropertyGroup::readEntitySubclassDataFromBuffer(const unsigned ch
 
     return bytesRead;
 }
+
+INSTANTIATE_PROPERTY_GROUP_CONVERSIONS(ToneMappingPropertyGroup)

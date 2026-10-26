@@ -9,6 +9,8 @@
 #include "EntityTreeModel.h"
 
 #include <QtCore/QMimeData>
+#include <QtGui/QBrush>
+#include <QtGui/QColor>
 
 #include <EntityItem.h>
 #include <EntityTreeElement.h>
@@ -61,7 +63,7 @@ void EntityTreeModel::attach() {
     // the tree's signals come from other threads; everything here runs on the model's thread
     connect(_tree.get(), &EntityTree::addingEntity, this, &EntityTreeModel::onEntityAdded, Qt::QueuedConnection);
     connect(_tree.get(), &EntityTree::deletingEntity, this, &EntityTreeModel::onEntityDeleted, Qt::QueuedConnection);
-    connect(_tree.get(), &EntityTree::clearingEntities, this, &EntityTreeModel::rebuild, Qt::QueuedConnection);
+    connect(_tree.get(), &EntityTree::clearingEntities, this, &EntityTreeModel::clearTree, Qt::QueuedConnection);
     connect(_tree.get(), &EntityTree::editingEntityPointer, this, [this](const EntityItemPointer& entity) {
         if (!entity) {
             return;
@@ -93,15 +95,32 @@ bool EntityTreeModel::readEntity(const QUuid& id, Node& node) const {
             return;
         }
         found = true;
-        node.id = id;
-        node.name = entity->getName();
-        node.type = entity->getType();
-        node.locked = entity->getLocked();
-        node.visible = entity->getVisible();
-        node.created = entity->getCreated();
-        node.parentID = entity->getParentID();
+        fillNode(node, entity);
     });
     return found;
+}
+
+void EntityTreeModel::fillNode(Node& node, const EntityItemPointer& entity) {
+    node.id = entity->getID();
+    node.name = entity->getName();
+    node.type = entity->getType();
+    node.locked = entity->getLocked();
+    node.visible = entity->getVisible();
+    node.created = entity->getCreated();
+    node.parentID = entity->getParentID();
+    node.loaded = true;
+}
+
+void EntityTreeModel::fillNode(Node& node, const EntityListMessage::Record& record) {
+    node.id = record.id;
+    node.name = record.name;
+    node.type = record.type;
+    node.locked = record.locked;
+    node.visible = record.visible;
+    node.created = record.created;
+    node.parentID = record.parentID;
+    node.loaded = false;
+    node.cube = record.cube;
 }
 
 void EntityTreeModel::rebuild() {
@@ -120,12 +139,7 @@ void EntityTreeModel::rebuild() {
                         return;
                     }
                     auto node = new Node();
-                    node->id = entity->getID();
-                    node->name = entity->getName();
-                    node->type = entity->getType();
-                    node->locked = entity->getLocked();
-                    node->visible = entity->getVisible();
-                    node->parentID = entity->getParentID();
+                    fillNode(*node, entity);
                     nodes << node;
                 });
                 return true;
@@ -134,6 +148,15 @@ void EntityTreeModel::rebuild() {
     }
     for (auto node : nodes) {
         _nodes[node->id] = node;
+    }
+    // and what the server listed that the tree does not hold
+    for (const auto& record : _listed) {
+        if (!_nodes.contains(record.id)) {
+            auto node = new Node();
+            fillNode(*node, record);
+            _nodes[node->id] = node;
+            nodes << node;
+        }
     }
     // parents first, then everything else hangs off its parent or the root
     for (auto node : nodes) {
@@ -145,6 +168,14 @@ void EntityTreeModel::rebuild() {
         parent->children.append(node);
     }
     endResetModel();
+}
+
+void EntityTreeModel::clearTree() {
+    // the list was this domain's; the editor asks the new one
+    _listed.clear();
+    _hasList = false;
+    rebuild();
+    emit listCleared();
 }
 
 void EntityTreeModel::rescan() {
@@ -161,26 +192,22 @@ void EntityTreeModel::rescan() {
                     return;
                 }
                 Node node;
-                node.id = entity->getID();
-                node.name = entity->getName();
-                node.type = entity->getType();
-                node.locked = entity->getLocked();
-                node.visible = entity->getVisible();
-                node.parentID = entity->getParentID();
+                fillNode(node, entity);
                 current.insert(node.id, node);
             });
             return true;
         });
     });
 
-    // gone
+    // gone (a row that is not loaded was never in the tree)
     QList<QUuid> stale;
     for (auto it = _nodes.constBegin(); it != _nodes.constEnd(); ++it) {
-        if (!current.contains(it.key())) {
+        if (it.value()->loaded && !current.contains(it.key())) {
             stale << it.key();
         }
     }
     for (const auto& id : stale) {
+        _listed.remove(id);
         if (auto node = _nodes.value(id)) {
             removeNode(node);
         }
@@ -194,32 +221,170 @@ void EntityTreeModel::rescan() {
         }
     }
     for (auto it = current.constBegin(); it != current.constEnd(); ++it) {
-        auto node = _nodes.value(it.key());
-        if (!node) {
+        if (auto node = _nodes.value(it.key())) {
+            refreshNode(node, it.value());
+        }
+    }
+}
+
+void EntityTreeModel::refreshNode(Node* node, const Node& fresh) {
+    bool arrived = !node->loaded;
+    bool changed = arrived || node->name != fresh.name || node->locked != fresh.locked
+        || node->visible != fresh.visible || node->type != fresh.type || node->created != fresh.created;
+    if (changed) {
+        node->name = fresh.name;
+        node->locked = fresh.locked;
+        node->visible = fresh.visible;
+        node->type = fresh.type;
+        node->created = fresh.created;
+        node->loaded = true;
+        QModelIndex index = indexFor(node);
+        emit dataChanged(index, index);
+    }
+    if (node->parentID != fresh.parentID) {
+        node->parentID = fresh.parentID;
+        moveNode(node, parentNodeFor(fresh.parentID));
+    }
+    if (arrived) {
+        emit entityLoaded(node->id);
+    }
+}
+
+void EntityTreeModel::setListed(const QVector<EntityListMessage::Record>& records) {
+    _listed.clear();
+    _listed.reserve(records.size());
+    for (const auto& record : records) {
+        if (!record.id.isNull()) {
+            _listed.insert(record.id, record);
+        }
+    }
+    _hasList = true;
+
+    // rows that were not loaded and are no longer listed: deleted on the server since the last list
+    QList<Node*> gone;
+    for (auto node : _nodes) {
+        if (!node->loaded && !_listed.contains(node->id)) {
+            gone << node;
+        }
+    }
+    for (auto node : gone) {
+        removeNode(node);
+    }
+    // rows that are still not loaded take the list's fields
+    for (const auto& record : _listed) {
+        auto node = _nodes.value(record.id);
+        if (!node || node->loaded) {
             continue;
         }
-        const Node& fresh = it.value();
-        bool changed = node->name != fresh.name || node->locked != fresh.locked || node->visible != fresh.visible
-            || node->type != fresh.type;
-        if (changed) {
-            node->name = fresh.name;
-            node->locked = fresh.locked;
-            node->visible = fresh.visible;
-            node->type = fresh.type;
+        node->cube = record.cube;
+        if (node->name != record.name || node->locked != record.locked || node->visible != record.visible
+            || node->type != record.type) {
+            node->name = record.name;
+            node->locked = record.locked;
+            node->visible = record.visible;
+            node->type = record.type;
             QModelIndex index = indexFor(node);
             emit dataChanged(index, index);
         }
-        if (node->parentID != fresh.parentID) {
-            node->parentID = fresh.parentID;
-            moveNode(node, parentNodeFor(fresh.parentID));
+        if (node->parentID != record.parentID) {
+            node->parentID = record.parentID;
+            moveNode(node, parentNodeFor(record.parentID));
         }
     }
+
+    // the new ones. They are put together first, children under their new parents out of the model's sight, then
+    // go in with one insertion per parent that is already in the model, rather than a row at a time
+    QHash<QUuid, Node*> fresh;
+    for (const auto& record : _listed) {
+        if (!_nodes.contains(record.id)) {
+            auto node = new Node();
+            fillNode(*node, record);
+            fresh.insert(node->id, node);
+        }
+    }
+    if (!fresh.isEmpty()) {
+        QHash<Node*, QVector<Node*>> byParent;   // a parent in the model (or the root), and the new rows for it
+        for (auto node : fresh) {
+            // a chain of new parents that loops (bad data) goes to the root
+            int steps = 0;
+            QUuid ancestor = node->parentID;
+            while (fresh.contains(ancestor) && ancestor != node->id && steps <= fresh.size()) {
+                ancestor = fresh.value(ancestor)->parentID;
+                ++steps;
+            }
+            bool loops = ancestor == node->id || steps > fresh.size();
+            Node* newParent = loops ? nullptr : fresh.value(node->parentID);
+            if (newParent) {
+                node->parent = newParent;
+                newParent->children.append(node);
+            } else {
+                byParent[loops ? _root.get() : parentNodeFor(node->parentID)].append(node);
+            }
+        }
+        for (auto it = byParent.begin(); it != byParent.end(); ++it) {
+            Node* parent = it.key();
+            const auto& children = it.value();
+            int first = parent->children.size();
+            beginInsertRows(indexFor(parent), first, first + children.size() - 1);
+            for (auto child : children) {
+                child->parent = parent;
+                parent->children.append(child);
+            }
+            endInsertRows();
+        }
+        for (auto node : fresh) {
+            _nodes[node->id] = node;
+        }
+        // loaded entities whose parent had not arrived sat at the root; their parent has a row now
+        QVector<Node*> orphans;
+        for (auto child : _root->children) {
+            if (child->loaded && fresh.contains(child->parentID)) {
+                orphans << child;
+            }
+        }
+        for (auto child : orphans) {
+            moveNode(child, _nodes.value(child->parentID));
+        }
+    }
+}
+
+bool EntityTreeModel::isLoaded(const QUuid& id) const {
+    auto node = _nodes.value(id);
+    return node && node->loaded;
+}
+
+bool EntityTreeModel::listedPlace(const QUuid& id, AACube& cube, QString& name) const {
+    auto node = _nodes.value(id);
+    if (!node || node->loaded) {
+        return false;
+    }
+    cube = node->cube;
+    name = node->name.isEmpty() ? EntityTypes::getEntityTypeName(node->type) : node->name;
+    return true;
+}
+
+int EntityTreeModel::loadedCount() const {
+    int loaded = 0;
+    for (auto node : _nodes) {
+        if (node->loaded) {
+            ++loaded;
+        }
+    }
+    return loaded;
 }
 
 // --- incremental updates ------------------------------------------------------------------------
 
 void EntityTreeModel::onEntityAdded(const EntityItemID& id) {
-    if (_nodes.contains(id)) {
+    if (auto existing = _nodes.value(id)) {
+        if (!existing->loaded) {
+            // a listed row's entity has streamed in: the row turns live where it is
+            Node fresh;
+            if (readEntity(id, fresh)) {
+                refreshNode(existing, fresh);
+            }
+            return;
+        }
         _pendingEdits.insert(id);
         if (!_editFlush.isActive()) {
             _editFlush.start();
@@ -236,6 +401,7 @@ void EntityTreeModel::onEntityAdded(const EntityItemID& id) {
 
 void EntityTreeModel::onEntityDeleted(const EntityItemID& id) {
     _pendingEdits.remove(id);
+    _listed.remove(id);
     if (auto node = _nodes.value(id)) {
         removeNode(node);
     }
@@ -257,23 +423,13 @@ void EntityTreeModel::flushEdits() {
 void EntityTreeModel::updateNode(Node* node) {
     Node fresh;
     if (!readEntity(node->id, fresh)) {
-        removeNode(node);
+        if (node->loaded) {
+            _listed.remove(node->id);
+            removeNode(node);
+        }
         return;
     }
-    bool changed = node->name != fresh.name || node->locked != fresh.locked || node->visible != fresh.visible
-        || node->type != fresh.type;
-    if (changed) {
-        node->name = fresh.name;
-        node->locked = fresh.locked;
-        node->visible = fresh.visible;
-        node->type = fresh.type;
-        QModelIndex index = indexFor(node);
-        emit dataChanged(index, index);
-    }
-    if (node->parentID != fresh.parentID) {
-        node->parentID = fresh.parentID;
-        moveNode(node, parentNodeFor(fresh.parentID));
-    }
+    refreshNode(node, fresh);
 }
 
 void EntityTreeModel::insertNode(Node* node, Node* parent) {
@@ -428,8 +584,29 @@ QVariant EntityTreeModel::data(const QModelIndex& index, int role) const {
             return node->name.isEmpty() ? typeName : node->name;
         case Qt::EditRole:
             return node->name;
-        case Qt::ToolTipRole:
-            return typeName + "  " + node->id.toString(QUuid::WithoutBraces);
+        case Qt::ToolTipRole: {
+            QString tip = typeName + "  " + node->id.toString(QUuid::WithoutBraces);
+            if (!node->loaded) {
+                tip += "\nNot loaded yet. Click to go there.";
+            }
+            if (!node->loadProblem.isEmpty()) {
+                tip += "\nCouldn't load:\n" + node->loadProblem;
+            }
+            return tip;
+        }
+        case Qt::ForegroundRole:
+            // red over grey: red, an entity whose model, image or texture failed to load (Caity, 10-24: an Image that
+            // stayed blank and said nothing); grey, one the entity server lists that the client has not loaded; the
+            // selected row keeps the style sheet's white
+            if (!node->loadProblem.isEmpty()) {
+                return QBrush(_failedColor);
+            }
+            if (!node->loaded) {
+                return QBrush(_unloadedColor);
+            }
+            return QVariant();
+        case LoadedRole:
+            return node->loaded;
         case IdRole:
             return node->id;
         case TypeRole:
@@ -464,6 +641,12 @@ Qt::ItemFlags EntityTreeModel::flags(const QModelIndex& index) const {
     if (!index.isValid()) {
         return Qt::ItemIsDropEnabled;   // the empty space below the rows: a drop there is to the top level
     }
+    // a row that is not loaded can be chosen (to go there) but not renamed, dragged or dropped onto: a move
+    // needs the entity, and a new parent's transform
+    Node* node = nodeFor(index);
+    if (node && !node->loaded) {
+        return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+    }
     return Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable | Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled;
 }
 
@@ -496,8 +679,11 @@ bool EntityTreeModel::canDropMimeData(const QMimeData* data, Qt::DropAction acti
     }
     // onto an entity, or onto the empty space; not onto one of the dragged or anything below it
     QUuid target = idForIndex(parent);
+    if (!target.isNull() && !isLoaded(target)) {
+        return false;
+    }
     for (const auto& id : draggedIds(data)) {
-        if (!target.isNull() && isDescendantOf(target, id)) {
+        if (!isLoaded(id) || (!target.isNull() && isDescendantOf(target, id))) {
             return false;
         }
     }
@@ -513,6 +699,37 @@ bool EntityTreeModel::dropMimeData(const QMimeData* data, Qt::DropAction action,
     return true;
 }
 
+void EntityTreeModel::setLoadProblem(const QUuid& id, const QString& problem) {
+    Node* node = _nodes.value(id);
+    if (!node || node->loadProblem == problem) {
+        return;
+    }
+    node->loadProblem = problem;
+    QModelIndex index = indexFor(node);
+    emit dataChanged(index, index, { Qt::ForegroundRole, Qt::ToolTipRole });
+}
+
+void EntityTreeModel::setRowColors(const QColor& failed, const QColor& unloaded) {
+    if (failed == _failedColor && unloaded == _unloadedColor) {
+        return;
+    }
+    _failedColor = failed;
+    _unloadedColor = unloaded;
+    // every row may be drawn in one: Qt has no dataChanged for a whole tree, so the views draw it again
+    emit layoutAboutToBeChanged();
+    emit layoutChanged();
+}
+
+QColor EntityTreeModel::rowColor(const QUuid& id) const {
+    QVariant brush = data(indexForId(id), Qt::ForegroundRole);
+    return brush.isValid() ? brush.value<QBrush>().color() : QColor();
+}
+
+QString EntityTreeModel::loadProblem(const QUuid& id) const {
+    Node* node = _nodes.value(id);
+    return node ? node->loadProblem : QString();
+}
+
 bool EntityTreeModel::isDescendantOf(const QUuid& id, const QUuid& ancestor) const {
     Node* node = _nodes.value(id);
     Node* ancestorNode = _nodes.value(ancestor);
@@ -526,5 +743,6 @@ QHash<int, QByteArray> EntityTreeModel::roleNames() const {
     roles[TypeNameRole] = "typeName";
     roles[LockedRole] = "locked";
     roles[VisibleRole] = "visible";
+    roles[LoadedRole] = "loaded";
     return roles;
 }

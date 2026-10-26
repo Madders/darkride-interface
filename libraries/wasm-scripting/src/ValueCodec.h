@@ -80,7 +80,10 @@ public:
     QVariant fromCbor(const QCborValue& value, int targetType, bool* ok) const;
     QVariant fromCbor(const QCborValue& value) const;
     QVariant fromCbor(const QCborValue& value, int targetType) const;
+    /// The type of the QVariant fromCbor(value) gives, without making it: what a host call scores overloads by.
+    int genericTypeOf(const QCborValue& value) const;
 
+    /// toCbor(value).toCbor(), byte for byte; the types a call returns most often are written directly.
     QByteArray encode(const QVariant& value) const;
     /// False with the error when the bytes are not well-formed CBOR.
     bool decode(const QByteArray& bytes, QVariant& out, QString& error) const;
@@ -93,6 +96,9 @@ public:
     static bool isBuiltinType(int typeId);
 
 private:
+    /// The CBOR of the common types (nothing, null, booleans, numbers, text, uuids, the glm vectors and quaternions)
+    /// appended to `out`, as toCbor(value).toCbor() writes it; false, with nothing appended, for any other type.
+    bool encodeDirectly(const QVariant& value, QByteArray& out) const;
     QCborValue encodeObject(QObject* object, bool owned = false, std::function<bool(QObject*)> lingers = std::function<bool(QObject*)>()) const;
     bool encodeRegistered(const QVariant& value, QCborValue& out) const;
     bool decodeRegistered(const QCborValue& value, int targetType, QVariant& out, bool& ok) const;

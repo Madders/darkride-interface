@@ -14,10 +14,6 @@ declare namespace HMD {
 	const tabletScreenID: Uuid;
 	const homeButtonID: Uuid;
 	const homeButtonHighlightID: Uuid;
-	const miniTabletID: Uuid;
-	const miniTabletScreenID: Uuid;
-	let miniTabletHand: number;
-	let miniTabletEnabled: boolean;
 	const playArea: Rect;
 	const sensorPositions: Vec3[];
 	let visionSqueezeRatioX: number;
@@ -64,7 +60,6 @@ declare namespace HMD {
 	const awayStateWhenFocusLostInVRChanged: Signal<(enabled: boolean) => any>;
 	const displayModeChanged: Signal<(isHMDMode: boolean) => any>;
 	const IPDScaleChanged: Signal<() => any>;
-	const miniTabletEnabledChanged: Signal<(enabled: boolean) => any>;
 	const mountedChanged: Signal<() => any>;
 	const shouldShowHandControllersChanged: Signal<() => any>;
 	const showTabletChanged: Signal<(showTablet: boolean) => any>;

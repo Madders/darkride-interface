@@ -199,6 +199,11 @@ public:
     };
 
 public slots:
+    /// leaves the domain and stops trying it, as before a first connection: disconnected, its address forgotten (no
+    /// more check-ins), and no refresh of the last lookup. The next lookup connects afresh. The sign-in screen after a
+    /// logout holds the client here, out of the world, until someone signs in (#34): with a plain disconnect the
+    /// check-ins went on, and the refresh timer went back to the last world every 2.5 s
+    void leave(QString reason);
     void setURLAndID(QUrl domainURL, QUuid id);
     void setIceServerHostnameAndID(const QString& iceServerHostname, const QUuid& id);
 
@@ -239,6 +244,8 @@ signals:
     void redirectErrorStateChanged(bool isInErrorState);
 
     void limitOfSilentDomainCheckInsReached();
+    /// leave() is done: out of the domain on purpose, with nothing to time out (ConnectionMonitor)
+    void left();
 
 private:
     bool reasonSuggestsLogin(ConnectionRefusedReason reasonCode);

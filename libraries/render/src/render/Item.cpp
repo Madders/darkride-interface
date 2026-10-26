@@ -145,6 +145,20 @@ namespace render {
         return payload->getBound();
     }
 
+    template <> Instancing payloadGetInstancing(const PayloadProxyInterface::Pointer& payload, RenderArgs* args) {
+        if (!payload) {
+            return Instancing(Instancing::NONE);
+        }
+        return payload->getInstancing(args);
+    }
+
+    template <> void payloadRenderInstances(const PayloadProxyInterface::Pointer& payload, RenderArgs* args, const Transforms& transforms) {
+        if (!payload) {
+            return;
+        }
+        payload->renderInstances(args, transforms);
+    }
+
     template <> void payloadRender(const PayloadProxyInterface::Pointer& payload, RenderArgs* args) {
         if (!args || !payload) {
             return;

@@ -15,8 +15,11 @@
 #include <QRunnable>
 #include <QThreadPool>
 
+#include <unordered_map>
+
 #include <glm/gtx/transform.hpp>
 #include <glm/gtx/norm.hpp>
+#include <glm/gtx/hash.hpp>
 
 #include <shared/QtHelpers.h>
 #include <GeometryUtil.h>
@@ -82,6 +85,19 @@ Model::~Model() {
 }
 
 AbstractViewStateInterface* Model::_viewState = NULL;
+
+QStringList Model::loadFailures() const {
+    QStringList failures;
+    if (_visualGeometryRequestFailed) {
+        QString reason = _renderWatcher.getFailureReason();
+        failures << "model " + _url.fileName() + ": " + (reason.isEmpty() ? QString("could not be loaded") : reason);
+    } else if (_renderGeometry) {
+        for (const auto& texture : _renderGeometry->failedTextures()) {
+            failures << "texture " + texture;
+        }
+    }
+    return failures;
+}
 
 bool Model::needsFixupInScene() const {
     return (_needsFixupInScene || !_addedToScene) && !_needsReload && isLoaded();
@@ -243,7 +259,7 @@ void Model::updateRenderItems() {
                 const auto& meshState = self->getMeshState(skinDeformerIndex);
                 bool useDualQuaternionSkinning = self->getUseDualQuaternionSkinning();
 
-                transaction.updateItem<ModelMeshPartPayload>(itemID, [modelTransform, shapeState, meshState, useDualQuaternionSkinning,
+                transaction.updateItem<ModelMeshPartPayload>(itemID, [modelTransform, meshState, useDualQuaternionSkinning,
                                                                       invalidatePayloadShapeKey, primitiveMode, renderItemKeyGlobalFlags, cauterized](ModelMeshPartPayload& data) {
                     if (useDualQuaternionSkinning) {
                         data.updateClusterBuffer(meshState.clusterDualQuaternions);
@@ -253,7 +269,11 @@ void Model::updateRenderItems() {
 
                     Transform renderTransform = modelTransform;
                     data.updateTransform(renderTransform);
-                    data.updateTransformAndBound(modelTransform.worldTransform(shapeState._rootFromJointTransform));
+                    if (useDualQuaternionSkinning) {
+                        data.updateSkinnedBound(modelTransform, meshState.clusterDualQuaternions);
+                    } else {
+                        data.updateSkinnedBound(modelTransform, meshState.clusterMatrices);
+                    }
 
                     data.setCauterized(cauterized);
                     data.updateKey(renderItemKeyGlobalFlags);
@@ -811,6 +831,79 @@ scriptable::ScriptableModelBase Model::getScriptableModel() {
     return result;
 }
 
+// A skinned mesh's points where its clusters put them at the bind pose, as it's drawn at rest: each vertex's weighted
+// joint global transforms times inverse bind matrices. Its node doesn't place a skinned mesh: under a glTF armature at
+// 1/100 scale the node put the picking triangles at a hundredth of the body, and a click on it found nothing. When the
+// file's rest pose is its bind pose (the usual case) every cluster's matrix is the same, the mesh's bind placement,
+// and that one matrix places every point. Otherwise each point takes its own weights; the triangle list's points are
+// the mesh's own with duplicates merged, so they find their weights by position, and a point without weights stays by
+// the node.
+static bool sameMatrix(const glm::mat4& a, const glm::mat4& b) {
+    const float EPSILON = 1.0e-4f;
+    for (int column = 0; column < 4; column++) {
+        for (int row = 0; row < 4; row++) {
+            const float x = a[column][row];
+            const float y = b[column][row];
+            if (fabsf(x - y) > EPSILON * std::max(1.0f, std::max(fabsf(x), fabsf(y)))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static std::vector<glm::vec3> skinnedBindPosePoints(const HFMModel& hfmModel, const hfm::Mesh& mesh,
+                                                    const hfm::SkinDeformer& skin, const glm::mat4& nodeTransform,
+                                                    const std::vector<glm::vec3>& points) {
+    std::vector<glm::mat4> clusterBindMatrices(skin.clusters.size());
+    bool allSame = true;
+    for (size_t i = 0; i < skin.clusters.size(); i++) {
+        const hfm::Cluster& cluster = skin.clusters[i];
+        clusterBindMatrices[i] = cluster.jointIndex < hfmModel.joints.size()
+            ? hfmModel.joints[cluster.jointIndex].globalTransform * cluster.inverseBindMatrix : nodeTransform;
+        allSame = allSame && sameMatrix(clusterBindMatrices[i], clusterBindMatrices[0]);
+    }
+    if (allSame && !clusterBindMatrices.empty()) {
+        std::vector<glm::vec3> bindPosePoints;
+        bindPosePoints.reserve(points.size());
+        for (const auto& point : points) {
+            bindPosePoints.push_back(glm::vec3(clusterBindMatrices[0] * glm::vec4(point, 1.0f)));
+        }
+        return bindPosePoints;
+    }
+    const size_t perVertex = mesh.clusterWeightsPerVertex;
+    std::unordered_map<glm::vec3, glm::vec3> bindPoseByPoint;
+    bindPoseByPoint.reserve(mesh.vertices.size());
+    for (int vertexIndex = 0; vertexIndex < mesh.vertices.size(); vertexIndex++) {
+        const glm::vec3& point = mesh.vertices[vertexIndex];
+        if (bindPoseByPoint.count(point)) {
+            continue;
+        }
+        glm::vec3 bindPosition(0.0f);
+        float totalWeight = 0.0f;
+        for (size_t k = 0; k < perVertex; k++) {
+            const size_t at = (size_t)vertexIndex * perVertex + k;
+            if (at >= mesh.clusterWeights.size() || at >= mesh.clusterIndices.size()) {
+                break;
+            }
+            const float weight = (float)mesh.clusterWeights[at] / 65535.0f;
+            const uint16_t clusterIndex = mesh.clusterIndices[at];
+            if (weight > 0.0f && clusterIndex < clusterBindMatrices.size()) {
+                bindPosition += weight * glm::vec3(clusterBindMatrices[clusterIndex] * glm::vec4(point, 1.0f));
+                totalWeight += weight;
+            }
+        }
+        bindPoseByPoint[point] = totalWeight > 0.0f ? bindPosition / totalWeight : glm::vec3(nodeTransform * glm::vec4(point, 1.0f));
+    }
+    std::vector<glm::vec3> bindPosePoints;
+    bindPosePoints.reserve(points.size());
+    for (const auto& point : points) {
+        auto found = bindPoseByPoint.find(point);
+        bindPosePoints.push_back(found != bindPoseByPoint.end() ? found->second : glm::vec3(nodeTransform * glm::vec4(point, 1.0f)));
+    }
+    return bindPosePoints;
+}
+
 void Model::calculateTriangleSets(const HFMModel& hfmModel) {
     PROFILE_RANGE(render, __FUNCTION__);
 
@@ -850,10 +943,17 @@ void Model::calculateTriangleSets(const HFMModel& hfmModel) {
             _modelSpaceMeshTriangleSets.emplace_back();
             _modelSpaceMeshTriangleSets.back().reserve(mesh.parts.size());
 
-            transformedPoints = triangleListMesh.vertices;
-            if (worldFromMeshTransform != glm::mat4()) {
-                for (auto& point : transformedPoints) {
-                    point = glm::vec3(worldFromMeshTransform * glm::vec4(point, 1.0f));
+            const bool skinned = shape.skinDeformer < hfmModel.skinDeformers.size() && mesh.clusterWeightsPerVertex > 0 &&
+                                 !mesh.clusterIndices.empty();
+            if (skinned) {
+                transformedPoints = skinnedBindPosePoints(hfmModel, mesh, hfmModel.skinDeformers[shape.skinDeformer],
+                                                          worldFromMeshTransform, triangleListMesh.vertices);
+            } else {
+                transformedPoints = triangleListMesh.vertices;
+                if (worldFromMeshTransform != glm::mat4()) {
+                    for (auto& point : transformedPoints) {
+                        point = glm::vec3(worldFromMeshTransform * glm::vec4(point, 1.0f));
+                    }
                 }
             }
         }
@@ -1273,8 +1373,14 @@ void Model::setURL(const QUrl& url) {
 void Model::loadURLFinished(bool success) {
     if (!success) {
         _visualGeometryRequestFailed = true;
-    } else if (!_pendingTextures.empty()) {
-        setTextures(_pendingTextures);
+    } else {
+        if (!_pendingTextures.empty()) {
+            setTextures(_pendingTextures);
+        }
+        // its textures load as soon as it would have (on arrival, the nearest first), not after every model in the queue
+        if (_renderGeometry) {
+            _renderGeometry->setTextureLoadPriority(this, _loadingPriority);
+        }
     }
     emit setURLFinished(success);
 }

@@ -91,6 +91,27 @@ bool blockingInvokeMethod(
     return blockingInvokeMethod(function, obj, member, QGenericReturnArgument(), val0, val1, val2, val3, val4, val5, val6, val7, val8, val9);
 }
 
+void blockingInvoke(const char* function, QObject* obj, const std::function<void()>& f) {
+    auto currentThread = QThread::currentThread();
+    if (currentThread == obj->thread()) {
+        qCWarning(thread_safety) << "BlockingQueuedConnection invoked on the receiver's own thread from " << function;
+        f();
+        return;
+    }
+
+    {
+        QReadLocker locker(&threadHashLock);
+        for (const auto& thread : threadHash.keys()) {
+            if (currentThread == thread) {
+                qCWarning(thread_safety) << "BlockingQueuedConnection invoked on forbidden thread " << threadHash[thread];
+            }
+        }
+    }
+
+    PROFILE_RANGE(app, function);
+    QMetaObject::invokeMethod(obj, f, Qt::BlockingQueuedConnection);
+}
+
 // Inspecting of the qt event queue
 // requres access to private Qt datastructures
 // Querying the event queue should be done with

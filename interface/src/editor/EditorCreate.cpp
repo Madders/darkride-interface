@@ -8,6 +8,8 @@
 
 #include "EditorCreate.h"
 
+#include <cmath>
+
 #include <QtCore/QBuffer>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
@@ -35,6 +37,17 @@ namespace {
     const glm::u8vec3 BLACK { 0, 0, 0 };
     // a mid grey reads on white sand and on dark grass alike, where white vanished on sand
     const glm::u8vec3 GRID_COLOR { 110, 110, 110 };
+    // a new Track: an oval loop, its ride line lifted so a car's floor clears the ground, its box reaching from the
+    // pylons' feet (8 m under the ride line by default) to a little over it
+    const int TRACK_LOOP_POINTS = 8;
+    const float TRACK_LOOP_HALF_LENGTH = 15.0f;
+    const float TRACK_LOOP_HALF_WIDTH = 7.5f;
+    const float TRACK_LIFT = 3.0f;
+    const float TRACK_LOOP_BOX_HEIGHT = 12.0f;
+    const float TRACK_LOOP_REGISTRATION_Y = 9.0f / 12.0f;   // the ride line 9 m up the 12 m box: 9 m below, 3 m above
+    const glm::u8vec3 TRACK_COLOR { 215, 215, 222 };
+    const glm::vec3 TRACK_CAR_DIMENSIONS { 2.6f, 0.3f, 6.0f };   // a floor
+    const glm::u8vec3 TRACK_CAR_COLOR { 60, 70, 90 };
     const glm::vec3 UNIT_DIMENSIONS { 1.0f };
     const glm::vec3 PANEL_DIMENSIONS { 1.0f, 1.0f, 0.01f };
     const float EMPTY_SIZE = 0.2f;           // an Empty's box: enough to frame and to take the gizmo
@@ -79,7 +92,6 @@ const QVector<EditorCreate::Item>& EditorCreate::items() {
         { "empty", "Empty", "", EntityTypes::Shape },
         { "model", "Model…", "", EntityTypes::Model, true },
         { "cube", "Cube", "Shape", EntityTypes::Shape, true },
-        { "mirror", "Mirror", "Shape", EntityTypes::Shape },
         { "sphere", "Sphere", "Shape", EntityTypes::Shape },
         { "cylinder", "Cylinder", "Shape", EntityTypes::Shape },
         { "cone", "Cone", "Shape", EntityTypes::Shape },
@@ -99,6 +111,22 @@ const QVector<EditorCreate::Item>& EditorCreate::items() {
         { "material", "Material", "", EntityTypes::Material },
         { "grid", "Grid", "", EntityTypes::Grid },
         { "terrain", "Terrain", "", EntityTypes::Terrain },
+        { "track", "Track", "", EntityTypes::Track },
+        { "trackcar", "Track Car", "", EntityTypes::Shape },
+        // ready-made things (Caity, 10-24): a mirror, and vehicles to drive at once, the Test Track's own as physics
+        // tuned them (tests-manual/physics-baseline: landrover.js, aircraft-rig.js, airship-rig.js; the monorail's
+        // loop and car). Later here: a scripted-avatar slot, a sound emitter, a wind source
+        { "mirror", "Mirror", "Special items", EntityTypes::Shape, true },
+        { "vehicle-car", "Car", "Special items/Vehicles", EntityTypes::Box, false, "editor/vehicles/car.json", 0.0f, false,
+          "A four-wheeled car: get in its driver's seat to drive" },
+        { "vehicle-rail", "Rail", "Special items/Vehicles", EntityTypes::Track, false, "editor/vehicles/rail.json", 20.0f,
+          false, "A loop of monorail track with a car that stops at its station: walk up the ramp to the platform to board" },
+        { "vehicle-airship", "Airship", "Special items/Vehicles", EntityTypes::Box, false, "editor/vehicles/airship.json",
+          25.0f, false, "A small airship with a deck to walk on, 36 m long: it goes 25 m ahead of you" },
+        { "vehicle-aircraft", "Aircraft", "Special items/Vehicles", EntityTypes::Box, false, "editor/vehicles/aircraft.json",
+          6.0f, false, "A small aircraft with a flight assistant. It flies best in a world with the physics server on" },
+        { "vehicle-watercraft", "Watercraft (coming later)", "Special items/Vehicles", EntityTypes::Box, false, "", 0.0f,
+          true, "Boats need water physics, which isn't built yet" },
     };
     return ITEMS;
 }
@@ -243,6 +271,34 @@ EntityItemProperties EditorCreate::properties(const QString& key, const glm::vec
         p.setName("Terrain");
         p.setDimensions(glm::vec3(32.0f, 16.0f, 32.0f));
         p.setVoxelSize(0.5f);
+    } else if (key == "track") {
+        // a loop of eight points round an oval 30 by 15 m, the monorail's beam under its ride line (PHYSICS.md 4.8),
+        // placed with the ride line a car's height above the surface; the Inspector's Points list and the viewport's
+        // handles take it from here
+        p.setType(EntityTypes::Track);
+        p.setName("Track");
+        QVector<glm::vec3> points;
+        for (int i = 0; i < TRACK_LOOP_POINTS; ++i) {
+            float angle = glm::two_pi<float>() * (float)i / (float)TRACK_LOOP_POINTS;
+            points << glm::vec3(TRACK_LOOP_HALF_LENGTH * std::cos(angle), 0.0f, TRACK_LOOP_HALF_WIDTH * std::sin(angle));
+        }
+        p.setTrackPoints(points);
+        p.setTrackClosed(true);
+        p.setTrackSpeed(5.0f);
+        p.setTrackAcceleration(1.0f);
+        p.setColor(TRACK_COLOR);
+        p.setRestitution(0.0f);   // nothing bounces off a beam (the entity default of 0.5 threw a dropped ball off it)
+        p.setFriction(0.8f);
+        p.setDimensions(glm::vec3(2.0f * TRACK_LOOP_HALF_LENGTH + 2.0f, TRACK_LOOP_BOX_HEIGHT, 2.0f * TRACK_LOOP_HALF_WIDTH + 2.0f));
+        p.setRegistrationPoint(glm::vec3(0.5f, TRACK_LOOP_REGISTRATION_Y, 0.5f));
+    } else if (key == "trackcar") {
+        // a car that is a moving frame: a floor to stand on that rides the Track selected when it is made (the
+        // editor sets trackID then); walls, seats and a roof go on as its children
+        p = shape("Cube", position);
+        p.setName("Track Car");
+        p.setDimensions(TRACK_CAR_DIMENSIONS);
+        p.setColor(TRACK_CAR_COLOR);
+        p.setFrame(true);
     }
     return p;
 }
@@ -285,6 +341,7 @@ float EditorCreate::lift(const EntityItemProperties& properties) {
         case EntityTypes::Material: return 0.0f;
         case EntityTypes::Grid: return 0.02f;
         case EntityTypes::Terrain: return 0.0f;   // the ground starts halfway up the box, so the box's centre sits at the surface
+        case EntityTypes::Track: return TRACK_LIFT;   // the ride line a car's height up, the beam under it, the pylons to the ground
         default: return properties.getDimensions().y * 0.5f;   // resting on the surface
     }
 }

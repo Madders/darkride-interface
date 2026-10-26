@@ -54,6 +54,7 @@ public:
         uint64_t time;        // usecs
         glm::vec3 camera;     // the frame's view position
         glm::vec3 item;       // the centre of the item's bound as drawn
+        uint32_t frameIndex;  // the frame's index (gpu::Frame::frameIndex), what the present trace shows
     };
     void setRenderTraceItem(render::ItemID id);
     std::vector<TraceSample> takeRenderTrace();

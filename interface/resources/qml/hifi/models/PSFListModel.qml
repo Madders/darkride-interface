@@ -1,6 +1,6 @@
 //
 //  PSFListModel.qml
-//  qml/hifi/commerce/common
+//  qml/hifi/models
 //
 //  PSFListModel
 // "PSF" stands for:
@@ -42,8 +42,8 @@ ListModel {
     //     - If your ListView delegates are of variable width/height, ensure you select
     //     an `itemsPerPage` value that would be sufficient to show one full page of data
     //     if all of the delegates were at their minimum heights.
-    //     - If your first ListView delegate contains some special data (as in WalletHome's
-    //     "Recent Activity" view), beware that your `itemsPerPage` value may _never_ reasonably be
+    //     - If your first ListView delegate contains some special data (a heading, say),
+    //     beware that your `itemsPerPage` value may _never_ reasonably be
     //     high enough such that the first page of data causes the view to be one-screen in height
     //     after retrieving the first page. This means data will automatically pop-in (after a short delay)
     //     until the combined heights of your View's delegates reach one-screen in height OR there is

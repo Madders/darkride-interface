@@ -24,6 +24,8 @@ public:
 
     // true while build mode is on: resizes of the container reach the viewport only after a pause
     void setDeferResizes(bool defer);
+    // room around the GL view for a frame drawn by the container's style sheet (a skin's viewport frame, ui/Skins.h)
+    void setInset(const QMargins& inset);
 
 protected:
     void resizeEvent(QResizeEvent* event) override;

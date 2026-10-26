@@ -20,14 +20,18 @@
 #include <QtCore/QUrlQuery>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonArray>
+#include <QtCore/QJsonObject>
 #include <QtCore/QMimeDatabase>
 #include <QtCore/QRandomGenerator>
+#include <QtCore/QThread>
 #include <QtNetwork/QHttpMultiPart>
+#include <QtNetwork/QNetworkReply>
 #include <QPainter>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <AccountManager.h>
 #include <AddressManager.h>
+#include <NetworkAccessManager.h>
 #include <avatar/AvatarManager.h>
 #include <avatar/MyAvatar.h>
 #include <shared/FileUtils.h>
@@ -56,6 +60,7 @@ const QString SNAPSHOTS_DIRECTORY = "Snapshots";
 static const int FILENAME_RANDOM_LENGTH = 6;
 // the folder in the user's files that snapshots go to, and the local folder a snapshot waits in for its upload
 const QString USER_FILES_SNAPSHOTS_FOLDER = "/Snapshots";
+const QString USER_FILES_API_PATH = "/api/user/files";
 const QString UPLOADS_DIRECTORY = "Snapshot uploads";
 const QString URL = "highfidelity_url";
 static const int SNAPSHOT_360_TIMER_INTERVAL = 350;
@@ -167,6 +172,7 @@ void Snapshot::uploadToUserFiles(const QString& takenPath) {
     auto upload = new EditorUpload(this);
     connect(upload, &EditorUpload::finished, this, [this, upload, takenPath](const QString& url) {
         upload->deleteLater();
+        _uploadedPaths.insert(url, USER_FILES_SNAPSHOTS_FOLDER + "/" + upload->fileName());
         // in the user's files now, so no copy stays on this computer
         if (!QFile::remove(takenPath)) {
             qCWarning(interfaceapp) << "snapshot uploaded to the user's files, but its local copy could not be deleted:"
@@ -271,7 +277,7 @@ void Snapshot::takeNextSnapshot() {
     if (_taking360Snapshot) {
         if (!_waitingOnSnapshot) {
             _waitingOnSnapshot = true;
-            qApp->addSnapshotOperator(std::make_tuple([this](const QImage& snapshot) {
+            qApp->getSnapshotRequests().add(std::make_tuple([this](const QImage& snapshot) {
                 // Order is:
                 // 0. Down
                 // 1. Front
@@ -611,6 +617,40 @@ void Snapshot::uploadSnapshot(const QString& filename, const QUrl& href) {
 
     accountManager->sendRequest(SNAPSHOT_UPLOAD_URL, AccountManagerAuth::Required, QNetworkAccessManager::PostOperation,
                                 callbackParams, nullptr, multiPart);
+}
+
+void Snapshot::deleteFromUserFiles(const QString& url) {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this, url] { deleteFromUserFiles(url); }, Qt::QueuedConnection);
+        return;
+    }
+    QString path = _uploadedPaths.value(url);
+    if (path.isEmpty()) {
+        emit snapshotDeleted(url, "not a snapshot this viewer uploaded");
+        return;
+    }
+    auto accountManager = DependencyManager::get<AccountManager>();
+    if (!accountManager->isLoggedIn()) {
+        emit snapshotDeleted(url, "you are not logged in");
+        return;
+    }
+    QNetworkRequest request = accountManager->createRequest(USER_FILES_API_PATH, AccountManagerAuth::Required);
+    QUrl requestUrl = request.url();
+    requestUrl.setQuery(QUrlQuery({ { "path", path } }));
+    request.setUrl(requestUrl);
+    auto reply = NetworkAccessManager::getInstance().deleteResource(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, url, path] {
+        reply->deleteLater();
+        QString error;
+        if (reply->error() != QNetworkReply::NoError) {
+            QString detail = QJsonDocument::fromJson(reply->readAll()).object().value("message").toString();
+            error = detail.isEmpty() ? reply->errorString() : detail;
+            qCWarning(interfaceapp) << "snapshot not deleted from the user's files:" << path << error;
+        } else {
+            _uploadedPaths.remove(url);
+        }
+        emit snapshotDeleted(url, error);
+    });
 }
 
 QString Snapshot::getSnapshotsLocation() {

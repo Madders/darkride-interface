@@ -44,6 +44,9 @@ public:
     void refreshValues(const QVector<EntityItemProperties>& snapshots);
     // the world cannot be edited: fields greyed out, with a note at the top saying why
     void setReadOnly(bool readOnly, const QString& reason);
+    // what the selection could not load (its model, image or textures, with the reasons), in red under the title, and
+    // the title red too; empty hides it (Caity, 10-24: an Image that stayed blank and said nothing)
+    void setLoadProblem(const QString& problem);
     // everything shown, whatever is scrolled into view (a scripted test's picture)
     QPixmap contentPicture() const;
     // the Terrain tool, which a Terrain's Layers section reads and sets the layers through (they live in the
@@ -57,12 +60,18 @@ signals:
     void terrainLayersShown();
     // a vehicle's Wheels or Seats list selected a row (-1 none): the part the viewport draws bright
     void vehiclePartChosen(const QString& key, int index);
+    // a Track's Points list selected a row (-1 none): the point the viewport draws bright and the Move gizmo stands on
+    void trackPointChosen(int index);
     void editBegan(const QString& key);
     void liveEdit(const QString& key, const QVariant& value);
     void committed(const QString& key, const QVariant& value);
     void editCancelled(const QString& key);
     // a picture on this computer chosen for a field (a light's Cookie): to be uploaded, its URL then set
     void uploadRequested(const QString& key, const QString& localPath);
+
+public slots:
+    // the viewport chose a track point (a click on its diamond): the Points list follows
+    void chooseTrackPoint(int index);
 
 protected:
     // the content follows the scroll area's width exactly: rows compress rather than run off the edge
@@ -91,6 +100,7 @@ private:
     QWidget* _content { nullptr };
     QVBoxLayout* _contentLayout { nullptr };
     QLabel* _title { nullptr };
+    QLabel* _loadProblem { nullptr };
     QString _layoutKey;
     QHash<QString, Row> _rows;
     QHash<QString, QWidget*> _sections;     // each section's header and body, by id

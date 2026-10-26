@@ -311,6 +311,8 @@ private:
         uint32_t visualsScanStep { 0 };
         int childCount { -1 };
         bool wasAuthority { false };
+        bool wasLocalDriver { false };        // the wheel taken here last substep (round 12: a fresh start at each sit)
+        uint32_t driveStartSequence { 0 };    // the driver's first input of this sit: the lead ignores states acked before it
         bool logged { false };
     };
     struct Snapshot {

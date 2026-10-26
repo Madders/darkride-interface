@@ -15,6 +15,7 @@
 #include <glm/glm.hpp>
 
 #include <QDateTime>
+#include <QHash>
 #include <QString>
 #include <QStandardPaths>
 #include <QUrl>
@@ -108,6 +109,15 @@ signals:
      */
     void snapshotStored(const QString& takenPath, const QString& location, bool inUserFiles, const QString& uploadError);
 
+    /**jsdoc
+     * Triggered when {@link Snapshot.deleteFromUserFiles|deleteFromUserFiles} is done.
+     * @function Snapshot.snapshotDeleted
+     * @param {string} url - The snapshot's URL in the user's files.
+     * @param {string} error - Why it could not be deleted; empty when it was.
+     * @returns {Signal}
+     */
+    void snapshotDeleted(const QString& url, const QString& error);
+
 public slots:
 
     /**jsdoc
@@ -123,6 +133,14 @@ public slots:
      * @param {String} location - The path to save snapshots to.
      */
     Q_INVOKABLE void setSnapshotsLocation(const QString& location);
+
+    /**jsdoc
+     * Deletes a snapshot from the user's files: one uploaded there by this viewer since it started. Others are left
+     * alone. {@link Snapshot.snapshotDeleted|snapshotDeleted} says when it is done.
+     * @function Snapshot.deleteFromUserFiles
+     * @param {string} url - The snapshot's URL, as {@link Snapshot.snapshotStored|snapshotStored} gave it.
+     */
+    Q_INVOKABLE void deleteFromUserFiles(const QString& url);
 
 private slots:
     void takeNextSnapshot();
@@ -143,6 +161,8 @@ private:
     void keepLeftovers();
     QDateTime _sessionStart { QDateTime::currentDateTime() };
     bool _leftoversKept { false };
+    // the snapshots uploaded to the user's files since the viewer started: URL -> path there ("/Snapshots/<name>")
+    QHash<QString, QString> _uploadedPaths;
     QString _snapshotFilename;
     bool _notify360;
     bool _cubemapOutputFormat;

@@ -8,6 +8,7 @@
 
 #include "WasmRuntimeTests.h"
 
+#include <atomic>
 #include <thread>
 
 #include <QtCore/QElapsedTimer>
@@ -188,6 +189,182 @@ void WasmRuntimeTests::testRequestStop() {
     stopper.join();
     QVERIFY2(error.contains("stopped"), qPrintable(error));
     QVERIFY2(elapsed < 500, qPrintable(QString("took %1 ms").arg(elapsed)));
+}
+
+namespace {
+
+// A module compiled for cooperative interruption: no deadline checks in its loop, it asks the host whether to stop
+// (as the JavaScript guest does from QuickJS's interrupt handler) and returns how many times it asked.
+const QString COOPERATIVE_MODULE = R"((module
+  (import "darkride" "interrupted" (func $interrupted (result i32)))
+  (func (export "until_told") (result i32)
+    (local $asked i32)
+    (block $done
+      (loop $again
+        (local.set $asked (i32.add (local.get $asked) (i32.const 1)))
+        (br_if $done (call $interrupted))
+        (br $again)))
+    (local.get $asked))))";
+
+std::unique_ptr<WasmInstance> makeCooperativeInstance(std::shared_ptr<WasmRuntime> runtime, const WasmInstance::Limits& limits) {
+    QString error;
+    auto module = runtime->compileText(COOPERATIVE_MODULE, error, WasmRuntime::Interruption::Cooperative);
+    if (!module) {
+        qWarning() << "compile failed:" << error;
+        return nullptr;
+    }
+    auto instance = std::make_unique<WasmInstance>(module, limits);
+    instance->defineHostFunction("darkride", "interrupted", { {}, { WasmType::I32 } },
+                                 [](WasmInstance& self, const std::vector<WasmValue>&, std::vector<WasmValue>& results) {
+                                     results.push_back(int32_t(self.interruptRequested() ? 1 : 0));
+                                     return QString();
+                                 });
+    if (!instance->instantiate(error)) {
+        qWarning() << "instantiate failed:" << error;
+        return nullptr;
+    }
+    return instance;
+}
+
+} // namespace
+
+// A stop requested from another thread: the module, which has no deadline checks, unwinds when it next asks, the
+// call returns normally with the reason to take, and every later call is refused.
+void WasmRuntimeTests::testCooperativeStop() {
+    auto runtime = makeRuntime();
+    WasmInstance::Limits limits;
+    limits.callTimeout = std::chrono::milliseconds(0);
+    auto instance = makeCooperativeInstance(runtime, limits);
+    QVERIFY(instance);
+    QCOMPARE(instance->module()->interruption(), WasmRuntime::Interruption::Cooperative);
+    WasmInstance* raw = instance.get();
+    std::thread stopper([raw] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        raw->requestStop();
+    });
+    std::vector<WasmValue> results;
+    QString error;
+    QElapsedTimer timer;
+    timer.start();
+    QVERIFY2(instance->call("until_told", {}, results, error), qPrintable(error));
+    qint64 elapsed = timer.elapsed();
+    stopper.join();
+    QVERIFY2(elapsed >= 25 && elapsed < 500, qPrintable(QString("took %1 ms").arg(elapsed)));
+    QVERIFY(std::get<int32_t>(results[0]) > 1);
+    QString reason = instance->takeInterruptionReason();
+    QVERIFY2(reason.contains("stopped"), qPrintable(reason));
+    QVERIFY(instance->takeInterruptionReason().isEmpty());
+    QVERIFY(!instance->call("until_told", {}, results, error));
+    QVERIFY2(error.contains("stopped"), qPrintable(error));
+}
+
+// A call that runs past its time limit is told to stop when it next asks; the instance stays usable.
+void WasmRuntimeTests::testCooperativeTimeLimit() {
+    auto runtime = makeRuntime();
+    WasmInstance::Limits limits;
+    limits.callTimeout = std::chrono::milliseconds(40);
+    auto instance = makeCooperativeInstance(runtime, limits);
+    QVERIFY(instance);
+    for (int round = 0; round < 2; ++round) {
+        std::vector<WasmValue> results;
+        QString error;
+        QElapsedTimer timer;
+        timer.start();
+        QVERIFY2(instance->call("until_told", {}, results, error), qPrintable(error));
+        qint64 elapsed = timer.elapsed();
+        QVERIFY2(elapsed >= 35 && elapsed < 500, qPrintable(QString("took %1 ms").arg(elapsed)));
+        QString reason = instance->takeInterruptionReason();
+        QVERIFY2(reason.contains("limit of 40 ms"), qPrintable(reason));
+    }
+}
+
+// A call past its warning time is reported once and goes on: here until a stop is asked for, well after the warning.
+void WasmRuntimeTests::testCallWarningGoesOn() {
+    auto runtime = makeRuntime();
+    WasmInstance::Limits limits;
+    limits.callTimeout = std::chrono::milliseconds(0);
+    limits.callWarning = std::chrono::milliseconds(30);
+    auto instance = makeCooperativeInstance(runtime, limits);
+    QVERIFY(instance);
+    std::atomic<int> warnings { 0 };
+    std::atomic<qint64> warnedAt { 0 };
+    instance->setCallWarningHandler([&warnings, &warnedAt](std::chrono::milliseconds elapsed) {
+        ++warnings;
+        warnedAt = elapsed.count();
+    });
+    WasmInstance* raw = instance.get();
+    std::thread stopper([raw] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        raw->requestStop();
+    });
+    std::vector<WasmValue> results;
+    QString error;
+    QElapsedTimer timer;
+    timer.start();
+    QVERIFY2(instance->call("until_told", {}, results, error), qPrintable(error));
+    const qint64 elapsed = timer.elapsed();
+    stopper.join();
+    QCOMPARE(warnings.load(), 1);
+    QVERIFY2(warnedAt.load() >= 30, qPrintable(QString("warned at %1 ms").arg(warnedAt.load())));
+    QVERIFY2(elapsed >= 140, qPrintable(QString("the call ended after %1 ms, before the stop").arg(elapsed)));
+    const QString reason = instance->takeInterruptionReason();
+    QVERIFY2(reason.contains("stopped"), qPrintable(reason));
+}
+
+namespace {
+
+// A cooperative module that first waits in a host function, then loops asking whether to stop.
+const QString WAIT_THEN_SPIN_MODULE = R"((module
+  (import "darkride" "interrupted" (func $interrupted (result i32)))
+  (import "test" "wait" (func $wait))
+  (func (export "wait_then_spin") (result i32)
+    (local $asked i32)
+    (call $wait)
+    (block $done
+      (loop $again
+        (local.set $asked (i32.add (local.get $asked) (i32.const 1)))
+        (br_if $done (call $interrupted))
+        (br $again)))
+    (local.get $asked))))";
+
+} // namespace
+
+// The time limit counts the module's own time: what it spends inside a host function (a download, a long host
+// call) does not count. A host function that sleeps 80 ms under a 40 ms limit: the call ends about 120 ms in,
+// not at 80, and the limit is the reason.
+void WasmRuntimeTests::testTimeLimitCountsModuleTimeOnly() {
+    auto runtime = makeRuntime();
+    QString error;
+    auto module = runtime->compileText(WAIT_THEN_SPIN_MODULE, error, WasmRuntime::Interruption::Cooperative);
+    QVERIFY2(module, qPrintable(error));
+    WasmInstance::Limits limits;
+    limits.callTimeout = std::chrono::milliseconds(40);
+    WasmInstance instance(module, limits);
+    instance.defineHostFunction("darkride", "interrupted", { {}, { WasmType::I32 } },
+                                [](WasmInstance& self, const std::vector<WasmValue>&, std::vector<WasmValue>& results) {
+                                    results.push_back(int32_t(self.interruptRequested() ? 1 : 0));
+                                    return QString();
+                                });
+    instance.defineHostFunction("test", "wait", { {}, {} }, [](WasmInstance&, const std::vector<WasmValue>&, std::vector<WasmValue>&) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+        return QString();
+    });
+    QVERIFY2(instance.instantiate(error), qPrintable(error));
+    std::vector<WasmValue> results;
+    QElapsedTimer timer;
+    timer.start();
+    QVERIFY2(instance.call("wait_then_spin", {}, results, error), qPrintable(error));
+    qint64 elapsed = timer.elapsed();
+    QVERIFY2(elapsed >= 115 && elapsed < 1000, qPrintable(QString("took %1 ms (80 ms waiting in the host, then 40 ms of the module's own)").arg(elapsed)));
+    QString reason = instance.takeInterruptionReason();
+    QVERIFY2(reason.contains("limit of 40 ms"), qPrintable(reason));
+    QVERIFY(!instance.isStopRequested());
+    // and the module runs on: a second call gets its own 40 ms
+    timer.restart();
+    QVERIFY2(instance.call("wait_then_spin", {}, results, error), qPrintable(error));
+    elapsed = timer.elapsed();
+    QVERIFY2(elapsed >= 115 && elapsed < 1000, qPrintable(QString("the second call took %1 ms").arg(elapsed)));
+    QVERIFY(instance.takeInterruptionReason().contains("limit of 40 ms"));
 }
 
 void WasmRuntimeTests::testMemoryLimit() {

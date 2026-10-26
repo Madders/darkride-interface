@@ -23,53 +23,6 @@
 
 #include "RegisteredMetaTypes.h"
 
-using BakeVersion = int;
-static const BakeVersion INITIAL_BAKE_VERSION = 0;
-static const BakeVersion NEEDS_BAKING_BAKE_VERSION = -1;
-
-enum class BakedAssetType : int {
-    Model = 0,
-    Texture,
-    Script,
-
-    NUM_ASSET_TYPES,
-    Undefined
-};
-
-// ATTENTION! Do not remove baking versions, and do not reorder them. If you add
-// a new value, it will immediately become the "current" version.
-enum class ModelBakeVersion : BakeVersion {
-    Initial = INITIAL_BAKE_VERSION,
-    MetaTextureJson,
-
-    COUNT
-};
-
-// ATTENTION! See above.
-enum class TextureBakeVersion : BakeVersion {
-    Initial = INITIAL_BAKE_VERSION,
-    MetaTextureJson,
-
-    COUNT
-};
-
-// ATTENTION! See above.
-enum class ScriptBakeVersion : BakeVersion {
-    Initial = INITIAL_BAKE_VERSION,
-    FixEmptyScripts,
-
-    COUNT
-};
-
-struct AssetMeta {
-    BakeVersion bakeVersion { INITIAL_BAKE_VERSION };
-    bool failedLastBake { false };
-    QString lastBakeErrors;
-    QString redirectTarget;
-};
-
-class BakeAssetTask;
-
 class AssetServer : public ThreadedAssignment {
     Q_OBJECT
 public:
@@ -117,7 +70,6 @@ private:
     /// Rename mapping from `oldPath` to `newPath`. Returns true if successful
     bool renameMapping(AssetUtils::AssetPath oldPath, AssetUtils::AssetPath newPath);
 
-    bool setBakingEnabled(const AssetUtils::AssetPathList& paths, bool enabled);
 
     /// Delete any unmapped files from the local asset directory
     void cleanupUnmappedFiles();
@@ -127,23 +79,8 @@ private:
 
     QString getPathToAssetHash(const AssetUtils::AssetHash& assetHash);
 
-    std::pair<AssetUtils::BakingStatus, QString> getAssetStatus(const AssetUtils::AssetPath& path, const AssetUtils::AssetHash& hash);
 
-    void bakeAssets();
-    void maybeBake(const AssetUtils::AssetPath& path, const AssetUtils::AssetHash& hash);
-    void createEmptyMetaFile(const AssetUtils::AssetHash& hash);
-    bool hasMetaFile(const AssetUtils::AssetHash& hash);
-    bool needsToBeBaked(const AssetUtils::AssetPath& path, const AssetUtils::AssetHash& assetHash);
-    void bakeAsset(const AssetUtils::AssetHash& assetHash, const AssetUtils::AssetPath& assetPath, const QString& filePath);
 
-    /// Move baked content for asset to baked directory and update baked status
-    void handleCompletedBake(QString originalAssetHash, QString assetPath, QString bakedTempOutputDir);
-    void handleFailedBake(QString originalAssetHash, QString assetPath, QString errors);
-    void handleAbortedBake(QString originalAssetHash, QString assetPath);
-
-    /// Create meta file to describe baked content for original asset
-    std::pair<bool, AssetMeta> readMetaFile(AssetUtils::AssetHash hash);
-    bool writeMetaFile(AssetUtils::AssetHash originalAssetHash, const AssetMeta& meta = AssetMeta());
 
     /// Remove baked paths when the original asset is deleteds
     void removeBakedPathsForDeletedAsset(AssetUtils::AssetHash originalAssetHash);
@@ -156,8 +93,6 @@ private:
     /// Task pool for handling uploads and downloads of assets
     QThreadPool _transferTaskPool;
 
-    QHash<AssetUtils::AssetHash, std::shared_ptr<BakeAssetTask>> _pendingBakes;
-    QThreadPool _bakingTaskPool;
 
     QMutex _queuedRequestsMutex;
     bool _isQueueingRequests { true };

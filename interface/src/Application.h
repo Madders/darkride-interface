@@ -33,7 +33,6 @@
 #include <input-plugins/KeyboardMouseDevice.h>
 #include <input-plugins/TouchscreenDevice.h>
 #include <input-plugins/TouchscreenVirtualPadDevice.h>
-#include <OctreeQuery.h>
 #include <PhysicalEntitySimulation.h>
 #include <PhysicsEngine.h>
 #include <plugins/Forward.h>
@@ -51,16 +50,23 @@
 #include <shared/FileLogger.h>
 #include <RunningMarker.h>
 
+class ClientOptions;
+
 #include "avatar/MyAvatar.h"
-#include "FancyCamera.h"
-#include "ConnectionMonitor.h"
+#include "ViewState.h"
+#include "EntityClipboard.h"
+#include "AssetImport.h"
+#include "SignInGate.h"
+#include "DomainSession.h"
+#include "Display.h"
 #include "CursorManager.h"
+#include "WindowCursor.h"
+#include "SnapshotRequests.h"
+#include "KeyboardFocus.h"
 #include "gpu/Context.h"
-#include "LoginStateManager.h"
 #include "Menu.h"
 #include "PerformanceManager.h"
 #include "RefreshRateManager.h"
-#include "octree/OctreePacketProcessor.h"
 #include "render/Engine.h"
 #include "scripting/ControllerScriptingInterface.h"
 #include "scripting/DialogsManagerScriptingInterface.h"
@@ -108,9 +114,6 @@ class Application : public QApplication,
                     public PluginContainer {
     Q_OBJECT
 
-    // TODO? Get rid of those
-    friend class OctreePacketProcessor;
-
 public:
     // virtual functions required for PluginContainer
     virtual ui::Menu* getPrimaryMenu() override;
@@ -120,14 +123,13 @@ public:
     virtual MainWindow* getPrimaryWindow() override;
     virtual QOpenGLContext* getPrimaryContext() override;
     virtual bool makeRenderingContextCurrent() override;
-    virtual bool isForeground() const override;
-    void speakText(QString speakText);
+    virtual bool isForeground() const override { return _display.isForeground(); }
 
-    virtual DisplayPluginPointer getActiveDisplayPlugin() const override;
+    Display& getDisplay() { return _display; }   // the display plug-ins, the window's geometry and title, the headset (Display.h)
+    virtual DisplayPluginPointer getActiveDisplayPlugin() const override { return _display.getActiveDisplayPlugin(); }
 
     // FIXME? Empty methods, do we still need them?
-    static void initPlugins(const QStringList& arguments);
-    static void shutdownPlugins();
+    static void initPlugins(const ClientOptions& options);
 
     Application(int& argc, char** argv, QElapsedTimer& startup_time, bool runningMarkerExisted);
     ~Application();
@@ -145,52 +147,38 @@ public:
     void initializeDisplayPlugins();
     void initializeRenderEngine();
     void initializeUi();
-    void speakThis();
-    void updateSecondaryCameraViewFrustum();
-
-    void updateCamera(RenderArgs& renderArgs, float deltaTime);
-    void resizeGL();
 
     bool notify(QObject*, QEvent*) override;
     bool event(QEvent* event) override;
     bool eventFilter(QObject* object, QEvent* event) override;
 
-    glm::uvec2 getCanvasSize() const;
-    QRect getRenderingGeometry() const;
+    glm::uvec2 getCanvasSize() const { return _display.getCanvasSize(); }
+    glm::uvec2 getUiSize() const { return _display.getUiSize(); }
+    QRect getRecommendedHUDRect() const { return _display.getRecommendedHUDRect(); }
+    glm::vec2 getDeviceSize() const { return _display.getDeviceSize(); }
+    bool hasFocus() const { return _display.hasFocus(); }
+    void setFocus() { _display.setFocus(); }
+    void raise() { _display.raise(); }
 
-    glm::uvec2 getUiSize() const;
-    QRect getRecommendedHUDRect() const;
-    glm::vec2 getDeviceSize() const;
-    bool hasFocus() const;
-    void setFocus();
-    void raise();
+    WindowCursor& getWindowCursor() { return _windowCursor; }   // the system cursor over the window (WindowCursor.h)
 
-    void showCursor(const Cursor::Icon& cursor);
-    Q_INVOKABLE void updateSystemCursor(const Qt::CursorShape cursor);
+    ViewState& getViewState() { return _viewState; }   // the camera and what it sees: the view frustums, the conical views (ViewState.h)
+    const ViewState& getViewState() const { return _viewState; }
+    Camera& getCamera() { return _viewState.camera(); }
+    const Camera& getCamera() const { return _viewState.camera(); }
 
-    bool isThrottleRendering() const;
+    bool isMissingSequenceNumbers() { return _domainSession.isMissingSequenceNumbers(); }
 
-    Camera& getCamera() { return _myCamera; }
-    const Camera& getCamera() const { return _myCamera; }
-    // Represents the current view frustum of the avatar.
-    void copyViewFrustum(ViewFrustum& viewOut) const;
-    // Represents the view frustum of the current rendering pass,
-    // which might be different from the viewFrustum, i.e. shadowmap
-    // passes, mirror window passes, etc
-    void copyDisplayViewFrustum(ViewFrustum& viewOut) const;
+    const ConicalViewFrustums& getConicalViews() const override { return _viewState.conicalViews(); }
 
-    bool isMissingSequenceNumbers() { return _isMissingSequenceNumbers; }
-
-    const ConicalViewFrustums& getConicalViews() const override { return _conicalViews; }
-
-    const OctreePacketProcessor& getOctreePacketProcessor() const { return _octreeProcessor; }
+    DomainSession& getDomainSession() { return _domainSession; }   // the session with a domain: the queries, the octree accounting, the modes, the physics gate (DomainSession.h)
+    const OctreePacketProcessor& getOctreePacketProcessor() const { return _domainSession.octreeProcessor(); }
     QSharedPointer<EntityTreeRenderer> getEntities() const { return DependencyManager::get<EntityTreeRenderer>(); }
     GraphicsEngine& getGraphicsEngine() { return _graphicsEngine; }
     MainWindow* getWindow() const { return _window; }
-    EntityTreePointer getEntityClipboard() const { return _entityClipboard; }
+    EntityClipboard& getEntityClipboard() { return _entityClipboard; }   // the entities' clipboard: export, import, paste (EntityClipboard.h)
+    AssetImport& getAssetImport() { return _assetImport; }   // a file from a URL or a drop becomes an asset and an entity (AssetImport.h)
     EntityEditPacketSender* getEntityEditPacketSender() { return &_entityEditSender; }
-
-    ivec2 getMouse() const;
 
     ApplicationOverlay& getApplicationOverlay() { return _applicationOverlay; }
     const ApplicationOverlay& getApplicationOverlay() const { return _applicationOverlay; }
@@ -204,7 +192,6 @@ public:
     size_t getRenderFrameCount() const { return _graphicsEngine.getRenderFrameCount(); }
     float getRenderLoopRate() const { return _graphicsEngine.getRenderLoopRate(); }
     float getNumCollisionObjects() const;
-    float getTargetRenderFrameRate() const;  // frames/second
 
     static void setupQmlSurface(QQmlContext* surfaceContext, bool setAdditionalContextProperties);
 
@@ -236,7 +223,6 @@ public:
     // TODO: Add this as an option to domain settings and switch on when you visit a domain
     // TODO: Make sure loading screen works
     bool getLoadCompleteEntityTreeSetting() { return _loadCompleteEntityTreeSetting.get(); }
-    void setLoadCompleteEntityTreeSetting(bool value);
 
     // Shortcircuits the code that does priority sorting in EntityTreeRenderer for faster
     // load and batch operations like zone culling all at once
@@ -256,8 +242,6 @@ public:
     bool getPreferAvatarFingerOverStylus() { return _preferAvatarFingerOverStylusSetting.get(); }
     void setPreferAvatarFingerOverStylus(bool value);
 
-    bool getMiniTabletEnabled() { return _miniTabletEnabledSetting.get(); }
-    void setMiniTabletEnabled(bool enabled);
 
     float getSettingConstrainToolbarPosition() { return _constrainToolbarPosition.get(); }
     void setSettingConstrainToolbarPosition(bool setting);
@@ -265,56 +249,53 @@ public:
     float getAwayStateWhenFocusLostInVREnabled() { return _awayStateWhenFocusLostInVREnabled.get(); }
     void setAwayStateWhenFocusLostInVREnabled(bool setting);
 
-    Q_INVOKABLE void setMinimumGPUTextureMemStabilityCount(int stabilityCount) {
-        _minimumGPUTextureMemSizeStabilityCount = stabilityCount;
-    }
+    Q_INVOKABLE void setMinimumGPUTextureMemStabilityCount(int stabilityCount) { _domainSession.setMinimumGPUTextureMemStabilityCount(stabilityCount); }   // the Test API's, by name
 
-    NodeToOctreeSceneStats* getOcteeSceneStats() { return &_octreeServerSceneStats; }
+    NodeToOctreeSceneStats* getOcteeSceneStats() { return _domainSession.octreeSceneStats(); }
 
 
     virtual controller::ScriptingInterface* getControllerScriptingInterface() { return _controllerScriptingInterface; }
     virtual void registerScriptEngineWithApplicationServices(const ScriptEnginePointer& scriptEngine) override;
 
-    virtual void copyCurrentViewFrustum(ViewFrustum& viewOut) const override { copyDisplayViewFrustum(viewOut); }
+    virtual void copyCurrentViewFrustum(ViewFrustum& viewOut) const override { _viewState.copyDisplayViewFrustum(viewOut); }
     virtual QThread* getMainThread() override { return thread(); }
-    virtual PickRay computePickRay(float x, float y) const override;
+    virtual PickRay computePickRay(float x, float y) const override { return _viewState.computePickRay(x, y); }
     virtual glm::vec3 getAvatarPosition() const override;
-    virtual qreal getDevicePixelRatio() override;
+    virtual qreal getDevicePixelRatio() override { return _display.getDevicePixelRatio(); }
 
-    void setActiveDisplayPlugin(const QString& pluginName);
+    void setActiveDisplayPlugin(const QString& pluginName) { _display.setActiveDisplayPlugin(pluginName); }
 
 #ifndef Q_OS_ANDROID
     FileLogger* getLogger() const { return _logger; }
 #endif
 
-    float getRenderResolutionScale() const;
+    float getRenderResolutionScale() const { return _display.getRenderResolutionScale(); }
 
     qint64 getCurrentSessionRuntime() const { return _sessionRunTimer.elapsed(); }
 
     bool isAboutToQuit() const { return _aboutToQuit; }
-    bool isPhysicsEnabled() const { return _physicsEnabled; }
+    bool isPhysicsEnabled() const { return _domainSession.isPhysicsEnabled(); }
+    bool settingsLoaded() const { return _settingsLoaded; }
+    Setting::Handle<bool>& firstRun() { return _firstRun; }   // the first run's setting, read and cleared where the client goes first
 
     // While a loading screen is up, the arrival in a world waits for what is near the avatar to be ready for physics
     // and drawn (as interstitial mode does), even where the zone allows moving at once (ghosting).
-    void setArrivalWaitsForNearby(bool wait);
+    void setArrivalWaitsForNearby(bool wait) { _domainSession.setArrivalWaitsForNearby(wait); }
     PhysicsEnginePointer getPhysicsEngine() { return _physicsEngine; }
-    bool isEditMode() const;
 
     // the isHMDMode is true whenever we use the interface from an HMD and not a standard flat display
     // rendering of several elements depend on that
     // TODO: carry that information on the Camera as a setting
-    virtual bool isHMDMode() const override;
-    glm::mat4 getHMDSensorPose() const;
-    glm::mat4 getEyeOffset(int eye) const;
-    glm::mat4 getEyeProjection(int eye) const;
-
-    QRect getDesirableApplicationGeometry() const;
+    virtual bool isHMDMode() const override { return _display.isHMDMode(); }
+    glm::mat4 getHMDSensorPose() const { return _display.getHMDSensorPose(); }
+    glm::mat4 getEyeOffset(int eye) const { return _display.getEyeOffset(eye); }
+    glm::mat4 getEyeProjection(int eye) const { return _display.getEyeProjection(eye); }
 
     virtual bool canAcceptURL(const QString& url) const override;
     virtual bool acceptURL(const QString& url, bool defaultUpload = false) override;
 
-    void setMaxOctreePacketsPerSecond(int maxOctreePPS);
-    int getMaxOctreePacketsPerSecond() const;
+    void setMaxOctreePacketsPerSecond(int maxOctreePPS) { _domainSession.setMaxOctreePacketsPerSecond(maxOctreePPS); }
+    int getMaxOctreePacketsPerSecond() const { return _domainSession.getMaxOctreePacketsPerSecond(); }
 
     render::ScenePointer getMain3DScene() override { return _graphicsEngine.getRenderScene(); }
     render::EnginePointer getRenderEngine() override { return _graphicsEngine.getRenderEngine(); }
@@ -327,15 +308,9 @@ public:
     void updateMyAvatarLookAtPosition(float deltaTime);
 
     float getGameLoopRate() const { return _gameLoopCounter.rate(); }
+    float getPresentPeriod() const { return _display.getPresentPeriod(); }   // the period the presents are paced at, in seconds; 0 while they are not
 
-    void takeSnapshot(bool notify, bool includeAnimated = false, float aspectRatio = 0.0f, const QString& filename = QString());
-    void takeSecondaryCameraSnapshot(const bool& notify, const QString& filename = QString());
-    void takeSecondaryCamera360Snapshot(const glm::vec3& cameraPosition,
-                                        const bool& cubemapOutputFormat,
-                                        const bool& notify,
-                                        const QString& filename = QString());
-
-    void shareSnapshot(const QString& filename, const QUrl& href = QUrl(""));
+    SnapshotRequests& getSnapshotRequests() { return _snapshotRequests; }   // the snapshots asked of the next frame (SnapshotRequests.h)
 
     QUuid getTabletScreenID() const;
     QUuid getTabletHomeButtonID() const;
@@ -352,11 +327,12 @@ public:
     bool getSaveAvatarOverrideUrl() { return _saveAvatarOverrideUrl; }
     void saveNextPhysicsStats(QString filename);
 
-    bool isServerlessMode() const;
-    bool isInterstitialMode() const { return _interstitialMode; }
-    bool failedToConnectToEntityServer() const { return _failedToConnectToEntityServer; }
-
-    void replaceDomainContent(const QString& url, const QString& itemName);
+    bool isServerlessMode() const { return _domainSession.isServerlessMode(); }
+    bool isInterstitialMode() const { return _domainSession.isInterstitialMode(); }
+    // whole-world loading (the domain asks for a loading screen until the whole world is in): the domain session's
+    bool isWorldLoading() const { return _domainSession.isWorldLoading(); }
+    QVariantMap getWorldLoadingState() { return _domainSession.getWorldLoadingState(); }
+    void showWorldNow() { _domainSession.showWorldNow(); }
 
     void loadAvatarScripts(const QVector<QString>& urls);
     void unloadAvatarScripts();
@@ -366,19 +342,16 @@ public:
     int getOtherAvatarsReplicaCount() { return DependencyManager::get<AvatarHashMap>()->getReplicaCount(); }
     void setOtherAvatarsReplicaCount(int count) { DependencyManager::get<AvatarHashMap>()->setReplicaCount(count); }
 
-    bool getLoginDialogPoppedUp() const { return _loginDialogPoppedUp; }
+    SignInGate& getSignInGate() { return _signInGate; }   // the sign-in screen, the pause until an account is chosen, the resume (SignInGate.h)
+    bool getLoginDialogPoppedUp() const { return _signInGate.poppedUp(); }
     // From the start, and again after signing out, until the viewer goes in (resumeAfterLoginDialogActionTaken): the
     // 3D view isn't drawn then, only Darkride's navy under the user interface (GraphicsEngine::render_performFrame)
-    bool isSignInPending() const { return _signInPending; }
-    void createLoginDialog();
-    void updateLoginDialogPosition();
-
-    void createAvatarInputsBar();
-    void destroyAvatarInputsBar();
+    bool isSignInPending() const { return _signInGate.signInPending(); }
+    const QDir& getDefaultScriptsLocation() const { return _defaultScriptsLocation; }   // --scripts, when given
 
     // Check if a headset is connected
-    bool hasRiftControllers();
-    bool hasViveControllers();
+    bool hasRiftControllers() { return _display.hasRiftControllers(); }
+    bool hasViveControllers() { return _display.hasViveControllers(); }
 
 #if defined(Q_OS_ANDROID)
     void beforeEnterBackground();
@@ -387,16 +360,11 @@ public:
     void toggleAwayMode();
 #endif
 
-    using SnapshotOperator = std::tuple<std::function<void(const QImage&)>, float, bool>;
-    void addSnapshotOperator(const SnapshotOperator& snapshotOperator);
-    bool takeSnapshotOperators(std::queue<SnapshotOperator>& snapshotOperators);
-
     void openDirectory(const QString& path);
 
     void overrideEntry();
     void forceDisplayName(const QString& displayName);
     void forceLoginWithTokens(const QString& tokens);
-    void setConfigFileURL(const QString& fileUrl);
 
     // used by preferences and HMDScriptingInterface...
     VisionSqueeze& getVisionSqueeze() { return _visionSqueeze; }
@@ -407,26 +375,20 @@ signals:
     void fullAvatarURLChanged(const QString& newValue, const QString& modelName);
 
     void beforeAboutToQuit();
-    void activeDisplayPluginChanged();
+    void activeDisplayPluginChanged();   // the Display's, relayed: services connect here in the essentials stage
 
     void uploadRequest(QString path);
 
-    void interstitialModeChanged(bool isInInterstitialMode);
+    void interstitialModeChanged(bool isInInterstitialMode);   // the domain session's, relayed: the Window scripting interface connects here before the session exists
+    void worldLoadingChanged(bool isWorldLoading);   // the domain session's, relayed likewise
 
-    void loginDialogFocusEnabled();
-    void loginDialogFocusDisabled();
-
-    void miniTabletEnabledChanged(bool enabled);
     void awayStateWhenFocusLostInVRChanged(bool enabled);
 
 public slots:
-    QVector<EntityItemID> pasteEntities(const QString& entityHostType, float x, float y, float z);
-    bool exportEntities(const QString& filename, const QVector<QUuid>& entityIDs, const glm::vec3* givenOffset = nullptr);
-    bool exportEntities(const QString& filename, float x, float y, float z, float scale);
-    bool importEntities(const QString& url, const bool isObservable = true, const qint64 callerId = -1);
     void updateThreadPoolCount() const;
     void updateSystemTabletMode();
-    void goToErrorDomainURL(QUrl errorDomainURL);
+    void updateWindowTitle() const { _display.updateWindowTitle(); }   // the domain session and the start-up call it
+    void onPresent(quint32 frameCount, quint64 presentSlot);   // the display plug-in's present callback, on its thread: the present's slot noted, the next idle and render events posted
 
     Q_INVOKABLE void loadDialog();
     void importAvatarDialog();
@@ -436,36 +398,21 @@ public slots:
     void recreateLogWindow(int);
     void toggleEntityScriptServerLogDialog();
     Q_INVOKABLE void showAssetServerWidget(QString filePath = "");
-    Q_INVOKABLE void loadAddAvatarBookmarkDialog() const;
-    Q_INVOKABLE void loadAvatarBrowser() const;
     Q_INVOKABLE SharedSoundPointer getSampleSound() const;
 
     void showDialog(const QUrl& widgetUrl, const QUrl& tabletUrl, const QString& name) const;
 
-    void showLoginScreen();
-
-    // FIXME: Move addAssetToWorld* methods to own class?
-    void addAssetToWorldFromURL(QString url);
-    void addAssetToWorldFromURLRequestFinished();
-    void addAssetToWorld(QString filePath, QString zipFile, bool isZip = false, bool isBlocks = false);
-    void addAssetToWorldUnzipFailure(QString filePath);
-    void addAssetToWorldWithNewMapping(QString filePath, QString mapping, int copy, bool isZip = false, bool isBlocks = false);
-    void addAssetToWorldUpload(QString filePath, QString mapping, bool isZip = false, bool isBlocks = false);
-    void addAssetToWorldSetMapping(QString filePath, QString mapping, QString hash, bool isZip = false, bool isBlocks = false);
-    void addAssetToWorldAddEntity(QString filePath, QString mapping);
-
-    void handleUnzip(QString sourceFile, QStringList destinationFile, bool autoAdd, bool isZip, bool isBlocks);
+    void addAssetToWorldFromURL(QString url) { _assetImport.addAssetToWorldFromURL(url); }   // QML's ApplicationInterface.addAssetToWorldFromURL (the tablet and window roots, the web view)
 
     FileScriptingInterface* getFileDownloadInterface() { return _fileDownload; }
 
-    void handleLocalServerConnection() const;
-    void readArgumentsFromLocalSocket() const;
+    // the hand-offs of later launches (SingleInstance): raise this window (the domain session goes to the address handed over)
+    void raiseWindow() const { _display.raiseWindow(); }
 
     static void packageModel();
 
     void resetSensors(bool andReload = false);
 
-    void hmdVisibleChanged(bool visible);
 
 #if (PR_BUILD || DEV_BUILD)
     void sendWrongProtocolVersionsSignature(bool checked) { ::sendWrongProtocolVersionsSignature(checked); }
@@ -473,36 +420,26 @@ public slots:
 
     static void showHelp();
 
-    void cycleCamera();
-    void cameraModeChanged();
-    void cameraMenuChanged();
+    void cameraMenuChanged() { _viewState.cameraMenuChanged(); }   // the View menu's camera items, connected by name in Menu.cpp
     void toggleOverlays();
     void setOverlaysVisible(bool visible);
     Q_INVOKABLE void centerUI();
 
-    void resetPhysicsReadyInformation();
+    Q_INVOKABLE void requeryOctree() { _domainSession.requeryOctree(); }   // Redraw: the menu's, by name; MyAvatar's
 
-    Q_INVOKABLE void requeryOctree();
-
-    void reloadResourceCaches();
-
-    Q_INVOKABLE void setTonemappingMode(int toneCurve, float exposure);
+    void reloadResourceCaches() { _domainSession.reloadResourceCaches(); }   // Reload Content: the menu's, by name; the Test API's
 
     void updateHeartbeat() const;
 
     static void deadlockApplication();
     static void unresponsiveApplication();  // cause main thread to be unresponsive for 35 seconds
 
-    void rotationModeChanged() const;
+    void rotationModeChanged() const { _viewState.rotationModeChanged(); }   // View > Center Player In View, connected by name in Menu.cpp
 
     static void runTests();
 
-    void setKeyboardFocusHighlight(const glm::vec3& position, const glm::quat& rotation, const glm::vec3& dimensions);
-
-    QUuid getKeyboardFocusEntity() const;  // thread-safe
-    void setKeyboardFocusEntity(const QUuid& id);
-
-    void addAssetToWorldMessageClose();
+    KeyboardFocus& getKeyboardFocus() { return _keyboardFocus; }   // which entity has the keyboard, and its highlight (KeyboardFocus.h)
+    std::shared_ptr<KeyboardMouseDevice> getKeyboardMouseDevice() const { return _keyboardMouseDevice; }
 
     void loadLODToolsDialog();
     void loadEntityStatisticsDialog();
@@ -512,20 +449,11 @@ public slots:
     const QString getPreferredCursor() const { return _preferredCursor.get(); }
     void setPreferredCursor(const QString& cursor);
 
-    void setIsServerlessMode(bool serverlessDomain);
-    std::map<QString, QString> prepareServerlessDomainContents(QUrl domainURL, QByteArray data);
-
-    void loadServerlessDomain(QUrl domainURL);
-    void loadErrorDomain(QUrl domainURL);
-    void setIsInterstitialMode(bool interstitialMode);
-
     void updateVerboseLogging();
-
-    void changeViewAsNeeded(float boomLength);
 
     QString getGraphicsCardType();
 
-    bool gpuTextureMemSizeStable();
+    bool gpuTextureMemSizeStable() { return _domainSession.gpuTextureMemSizeStable(); }   // the Test API's, by name
     void showUrlHandler(const QUrl& url);
 
     // used to test "shutdown" crash annotation.
@@ -534,21 +462,9 @@ public slots:
 private slots:
     void onDesktopRootItemCreated(QQuickItem* qmlContext);
     void onDesktopRootContextCreated(QQmlContext* qmlContext);
-    void showDesktop();
-    void clearDomainOctreeDetails(bool clearAll = true);
     void onAboutToQuit();
-    void onPresent(quint32 frameCount);
-
-    void resettingDomain();
-
-    void activeChanged(Qt::ApplicationState state);
-    void windowMinimizedChanged(bool minimized);
-
-    void notifyPacketVersionMismatch();
-
     void loadSettings();
     void saveSettings() const;
-    void setFailedToConnectToEntityServer();
 
     bool acceptSnapshot(const QString& urlString);
     bool askToSetAvatarUrl(const QString& url);
@@ -557,29 +473,7 @@ private slots:
     bool askToWearAvatarAttachmentUrl(const QString& url);
     void displayAvatarAttachmentWarning(const QString& message) const;
 
-    bool askToReplaceDomainContent(const QString& url);
-
-    void setSessionUUID(const QUuid& sessionUUID) const;
-
-    void domainURLChanged(QUrl domainURL);
-    void updateWindowTitle() const;
-    void nodeAdded(SharedNodePointer node);
-    void nodeActivated(SharedNodePointer node);
-    void nodeKilled(SharedNodePointer node);
-    static void packetSent(quint64 length);
-    static void addingEntityWithCertificate(const QString& certificateID, const QString& placeName);
-    void updateDisplayMode();
-    void setDisplayPlugin(DisplayPluginPointer newPlugin);
-    void domainConnectionRefused(const QString& reasonMessage, int reason, const QString& extraInfo);
-
-    void addAssetToWorldCheckModelSize();
-
-    void onAssetToWorldMessageBoxClosed();
-    void addAssetToWorldInfoTimeout();
-    void addAssetToWorldErrorTimeout();
-
-    void handleSandboxStatus(QNetworkReply* reply);
-    void switchDisplayMode();
+    void updateDisplayMode() { _display.updateDisplayMode(); }   // the Output menu's items and the graphics engine reach it by name
 
     void setShowBulletWireframe(bool value);
     void setShowBulletAABBs(bool value);
@@ -587,20 +481,25 @@ private slots:
     void setShowBulletConstraints(bool value);
     void setShowBulletConstraintLimits(bool value);
 
-    void onDismissedLoginDialog();
-
     void setShowTrackedObjects(bool value);
 
 private:
     void init();
-    void pauseUntilLoginDetermined();
-    void resumeAfterLoginDialogActionTaken();
-    bool handleKeyEventForFocusedEntity(QEvent* event);
+    // the constructor's stages, in order (ApplicationStartup.cpp); each groups the start-up profile's rows
+    void setupProcess();
+    void startServices();
+    void connectServices();
+    void openWindow();
+    void setupInterface();
+    void startEntityProcessing();
+    void setupInput();
+    void setupSettings();
+    void installOperators();
+    void finishStartup();
     bool handleFileOpenEvent(QFileOpenEvent* event);
     void cleanupBeforeQuit();
 
     void idle();
-    void tryToEnablePhysics();
     void update(float deltaTime);
 
     // Various helper functions called during update()
@@ -608,33 +507,21 @@ private:
     void updateThreads(float deltaTime);
     void updateDialogs(float deltaTime) const;
 
-    void queryOctree(NodeType_t serverType, PacketType packetType, QJsonObject jsonParameters);
-    void queryAvatars();
-
-    int sendNackPackets();
-
     std::shared_ptr<MyAvatar> getMyAvatar() const;
 
     void checkSkeleton() const;
 
-    void initializeAcceptedFiles();
 
     bool importJSONFromURL(const QString& urlString);
     bool importSVOFromURL(const QString& urlString);
     bool importFromZIP(const QString& filePath);
     bool importImage(const QString& urlString);
 
-    int processOctreeStats(ReceivedMessage& message, SharedNodePointer sendingNode);
-    void trackIncomingOctreePacket(ReceivedMessage& message, SharedNodePointer sendingNode, bool wasStatsPacket);
-
-    void resizeEvent(QResizeEvent* size);
-
     void keyPressEvent(QKeyEvent* event);
     void keyReleaseEvent(QKeyEvent* event);
 
     void focusOutEvent(QFocusEvent* event);
     void synthesizeKeyReleasEvents();
-    void focusInEvent(QFocusEvent* event);
 
     void mouseMoveEvent(QMouseEvent* event);
     void mousePressEvent(QMouseEvent* event);
@@ -656,6 +543,7 @@ private:
     void userKickConfirmation(const QUuid& nodeID);
 
     MainWindow* _window;
+    Display _display;   // the display plug-ins, the window's geometry and title, the headset (Display.h); before the essentials stage, which may ask it for the active plug-in
     QElapsedTimer& _sessionRunTimer;
 
     bool _aboutToQuit{ false };
@@ -666,40 +554,19 @@ private:
 
     bool _previousSessionCrashed;
 
-    DisplayPluginPointer _displayPlugin;
-    QMetaObject::Connection _displayPluginPresentConnection;
-    mutable std::mutex _displayPluginLock;
-    InputPluginList _activeInputPlugins;
-
-    bool _activatingDisplayPlugin{ false };
-
     // Frame Rate Measurement
     RateCounter<500> _gameLoopCounter;
 
-    QTimer _minimizedWindowTimer;
-    QElapsedTimer _timerStart;
     QElapsedTimer _lastTimeUpdated;
-
-    int _minimumGPUTextureMemSizeStabilityCount{ 30 };
 
     ShapeManager _shapeManager;
     PhysicalEntitySimulationPointer _entitySimulation;
     PhysicsEnginePointer _physicsEngine;
 
-    EntityTreePointer _entityClipboard;
+    EntityClipboard _entityClipboard;   // the entities' clipboard (EntityClipboard.h)
 
-    mutable QMutex _viewMutex{ QMutex::Recursive };
-    ViewFrustum _viewFrustum;  // current state of view frustum, perspective, orientation, etc.
-    ViewFrustum _displayViewFrustum;
-
-    ConicalViewFrustums _conicalViews;
-    ConicalViewFrustums _lastQueriedViews;  // last views used to query servers
-
-    using SteadyClock = std::chrono::steady_clock;
-    using TimePoint = SteadyClock::time_point;
-    TimePoint _queryExpiry;
-
-    OctreeQuery _octreeQuery{ true };  // NodeData derived class for querying octee cells from octree servers
+    ViewState _viewState;   // the camera, the view frustums and the conical views (ViewState.h)
+    DomainSession _domainSession;   // the session with a domain (DomainSession.h)
 
     std::shared_ptr<controller::StateController>
         _applicationStateDevice;  // Default ApplicationDevice reflecting the state of different properties of the session
@@ -707,10 +574,6 @@ private:
         _keyboardMouseDevice;  // Default input device, the good old keyboard mouse and maybe touchpad
     std::shared_ptr<TouchscreenDevice> _touchscreenDevice;  // the good old touchscreen
     std::shared_ptr<TouchscreenVirtualPadDevice> _touchscreenVirtualPadDevice;
-    SimpleMovingAverage _avatarSimsPerSecond{ 10 };
-    int _avatarSimsPerSecondReport{ 0 };
-    quint64 _lastAvatarSimsPerSecondUpdate{ 0 };
-    FancyCamera _myCamera;  // My view onto the world
 
     Setting::Handle<QString> _previousScriptLocation;
     Setting::Handle<float> _fieldOfView;
@@ -726,29 +589,19 @@ private:
     Setting::Handle<bool> _constrainToolbarPosition;
     Setting::Handle<bool> _awayStateWhenFocusLostInVREnabled;
     Setting::Handle<QString> _preferredCursor;
-    Setting::Handle<bool> _miniTabletEnabledSetting;
     Setting::Handle<bool> _keepLogWindowOnTop{ "keepLogWindowOnTop", false };
     // TIVOLI SPECIFIC
     Setting::Handle<bool> _loadCompleteEntityTreeSetting; 
     Setting::Handle<bool> _bypassPrioritySortingSetting;
     Setting::Handle<bool> _bypassScriptThrottling;
 
-    float _scaleMirror;
-    float _mirrorYawOffset;
-    float _raiseMirror;
-
     QHash<int, QKeyEvent> _keysPressed;
 
     bool _enableProcessOctreeThread;
-    bool _interstitialMode{ false };
-
-    OctreePacketProcessor _octreeProcessor;
     EntityEditPacketSender _entityEditSender;
 
     StDev _idleLoopStdev;
-    float _idleLoopMeasuredJitter;
 
-    NodeToOctreeSceneStats _octreeServerSceneStats;
     ControllerScriptingInterface* _controllerScriptingInterface{ nullptr };
     QPointer<LogDialog> _logDialog;
     QPointer<EntityScriptServerLogDialog> _entityScriptServerLogDialog;
@@ -756,10 +609,7 @@ private:
 
     TouchEvent _lastTouchEvent;
 
-    quint64 _lastNackTime;
     quint64 _lastSendDownstreamAudioStats;
-
-    bool _notifiedPacketVersionMismatchThisDomain;
 
     ConditionalGuard _settingsGuard;
 
@@ -768,22 +618,7 @@ private:
     typedef bool (Application::*AcceptURLMethod)(const QString&);
     static const std::vector<std::pair<QString, Application::AcceptURLMethod>> _acceptedExtensions;
 
-    glm::uvec2 _renderResolution;
-
-    int _maxOctreePPS = DEFAULT_MAX_OCTREE_PPS;
-    bool _interstitialModeEnabled{ false };
-
-    bool _loginDialogPoppedUp{ false };
-    std::atomic<bool> _signInPending{ true };
-    bool _desktopRootItemCreated{ false };
-
-    bool _developerMenuVisible{ false };
-    QString _previousAvatarSkeletonModel;
-    float _previousAvatarTargetScale;
-    CameraMode _previousCameraMode;
-    QUuid _loginDialogID;
-    QUuid _avatarInputsBarID;
-    LoginStateManager _loginStateManager;
+    SignInGate _signInGate;   // the sign-in screen and the pause and resume around it (SignInGate.h)
     PerformanceManager _performanceManager;
     RefreshRateManager _refreshRateManager;
 
@@ -798,89 +633,54 @@ private:
 
     DialogsManagerScriptingInterface* _dialogsManagerScriptingInterface = new DialogsManagerScriptingInterface();
 
-    ThreadSafeValueCache<EntityItemID> _keyboardFocusedEntity;
-    quint64 _lastAcceptedKeyPress = 0;
-    bool _isForeground = true;  // starts out assumed to be in foreground
+    KeyboardFocus _keyboardFocus;
     bool _isGLInitialized{ false };
-    bool _physicsEnabled{ false };
-    std::atomic<bool> _arrivalWaitsForNearby { false };
-    bool _failedToConnectToEntityServer{ false };
+
+    // Whole-world loading, per arrival (reset with the physics-ready information). The choice is the domain's
+    // ("loading.whole_world" and "loading.time_limit" in its settings, sent to the client when it connects).
+    struct WorldLoading {
+        bool settingsKnown { false };   // the domain's settings have arrived, or we stopped waiting for them
+        bool active { false };          // the loading screen is up and the entity query asks for the whole world
+        bool skipRequested { false };   // "Show me now"
+        quint64 waitStart { 0 };        // since when we are connected and waiting for the domain's settings
+        quint64 started { 0 };
+        quint64 deadline { 0 };
+        int timeLimit { 0 };            // seconds
+        float radius { 0.0f };          // metres round the avatar whose models are waited for; 0 for all
+        quint64 lastQuery { 0 };
+    } _worldLoading;
 
     bool _reticleClickPressed{ false };
-    bool _keyboardFocusWaitingOnRenderable{ false };
 
     int _avatarAttachmentRequest = 0;
 
     bool _settingsLoaded{ false };
 
-    bool _fakedMouseEvent{ false };
-
-    bool _isMissingSequenceNumbers{ false };
-
-    void checkChangeCursor();
-    mutable QMutex _changeCursorLock{ QMutex::Recursive };
-    Qt::CursorShape _desiredCursor{ Qt::BlankCursor };
-    bool _cursorNeedsChanging{ false };
+    WindowCursor _windowCursor;
 
     std::map<void*, std::function<void()>> _postUpdateLambdas;
     std::mutex _postUpdateLambdasLock;
 
-    std::atomic<uint32_t> _fullSceneReceivedCounter{ 0 };  // how many times have we received a full-scene octree stats packet
-    uint32_t _fullSceneCounterAtLastPhysicsCheck{ 0 };     // _fullSceneReceivedCounter last time we checked physics ready
-
-    qint64 _gpuTextureMemSizeStabilityCount{ 0 };
-    qint64 _gpuTextureMemSizeAtLastCheck{ 0 };
-
     bool _keyboardDeviceHasFocus{ true };
 
-    ConnectionMonitor _connectionMonitor;
-
-    QTimer _addAssetToWorldResizeTimer;
-    QHash<QUuid, int> _addAssetToWorldResizeList;
-
-    void addAssetToWorldInfo(QString modelName, QString infoText);
-    void addAssetToWorldInfoClear(QString modelName);
-    void addAssetToWorldInfoDone(QString modelName);
-    void addAssetToWorldError(QString modelName, QString errorText);
-
-    QQuickItem* _addAssetToWorldMessageBox{ nullptr };
-    QStringList _addAssetToWorldInfoKeys;      // Model name
-    QStringList _addAssetToWorldInfoMessages;  // Info message
-    QTimer _addAssetToWorldInfoTimer;
-    QTimer _addAssetToWorldErrorTimer;
-    mutable QTimer _entityServerConnectionTimer;
+    AssetImport _assetImport;   // a file from a URL or a drop becomes an asset and an entity (AssetImport.h)
 
     FileScriptingInterface* _fileDownload;
-    AudioInjectorPointer _snapshotSoundInjector;
     SharedSoundPointer _snapshotSound;
     SharedSoundPointer _sampleSound;
-    std::mutex _snapshotMutex;
-    std::queue<SnapshotOperator> _snapshotOperators;
-    bool _hasPrimarySnapshot{ false };
-
-    DisplayPluginPointer _autoSwitchDisplayModeSupportedHMDPlugin{ nullptr };
-    QString _autoSwitchDisplayModeSupportedHMDPluginName;
-    bool _previousHMDWornStatus;
-    void startHMDStandBySession();
-    void endHMDSession();
-
-    glm::vec3 _thirdPersonHMDCameraBoom{ 0.0f, 0.0f, -1.0f };
-    bool _thirdPersonHMDCameraBoomValid{ true };
+    SnapshotRequests _snapshotRequests;
 
     QUrl _avatarOverrideUrl;
     bool _saveAvatarOverrideUrl{ false };
 
     std::atomic<bool> _pendingIdleEvent{ true };
-
-    bool quitWhenFinished{ false };
+    // the slot (the paced refresh interval) of the latest present, from the present thread (onPresent), and the
+    // one the last update was for: the simulation advances by the intervals between them (update)
+    std::atomic<uint64_t> _presentSlot{ 0 };
+    uint64_t _lastUpdateSlot{ 0 };
 
     bool _showTrackedObjects{ false };
     bool _prevShowTrackedObjects{ false };
-
-    bool _resumeAfterLoginDialogActionTaken_WasPostponed{ false };
-    bool _resumeAfterLoginDialogActionTaken_SafeToRun{ false };
-    bool _startUpFinished{ false };
-    bool _overrideEntry{ false };
 
     VisionSqueeze _visionSqueeze;
 

@@ -15,10 +15,6 @@ set(CUSTOM_INTERFACE_QRC_PATHS "")
 
 find_npm()
 
-if (BUILD_TOOLS AND NPM_EXECUTABLE)
-  add_custom_qrc_path(CUSTOM_INTERFACE_QRC_PATHS "${CMAKE_SOURCE_DIR}/tools/jsdoc/out/doclets.json" "auto-complete/doclets.json")
-endif ()
-
 set(RESOURCES_QRC ${CMAKE_CURRENT_BINARY_DIR}/resources.qrc)
 set(RESOURCES_RCC ${CMAKE_CURRENT_SOURCE_DIR}/compiledResources/resources.rcc)
 generate_qrc(OUTPUT ${RESOURCES_QRC} PATH ${CMAKE_CURRENT_SOURCE_DIR}/resources CUSTOM_PATHS ${CUSTOM_INTERFACE_QRC_PATHS} GLOBS *)
@@ -77,19 +73,6 @@ if (APPLE)
   list(APPEND INTERFACE_SRCS ${INTERFACE_OBJCPP_SRCS})
 endif ()
 
-# Add SpeechRecognizer if on Windows or OS X, otherwise remove
-if (WIN32)
-  # Use .cpp and .h files as is.
-elseif (APPLE)
-  get_filename_component(SPEECHRECOGNIZER_CPP "src/SpeechRecognizer.cpp" ABSOLUTE)
-  list(REMOVE_ITEM INTERFACE_SRCS ${SPEECHRECOGNIZER_CPP})
-else ()
-  get_filename_component(SPEECHRECOGNIZER_H "src/SpeechRecognizer.h" ABSOLUTE)
-  list(REMOVE_ITEM INTERFACE_SRCS ${SPEECHRECOGNIZER_H})
-  get_filename_component(SPEECHRECOGNIZER_CPP "src/SpeechRecognizer.cpp" ABSOLUTE)
-  list(REMOVE_ITEM INTERFACE_SRCS ${SPEECHRECOGNIZER_CPP})
-endif ()
-
 find_package(
   Qt5 COMPONENTS
   Gui Widgets Multimedia Network Qml Quick Script Svg
@@ -135,6 +118,35 @@ if (APPLE)
 
   # set how the icon shows up in the Info.plist file
   set(MACOSX_BUNDLE_ICON_FILE "${INTERFACE_ICON_FILENAME}")
+
+  # Only a PRODUCTION build (a download) claims the tivoli: and tivoliapp: links, so macOS never hands a link to one of
+  # the many dev and test builds on a developer's Mac (10-25: 35 were registered, and links went to stale ones).
+  # -DCLAIM_URL_SCHEMES=ON makes a dev build claim them, to test links.
+  option(CLAIM_URL_SCHEMES "the Mac bundle handles tivoli: and tivoliapp: links (on for PRODUCTION builds)" OFF)
+  if (PRODUCTION_BUILD OR CLAIM_URL_SCHEMES)
+    set(MACOSX_BUNDLE_URL_TYPES "\t<key>CFBundleURLTypes</key>
+\t<array>
+\t\t<dict>
+\t\t\t<key>CFBundleURLName</key>
+\t\t\t<string>${MACOSX_BUNDLE_BUNDLE_NAME} URL</string>
+\t\t\t<key>CFBundleURLSchemes</key>
+\t\t\t<array>
+\t\t\t\t<string>tivoli</string>
+\t\t\t</array>
+\t\t</dict>
+\t\t<dict>
+\t\t\t<key>CFBundleURLName</key>
+\t\t\t<string>${MACOSX_BUNDLE_BUNDLE_NAME} APP URL</string>
+\t\t\t<key>CFBundleURLSchemes</key>
+\t\t\t<array>
+\t\t\t\t<string>tivoliapp</string>
+\t\t\t</array>
+\t\t</dict>
+\t</array>
+")
+  else ()
+    set(MACOSX_BUNDLE_URL_TYPES "")
+  endif ()
 
   # set where in the bundle to put the resources file
   set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/icon/${INTERFACE_ICON_FILENAME} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
@@ -193,8 +205,7 @@ endif ()
 
 
 if (BUILD_TOOLS AND NPM_EXECUTABLE)
-  # require JSDoc and Tivoli scripts to be build before interface is deployed
-  add_dependencies(resources jsdoc)
+  # require the Tivoli scripts to be built before interface is deployed
   add_dependencies(resources tivoli-scripts)
 endif()
 
@@ -203,11 +214,6 @@ add_dependencies(${TARGET_NAME} resources)
 if (WIN32)
   # These are external plugins, but we need to do the 'add dependency' here so that their
   # binary directories get added to the fixup path
-
-  if (USE_SIXENSE)
-    add_dependency_external_projects(sixense)
-  endif ()
-
   add_dependency_external_projects(wasapi)
 endif()
 
@@ -224,8 +230,8 @@ link_hifi_libraries(
   pointers recording hfm fbx networking material-networking
   model-networking model-baker entities avatars
   audio audio-client animation script-engine wasm-scripting physics vehicles
-  render-utils entities-renderer avatars-renderer ui qml auto-updater midi terrain
-  controllers plugins image platform auto-rigging unity-import
+  render-utils entities-renderer avatars-renderer ui qml terrain
+  controllers plugins image platform auto-rigging unity-import chat
   ui-plugins display-plugins input-plugins
   # Platform specific GL libraries
   ${PLATFORM_GL_BACKEND}
@@ -241,8 +247,6 @@ target_include_directories(${TARGET_NAME} PRIVATE "${CMAKE_BINARY_DIR}/libraries
 target_openssl()
 
 target_opengl()
-add_crashpad()
-target_breakpad()
 target_json()
 target_gifh()
 
@@ -331,20 +335,19 @@ if (APPLE)
   set(RESOURCES_DEV_DIR "$<TARGET_FILE_DIR:${TARGET_NAME}>/../Resources")
 
   add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-    # copy script files beside the executable
+    # copy script files beside the executable, into an emptied folder: a script deleted from the repo must not live
+    # on in a build (the old Create app's did, 10-24, and ran beside the bar's Build button)
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory
+      "${RESOURCES_DEV_DIR}/scripts"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
       "${CMAKE_SOURCE_DIR}/scripts"
       "${RESOURCES_DEV_DIR}/scripts"
+    # the developer test scripts are for the repo, not for players
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory
+      "${RESOURCES_DEV_DIR}/scripts/developer/tests"
 
     # # copy JSDoc files beside the executable
     # COMMAND "${CMAKE_COMMAND}" -E copy_directory
-    #   "${CMAKE_SOURCE_DIR}/tools/jsdoc/out"
-    #   "${RESOURCES_DEV_DIR}/jsdoc"
-    # copy JSDoc files beside the executable
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-      "${CMAKE_SOURCE_DIR}/tools/jsdoc/out/doclets.json"
-      "${RESOURCES_DEV_DIR}/jsdoc/doclets.json"
-
     # copy Tivoli scripts into scripts folder
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
       "${CMAKE_SOURCE_DIR}/tivoli-scripts/dist"
@@ -392,9 +395,15 @@ else()
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
       "${PROJECT_SOURCE_DIR}/resources/fonts"
       "${RESOURCES_DEV_DIR}/fonts"
+    # into an emptied folder, as on macOS: a script deleted from the repo must not live on in a build
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory
+      "${INTERFACE_EXEC_DIR}/scripts"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
       "${CMAKE_SOURCE_DIR}/scripts"
       "${INTERFACE_EXEC_DIR}/scripts"
+    # the developer test scripts are for the repo, not for players
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory
+      "${INTERFACE_EXEC_DIR}/scripts/developer/tests"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
       "${PROJECT_SOURCE_DIR}/resources/serverless/tutorial.json"
       "${RESOURCES_DEV_DIR}/serverless/tutorial.json"
@@ -404,12 +413,6 @@ else()
 
     # copy JSDoc files beside the executable
     # COMMAND "${CMAKE_COMMAND}" -E copy_directory
-    #   "${CMAKE_SOURCE_DIR}/tools/jsdoc/out"
-    #   "${INTERFACE_EXEC_DIR}/jsdoc"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-      "${CMAKE_SOURCE_DIR}/tools/jsdoc/out/doclets.json"
-      "${INTERFACE_EXEC_DIR}/jsdoc/doclets.json"
-
     # copy Tivoli scripts into scripts folder
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
       "${CMAKE_SOURCE_DIR}/tivoli-scripts/dist"
@@ -464,19 +467,6 @@ if (SCRIPTS_INSTALL_DIR)
   )
 endif()
 
-if (DOWNLOAD_SERVERLESS_CONTENT)
-  add_dependency_external_projects(serverless-content)
-
-  ExternalProject_Get_Property(serverless-content SOURCE_DIR)
-
-  # for dev builds, copy the serverless content to the resources folder
-  add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E copy_directory
-      "${SOURCE_DIR}"
-      "${RESOURCES_DEV_DIR}/serverless"
-  )
-endif ()
-
 if (WIN32)
     set(EXTRA_DEPLOY_OPTIONS "--qmldir  \"${PROJECT_SOURCE_DIR}/resources/qml\"")
 
@@ -486,6 +476,7 @@ if (WIN32)
 
     package_libraries_for_deployment()
 endif()
+
 
 # tell CMake to exclude ui_console.h for policy CMP0071
 set_property(SOURCE ui_console.h PROPERTY SKIP_AUTOMOC ON)

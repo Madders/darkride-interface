@@ -117,10 +117,12 @@ void HttpRequestObject::onFinished() {
             _response = QString::fromUtf8(_rawResponse);
         }
     }
-    // the reply is read; the state change runs the script's handler, which may start another request
+    // the reply is read; the state change runs the script's handler, which may start another request. What was
+    // sent is not needed any more: a request the script keeps would otherwise keep its body
     QNetworkReply* reply = _reply;
     _reply = nullptr;
     reply->deleteLater();
+    _sendData.clear();
     setReadyState(DONE);
     emit requestComplete();
 }
@@ -173,7 +175,7 @@ void HttpRequestObject::setReadyState(ReadyState state) {
 
 // --- the factory ---------------------------------------------------------------------------------------------------
 
-QObject* HttpRequestFactory::createRequest() {
+HttpRequestObject* HttpRequestFactory::createRequest() {
     return new HttpRequestObject(this);
 }
 

@@ -167,6 +167,14 @@ QDockWidget#EditorHierarchy::title, QDockWidget#EditorInspector::title {
 #EditorInspector QSlider::handle:horizontal:disabled {
     background: #555555;
 }
+/* an entity whose model, image or texture failed to load: its name red, the reasons under it (setLoadProblem) */
+#EditorInspector QLabel#EditorInspectorTitle[loadFailed="true"] {
+    color: #ff6b6b;
+}
+#EditorInspector QLabel#EditorInspectorLoadProblem {
+    color: #ff6b6b;
+    padding: 2px 2px 4px 2px;
+}
 #EditorInspector QLabel#EditorInspectorNote {
     color: #8f8f8f;
 }
@@ -302,6 +310,23 @@ QToolBar#EditorToolBar QToolButton#EditorWorldEdit:checked:hover {
 }
 #EditorHierarchy QTreeView[readOnly="true"] {
     color: #8a8a8a;
+}
+#EditorHierarchy QLabel#EditorHierarchyCounts {
+    color: #9a9a9a;
+    padding: 2px 4px;
+}
+#EditorHierarchy QToolButton#EditorHierarchyRefresh {
+    color: #d0d0d0;
+    background: #454545;
+    border: 1px solid #2a2a2a;
+    border-radius: 3px;
+    padding: 1px 8px;
+}
+#EditorHierarchy QToolButton#EditorHierarchyRefresh:hover {
+    background: #505050;
+}
+#EditorHierarchy QToolButton#EditorHierarchyRefresh:pressed {
+    background: #2c5d87;
 }
 #EditorInspector QDoubleSpinBox:disabled, #EditorInspector QLineEdit:disabled, #EditorInspector QComboBox:disabled,
 #EditorInspector QPlainTextEdit:disabled, #EditorInspector QToolButton:disabled {
@@ -461,7 +486,7 @@ QDockWidget#EditorAssets::title {
     background: #474747;
 }
 #EditorAssets QToolButton#EditorAssetsCrumb[last="true"] {
-    color: #ffffff;
+    color: #f0f0f0;   /* the skin's text under a skin (Editor::applyStyle): it sits on the panel, not on the selection */
     font-weight: bold;
 }
 #EditorAssets QLabel#EditorAssetsCrumbSeparator {

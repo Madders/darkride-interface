@@ -27,7 +27,6 @@
 #include "LoginDialog.h"
 #include "OctreeStatsDialog.h"
 #include "PreferencesDialog.h"
-#include "UpdateDialog.h"
 
 #include "scripting/HMDScriptingInterface.h"
 
@@ -57,7 +56,7 @@ void DialogsManager::showAddressBar() {
     if (!hmd->getShouldShowTablet()) {
         hmd->openTablet();
     }
-    qApp->setKeyboardFocusEntity(hmd->getCurrentTabletScreenID());
+    qApp->getKeyboardFocus().setFocusedEntity(hmd->getCurrentTabletScreenID());
     setAddressBarVisible(true);
 }
 
@@ -70,7 +69,7 @@ void DialogsManager::hideAddressBar() {
         tablet->gotoHomeScreen();
         hmd->closeTablet();
     }
-    qApp->setKeyboardFocusEntity(UNKNOWN_ENTITY_ID);
+    qApp->getKeyboardFocus().setFocusedEntity(UNKNOWN_ENTITY_ID);
     setAddressBarVisible(false);
 }
 
@@ -119,10 +118,6 @@ void DialogsManager::showLoginDialog() {
 
 void DialogsManager::hideLoginDialog() {
     LoginDialog::hide();
-}
-
-void DialogsManager::showUpdateDialog() {
-    UpdateDialog::show();
 }
 
 void DialogsManager::octreeStatsDetails() {

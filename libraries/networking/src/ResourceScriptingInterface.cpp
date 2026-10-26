@@ -8,8 +8,26 @@
 
 #include "ResourceScriptingInterface.h"
 
+#include "ResourceCache.h"
 #include "ResourceManager.h"
 
 void ResourceScriptingInterface::overrideUrlPrefix(const QString& prefix, const QString& replacement) {
     DependencyManager::get<ResourceManager>()->setUrlPrefixOverride(prefix, replacement);
+}
+
+QVariantList ResourceScriptingInterface::getFailures() const {
+    QVariantList list;
+    for (const auto& failure : ResourceCache::failures()) {
+        QVariantMap entry;
+        entry["url"] = failure.url.toString();
+        entry["type"] = failure.type;
+        entry["reason"] = failure.reason;
+        entry["time"] = (double)failure.time;
+        list << entry;
+    }
+    return list;
+}
+
+void ResourceScriptingInterface::clearFailures() {
+    ResourceCache::clearFailures();
 }

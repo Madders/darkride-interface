@@ -1,2 +1,0 @@
-module AvatarPackager
-singleton AvatarPackagerState 1.0 AvatarPackagerState.qml

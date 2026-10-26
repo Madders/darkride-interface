@@ -1,0 +1,18 @@
+singleton Theme 1.0 Theme.qml
+Page 1.0 Page.qml
+Section 1.0 Section.qml
+ListRow 1.0 ListRow.qml
+Segmented 1.0 Segmented.qml
+Toggle 1.0 Toggle.qml
+ValueSlider 1.0 ValueSlider.qml
+Field 1.0 Field.qml
+ResetButton 1.0 ResetButton.qml
+Tab 1.0 Tab.qml
+PickerRow 1.0 PickerRow.qml
+NearbyPeople 1.0 NearbyPeople.qml
+PersonRow 1.0 PersonRow.qml
+RoundedImage 1.0 RoundedImage.qml
+SearchBar 1.0 SearchBar.qml
+CollectionView 1.0 CollectionView.qml
+CollectionTile 1.0 CollectionTile.qml
+SkinFrame 1.0 SkinFrame.qml

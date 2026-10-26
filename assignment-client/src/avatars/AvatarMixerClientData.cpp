@@ -73,19 +73,12 @@ int AvatarMixerClientData::processPackets(const WorkerSharedData& workerSharedDa
             case PacketType::BulkAvatarTraitsAck:
                 processBulkAvatarTraitsAckMessage(*packet);
                 break;
-            case PacketType::ChallengeOwnership:
-                _avatar->processChallengeResponse(*packet);
-                break;
             default:
                 Q_UNREACHABLE();
         }
         _packetQueue.pop();
     }
     assert(_packetQueue.empty());
-
-    if (_avatar) {
-        _avatar->processCertifyEvents();
-    }
 
     return packetsProcessed;
 }

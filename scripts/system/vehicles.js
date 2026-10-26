@@ -16,11 +16,19 @@
 //  the elevator, Space and C run the vertical thruster up and down, B drops ballast, V vents gas, F leaves the helm.
 //  The camera is your own.
 //
+//  An aircraft (vehicle.type "aircraft", PHYSICS.md round 8) is taken the same way, and flown through the flight
+//  assistant (libraries/flightAssist.js) the way San Andreas' planes fly: W/S faster and slower (the speed stays where
+//  you leave it; X stops, into a hover), A/D bank in flight and turn in a hover, Up/Down (or Space/C) climb and
+//  descend; let go and it levels and holds its height. A tilt-rotor hovers when slow and flies on its wing when fast,
+//  by itself. A chase camera follows, and a line at the top left shows the speed and height. F leaves the stick.
+//
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 
 (function() {
+    Script.include("/~/system/libraries/flightAssist.js");
+
     var SIT_ANIMATION_URL = "https://s3-us-west-1.amazonaws.com/hifi-content/clement/production/animations/sitting_idle.fbx";
     var SIT_ANIMATION_FPS = 30;
     var SIT_ANIMATION_FIRST_FRAME = 1;
@@ -29,16 +37,26 @@
     var CAMERA_BACK = 7.0;       // m behind the vehicle
     var CAMERA_UP = 2.5;         // m above it
     var CAMERA_RATE = 6.0;       // per second: how fast the camera settles behind the vehicle
+    var CAMERA_BACK_MIN = 3.2;   // m: a small vehicle's camera (a go-kart's) comes this close, and no closer
+    var CAMERA_UP_MIN = 1.5;     // m
+    var CAMERA_RATE_MAX = 9.0;   // per second: and settles this quickly
     var REVERSE_SPEED = 0.5;     // m/s: pressing against the direction of travel brakes above this speed
     var STAND_KEY = "f";
     var DRIVE_KEYS = [DriveKeys.TRANSLATE_X, DriveKeys.TRANSLATE_Y, DriveKeys.TRANSLATE_Z, DriveKeys.YAW, DriveKeys.STEP_YAW,
                       DriveKeys.STEP_TRANSLATE_X, DriveKeys.STEP_TRANSLATE_Y, DriveKeys.STEP_TRANSLATE_Z];
 
+    var AIR_CAMERA_BACK = 14.0;  // m behind an aircraft
+    var AIR_CAMERA_UP = 4.0;     // m above it
+    var AIR_CAMERA_RATE = 4.0;   // per second
+    var GROUND_RAY_EVERY = 3;    // frames between the aircraft's ground rays
     var THROTTLE_RATE = 0.5;     // per second: how fast W/S move an airship's throttle setting
+    var CAMERA_EASE_OUT = 0.12;  // s: the chase camera goes back out from a wall eased, as the third-person camera does
 
     var seated = null;           // { vehicleID, seat, driver, airship }
     var previousCameraMode = null;
     var cameraPosition = null;
+    var boomLength = null;       // the chase camera's distance from its pivot, as camera collision allows it
+    var boomHeldIn = false;
     var throttleSetting = 0;     // an airship's
 
     function parseList(text) {
@@ -106,13 +124,41 @@
         MyAvatar.orientation = Quat.multiply(vehicle.rotation, Quat.fromPitchYawRollDegrees(0, seat.yaw || 0, 0));
         Entities.editEntity(vehicle.id, { vehicle: { driver: MyAvatar.sessionUUID } });
         Script.update.connect(update);
-        print("vehicles.js: at the helm of " + vehicle.id + ": W/S throttle, X cut, A/D rudder, up/down elevator, Space/C up and down, B ballast, V vent, F leave");
+        if (vehicle.vehicle.type === "aircraft" && typeof FlightAssist !== "undefined") {
+            seated.aircraft = { assist: FlightAssist.create(vehicle.vehicle.mass), previous: null, frame: 0, aboveGround: 1000, readout: null };
+            previousCameraMode = Camera.mode;
+            Camera.mode = "independent";
+            cameraPosition = null;
+            boomLength = null;
+            seated.aircraft.readout = Overlays.addOverlay("text", {
+                x: 20, y: 80, width: 430, height: 58, font: { size: 16 }, text: "",
+                color: { red: 244, green: 246, blue: 248 }, backgroundColor: { red: 28, green: 33, blue: 54 }, backgroundAlpha: 0.7,
+                leftMargin: 10, topMargin: 6, visible: true
+            });
+            print("vehicles.js: at the stick of " + vehicle.id + ": W/S faster and slower, X stop, A/D bank (turn in a hover), Up/Down climb and descend, F leave");
+        } else {
+            if (vehicle.vehicle.type === "aircraft") {
+                print("vehicles.js: the flight assistant is missing; the aircraft's own controls instead");
+            }
+            print("vehicles.js: at the helm of " + vehicle.id + ": W/S throttle, X cut, A/D rudder, up/down elevator, Space/C up and down, B ballast, V vent, F leave");
+        }
     }
 
     function leaveHelm() {
         var vehicleID = seated.vehicleID;
+        if (seated.aircraft) {
+            Overlays.deleteOverlay(seated.aircraft.readout);
+            if (previousCameraMode !== null) {
+                Camera.mode = previousCameraMode;
+                previousCameraMode = null;
+            }
+        }
         seated = null;
-        Script.update.disconnect(update);
+        try {
+            Script.update.disconnect(update);
+        } catch (e) {
+            // never connected (the helm was not fully taken): leaving must still give the keys back
+        }
         Entities.clearVehicleControls(vehicleID);
         var properties = Entities.getEntityProperties(vehicleID, ["vehicle"]);
         if (properties && properties.vehicle && properties.vehicle.driver === MyAvatar.sessionUUID) {
@@ -147,6 +193,7 @@
         previousCameraMode = Camera.mode;
         Camera.mode = "independent";
         cameraPosition = null;
+        boomLength = null;
         Script.update.connect(update);
         print("vehicles.js: sitting in " + (seat.name || "a seat") + " of " + vehicle.id + (isDriver ? " as the driver" : " (the driver is " + vehicle.vehicle.driver + ")"));
     }
@@ -195,13 +242,74 @@
         print("vehicles.js: standing up from " + vehicleID);
     }
 
+    // metres from the aircraft's belly to whatever is below it (not itself or its parts)
+    function groundBelow(properties) {
+        var ignore = [seated.vehicleID].concat(Entities.getChildrenIDs(seated.vehicleID));
+        var hit = Entities.findRayIntersection({ origin: properties.position, direction: { x: 0, y: -1, z: 0 } }, true, [], ignore);
+        var halfHeight = properties.dimensions ? 0.5 * properties.dimensions.y : 0;
+        return hit && hit.intersects ? Math.max(0, hit.distance - halfHeight) : 1000;
+    }
+
+    // camera collision for the chase camera (Camera.collideBoom, the third-person camera's test): the camera stops short
+    // of a wall between it and the pivot, seeing through the vehicle and its parts; in at once, back out eased. The
+    // smoothed cameraPosition stays where the camera wants to be, so the wall never feeds back into the chase.
+    function keptOutOfWalls(pivot, position, dt) {
+        var boom = Vec3.subtract(position, pivot);
+        var length = Vec3.length(boom);
+        if (typeof Camera.collideBoom !== "function" || length < 0.001) {
+            return position;
+        }
+        var allowed = Camera.collideBoom(pivot, position, [seated.vehicleID]);
+        if (boomLength === null || allowed <= boomLength || !boomHeldIn) {
+            boomLength = allowed;
+        } else {
+            boomLength += (allowed - boomLength) * (1 - Math.exp(-dt / CAMERA_EASE_OUT));
+        }
+        boomLength = Math.min(boomLength, length);
+        boomHeldIn = boomLength < length - 0.01;
+        return Vec3.sum(pivot, Vec3.multiply(boomLength / length, boom));
+    }
+
+    function flyAircraft(properties, dt) {
+        var a = seated.aircraft;
+        var k = Controller.Hardware.Keyboard;
+        var held = function (key) { return Controller.getValue(key) > 0.5 ? 1 : 0; };
+        var keys = {
+            faster: held(k.W), slower: held(k.S), stop: held(k.X),
+            left: held(k.A) || held(k.Left), right: held(k.D) || held(k.Right),
+            up: held(k.Up) || held(k.Space), down: held(k.Down) || held(k.C)
+        };
+        if (a.frame++ % GROUND_RAY_EVERY === 0) {
+            a.aboveGround = groundBelow(properties);
+        }
+        var live = (Entities.getVehicleStats() || {}).live;
+        if (live && !live.aircraft) {
+            live = null;
+        }
+        var s = FlightAssist.state(properties, live, a.aboveGround, a.previous, dt);
+        a.previous = s;
+        Entities.setVehicleControls(seated.vehicleID, a.assist.controls(keys, s, dt));
+        Overlays.editOverlay(a.readout, {
+            text: (a.assist.mode === "hover" ? "HOVER" : "FLIGHT") + "   speed " + s.airspeed.toFixed(0) + " m/s  (wanted " +
+                a.assist.speedTarget.toFixed(0) + ")   height " + Math.max(0, s.aboveGround).toFixed(0) + " m\n" +
+                "W/S speed  A/D " + (a.assist.mode === "hover" ? "turn" : "bank") + "  Up/Down climb  X stop  F leave"
+        });
+        // the chase camera: behind along the heading (not the bank, so a turn does not roll the view), settling at a rate
+        var front = Quat.getFront(properties.rotation);
+        var flat = Vec3.normalize({ x: front.x, y: 0, z: front.z });
+        var wanted = Vec3.sum(properties.position, Vec3.sum(Vec3.multiply(-AIR_CAMERA_BACK, flat), { x: 0, y: AIR_CAMERA_UP, z: 0 }));
+        cameraPosition = cameraPosition ? Vec3.mix(cameraPosition, wanted, 1 - Math.exp(-dt * AIR_CAMERA_RATE)) : wanted;
+        Camera.position = keptOutOfWalls(Vec3.sum(properties.position, { x: 0, y: 1, z: 0 }), cameraPosition, dt);
+        Camera.orientation = Quat.lookAtSimple(cameraPosition, Vec3.sum(properties.position, Vec3.multiply(6, flat)));
+    }
+
     var HELM_REACH = 20;  // m from the vehicle's centre: farther, the helm is left
 
     function update(dt) {
         if (!seated) {
             return;
         }
-        var properties = Entities.getEntityProperties(seated.vehicleID, ["id", "position", "rotation", "velocity", "vehicle"]);
+        var properties = Entities.getEntityProperties(seated.vehicleID, ["id", "position", "rotation", "velocity", "vehicle", "dimensions"]);
         if (!properties || properties.id !== seated.vehicleID) {
             stand();   // the vehicle is gone (a deleted entity's properties come back as defaults, a null id among them)
             return;
@@ -211,6 +319,10 @@
             return;
         }
         var front = Quat.getFront(properties.rotation);
+        if (seated.aircraft) {
+            flyAircraft(properties, dt);
+            return;
+        }
         if (seated.airship) {
             var k = Controller.Hardware.Keyboard;
             throttleSetting += dt * THROTTLE_RATE * (Controller.getValue(k.W) - Controller.getValue(k.S));
@@ -241,15 +353,21 @@
             }
             Entities.setVehicleControls(seated.vehicleID, { throttle: forward, steering: steering, brake: brake, handBrake: handBrake });
         }
-        // the chase camera, behind and above, settling at a rate so a bump does not swing it
-        var wanted = Vec3.sum(properties.position, Vec3.sum(Vec3.multiply(-CAMERA_BACK, front), { x: 0, y: CAMERA_UP, z: 0 }));
+        // the chase camera, behind and above, settling at a rate so a bump does not swing it: by the vehicle's length,
+        // the rover's (3.6 m) at CAMERA_BACK and CAMERA_UP, a go-kart's (1.45 m) low, near and quick
+        var length = properties.dimensions.z;
+        var back = Math.max(CAMERA_BACK_MIN, Math.min(CAMERA_BACK, 2.0 * length));
+        var up = Math.max(CAMERA_UP_MIN, Math.min(CAMERA_UP, 0.7 * length));
+        var rate = Math.max(CAMERA_RATE, Math.min(CAMERA_RATE_MAX, CAMERA_RATE * 3.6 / length));
+        var wanted = Vec3.sum(properties.position, Vec3.sum(Vec3.multiply(-back, front), { x: 0, y: up, z: 0 }));
         if (!cameraPosition) {
             cameraPosition = wanted;
         } else {
-            cameraPosition = Vec3.mix(cameraPosition, wanted, 1 - Math.exp(-dt * CAMERA_RATE));
+            cameraPosition = Vec3.mix(cameraPosition, wanted, 1 - Math.exp(-dt * rate));
         }
-        Camera.position = cameraPosition;
-        Camera.orientation = Quat.lookAtSimple(cameraPosition, Vec3.sum(properties.position, { x: 0, y: 1, z: 0 }));
+        var pivot = Vec3.sum(properties.position, { x: 0, y: 1, z: 0 });
+        Camera.position = keptOutOfWalls(pivot, cameraPosition, dt);
+        Camera.orientation = Quat.lookAtSimple(cameraPosition, pivot);
     }
 
     function onMousePress(entityID, event) {

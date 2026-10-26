@@ -63,6 +63,7 @@ public:
         IS_TRANSPARENT = 0,
         IS_SKINNED,
         IS_SKINNED_DQ,
+        IS_FORWARD,
 
         NUM_FLAGS
     };
@@ -73,11 +74,15 @@ public:
     bool isTransparent() const { return _flags[IS_TRANSPARENT]; }
     bool isSkinned() const { return _flags[IS_SKINNED]; }
     bool isSkinnedDQ() const { return _flags[IS_SKINNED_DQ]; }
+    bool isForward() const { return _flags[IS_FORWARD]; }
 
-    ProceduralProgramKey(bool transparent = false, bool isSkinned = false, bool isSkinnedDQ = false) {
+    // forward: the view lights in place (the forward path), so an opaque procedural draws the variant that lights itself;
+    // a transparent one lights itself in either path
+    ProceduralProgramKey(bool transparent = false, bool isSkinned = false, bool isSkinnedDQ = false, bool forward = false) {
         _flags.set(IS_TRANSPARENT, transparent);
         _flags.set(IS_SKINNED, isSkinned);
         _flags.set(IS_SKINNED_DQ, isSkinnedDQ);
+        _flags.set(IS_FORWARD, forward && !transparent);
     }
 };
 namespace std {
@@ -126,6 +131,7 @@ public:
     gpu::Shader::Source _vertexSourceSkinned;
     gpu::Shader::Source _vertexSourceSkinnedDQ;
     gpu::Shader::Source _opaqueFragmentSource;
+    gpu::Shader::Source _opaqueForwardFragmentSource;   // lit in place, for the forward path (empty: the opaque one)
     gpu::Shader::Source _transparentFragmentSource;
 
     gpu::StatePointer _opaqueState{ std::make_shared<gpu::State>() };

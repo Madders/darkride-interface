@@ -15,6 +15,7 @@
 
 #include <QtCore/QHash>
 #include <QtCore/QObject>
+#include <QtCore/QPointer>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 #include <QtCore/QVariantMap>
@@ -117,6 +118,54 @@ private:
     }
 };
 
+/// A stand-in for the engine's HTTP requests (HttpRequestObject), for the guest's XMLHttpRequest: open and send are
+/// recorded, and finish() is the reply coming.
+class FakeRequest : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(int readyState READ readyState)
+    Q_PROPERTY(int errorCode READ errorCode)
+    Q_PROPERTY(QString responseText READ responseText)
+public:
+    static int alive;
+    FakeRequest() { ++alive; }
+    ~FakeRequest() override { --alive; }
+    int readyState() const { return _state; }
+    int errorCode() const { return 0; }
+    QString responseText() const { return QStringLiteral("ok"); }
+    Q_INVOKABLE void open(const QString& method, const QString& url, bool async, const QString& user, const QString& password) {
+        Q_UNUSED(method); Q_UNUSED(url); Q_UNUSED(async); Q_UNUSED(user); Q_UNUSED(password);
+        _state = 1;
+        emit readyStateChanged();
+    }
+    Q_INVOKABLE void send() { sent = true; }
+    Q_INVOKABLE void send(const QVariant& data) { Q_UNUSED(data); sent = true; }
+    Q_INVOKABLE void setRequestHeader(const QString& name, const QString& value) { Q_UNUSED(name); Q_UNUSED(value); }
+    Q_INVOKABLE void abort() {}
+    void finish() {
+        _state = 4;
+        emit readyStateChanged();
+    }
+    bool sent { false };
+signals:
+    void readyStateChanged();
+    void timedOut();
+private:
+    int _state { 0 };
+};
+
+/// A stand-in for the engine's Http global (HttpRequestFactory).
+class FakeHttp : public QObject {
+    Q_OBJECT
+public:
+    QList<QPointer<FakeRequest>> made;
+    Q_INVOKABLE FakeRequest* createRequest() {
+        auto request = new FakeRequest();
+        request->setParent(this);
+        made << request;
+        return request;
+    }
+};
+
 class JavaScriptGuestTests : public QObject {
     Q_OBJECT
 private slots:
@@ -128,7 +177,11 @@ private slots:
     void testManyCalls();
     void testEntityScripts();
     void testObjectsAreReleased();
+    void testRequestsAreReleased();
     void testScopedCallbacks();
+    void testRunawayLoopIsInterrupted();
+    void testRunawayEntityScriptIsNamed();
+    void testErrorsAndPrintedNamesAsOnQtScript();
 };
 
 #endif // hifi_JavaScriptGuestTests_h

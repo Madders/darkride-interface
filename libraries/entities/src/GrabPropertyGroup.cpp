@@ -16,8 +16,9 @@
 #include "EntityItemProperties.h"
 #include "EntityItemPropertiesMacros.h"
 
-void GrabPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties,
-                                          QScriptEngine* engine, bool skipDefaults,
+template <typename Value, typename Engine>
+void GrabPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties,
+                                          Engine* engine, bool skipDefaults,
                                           EntityItemProperties& defaultEntityProperties) const {
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_GRAB_GRABBABLE, Grab, grab, Grabbable, grabbable);
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_GRAB_KINEMATIC, Grab, grab, GrabKinematic, grabKinematic);
@@ -43,7 +44,8 @@ void GrabPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProp
 
 }
 
-void GrabPropertyGroup::copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) {
+template <typename Value>
+void GrabPropertyGroup::copyFromScriptValue(const Value& object, bool& _defaultSettings) {
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(grab, grabbable, bool, setGrabbable);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(grab, grabKinematic, bool, setGrabKinematic);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(grab, grabFollowsController, bool, setGrabFollowsController);
@@ -348,3 +350,5 @@ int GrabPropertyGroup::readEntitySubclassDataFromBuffer(const unsigned char* dat
 
     return bytesRead;
 }
+
+INSTANTIATE_PROPERTY_GROUP_CONVERSIONS(GrabPropertyGroup)

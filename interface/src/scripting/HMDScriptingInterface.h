@@ -58,12 +58,6 @@ class QScriptEngine;
  * @property {Uuid} tabletScreenID - The UUID of the tablet's screen entity.
  * @property {Uuid} homeButtonID - The UUID of the tablet's "home" button entity.
  * @property {Uuid} homeButtonHighlightID - The UUID of the tablet's "home" button highlight entity.
- * @property {Uuid} miniTabletID - The UUID of the mini tablet's body model entity. <code>null</code> if not in HMD mode.
- * @property {Uuid} miniTabletScreenID - The UUID of the mini tablet's screen entity. <code>null</code> if not in HMD mode.
- * @property {number} miniTabletHand - The hand that the mini tablet is displayed on: <code>0</code> for left hand, 
- *     <code>1</code> for right hand, <code>-1</code> if not in HMD mode.
- * @property {boolean} miniTabletEnabled=true - <code>true</code> if the mini tablet is enabled to be displayed, otherwise 
- *     <code>false</code>.
  * @property {Rect} playArea=0,0,0,0 - The size and position of the HMD play area in sensor coordinates. <em>Read-only.</em>
  * @property {Vec3[]} sensorPositions=[]] - The positions of the VR system sensors in sensor coordinates. <em>Read-only.</em>
  *
@@ -96,10 +90,6 @@ class HMDScriptingInterface : public AbstractHMDScriptingInterface, public Depen
     Q_PROPERTY(QUuid homeButtonID READ getCurrentHomeButtonID WRITE setCurrentHomeButtonID)
     Q_PROPERTY(QUuid tabletScreenID READ getCurrentTabletScreenID WRITE setCurrentTabletScreenID)
     Q_PROPERTY(QUuid homeButtonHighlightID READ getCurrentHomeButtonHighlightID WRITE setCurrentHomeButtonHighlightID)
-    Q_PROPERTY(QUuid miniTabletID READ getCurrentMiniTabletID WRITE setCurrentMiniTabletID)
-    Q_PROPERTY(QUuid miniTabletScreenID READ getCurrentMiniTabletScreenID WRITE setCurrentMiniTabletScreenID)
-    Q_PROPERTY(int miniTabletHand READ getCurrentMiniTabletHand WRITE setCurrentMiniTabletHand)
-    Q_PROPERTY(bool miniTabletEnabled READ getMiniTabletEnabled WRITE setMiniTabletEnabled)
     Q_PROPERTY(QVariant playArea READ getPlayAreaRect);
     Q_PROPERTY(QVector<glm::vec3> sensorPositions READ getSensorPositions);
 
@@ -419,14 +409,6 @@ signals:
     void showTabletChanged(bool showTablet);
 
     /**jsdoc
-     * Triggered when the ability to display the mini tablet has changed.
-     * @function HMD.miniTabletEnabledChanged
-     * @param {boolean} enabled - <code>true</code> if the mini tablet is enabled to be displayed, otherwise <code>false</code>.
-     * @returns {Signal}
-     */
-    bool miniTabletEnabledChanged(bool enabled);
-
-    /**jsdoc
      * Triggered when the altering the mode for going into an away state when the interface focus is lost in VR.
      * @function HMD.awayStateWhenFocusLostInVRChanged
      * @param {boolean} enabled - <code>true</code> if the setting to go into an away state in VR when the interface focus is lost is enabled, otherwise <code>false</code>.
@@ -475,18 +457,6 @@ public:
     void setCurrentTabletScreenID(QUuid tabletID) { _tabletScreenID = tabletID; }
     QUuid getCurrentTabletScreenID() const { return _tabletScreenID; }
 
-    void setCurrentMiniTabletID(QUuid miniTabletID) { _miniTabletID = miniTabletID; }
-    QUuid getCurrentMiniTabletID() const { return _miniTabletID; }
-
-    void setCurrentMiniTabletScreenID(QUuid miniTabletScreenID) { _miniTabletScreenID = miniTabletScreenID; }
-    QUuid getCurrentMiniTabletScreenID() const { return _miniTabletScreenID; }
-
-    void setCurrentMiniTabletHand(int miniTabletHand) { _miniTabletHand = miniTabletHand; }
-    int getCurrentMiniTabletHand() const { return _miniTabletHand; }
-
-    void setMiniTabletEnabled(bool enabled);
-    bool getMiniTabletEnabled();
-
     void setAwayStateWhenFocusLostInVREnabled(bool enabled);
     bool getAwayStateWhenFocusLostInVREnabled();
 
@@ -503,10 +473,6 @@ private:
     QUuid _homeButtonID;
     QUuid _tabletEntityID;
     QUuid _homeButtonHighlightID;
-    QUuid _miniTabletID;
-    QUuid _miniTabletScreenID;
-    int _miniTabletHand { -1 };
-    bool _miniTabletEnabled { true };
 
     // Get the orientation of the HMD
     glm::quat getOrientation() const;

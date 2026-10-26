@@ -10,8 +10,10 @@
 //
 #include "OffscreenUi.h"
 
+#include <QtCore/QMetaMethod>
 #include <QtCore/QVariant>
 #include <QtGui/QGuiApplication>
+#include <QtQuick/QQuickItem>
 #include <QtQuick/QQuickWindow>
 #include <QtQml/QtQml>
 
@@ -114,6 +116,37 @@ bool OffscreenUi::shouldSwallowShortcut(QEvent* event) {
         if (focusObject != getWindow() && focusObject != getRootItem()) {
             event->accept();
             return true;
+        }
+    }
+    return false;
+}
+
+// Cut, copy and paste by the overlay's focused item itself: a web page (the Avatar app, Explore's search) through its
+// WebEngineView's triggerWebAction, as its own context menu does; a text field through its cut(), copy() or paste().
+// A key press standing in for the shortcut doesn't do for a web page: the web engine read a made-up Cmd+V on macOS as
+// Option+V and typed a "√". The Edit menu calls this only when its shortcut wasn't taken by the focused item already.
+bool OffscreenUi::editFocusedItem(const char* action) {
+    QQuickWindow* window = getWindow();
+    QQuickItem* rootItem = getRootItem();
+    QQuickItem* item = window ? window->activeFocusItem() : nullptr;
+    const QByteArray slotName = QByteArray(action).toLower();
+    for (; item && item != rootItem; item = item->parentItem()) {
+        const QMetaObject* meta = item->metaObject();
+        const int actionEnum = meta->indexOfEnumerator("WebAction");
+        if (actionEnum >= 0) {
+            for (int i = 0; i < meta->methodCount(); i++) {   // the QML web views subclass WebEngineView
+                QMetaMethod method = meta->method(i);
+                if (method.name() == "triggerWebAction" && method.parameterCount() == 1) {
+                    int webAction = meta->enumerator(actionEnum).keyToValue(action);
+                    return webAction >= 0 && method.invoke(item, Qt::DirectConnection,
+                                                           QGenericArgument(method.parameterTypes().at(0).constData(), &webAction));
+                }
+            }
+            // a web view of another kind: leave it to the key press
+            return false;
+        }
+        if (meta->indexOfMethod((slotName + "()").constData()) >= 0) {
+            return QMetaObject::invokeMethod(item, slotName.constData(), Qt::DirectConnection);
         }
     }
     return false;
@@ -382,6 +415,20 @@ ModalDialogListener* OffscreenUi::asyncWarning(const QString& title, const QStri
     return DependencyManager::get<OffscreenUi>()->asyncMessageBox(OffscreenUi::Icon::ICON_WARNING, title, text, buttons, defaultButton);
 }
 
+void OffscreenUi::setButtonText(QQuickItem* dialog, QMessageBox::StandardButton button, const QString& text) {
+    if (!dialog) {
+        return;
+    }
+    // buttonTexts maps each button, by its number, to its words; the box keeps the standard words for the others
+    QVariant texts = dialog->property("buttonTexts");
+    if (texts.userType() == qMetaTypeId<QJSValue>()) {
+        texts = texts.value<QJSValue>().toVariant();
+    }
+    QVariantMap map = texts.toMap();
+    map.insert(QString::number(button), text);
+    dialog->setProperty("buttonTexts", map);
+}
+
 
 class InputDialogListener : public ModalDialogListener {
     Q_OBJECT
@@ -463,6 +510,15 @@ ModalDialogListener* OffscreenUi::getItemAsync(const Icon icon, const QString& t
 }
 
 QVariant OffscreenUi::inputDialog(const Icon icon, const QString& title, const QString& label, const QVariant& current) {
+    return inputDialog(icon, title, label, current, QVariantMap());
+}
+
+ModalDialogListener* OffscreenUi::inputDialogAsync(const Icon icon, const QString& title, const QString& label, const QVariant& current) {
+    return inputDialogAsync(icon, title, label, current, QVariantMap());
+}
+
+QVariant OffscreenUi::inputDialog(const Icon icon, const QString& title, const QString& label, const QVariant& current,
+                                  const QVariantMap& properties) {
     if (QThread::currentThread() != thread()) {
         QVariant result;
         BLOCKING_INVOKE_METHOD(this, "inputDialog",
@@ -470,14 +526,16 @@ QVariant OffscreenUi::inputDialog(const Icon icon, const QString& title, const Q
             Q_ARG(Icon, icon),
             Q_ARG(QString, title),
             Q_ARG(QString, label),
-            Q_ARG(QVariant, current));
+            Q_ARG(QVariant, current),
+            Q_ARG(QVariantMap, properties));
         return result;
     }
 
-    return waitForInputDialogResult(createInputDialog(icon, title, label, current));
+    return waitForInputDialogResult(createInputDialog(icon, title, label, current, properties));
 }
 
-ModalDialogListener* OffscreenUi::inputDialogAsync(const Icon icon, const QString& title, const QString& label, const QVariant& current) {
+ModalDialogListener* OffscreenUi::inputDialogAsync(const Icon icon, const QString& title, const QString& label,
+                                                   const QVariant& current, const QVariantMap& properties) {
     if (QThread::currentThread() != thread()) {
         ModalDialogListener* ret;
         BLOCKING_INVOKE_METHOD(this, "inputDialogAsync",
@@ -485,11 +543,12 @@ ModalDialogListener* OffscreenUi::inputDialogAsync(const Icon icon, const QStrin
             Q_ARG(Icon, icon),
             Q_ARG(QString, title),
             Q_ARG(QString, label),
-            Q_ARG(QVariant, current));
+            Q_ARG(QVariant, current),
+            Q_ARG(QVariantMap, properties));
         return ret;
     }
 
-    InputDialogListener* inputDialogListener = new InputDialogListener(createInputDialog(icon, title, label, current));
+    InputDialogListener* inputDialogListener = new InputDialogListener(createInputDialog(icon, title, label, current, properties));
     QObject* inputDialog = qobject_cast<QObject*>(inputDialogListener);
     _modalDialogListeners.push_back(inputDialog);
     return inputDialogListener;
@@ -562,9 +621,9 @@ void OffscreenUi::addMenuInitializer(std::function<void(VrMenu*)> f) {
 }
 
 QQuickItem* OffscreenUi::createInputDialog(const Icon icon, const QString& title, const QString& label,
-    const QVariant& current) {
+    const QVariant& current, const QVariantMap& properties) {
 
-    QVariantMap map;
+    QVariantMap map = properties;
     map.insert("title", title);
     map.insert("icon", icon);
     map.insert("label", label);

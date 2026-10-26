@@ -16,6 +16,7 @@
 #include <gpu/Batch.h>
 #include <gpu/Stream.h>
 
+#include <QSet>
 #include <QThreadPool>
 
 #include <Gzip.h>
@@ -295,7 +296,8 @@ void ModelResource::downloadFinished(const QByteArray& data) {
             _url = _effectiveBaseURL;
             _textureBaseURL = _effectiveBaseURL;
         }
-        QThreadPool::globalInstance()->start(new GeometryReader(_modelLoader, _self, _effectiveBaseURL, _mappingPair, data, _combineParts, _request->getWebMediaType()));
+        QThreadPool::globalInstance()->start(new GeometryReader(_modelLoader, _self, _effectiveBaseURL, _mappingPair, data, _combineParts, _request->getWebMediaType()),
+                                             getThreadPoolPriority());
     }
 }
 
@@ -348,6 +350,16 @@ void ModelResource::setGeometryDefinition(HFMModel::Pointer hfmModel, const Mate
 }
 
 void ModelResource::deleter() {
+    // The last reference can go on another thread: a GeometryReader on the thread pool holds one while it parses and
+    // bakes the model (seconds, with its automatic LODs), and when the world it loaded for is left meanwhile (a hop
+    // away, Cancel on the loading screen) the cache lets go of the rest, so the reader's was the last. The materials
+    // are the resource thread's, which may be setting them from that same reader's setGeometryDefinition right then:
+    // cleared from the pool thread, they crashed the client (Caity's Cancel 4 s into Tivoli Town, 10-22). So the
+    // whole teardown happens on the resource's thread, as Resource::allReferencesCleared already does.
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this] { deleter(); }, Qt::QueuedConnection);
+        return;
+    }
     resetTextures();
     Resource::deleter();
 }
@@ -462,6 +474,58 @@ void NetworkModel::setTextures(const QVariantMap& textureMap) {
     } else {
         qCWarning(modelnetworking) << "Ignoring setTextures(); NetworkModel not ready";
     }
+}
+
+void NetworkModel::setTextureLoadPriority(QObject* owner, float priority) const {
+    QPointer<QObject> guardedOwner(owner);
+    for (const auto& material : _materials) {
+        if (!material) {
+            continue;
+        }
+        for (const auto& entry : material->getTextures()) {
+            NetworkTexturePointer texture = entry.second.texture;
+            if (!texture || texture->isLoaded()) {
+                continue;
+            }
+            texture->setLoadPriority(guardedOwner, priority);
+            QWeakPointer<NetworkTexture> weakTexture = texture;
+            QObject::connect(texture.data(), &Resource::finished, owner, [weakTexture, guardedOwner](bool) {
+                if (auto loaded = weakTexture.lock()) {
+                    loaded->clearLoadPriority(guardedOwner);
+                }
+            });
+        }
+    }
+}
+
+QStringList NetworkModel::failedTextures() const {
+    QStringList failures;
+    QSet<QUrl> seen;   // a picture shared by several materials is said once
+    auto consider = [&](const std::shared_ptr<NetworkMaterial>& material) {
+        if (!material) {
+            return;
+        }
+        // the map itself (NetworkModel is a friend): build mode asks once a second for every model in view, and
+        // getTextures() copies it
+        for (const auto& entry : material->_textures) {
+            const auto& texture = entry.second.texture;
+            if (texture && texture->isFailed() && !seen.contains(texture->getURL())) {
+                seen.insert(texture->getURL());
+                failures << texture->getURL().fileName() + ": " + texture->getFailureReason();
+            }
+        }
+    };
+    for (auto& material : _materials) {
+        consider(material);
+    }
+    for (auto& materialMapping : _materialMapping) {
+        if (materialMapping.second) {
+            for (auto& materialPair : materialMapping.second->parsedMaterials.networkMaterials) {
+                consider(materialPair.second);
+            }
+        }
+    }
+    return failures;
 }
 
 bool NetworkModel::areTexturesLoaded() const {

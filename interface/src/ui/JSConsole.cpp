@@ -83,8 +83,11 @@ QString _jsdocTypeToString(QJsonValue jsdocType) {
 }
 
 void JSConsole::readAPI() {
+    // The API description for autocomplete is optional: a build with no auto-complete/doclets.json has none.
     QFile file(PathUtils::resourcesPath() + "auto-complete/doclets.json");
-    file.open(QFile::ReadOnly);
+    if (!file.open(QFile::ReadOnly)) {
+        return;
+    }
     auto json = QTextStream(&file).readAll().toUtf8();
     _apiDocs = QJsonDocument::fromJson(json).array();
 }

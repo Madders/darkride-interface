@@ -20,13 +20,11 @@
 #include <QtCore/QMetaEnum>
 #include <QtCore/QPointer>
 #include <QtCore/QRegularExpression>
-#include <QtCore/QSet>
 #include <QtCore/QThread>
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
 #include <QtScript/QScriptEngine>
 #include <QtScript/QScriptValue>
-#include <QtScript/QScriptValueIterator>
 
 #include <AddressManager.h>
 #include <AudioEffectOptions.h>
@@ -63,6 +61,16 @@ const QString JS_SUFFIX = QStringLiteral("js");
 const int MIN_TIMEOUT_FOR_COARSE_TIMER = 200;  // below this a Qt timer is made precise, as the QtScript engine does
 const int MAX_SCRIPT_QUITTING_TIME_MS = 500;
 const int MAX_SCRIPT_ENDING_TIME_MS = 3000;  // for the scriptEnding handlers, before the modules are interrupted
+const int DEFAULT_SCRIPT_CALL_LIMIT_MS = 5000;  // a call into a JavaScript script, of the script's own time
+
+// A call into a JavaScript script may run this long of the script's own time (what it spends in host functions,
+// a download among them, does not count): DARKRIDE_SCRIPT_CALL_LIMIT_MS, 0 for no limit; 5 s otherwise. An entity
+// script is stopped past it; a client script or an agent is warned about once and goes on.
+std::chrono::milliseconds scriptCallTimeLimit() {
+    bool ok = false;
+    const int fromEnvironment = qEnvironmentVariableIntValue("DARKRIDE_SCRIPT_CALL_LIMIT_MS", &ok);
+    return std::chrono::milliseconds(ok && fromEnvironment >= 0 ? fromEnvironment : DEFAULT_SCRIPT_CALL_LIMIT_MS);
+}
 const int SHUTDOWN_POLL_MS = 5;
 const int MAX_MODULE_ID_LENGTH = 4096;
 const int MAX_DEBUG_VALUE_LENGTH = 80;
@@ -160,8 +168,17 @@ WasmScriptEngine::WasmScriptEngine(Context context, const QString& scriptContent
         _limits.memoryBytes = int64_t(1024) * 1024 * 1024;
     }
     if (_runsJavaScript) {
-        // a JavaScript script may run as long as it did on QtScript, which had no limit; stop() still interrupts it
-        _limits.callTimeout = std::chrono::milliseconds(0);
+        // a call into a script may run this long of the script's own time. An entities engine hosts every entity
+        // script of the world on one thread, so a runaway there holds them all: it is interrupted and that entity
+        // script alone is stopped (onCallTimeLimit). A client script or an agent runs on its own, and its runaway
+        // holds only itself: the call is reported in the log once and goes on, as on QtScript (Caity's choice,
+        // 2026-10-24). stop() interrupts a call as before.
+        if (_isEntitiesEngine) {
+            _limits.callTimeout = scriptCallTimeLimit();
+        } else {
+            _limits.callTimeout = std::chrono::milliseconds(0);
+            _limits.callWarning = scriptCallTimeLimit();
+        }
     }
 }
 
@@ -272,7 +289,15 @@ std::shared_ptr<WasmModule> WasmScriptEngine::javascriptGuestModule(QString& err
         return nullptr;
     }
     auto started = usecTimestampNow();
-    std::shared_ptr<WasmModule> module = runtime()->compile(file.readAll(), error);
+    // The guest stops by itself when the host says so (QuickJS's interrupt handler asks through the "interrupted"
+    // import), so it runs without the runtime's deadline checks in its loops; a guest built before it asked keeps
+    // the checks, or nothing could stop it.
+    const QByteArray bytes = file.readAll();
+    std::shared_ptr<WasmModule> module = runtime()->compile(bytes, error, WasmRuntime::Interruption::Cooperative);
+    if (module && !module->imports().contains("darkride.interrupted")) {
+        qCWarning(scriptengine) << "The JavaScript guest" << path << "does not ask whether to stop; it runs with the runtime's checks";
+        module = runtime()->compile(bytes, error);
+    }
     if (module) {
         qCDebug(scriptengine) << "JavaScript guest" << path << "compiled in" << (usecTimestampNow() - started) / 1000 << "ms";
         cached = module;
@@ -424,14 +449,16 @@ void WasmScriptEngine::run() {
     scriptInfoMessage((_runsJavaScript ? "JavaScript on the WebAssembly script engine starting:" : "WebAssembly script engine starting:") + getFilename());
 
     if (!_isInitialized) {
-        // the QtScript engine's own initialization: it registers the standard globals (through this class's
-        // registerGlobalObject) and the QtScript conversions on the carried engine, which the serializer uses
-        init();
+        _isInitialized = true;
+        DependencyManager::get<EntityScriptingInterface>()->init();
+        registerStandardGlobals();
     }
-    adoptScriptGlobals();
-    // the network objects XMLHttpRequest and WebSocket are built on in the guest
+    // the network objects XMLHttpRequest and WebSocket are built on in the guest, and an agent's WebSocketServer
     registerGlobalObject("Http", _http);
     registerGlobalObject("Sockets", _sockets);
+    if (_context == Context::AGENT_SCRIPT) {
+        registerGlobalObject("WebSocketServers", new WebSocketServerFactory(this));
+    }
     // two globals the QtScript engine gives as a native constructor and a plain object
     registerGlobalObject("AudioEffectOptions", _audioEffectOptions);
     registerGlobalObject("Resource", _resourceStates);
@@ -455,27 +482,6 @@ void WasmScriptEngine::run() {
     emit doneRunning();
 }
 
-// A few hosts put an object on the QtScript global object directly (MyAvatar: globalObject().setProperty with
-// newQObject) rather than through registerGlobalObject. The carried engine received those; the module gets
-// them too, under the same names, so it sees the globals a JavaScript script sees.
-void WasmScriptEngine::adoptScriptGlobals() {
-    QScriptValueIterator it(globalObject());
-    int adopted = 0;
-    while (it.hasNext()) {
-        it.next();
-        QScriptValue value = it.value();
-        if (!value.isQObject()) {
-            continue;
-        }
-        QObject* object = value.toQObject();
-        if (object && _objects->global(it.name()) == ObjectTable::NULL_HANDLE) {
-            _objects->registerGlobal(it.name(), object);
-            ++adopted;
-        }
-    }
-    qCDebug(scriptengine) << "WasmScriptEngine:" << _objects->globalNames().size() << "globals for the module," << adopted << "adopted from the QtScript global object";
-}
-
 // An instance of a module in this engine: its codec (with this engine's table, the serializer and the
 // instance as the callback target), its host interface (logging into this script's log, failures stopping
 // what they must), instantiated with WASI, its C runtime initialised, its script_start called.
@@ -485,10 +491,24 @@ WasmScriptEngine::ModuleInstancePointer WasmScriptEngine::makeInstance(const QSt
     instance->name = name;
     instance->module = module;
     instance->codec = std::make_unique<ValueCodec>(_objects.get());
-    installSerializer(*instance->codec);
     instance->target = std::make_shared<InstanceCallbackTarget>(this, instance);
     instance->codec->setCallbackTarget(instance->target);
-    instance->instance = std::make_unique<WasmInstance>(module, limits);
+    WasmInstance::Limits instanceLimits = limits;
+    if (_runsJavaScript && module->interruption() == WasmRuntime::Interruption::Epoch) {
+        // an older guest, which does not ask whether to stop: its only interruption would be a trap, which breaks
+        // the guest and every script in it, so it keeps no time limit, as before (stop() still interrupts it)
+        instanceLimits.callTimeout = std::chrono::milliseconds(0);
+    }
+    instance->instance = std::make_unique<WasmInstance>(module, instanceLimits);
+    if (instanceLimits.callWarning.count() > 0) {
+        // logged at once, from inside the long call: a message queued to this thread would wait for the call to end
+        const QString scriptName = name;
+        instance->instance->setCallWarningHandler([this, scriptName](std::chrono::milliseconds elapsed) {
+            scriptWarningMessage(QString("%1: a call into the script has run %2 ms of its own time and goes on; "
+                                         "it may be stuck (a client script or an agent is not stopped)")
+                                     .arg(scriptName).arg(elapsed.count()));
+        });
+    }
     instance->host = std::make_unique<HostInterface>(*instance->instance, *_objects, *instance->codec, *_relay);
     instance->host->setLogger([this](int level, const QString& text) {
         switch (level) {
@@ -512,6 +532,9 @@ WasmScriptEngine::ModuleInstancePointer WasmScriptEngine::makeInstance(const QSt
     std::weak_ptr<ModuleInstance> weak = instance;
     instance->host->setFailureHandler([this, weak](const QString& entry, const QString& failure) {
         onModuleFailure(weak.lock(), entry, failure);
+    });
+    instance->host->setTimeLimitHandler([this, weak](const QString& entry, const QString& entity, const QString& reason) {
+        onCallTimeLimit(weak.lock(), entry, entity, reason);
     });
     instance->host->install();
     instance->instance->enableWasi();
@@ -615,6 +638,11 @@ void WasmScriptEngine::loop() {
         } else {
             QCoreApplication::processEvents();
         }
+        // What was deleted later inside that loop goes now. Qt runs a deferred delete only once a loop lower than the
+        // one it was asked for in has control, and this thread runs no other loop: a request's network reply, and an
+        // object the script let go of while a reply was being delivered, would otherwise stay for good (an agent
+        // posting what it hears grew without end, 2026-10-25).
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         if (_isFinished) {
             break;
         }
@@ -704,6 +732,59 @@ void WasmScriptEngine::onModuleFailure(const ModuleInstancePointer& instance, co
     }
 }
 
+void WasmScriptEngine::onCallTimeLimit(const ModuleInstancePointer& instance, const QString& entry, const QString& entity,
+                                       const QString& reason) {
+    if (!entity.isEmpty()) {
+        const EntityItemID entityID { QUuid(entity) };
+        if (!entityID.isNull() && hasEntityScriptDetails(entityID)) {
+            stopEntityScript(entityID, QString("%1, in %2: the entity script is stopped").arg(reason, entry));
+            return;
+        }
+    }
+    if (_isEntitiesEngine) {
+        // outside any entity script (the guest's own code, a handler nobody owns): the call ended; nothing to stop
+        scriptErrorMessage(QString("%1, in %2, outside any entity script: the call was abandoned").arg(reason, entry));
+        return;
+    }
+    // the script itself ran away: it stops, as a failure stops it
+    onModuleFailure(instance, entry, reason);
+}
+
+void WasmScriptEngine::stopEntityScript(const EntityItemID& entityID, const QString& errorInfo) {
+    EntityScriptDetails details;
+    if (!getEntityScriptDetails(entityID, details)) {
+        return;
+    }
+    const QString name = details.definingSandboxURL.isEmpty() ? QString("entity script") : details.definingSandboxURL.toString();
+    scriptErrorMessage(QString("%1 (%2): %3").arg(name, entityID.toString(), errorInfo));
+    std::weak_ptr<ModuleInstance> host = _entityHosts.value(entityID);
+    _entityHosts.remove(entityID);
+    _callbackHandlers.remove(entityID);
+    _stoppedByTimeLimit.insert(entityID, details.scriptText);
+    EntityScriptDetails stopped;
+    stopped.scriptText = details.scriptText;
+    stopped.definingSandboxURL = details.definingSandboxURL;
+    stopped.status = EntityScriptStatus::ERROR_RUNNING_SCRIPT;
+    stopped.errorInfo = errorInfo;
+    stopped.lastModified = QDateTime::currentMSecsSinceEpoch();
+    setEntityScriptDetails(entityID, stopped);
+    // the guest's record of the script (its object, timers, handlers and callbacks) goes through entity_unload once
+    // the interrupted call has unwound: queued, since this may run inside that call's own report
+    QMetaObject::invokeMethod(this, [this, entityID, host] {
+        ModuleInstancePointer instance = host.lock();
+        if (isStopping() || !instance || !instance->running || !instance->host || !instance->instance->hasExport(ENTITY_UNLOAD_EXPORT)) {
+            return;
+        }
+        QVariantMap payload;
+        payload["entity"] = entityID.toString();
+        QVariant result;
+        QString error;
+        ++_callDepth;
+        instance->host->callWithPayload(ENTITY_UNLOAD_EXPORT, payload, result, error);
+        --_callDepth;
+    }, Qt::QueuedConnection);
+}
+
 void WasmScriptEngine::stop(bool marshal) {
     _isStopping = true;
     if (marshal) {
@@ -770,67 +851,6 @@ void WasmScriptEngine::waitTillDoneRunning() {
         }
         scriptInfoMessage("Script Engine has stopped:" + getFilename());
     }
-}
-
-// --- the serializer: QtScript's conversions for the types that have no QVariant ones yet ----------------------
-
-namespace {
-
-// Each type the serializer converts is logged once per process, so a run shows what still crosses through QtScript.
-void noteSerializedType(int type, const char* direction) {
-    static std::mutex mutex;
-    static QSet<QString> noted;
-    const QString key = QString("%1 %2").arg(direction).arg(type);
-    std::lock_guard<std::mutex> lock(mutex);
-    if (!noted.contains(key)) {
-        noted.insert(key);
-        qCDebug(scriptengine) << "WasmScriptEngine: a" << QMetaType::typeName(type) << "value was" << direction << "through QtScript's conversion";
-    }
-}
-
-} // namespace
-
-void WasmScriptEngine::installSerializer(ValueCodec& codec) {
-    const int scriptValueType = QMetaType::type("QScriptValue");  // registered by QtScript at run time
-    codec.setFallback(
-        [this, &codec, scriptValueType](const QVariant& value, QCborValue& out) {
-            const int type = value.userType();
-            if (type == scriptValueType) {
-                return false;
-            }
-            QScriptValue converted = qScriptValueFromValue_helper(this, type, value.constData());
-            if (!converted.isValid()) {
-                return false;
-            }
-            QVariant plain = converted.toVariant();
-            if (plain.userType() == type) {
-                return false;  // no conversion registered: QtScript wrapped the value as it was
-            }
-            noteSerializedType(type, "encoded");
-            out = codec.toCbor(plain);
-            return true;
-        },
-        [this, &codec, scriptValueType](const QCborValue& value, int targetType, QVariant& out) {
-            if (targetType == scriptValueType) {
-                return false;
-            }
-            QVariant plain = codec.fromCbor(value);
-            QScriptValue scriptValue = qScriptValueFromValue_helper(this, plain.userType(), plain.constData());
-            if (!scriptValue.isValid()) {
-                return false;
-            }
-            void* buffer = QMetaType::create(targetType);
-            if (!buffer) {
-                return false;
-            }
-            bool ok = qscriptvalue_cast_helper(scriptValue, targetType, buffer);
-            if (ok) {
-                noteSerializedType(targetType, "decoded");
-                out = QVariant(targetType, buffer);
-            }
-            QMetaType::destroy(targetType, buffer);
-            return ok;
-        });
 }
 
 // --- timers -------------------------------------------------------------------------------------------------------
@@ -942,6 +962,24 @@ void WasmScriptEngine::loadEntityScript(const EntityItemID& entityID, const QStr
     }
     QSharedPointer<ScriptEngines> scriptEngines(_scriptEngines);
     if (isStopping() || !scriptEngines || scriptEngines->isStopped()) {
+        return;
+    }
+    // a script the time limit stopped stays stopped, with its error showing, until its entity names another script
+    // or a reload is forced
+    auto stopped = _stoppedByTimeLimit.find(entityID);
+    if (stopped != _stoppedByTimeLimit.end()) {
+        if (!forceRedownload && stopped.value() == entityScript) {
+            return;
+        }
+        _stoppedByTimeLimit.erase(stopped);
+    }
+    // the same script asked for again while it loads or runs is the one under way: a second load would run the
+    // script twice, as two objects with their own timers. Requests queue up while the engine is busy (a call that
+    // runs long, a runaway until the limit stops it), and the first may have finished loading when the second comes.
+    // A reload unloads the script first or is forced.
+    EntityScriptDetails current;
+    if (!forceRedownload && getEntityScriptDetails(entityID, current) && current.scriptText == entityScript &&
+        (current.status == EntityScriptStatus::LOADING || current.status == EntityScriptStatus::RUNNING)) {
         return;
     }
     if (!hasEntityScriptDetails(entityID)) {
@@ -1072,6 +1110,9 @@ void WasmScriptEngine::unloadEntityScript(const EntityItemID& entityID, bool sho
     if (QThread::currentThread() != thread()) {
         QMetaObject::invokeMethod(this, "unloadEntityScript", Q_ARG(const EntityItemID&, entityID), Q_ARG(bool, shouldRemoveFromMap));
         return;
+    }
+    if (shouldRemoveFromMap) {
+        _stoppedByTimeLimit.remove(entityID);
     }
     EntityScriptDetails oldDetails;
     if (!getEntityScriptDetails(entityID, oldDetails)) {
@@ -1280,37 +1321,10 @@ QVariantMap WasmScriptEngine::scriptSource() const {
     return program;
 }
 
-// The hosts put a few plain objects of numbers on the QtScript global object (DriveKeys, PickType); the carried
-// engine has them, and a guest gets them as values. Objects with functions or objects inside are not values.
+// The plain values the hosts register (registerGlobalValue: TREE_SCALE, DriveKeys, PickType); a guest puts them on
+// its global object under their names.
 QVariantMap WasmScriptEngine::scriptGlobalValues() const {
-    // registerGlobalValue's, then the plain objects hosts put on the QtScript global object themselves
-    QVariantMap values = _globalValues;
-    QScriptValueIterator it(globalObject());
-    while (it.hasNext()) {
-        it.next();
-        QScriptValue value = it.value();
-        if (!value.isObject() || value.isFunction() || value.isQObject() || value.isArray() || value.isError() ||
-            value.isRegExp() || value.isDate()) {
-            continue;
-        }
-        QVariantMap members;
-        bool plain = true;
-        QScriptValueIterator member(value);
-        while (member.hasNext()) {
-            member.next();
-            QScriptValue v = member.value();
-            if (v.isNumber() || v.isString() || v.isBool()) {
-                members[member.name()] = v.toVariant();
-            } else {
-                plain = false;
-                break;
-            }
-        }
-        if (plain && !members.isEmpty() && !values.contains(it.name())) {
-            values[it.name()] = members;
-        }
-    }
-    return values;
+    return _globalValues;
 }
 
 QString WasmScriptEngine::resolvePathFrom(const QString& path, const QString& parentUrl) const {

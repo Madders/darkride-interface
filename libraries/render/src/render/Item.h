@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <AABox.h>
+#include <Transform.h>
 
 #include "Args.h"
 
@@ -337,6 +338,47 @@ using ItemBounds = std::vector<ItemBound>;
 
 // Item is the proxy to a bounded "object" in the scene
 // An item is described by its Key
+// GPU instancing (INSTANCING.md 3.1): the draw an item can share. Items with equal keys in one view draw as a single
+// instanced draw: the same mesh, the same part at the same level of detail, the same material by content, the same
+// ShapeKey (so the same pipeline).
+class InstanceKey {
+public:
+    const void* mesh { nullptr };   // the mesh whose buffers the draw takes
+    uint64_t material { 0 };        // the material, by content (INSTANCING.md 3.2)
+    uint64_t range { 0 };           // the index range the draw takes: its start and its count
+    uint32_t part { 0 };            // the part and its level of detail
+    uint32_t shape { 0 };           // the ShapeKey's flags
+
+    bool operator==(const InstanceKey& other) const {
+        return mesh == other.mesh && material == other.material && range == other.range && part == other.part &&
+               shape == other.shape;
+    }
+    struct Hash {
+        size_t operator()(const InstanceKey& key) const {
+            size_t hash = std::hash<const void*>()(key.mesh);
+            hash ^= std::hash<uint64_t>()(key.material) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+            hash ^= std::hash<uint64_t>()(key.range) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+            hash ^= std::hash<uint64_t>()(((uint64_t)key.part << 32) | key.shape) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+            return hash;
+        }
+    };
+};
+
+using Transforms = std::vector<Transform>;
+
+// What an item answers when a draw job asks whether it can share a draw in this view: nothing to draw, a draw of its
+// own, or a shared draw under its key, at its transform. Answering settles the item's state for the pass (its level of
+// detail, its impostor switch), so that its render afterwards draws what it answered.
+class Instancing {
+public:
+    enum Draw : uint8_t { NONE, ALONE, SHARED };
+    Instancing() {}
+    Instancing(Draw draw) : draw(draw) {}
+    Draw draw { ALONE };
+    InstanceKey key;
+    Transform transform;
+};
+
 class Item {
 public:
     typedef std::vector<Item> Vector;
@@ -436,6 +478,11 @@ public:
 
         virtual const ShapeKey getShapeKey() const = 0;
 
+        // GPU instancing (INSTANCING.md 3): whether the item can share a draw in this view, having settled its state for
+        // the pass; and the shared draw itself, this item's with the group's transforms
+        virtual Instancing getInstancing(RenderArgs* args) = 0;
+        virtual void renderInstances(RenderArgs* args, const Transforms& transforms) = 0;
+
         virtual uint32_t fetchMetaSubItems(ItemIDs& subItems) const = 0;
 
         ~PayloadInterface() {}
@@ -482,6 +529,10 @@ public:
 
     // Render call for the item
     void render(RenderArgs* args) const { if (_payload) _payload->render(args); }
+
+    // GPU instancing (INSTANCING.md 3)
+    Instancing getInstancing(RenderArgs* args) const { return _payload ? _payload->getInstancing(args) : Instancing(Instancing::NONE); }
+    void renderInstances(RenderArgs* args, const Transforms& transforms) const { if (_payload) _payload->renderInstances(args, transforms); }
 
     // Shape Type Interface
     const ShapeKey getShapeKey() const;
@@ -536,6 +587,10 @@ template <class T> const ItemKey payloadGetKey(const std::shared_ptr<T>& payload
 template <class T> const Item::Bound payloadGetBound(const std::shared_ptr<T>& payloadData) { return Item::Bound(); }
 template <class T> void payloadRender(const std::shared_ptr<T>& payloadData, RenderArgs* args) { }
 
+// GPU instancing: by default an item draws alone, and its shared draw is its own render
+template <class T> Instancing payloadGetInstancing(const std::shared_ptr<T>& payloadData, RenderArgs* args) { return Instancing(); }
+template <class T> void payloadRenderInstances(const std::shared_ptr<T>& payloadData, RenderArgs* args, const Transforms& transforms) { payloadRender<T>(payloadData, args); }
+
 // Shape type interface
 // This allows shapes to characterize their pipeline via a ShapeKey, to be picked with a subclass of Shape.
 // When creating a new shape payload you need to create a specialized version, or the ShapeKey will be ownPipeline,
@@ -566,6 +621,10 @@ public:
 
     // Shape Type interface
     virtual const ShapeKey getShapeKey() const override { return shapeGetShapeKey<T>(_data); }
+
+    // GPU instancing
+    virtual Instancing getInstancing(RenderArgs* args) override { return payloadGetInstancing<T>(_data, args); }
+    virtual void renderInstances(RenderArgs* args, const Transforms& transforms) override { payloadRenderInstances<T>(_data, args, transforms); }
 
     // Meta Type Interface
     virtual uint32_t fetchMetaSubItems(ItemIDs& subItems) const override { return metaFetchMetaSubItems<T>(_data, subItems); }
@@ -624,6 +683,9 @@ public:
     virtual Item::Bound getBound() = 0;
     virtual void render(RenderArgs* args) = 0;
     virtual uint32_t metaFetchMetaSubItems(ItemIDs& subItems) const = 0;
+    // GPU instancing: a proxied item draws alone unless it says otherwise
+    virtual Instancing getInstancing(RenderArgs* args) { return Instancing(); }
+    virtual void renderInstances(RenderArgs* args, const Transforms& transforms) { render(args); }
 
     // FIXME: this isn't the best place for this since it's only used for ModelEntities, but currently all Entities use PayloadProxyInterface
     virtual void handleBlendedVertices(int blendshapeNumber, const QVector<BlendshapeOffset>& blendshapeOffsets,
@@ -633,6 +695,8 @@ public:
 template <> const ItemKey payloadGetKey(const PayloadProxyInterface::Pointer& payload);
 template <> const Item::Bound payloadGetBound(const PayloadProxyInterface::Pointer& payload);
 template <> void payloadRender(const PayloadProxyInterface::Pointer& payload, RenderArgs* args);
+template <> Instancing payloadGetInstancing(const PayloadProxyInterface::Pointer& payload, RenderArgs* args);
+template <> void payloadRenderInstances(const PayloadProxyInterface::Pointer& payload, RenderArgs* args, const Transforms& transforms);
 template <> uint32_t metaFetchMetaSubItems(const PayloadProxyInterface::Pointer& payload, ItemIDs& subItems);
 template <> const ShapeKey shapeGetShapeKey(const PayloadProxyInterface::Pointer& payload);
 
