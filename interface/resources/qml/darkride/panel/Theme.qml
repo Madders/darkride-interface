@@ -70,6 +70,8 @@ QtObject {
         var frames = PanelTheme.skin && PanelTheme.skin.frames;
         return frames && frames[part] ? frames[part] : null;
     }
+    // a skin's decorations on the panels: [{ source, at, offset: [x, y], size: [w, h] or [], stretch }]
+    readonly property var decorations: (PanelTheme.skin && PanelTheme.skin.decorations) || []
     readonly property string schemeName: palette.name
 
     readonly property color background: palette.background

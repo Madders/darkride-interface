@@ -28,7 +28,7 @@
 
 #include "SameVariant.h"
 
-QTEST_MAIN(EntityPropertiesConversionTests)
+QTEST_GUILESS_MAIN(EntityPropertiesConversionTests)
 
 namespace {
 
@@ -243,6 +243,7 @@ EntityItemProperties sampleProperties(EntityTypes::EntityType type) {
     properties.setColor(glm::u8vec3(255, 128, 0));
     properties.setName("sample");
     properties.setScript("https://example.invalid/script.js");
+    properties.setScriptsEnabled(false);
     properties.setUserData("{\"grabbable\": true}");
     properties.setParentID(QUuid("{1a2b3c4d-0000-0000-0000-000000000001}"));
     properties.setLifetime(60.0f);
@@ -565,6 +566,8 @@ void EntityPropertiesConversionTests::testRoundTrip() {
     QString where;
     QVERIFY2(sameVariant(a, b, where), qPrintable(where));
     QVERIFY(a.value("name").toString() == "sample" && a.value("modelURL").toString() == "https://example.invalid/model.glb");
+    // scripts off (not the default) comes through both ways
+    QVERIFY(a.contains("scriptsEnabled") && !a.value("scriptsEnabled").toBool() && !b.value("scriptsEnabled").toBool());
 }
 
 namespace {

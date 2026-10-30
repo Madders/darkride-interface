@@ -7,6 +7,7 @@ vcpkg_from_github(
     PATCHES
         draco-with-vcpkg.patch
         gltf2-sparse-bounds.patch
+        gltf2-texture-webp.patch
 )
 
 file(REMOVE_RECURSE ${SOURCE_PATH}/contrib/draco)

@@ -15,6 +15,8 @@
 #include <set>
 
 #include <glm/gtx/transform.hpp>
+#include <QCryptographicHash>
+#include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
 
@@ -795,6 +797,7 @@ void TerrainLayerSet::drawMapsDue(RenderArgs* args) {
         Sources sources;
     };
     std::vector<Due> due;
+    std::vector<gpu::TexturePointer> toMake;   // sources the backend has yet to make, bound so that it does
     {
         std::lock_guard<std::mutex> lock(_mapsMutex);
         // the colour array grows to the largest colour texture, within its bounds; its slices are then drawn again
@@ -813,11 +816,34 @@ void TerrainLayerSet::drawMapsDue(RenderArgs* args) {
             makeAlbedoArray(wanted);
         }
         // a slice is drawn when it has not been, when its sources change, and when more of a source has reached the
-        // GPU since (its residency stamp): a few draws per texture as its mips come in, smallest first
+        // GPU since (its residency stamp): a few draws per texture as its mips come in, smallest first. Not while a
+        // source has yet to reach the GPU at all (no stamp yet): the GL 4.5 backend (Windows, Linux) makes two new
+        // textures a frame and binds the others' fallbacks meanwhile (white, for a colour texture), and a slice drawn
+        // from a fallback was never drawn again, since only a texture the backend has made gets a new stamp and
+        // nothing else binds a layer's texture: Darkside's ground came out white on Windows (2026-10-28), its
+        // twenty maps all asked for in its first frame. Such a source is bound instead, so the backend makes it, and
+        // its slice is drawn once it has; the layer keeps its plain colour, or the slice what it had, until then.
+        // (The macOS GL 4.1 backend makes every texture as it is first bound.)
+        auto waiting = [](const Sources& sources) {
+            for (const auto& source : sources) {
+                if (source && source->getUsageType() == gpu::TextureUsageType::RESOURCE && source->getResidencyStamp() == 0) {
+                    return true;
+                }
+            }
+            return false;
+        };
         auto check = [&](Map map, Slices& slices, int slot, const Sources& sources) {
             Slice& slice = slices[slot];
             const Stamps stamps = stampsOf(sources);
             if (!slice.drawn || slice.sources != sources || slice.stamps != stamps) {
+                if (waiting(sources)) {
+                    for (const auto& source : sources) {
+                        if (source) {
+                            toMake.push_back(source);
+                        }
+                    }
+                    return;
+                }
                 slice.drawn = true;
                 slice.sources = sources;
                 slice.stamps = stamps;
@@ -835,15 +861,25 @@ void TerrainLayerSet::drawMapsDue(RenderArgs* args) {
             }
         }
     }
-    if (due.empty() || !args || !args->_context) {
+    if ((due.empty() && toMake.empty()) || !args || !args->_context) {
         return;
     }
-    _paramsDirty = true;   // the flags say which slices are drawn
+    if (!due.empty()) {
+        _paramsDirty = true;   // the flags say which slices are drawn
+    }
 
     auto white = DependencyManager::get<TextureCache>()->getWhiteTexture();
     // a batch of its own, appended to the frame now: at the start of the frame (DrawTerrainLayerMaps), before any
     // pass has bound its framebuffer, since the slice's stays bound when this batch ends
     gpu::doInBatch("TerrainLayerSet::drawMapsDue", args->_context, [&](gpu::Batch& batch) {
+        // binding a texture is what has the backend make it
+        for (const auto& texture : toMake) {
+            batch.setResourceTexture(0, texture);
+        }
+        if (due.empty()) {
+            batch.setResourceTexture(0, nullptr);
+            return;
+        }
         batch.enableStereo(false);
         batch.setPipeline(mapPipeline());
         bool drawn[3] = { false, false, false };
@@ -1404,6 +1440,9 @@ gpu::TexturePointer TerrainEntityRenderer::topTileFor(const terrain::TopSurface&
 
 void TerrainEntityRenderer::fetchTerrain(const QString& url, uint32_t version) {
     dropRequest();
+    if (url != _requestURL || version != _requestVersion) {
+        _fetchFailures = 0;
+    }
     _requestURL = url;
     _requestVersion = version;
     // a save writes the file at the same URL, so the version goes into the request: caches on the way (the client's
@@ -1433,20 +1472,51 @@ void TerrainEntityRenderer::fetchTerrain(const QString& url, uint32_t version) {
         if (!entity) {
             return;
         }
+        bool loaded = false;
         if (request->getResult() != ResourceRequest::Success) {
             qCWarning(entitiesrenderer) << "Terrain file" << url << "could not be fetched:" << request->getResultString();
-            entity->clearGrid();
         } else {
             QString error;
-            if (!entity->loadGrid(request->getData(), error)) {
-                qCWarning(entitiesrenderer) << "Terrain file" << url << "is not usable:" << error;
-                entity->clearGrid();
+            const QByteArray data = request->getData();
+            loaded = entity->loadGrid(data, error);
+            if (!loaded) {
+                // what the loader was given, to tell a short read from a short file: its size and the SHA-256 of all
+                // of it (the asset's name for an ATP file) and of its first KB
+                qCWarning(entitiesrenderer) << "Terrain file" << url << "is not usable:" << error << "; given" << data.size()
+                                            << "bytes, sha256"
+                                            << QCryptographicHash::hash(data, QCryptographicHash::Sha256).toHex()
+                                            << ", of the first 1 KB"
+                                            << QCryptographicHash::hash(data.left(1024), QCryptographicHash::Sha256).toHex();
             }
+        }
+        if (loaded) {
+            _fetchFailures = 0;
+        } else {
+            // no ground until a later fetch brings the file whole (one first visit in five to the LAN copy of
+            // Darkside got a file cut short at its first chunk, reported a success, and had no ground at all for
+            // the visit, 2026-10-28)
+            entity->clearGrid();
+            fetchTerrainLater(url, version);
         }
         entity->setGridSource(url, version);
         entity->gridEdited();
     });
     _request->send();
+}
+
+void TerrainEntityRenderer::fetchTerrainLater(const QString& url, uint32_t version) {
+    const int RETRY_FIRST_MS = 1000;
+    const int RETRY_LONGEST_MS = 30000;
+    const int delay = std::min(RETRY_FIRST_MS << std::min(_fetchFailures, 5), RETRY_LONGEST_MS);
+    _fetchFailures++;
+    qCWarning(entitiesrenderer) << "Terrain file" << url << "is fetched again in" << delay / 1000 << "s";
+    QTimer::singleShot(delay, this, [this, url, version] {
+        auto entity = std::dynamic_pointer_cast<RenderableTerrainEntityItem>(_entity);
+        // not if the entity has moved on to another file, or a fetch is already on its way
+        if (entity && !_request && entity->getTerrainURL() == url && entity->getTerrainVersion() == version) {
+            fetchTerrain(url, version);
+        }
+    });
 }
 
 void TerrainEntityRenderer::dropRequest() {

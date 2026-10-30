@@ -349,6 +349,7 @@ namespace controller {
             makePosePair(Action::HEAD, "Head"),
             makePosePair(Action::LEFT_EYE, "LeftEye"),
             makePosePair(Action::RIGHT_EYE, "RightEye"),
+            makePosePair(Action::HEAD_TURN, "HeadTurn"),
 
             // blendshapes
             makeAxisPair(Action::EYEBLINK_L, "EyeBlink_L"),

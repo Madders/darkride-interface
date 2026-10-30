@@ -175,8 +175,21 @@ QDockWidget#EditorHierarchy::title, QDockWidget#EditorInspector::title {
     color: #ff6b6b;
     padding: 2px 2px 4px 2px;
 }
+/* Script and Server Script: what the script is doing now (ScriptEditor), grey, red when it failed */
+#EditorInspector QLabel#EditorScriptStatus {
+    color: #8f8f8f;
+}
+#EditorInspector QLabel#EditorScriptStatus[state="error"] {
+    color: #ff6b6b;
+}
 #EditorInspector QLabel#EditorInspectorNote {
     color: #8f8f8f;
+}
+/* the header (Unity's): Visible and the name, the ticks under them, and why everything is greyed when it's locked */
+#EditorInspector QLabel#EditorInspectorLockNote {
+    color: #8f8f8f;
+    font-size: 11px;
+    padding: 0 2px 2px 2px;
 }
 #EditorInspector QLabel#EditorImageThumbnail {
     background: #2a2a2a;
@@ -259,8 +272,8 @@ QToolBar#EditorToolBar::separator, QToolBar#EditorTerrainBar::separator {
 /* the splitters between the panels and the viewport */
 QMainWindow::separator {
     background: #232323;
-    width: 2px;
-    height: 2px;
+    width: 4px;     /* as MainWindow's own (libraries/ui/src/MainWindow.cpp): wide enough to grab */
+    height: 4px;
 }
 QMainWindow::separator:hover {
     background: #2c5d87;
@@ -500,6 +513,12 @@ QDockWidget#EditorAssets::title {
 #EditorAssets QLabel#EditorAssetsEmpty {
     color: #7a7a7a;
     background: transparent;
+}
+#EditorAssets QLabel#EditorAssetsNote { color: #b8b8b8; font-size: 11px; padding: 0 4px; }
+#EditorAssets QLabel#EditorRightsLine {
+    color: #8f8f8f;
+    font-size: 11px;
+    padding: 0 4px;
 }
 #EditorAssets QLabel#EditorReadOnlyBanner {
     background: #4d3b1c;

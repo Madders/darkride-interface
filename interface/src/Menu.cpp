@@ -59,6 +59,10 @@
 #include "scripting/HMDScriptingInterface.h"
 #include "ui/DialogsManager.h"
 #include "chat/ChatWindow.h"
+#include "ui/Panels.h"
+#include "ui/QmlDock.h"
+#include "ui/Popup.h"
+#include "ui/WindowLayout.h"
 #include "ui/StandAloneJSConsole.h"
 #include "InterfaceLogging.h"
 #include "LocationBookmarks.h"
@@ -105,6 +109,30 @@ static void editOrPostKey(const char* action, Qt::Key key) {
     QCoreApplication::postEvent(QCoreApplication::instance(), keyEvent);
 }
 
+// The Settings panel (qml/darkride/SettingsPanel.qml) on one of its tabs: on the desktop its dock, in a headset the
+// tablet, as the bar's gear opens it. The page reads the tab it saved when it's made; one already made is told.
+static const char* SETTINGS_TAB_SETTING = "io.darkride.settings.tab";
+static const int SETTINGS_TAB_GENERAL = 0;
+static const int SETTINGS_TAB_CONTROLS = 1;
+static const int SETTINGS_TAB_SOUND = 3;
+
+static void openSettingsTab(int tab) {
+    // a default of -1: a handle saves only a value unlike its default, and the General tab is 0
+    Setting::Handle<int>(SETTINGS_TAB_SETTING, -1).set(tab);
+    if (qApp->isHMDMode()) {
+        auto tablet = DependencyManager::get<TabletScriptingInterface>()->getTablet("com.highfidelity.interface.tablet.system");
+        tablet->loadQMLSource("qrc:///qml/darkride/SettingsPanel.qml");
+        DependencyManager::get<HMDScriptingInterface>()->openTablet();
+        return;
+    }
+    auto window = qApp->getWindow();
+    auto dock = window ? window->findChild<QmlDock*>("SettingsDock") : nullptr;
+    if (dock && dock->panel()) {
+        dock->panel()->setProperty("currentTab", tab);
+    }
+    DependencyManager::get<Panels>()->open("Settings");
+}
+
 Menu::Menu() {
     auto dialogsManager = DependencyManager::get<DialogsManager>();
     auto accountManager = DependencyManager::get<AccountManager>();
@@ -131,7 +159,7 @@ Menu::Menu() {
     // File > Import Avatar: wear an .fst, or auto rig a character file (AUTO-RIGGING.md)
     addActionToQMenuAndActionHash(fileMenu, MenuOption::ImportAvatar, 0, qApp, SLOT(importAvatarDialog()));
 
-    // File > Put Avatar in My Files: the worn avatar, when it is on this computer, goes up so everyone sees it
+    // File > Put Avatar in My Files: the worn avatar, when it is on this computer, goes up, private, so others see it
     addActionToQMenuAndActionHash(fileMenu, MenuOption::PutAvatarInMyFiles, 0, qApp, SLOT(putAvatarInMyFiles()));
 
     // File > Quit
@@ -270,9 +298,108 @@ Menu::Menu() {
 
     viewMenu->addSeparator();
 
-    // View > Chat: Darkride chat's window (chat/ChatWindow.h)
-    action = addActionToQMenuAndActionHash(viewMenu, MenuOption::Chat, ChatWindow::shortcut());
-    connect(action, &QAction::triggered, [] { ChatWindow::toggle(); });
+    // View > Panels: every panel of the window, ticked while open, wherever it is (ui/Panels.h). Choosing one opens it
+    // or closes it; chat's keeps its shortcut and its own toggle, which brings it in front first and puts the keyboard
+    // in its message box (chat/ChatWindow.h)
+    {
+        auto panels = DependencyManager::get<Panels>();
+        MenuWrapper* panelsMenu = viewMenu->addMenu("Panels");
+        QHash<QString, QAction*> panelActions;
+        QString previous;
+        for (const QString& name : panels->names()) {
+            auto panelAction = new QAction(name, this);
+            panelAction->setCheckable(true);
+            panelAction->setChecked(panels->isOpen(name));
+            // the saved layout opens the panels, after sign-in; until then there are none (as there's no bar). Build
+            // mode's own, only while it's on
+            panelAction->setProperty(TICK_NOT_SAVED, true);
+            panelAction->setEnabled(false);
+            if (Panels::isBuildModeOnly(name)) {
+                connect(DependencyManager::get<Editor>().data(), &Editor::activeChanged, panelAction,
+                        [panelAction](bool active) { panelAction->setEnabled(active); });
+            } else {
+                connect(WindowLayout::instance(), &WindowLayout::restored, panelAction, [panelAction] {
+                    panelAction->setEnabled(true);
+                });
+            }
+            // My Files after the bar's panels, then Build mode's
+            if (name == "My Files" || (Panels::isBuildModeOnly(name) && !Panels::isBuildModeOnly(previous))) {
+                panelsMenu->addSeparator();
+            }
+            previous = name;
+            if (name == "Chat") {
+                panelAction->setShortcut(ChatWindow::shortcut());
+            }
+            // the tick is the panel's: chat's toggle may only bring it in front
+            connect(panelAction, &QAction::triggered, panels.data(), [panels, name, panelAction](bool checked) {
+                if (name == "Chat") {
+                    panels->toggle(name);
+                } else if (checked) {
+                    panels->open(name);
+                } else {
+                    panels->close(name);
+                }
+                panelAction->setChecked(panels->isOpen(name));
+            });
+            panelsMenu->addAction(panelAction);
+            panelActions[name] = panelAction;
+        }
+        connect(panels.data(), &Panels::openChanged, this, [panelActions](const QString& name, bool open) {
+            if (QAction* panelAction = panelActions.value(name)) {
+                panelAction->setChecked(open);
+            }
+        });
+    }
+
+    // View > Layouts: named arrangements of the panels, normal play's and Build mode's apart (ui/WindowLayout.h), and
+    // Reset to Default; listed as the menu opens
+    {
+        auto layoutsMenu = new QMenu("Layouts", this);
+        connect(layoutsMenu, &QMenu::aboutToShow, layoutsMenu, [layoutsMenu] {
+            layoutsMenu->clear();
+            auto layout = WindowLayout::instance();
+            const bool build = layout->isBuildMode();
+            layoutsMenu->addAction("Save Layout…", [build] {
+                const popup::Field field { "Streaming", QString() };
+                popup::Alert alert(popup::appIcon(), "Save Layout",
+                                   build ? "A name for Build mode's panels as they are now."
+                                         : "A name for the panels as they are now.",
+                                   QString(), { { "Cancel", popup::Role::Cancel }, { "Save", popup::Role::Default } },
+                                   qApp->getWindow(), &field);
+                alert.exec();
+                if (alert.answer() == 1) {
+                    WindowLayout::instance()->saveAs(alert.fieldText());
+                }
+            });
+            const QStringList names = layout->savedNames();
+            if (!names.isEmpty()) {
+                layoutsMenu->addSeparator();
+                for (const QString& name : names) {
+                    layoutsMenu->addAction(name, [name] { WindowLayout::instance()->apply(name); });
+                }
+                QMenu* forget = layoutsMenu->addMenu("Delete Layout");
+                for (const QString& name : names) {
+                    forget->addAction(name, [name] {
+                        popup::Alert alert(popup::appIcon(), "Delete the layout \"" + name + "\"?", QString(),
+                                           QString(), { { "Cancel", popup::Role::Cancel },
+                                                        { "Delete", popup::Role::Destructive } },
+                                           qApp->getWindow());
+                        alert.exec();
+                        if (alert.answer() == 1) {
+                            WindowLayout::instance()->forget(name);
+                        }
+                    });
+                }
+            }
+            layoutsMenu->addSeparator();
+            layoutsMenu->addAction("Reset to Default", [] { WindowLayout::instance()->resetToDefault(); });
+        });
+        // nothing to arrange before sign-in, as with View > Panels
+        layoutsMenu->menuAction()->setEnabled(false);
+        connect(WindowLayout::instance(), &WindowLayout::restored, layoutsMenu,
+                [layoutsMenu] { layoutsMenu->menuAction()->setEnabled(true); });
+        viewMenu->addAction(layoutsMenu->menuAction());
+    }
 
     // Build menu ----------------------------------
     MenuWrapper* buildMenu = addMenu("Build");
@@ -346,8 +473,10 @@ Menu::Menu() {
         editor->addMenuAction(addActionToQMenuAndActionHash(buildMenu, MenuOption::BuildBringHere, 0,
             editor.data(), SLOT(bringSelectionHere())));
         buildMenu->addSeparator();
-        editor->addMenuAction(addActionToQMenuAndActionHash(buildMenu, MenuOption::BuildResetPanels, 0,
-            editor.data(), SLOT(resetLayout())));
+        // the same as View > Layouts > Reset to Default, in Build mode
+        QAction* resetPanels = addActionToQMenuAndActionHash(buildMenu, MenuOption::BuildResetPanels, 0);
+        connect(resetPanels, &QAction::triggered, [] { WindowLayout::instance()->resetToDefault(); });
+        editor->addMenuAction(resetPanels);
         buildMenu->addSeparator();
         // Build > Import Entities…, Import Entities from URL…, Export Selected Entities…: entities files, as the old
         // Create app's Edit menu had them
@@ -379,23 +508,21 @@ Menu::Menu() {
     auto locationBookmarks = DependencyManager::get<LocationBookmarks>();
     locationBookmarks->setupMenus(this, navigateMenu);
 
-    // Navigate > Copy Address
+    // Navigate > Copy Path (Copy Address is gone: Explore's Copy Link, Caity 10-29)
     auto addressManager = DependencyManager::get<AddressManager>();
-    addActionToQMenuAndActionHash(navigateMenu, MenuOption::CopyAddress, 0,
-        addressManager.data(), SLOT(copyAddress()));
-
-    // Navigate > Copy Path
     addActionToQMenuAndActionHash(navigateMenu, MenuOption::CopyPath, 0,
         addressManager.data(), SLOT(copyPath()));
 
-    // Navigate > Start-up Location
+    // Start-up Location: Settings > General > Start in sets it (SettingsPanel.qml, by these two items' names), so the
+    // items stay, kept off the menu bar (Caity 10-29)
     MenuWrapper* startupLocationMenu = navigateMenu->addMenu(MenuOption::StartUpLocation);
     QActionGroup* startupLocatiopnGroup = new QActionGroup(startupLocationMenu);
     startupLocatiopnGroup->setExclusive(true);
-    startupLocatiopnGroup->addAction(addCheckableActionToQMenuAndActionHash(startupLocationMenu, MenuOption::HomeLocation, 0, 
+    startupLocatiopnGroup->addAction(addCheckableActionToQMenuAndActionHash(startupLocationMenu, MenuOption::HomeLocation, 0,
         false));
-    startupLocatiopnGroup->addAction(addCheckableActionToQMenuAndActionHash(startupLocationMenu, MenuOption::LastLocation, 0, 
+    startupLocatiopnGroup->addAction(addCheckableActionToQMenuAndActionHash(startupLocationMenu, MenuOption::LastLocation, 0,
         true));
+    startupLocationMenu->setVisible(false);
 
     // Navigate > Walk Through Walls: your avatar not colliding with the world (noclip; Caity, 10-25: it belongs where the
     // settings are, with a key). The same switch as MyAvatar.collisionsEnabled, the Avatar panel's "Collide with the
@@ -418,38 +545,26 @@ Menu::Menu() {
     // Settings menu ----------------------------------
     MenuWrapper* settingsMenu = addMenu("Settings");
 
-    // Settings > General...
+    // Settings > General...: Darkride's Settings, the bar's gear's panel (High Fidelity's General Settings window had
+    // little left that worked: its snapshot settings moved into it; Caity 10-28)
     action = addActionToQMenuAndActionHash(settingsMenu, MenuOption::Preferences, Qt::CTRL | Qt::Key_G, nullptr, nullptr);
     connect(action, &QAction::triggered, [] {
         if (!qApp->getLoginDialogPoppedUp()) {
-            qApp->showDialog(QString("hifi/dialogs/GeneralPreferencesDialog.qml"),
-                QString("hifi/tablet/TabletGeneralPreferences.qml"), "GeneralPreferencesDialog");
+            openSettingsTab(SETTINGS_TAB_GENERAL);
         }
     });
 
-    // Settings > Controls...
+    // Settings > Controls...: the Settings panel's Controls tab (High Fidelity's Controls page opens from its devices'
+    // Set Up... and its VR movement Options...; Caity 10-28)
     action = addActionToQMenuAndActionHash(settingsMenu, "Controls...");
     connect(action, &QAction::triggered, [] {
-            auto tablet = DependencyManager::get<TabletScriptingInterface>()->getTablet("com.highfidelity.interface.tablet.system");
-            auto hmd = DependencyManager::get<HMDScriptingInterface>();
-            tablet->pushOntoStack("hifi/tablet/ControllerSettings.qml");
-
-            if (!hmd->getShouldShowTablet()) {
-                hmd->toggleShouldShowTablet();
-            }
+        openSettingsTab(SETTINGS_TAB_CONTROLS);
     });
 
-    // Settings > Audio...
+    // Settings > Audio...: the Settings panel's Sound tab
     action = addActionToQMenuAndActionHash(settingsMenu, "Audio...");
     connect(action, &QAction::triggered, [] {
-        static const QUrl tabletUrl("hifi/audio/Audio.qml");
-        auto tablet = DependencyManager::get<TabletScriptingInterface>()->getTablet("com.highfidelity.interface.tablet.system");
-        auto hmd = DependencyManager::get<HMDScriptingInterface>();
-        tablet->pushOntoStack(tabletUrl);
-
-        if (!hmd->getShouldShowTablet()) {
-            hmd->toggleShouldShowTablet();
-        }
+        openSettingsTab(SETTINGS_TAB_SOUND);
     });
 
     // Settings > Developer Menu
@@ -575,39 +690,30 @@ Menu::Menu() {
         essLogAction->setEnabled(nodeList->getThisNodeCanRez());
     }
 
-    // Developer > Scripting > Script Log (HMD friendly)...
-    addActionToQMenuAndActionHash(scriptingOptionsMenu, "Script Log (HMD friendly)...", Qt::NoButton,
-                                           qApp, SLOT(showScriptLogs()));
-
     // Developer > Scripting > Verbose Logging
     addCheckableActionToQMenuAndActionHash(scriptingOptionsMenu, MenuOption::VerboseLogging, 0, false,
                                            qApp, SLOT(updateVerboseLogging()));
 
-    // Developer > Scripting > Run JavaScript on WebAssembly (which engine a .js client script loads on; takes effect
-    // for scripts loaded after the change)
-    addCheckableActionToQMenuAndActionHash(scriptingOptionsMenu, MenuOption::RunJavaScriptOnWebAssembly,
-                                           [](bool checked) { WasmScriptEngine::setRunJavaScriptOnWebAssembly(checked); },
-                                           0, WasmScriptEngine::runJavaScriptOnWebAssembly());
+    // Developer > Scripting > Run JavaScript on QtScript (the old engine): the way back from the WebAssembly engine, which
+    // .js client scripts load on otherwise; it takes effect for scripts loaded after the change. Without the runtime
+    // file every JavaScript script runs on QtScript, so the item shows ticked and can't be changed; it has its own name,
+    // since a menu item's name is its saved key and a saved tick would turn a later client with the file to QtScript
+    if (WasmScriptEngine::hasJavaScriptGuest()) {
+        addCheckableActionToQMenuAndActionHash(scriptingOptionsMenu, MenuOption::RunJavaScriptOnQtScript,
+                                               [](bool checked) { WasmScriptEngine::setRunJavaScriptOnWebAssembly(!checked); },
+                                               0, !WasmScriptEngine::runJavaScriptOnWebAssembly());
+    } else {
+        action = addCheckableActionToQMenuAndActionHash(scriptingOptionsMenu, MenuOption::RunJavaScriptOnQtScriptNoRuntime,
+                                                        0, true);
+        action->setEnabled(false);
+    }
 
-    // Developer > UI >>>
+    // Developer > UI >>> (High Fidelity's Desktop/HMD Tablet Becomes Toolbar are gone, Caity 10-29: unticked, the bar
+    // broke; Application keeps both at their defaults)
     MenuWrapper* uiOptionsMenu = developerMenu->addMenu("UI");
-    action = addCheckableActionToQMenuAndActionHash(uiOptionsMenu, MenuOption::DesktopTabletToToolbar, 0,
-                                                    qApp->getDesktopTabletBecomesToolbarSetting());
-    
+
     // Developer > UI > Show Overlays
     addCheckableActionToQMenuAndActionHash(uiOptionsMenu, MenuOption::Overlays, 0, true);
-    
-    // Developer > UI > Desktop Tablet Becomes Toolbar
-    connect(action, &QAction::triggered, [action] {
-        qApp->setDesktopTabletBecomesToolbarSetting(action->isChecked());
-    });
-    
-     // Developer > UI > HMD Tablet Becomes Toolbar
-    action = addCheckableActionToQMenuAndActionHash(uiOptionsMenu, MenuOption::HMDTabletToToolbar, 0,
-                                                    qApp->getHmdTabletBecomesToolbarSetting());
-    connect(action, &QAction::triggered, [action] {
-        qApp->setHmdTabletBecomesToolbarSetting(action->isChecked());
-    });
 
     // Developer > Render >>>
     MenuWrapper* renderOptionsMenu = developerMenu->addMenu("Render");
@@ -738,6 +844,12 @@ Menu::Menu() {
     connect(action, &QAction::triggered, [action] {
         ToneMapAndResample::setShowNaNPixels(action->isChecked());
     });
+    // Developer > Render > Upscaling (FSR) in VR: a resolution scale under 1x upscales with FSR in a headset too (on, the
+    // default, since a Quest 3 try on 2026-10-28); off, VR keeps the plain stretch. Follows the item's state however it's set.
+    action = addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::UpscaleFSRInVR, 0, true);
+    connect(action, &QAction::toggled, [](bool checked) {
+        ToneMapAndResample::setUpscaleFSRInVR(checked);
+    });
 
     addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::WorldAxes);
     // addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::DefaultSkybox, Qt::Key_Asterisk, true);
@@ -770,9 +882,8 @@ Menu::Menu() {
         });
     }
 
-    // Developer > Render > LOD Tools
-    addActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::LodTools, 0,
-                                  qApp, SLOT(loadLODToolsDialog()));
+    // (High Fidelity's Developer > Render > LOD Tools is gone: Settings > Displays has World detail and Draw distance,
+    // Caity 10-29)
 
     // HACK enable texture decimation
     {
@@ -875,7 +986,7 @@ Menu::Menu() {
 
     addCheckableActionToQMenuAndActionHash(avatarDebugMenu, MenuOption::ShowTrackedObjects, 0, false, qApp, SLOT(setShowTrackedObjects(bool)));
 
-    addActionToQMenuAndActionHash(avatarDebugMenu, MenuOption::PackageModel, 0, qApp, SLOT(packageModel()));
+    // (High Fidelity's Package Avatar as .fst is gone: File > Import Avatar, Caity 10-29)
 
     // Developer > Hands >>>
     MenuWrapper* handOptionsMenu = developerMenu->addMenu("Hands");
@@ -897,7 +1008,7 @@ Menu::Menu() {
         qApp->showDialog(QString("hifi/dialogs/NetworkingPreferencesDialog.qml"),
             QString("hifi/tablet/TabletNetworkingPreferences.qml"), "NetworkingPreferencesDialog");
     });
-    addActionToQMenuAndActionHash(networkMenu, MenuOption::ReloadContent, 0, qApp, SLOT(reloadResourceCaches()));
+    // (Clear Cache && Reload is Edit's; its copy here is gone, Caity 10-29)
 
 	action = addActionToQMenuAndActionHash(networkMenu, MenuOption::ClearDiskCaches);
     connect(action, &QAction::triggered, [] {
@@ -1091,29 +1202,12 @@ Menu::Menu() {
     });
     helpMenu->addSeparator();
 
-    // Help > Online Documentation, JavaScript API Reference, Changelog and Report a Bug stay greyed out until
-    // Darkride has those pages (Tivoli's are gone)
-    action = addActionToQMenuAndActionHash(helpMenu, "Online Documentation");
-    action->setEnabled(false);
-
-    // Help > Discord Server
+    // Help > Discord Server (High Fidelity's Controls Reference and the greyed-out Online Documentation, JavaScript API
+    // Reference, Changelog and Report a Bug are gone, Caity 10-29)
     action = addActionToQMenuAndActionHash(helpMenu, "Discord Server");
     connect(action, &QAction::triggered, qApp, [] {
         QDesktopServices::openUrl(QUrl("https://discord.gg/fQqG7dT9wY"));
     });
-
-    action = addActionToQMenuAndActionHash(helpMenu, "JavaScript API Reference");
-    action->setEnabled(false);
-
-    addActionToQMenuAndActionHash(helpMenu, "Controls Reference", 0, qApp, SLOT(showHelp()));
-
-    helpMenu->addSeparator();
-
-    action = addActionToQMenuAndActionHash(helpMenu, "Changelog");
-    action->setEnabled(false);
-
-    action = addActionToQMenuAndActionHash(helpMenu, "Report a Bug");
-    action->setEnabled(false);
 }
 
 void Menu::addMenuItem(const MenuItemProperties& properties) {

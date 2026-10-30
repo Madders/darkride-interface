@@ -9,8 +9,12 @@
 #include "ViewportContainer.h"
 
 #include <QtGui/QResizeEvent>
+#include <QtGui/QScreen>
+#include <QtGui/QWindow>
 
 #include <gl/GLHelpers.h>
+
+#include "../../InterfaceLogging.h"
 
 #ifdef Q_OS_MACOS
 #include <objc/message.h>
@@ -19,6 +23,7 @@
 
 namespace {
     const int SETTLE_MS = 250;   // a splitter drag has stopped when nothing moved for this long
+    const int RESCALE_MS = 100;  // Qt takes a pass or two of its event loop to settle a new scale
 
 #ifdef Q_OS_MACOS
     // [CATransaction flush]: Core Animation commits the window's pending layer changes now, the GL view's new surface
@@ -41,6 +46,9 @@ ViewportContainer::ViewportContainer(QWidget* viewport, QWidget* parent) : QWidg
     _settle.setSingleShot(true);
     _settle.setInterval(SETTLE_MS);
     connect(&_settle, &QTimer::timeout, this, &ViewportContainer::applySize);
+    _rescale.setSingleShot(true);
+    _rescale.setInterval(RESCALE_MS);
+    connect(&_rescale, &QTimer::timeout, this, &ViewportContainer::reapplySize);
 #ifdef Q_OS_MACOS
     // a change to the view is put in place before the presenting thread may draw again (see gl::ViewChangeGuard)
     gl::setViewChangeFlush(&flushCoreAnimation);
@@ -64,6 +72,32 @@ void ViewportContainer::resizeEvent(QResizeEvent* event) {
     }
 }
 
+void ViewportContainer::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+#ifndef Q_OS_MACOS
+    // Windows and Linux, where Qt does the scaling (main.cpp); macOS scales the view's surface itself
+    QWindow* handle = window()->windowHandle();
+    if (handle && !_screenChanged) {
+        _screenChanged = connect(handle, &QWindow::screenChanged, this, [this](QScreen*) {
+            watchScreen();
+            _rescale.start();
+        });
+        watchScreen();
+    }
+#endif
+}
+
+void ViewportContainer::watchScreen() {
+    QObject::disconnect(_screenGeometry);
+    QObject::disconnect(_screenDpi);
+    QWindow* handle = window()->windowHandle();
+    if (QScreen* screen = handle ? handle->screen() : nullptr) {
+        // a new display scale (Windows' Settings > Display > Scale) changes the screen's size in points and its dpi
+        _screenGeometry = connect(screen, &QScreen::geometryChanged, this, [this](const QRect&) { _rescale.start(); });
+        _screenDpi = connect(screen, &QScreen::logicalDotsPerInchChanged, this, [this](qreal) { _rescale.start(); });
+    }
+}
+
 void ViewportContainer::setInset(const QMargins& inset) {
     setContentsMargins(inset);
     applySize();
@@ -76,5 +110,28 @@ void ViewportContainer::applySize() {
         // panels resize the view, crashed in Apple's GL driver, clearing the view while it was being resized
         gl::ViewChangeGuard guard;
         _viewport->setGeometry(area);
+#ifdef Q_OS_MACOS
+        // the Mac's GL surface can keep its old size after this one: the picture was drawn at the old shape into the
+        // new one, squeezed sideways with Chat docked until the dock closed (Caity, beta zip, 10-29). Put it again once
+        // the layout has settled, as after a change of scale
+        _rescale.start();
+#endif
     }
+}
+
+void ViewportContainer::reapplySize() {
+    // After a change of scale Qt can size the view's native window at the old scale while the layout settles at the
+    // new one, and the view's size in points may still come out as applySize put it, which then leaves it: the view's
+    // window kept its old pixels and the picture was stretched into the new shape (squashed sideways with Chat docked,
+    // whose width stays the same in points). Put it again, through a different size so Qt resizes the native window.
+    // Only on a change of scale or screen: applySize's skip of an unchanged size stays for the GL resize crash
+    const QRect area = contentsRect();
+    if (area.height() < 2) {
+        return;
+    }
+    qCInfo(interfaceapp) << "ViewportContainer: the view's size put again after a change of scale or screen:" << area.size()
+                         << "points at" << devicePixelRatioF();
+    gl::ViewChangeGuard guard;
+    _viewport->setGeometry(area.adjusted(0, 0, 0, -1));
+    _viewport->setGeometry(area);
 }

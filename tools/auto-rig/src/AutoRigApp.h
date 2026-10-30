@@ -18,6 +18,7 @@ class AutoRigApp : public QCoreApplication {
     Q_OBJECT
 public:
     AutoRigApp(int argc, char* argv[]);
+    ~AutoRigApp();
 
     int getReturnCode() const { return _returnCode; }
 

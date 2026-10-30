@@ -754,7 +754,7 @@
             host.log(LOG_PRINT, "Script.include() skipping evaluation of previously included url:" + url);
             return;
         }
-        var fetched = host.call(Script, "fetchScript", [url, false]);
+        var fetched = host.call(Script, "fetchScript", [url, false, currentSandbox]);
         if (!fetched || !fetched.success) {
             host.log(LOG_ERROR, "Error loading file (" + (fetched ? fetched.status : "no reply") + "): " + url);
             return;
@@ -797,7 +797,7 @@
                 host.log(LOG_PRINT, "Script.include() skipping evaluation of previously included url:" + url);
                 continue;
             }
-            var fetched = host.call(Script, "fetchScript", [url, false]);
+            var fetched = host.call(Script, "fetchScript", [url, false, currentSandbox]);
             if (!fetched || !fetched.success) {
                 host.log(LOG_ERROR, "Error loading file (" + (fetched ? fetched.status : "no reply") + "): " + url);
                 continue;
@@ -916,7 +916,7 @@
         module = newModule(modulePath, parent);
         registerModuleWithParent(module, parent);
         moduleCache[modulePath] = module;
-        var fetched = host.call(Script, "fetchScript", [modulePath, false]);
+        var fetched = host.call(Script, "fetchScript", [modulePath, false, currentSandbox]);
         if (!fetched || !fetched.success) {
             delete moduleCache[modulePath];
             throw new Error("error retrieving script (" + (fetched ? fetched.status : "no reply") + "): " + modulePath);
@@ -950,11 +950,19 @@
     // --- XMLHttpRequest over the engine's Http object ---------------------------------------------------------------
     var UNSENT = 0, OPENED = 1, HEADERS_RECEIVED = 2, LOADING = 3, DONE = 4;
 
+    // The engine's makers of requests and sockets are the shim's alone: a script reaches them through XMLHttpRequest
+    // and WebSocket, which name the script they are made for; off the global, nothing can name another.
+    var httpFactory = global.Http;
+    var socketsFactory = global.Sockets;
+    delete global.Http;
+    delete global.Sockets;
+
     function XMLHttpRequest() {
-        if (!global.Http) {
+        if (!httpFactory) {
             throw new Error("XMLHttpRequest: the engine has no Http object");
         }
-        var request = global.Http.createRequest();
+        // made for the entity script running, else the script itself: the host's network rule judges it by that
+        var request = httpFactory.createRequest(currentSandbox || fileName || "");
         var self = this;
         this.onreadystatechange = null;
         this.ontimeout = null;
@@ -1075,10 +1083,10 @@
         socket.closedWith.connect(onClosed);
     }
     function WebSocket(url) {
-        if (!global.Sockets) {
+        if (!socketsFactory) {
             throw new Error("WebSocket: the engine has no Sockets object");
         }
-        attachSocket(this, global.Sockets.createWebSocket(url === undefined ? "" : String(url)));
+        attachSocket(this, socketsFactory.createWebSocket(url === undefined ? "" : String(url), currentSandbox || fileName || ""));
     }
     WebSocket.CONNECTING = 0;
     WebSocket.OPEN = 1;

@@ -399,6 +399,9 @@ void PhysicsEngine::processTransaction(PhysicsEngine::Transaction& transaction) 
             removeDynamicsForObject(object);
             world->removeObject(object);
         }
+        // its contacts in the other worlds too, before its motion state is deleted: a frame's interior part is in the
+        // contacts of the world its frame stands in, through the frame's copy of its interior (round 8)
+        removeContactsInEveryWorld(object);
         unregisterFrame(object->getObjectID());
     }
 
@@ -459,6 +462,14 @@ void PhysicsEngine::dropEmptyWorlds() {
         } else {
             ++itr;
         }
+    }
+}
+
+// private
+void PhysicsEngine::removeContactsInEveryWorld(ObjectMotionState* motionState) {
+    _rootWorld->removeContacts(motionState);
+    for (auto& entry : _frameWorlds) {
+        entry.second->removeContacts(motionState);
     }
 }
 
@@ -620,16 +631,21 @@ void PhysicsEngine::stepSimulation() {
         paced += extra;
         _timeShiftPending -= extra;
     }
+    float accumulatedBefore = _accumulatedTime;
     _accumulatedTime = glm::max(_accumulatedTime + paced, 0.0f);
+    _lastSteppedTime = _accumulatedTime - accumulatedBefore;
 
     int numSubsteps = (int)(_accumulatedTime / PHYSICS_ENGINE_FIXED_SUBSTEP);
     if (numSubsteps > PHYSICS_ENGINE_MAX_NUM_SUBSTEPS) {
         // the simulation can't keep up; drop time rather than spiral
+        _lastSteppedTime -= _accumulatedTime - (float)PHYSICS_ENGINE_MAX_NUM_SUBSTEPS * PHYSICS_ENGINE_FIXED_SUBSTEP;
         numSubsteps = PHYSICS_ENGINE_MAX_NUM_SUBSTEPS;
         _accumulatedTime = 0.0f;
     } else {
         _accumulatedTime -= (float)numSubsteps * PHYSICS_ENGINE_FIXED_SUBSTEP;
     }
+    _lastSteppedTime = glm::max(_lastSteppedTime, 0.0f);
+    _stepCount++;
 
     if (numSubsteps > 0 && _idleWhenStill && isStill()) {
         // nothing to simulate: the substeps are skipped, their time dropped (a body that wakes is stepped from now),

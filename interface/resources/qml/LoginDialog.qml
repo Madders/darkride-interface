@@ -12,6 +12,7 @@ import QtQuick 2.4
 
 import controlsUit 1.0 as HifiControlsUit
 import stylesUit 1.0 as HifiStylesUit
+import "LoginDialog" as LoginParts
 
 FocusScope {
     id: root
@@ -144,6 +145,16 @@ FocusScope {
             case Qt.Key_Return:
                 event.accepted = true
                 break
+        }
+    }
+
+    // the version and build along the bottom, for bug reports (LoginDialog/BuildLine.qml)
+    LoginParts.BuildLine {
+        z: 5
+        anchors {
+            horizontalCenter: parent.horizontalCenter
+            bottom: parent.bottom
+            bottomMargin: 14
         }
     }
 

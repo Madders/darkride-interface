@@ -176,6 +176,8 @@ private:
     void fail(const QString& entry, const QString& error);
 
     const QVector<int>& candidates(const QMetaObject* meta, const QByteArray& name);
+    /// Whether a module may call the method: the rules describe() gives the guest, held for every form of a call.
+    static bool callable(const QMetaMethod& method);
     /// A method's parameter types, resolved once (a type no library has registered yet is looked up again next time).
     QVector<int> parameterTypes(const QMetaObject* meta, int methodIndex);
     /// A property's index by name, looked up once per class (-1 when it has none).

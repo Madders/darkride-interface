@@ -78,6 +78,14 @@ public:
     bool gpuTextureMemSizeStable();
     void setArrivalWaitsForNearby(bool wait);   // a loading screen waits for what is near the avatar, even where the zone allows moving at once
     void setOverrideEntry() { _overrideEntry = true; }   // the first run goes to the address given, not to the entry
+    // A link the app is opened with: macOS hands a world link clicked while Darkride isn't running to the app as it
+    // starts, before it can go anywhere. Kept until the starting location is chosen, which then goes there instead of
+    // the last place, home or the entry (goToStartingLocation).
+    bool startingLocationChosen() const { return _startingLocationChosen; }
+    void keepStartupLink(const QString& url) { _startupLink = url; }
+    // start-up that chooses no starting location (a test run without --url): a link the app was opened with is
+    // followed all the same
+    void noStartingLocation();
 
     // once a frame, from Application::update(), in this order
     void enablePhysicsWhenReady();        // the physics gate
@@ -150,6 +158,8 @@ private:
     ConnectionMonitor _connectionMonitor;
     bool _interstitialMode{ false };
     bool _overrideEntry{ false };
+    bool _startingLocationChosen{ false };
+    QString _startupLink;
 
     // the physics gate
     bool _physicsEnabled{ false };

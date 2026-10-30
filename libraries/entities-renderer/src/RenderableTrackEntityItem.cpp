@@ -365,9 +365,17 @@ void TrackEntityRenderer::doRender(RenderArgs* args) {
     gpu::BufferPointer vertices;
     gpu::BufferPointer indices;
     uint32_t count = 0;
+    {
+        // Material entities add and remove their layers on the main thread under _materialsLock; [] here inserted
+        // into the map under this renderer's lock instead, on the render thread (two writers at once)
+        std::lock_guard<std::mutex> lock(_materialsLock);
+        auto found = _materials.find("0");
+        if (found != _materials.end()) {
+            materials = found->second;
+        }
+    }
     withReadLock([&] {
         transform = _trackTransform;
-        materials = _materials["0"];
         vertices = _vertexBuffer;
         indices = _indexBuffer;
         count = _indexCount;

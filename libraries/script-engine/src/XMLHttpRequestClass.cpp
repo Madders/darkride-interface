@@ -14,8 +14,9 @@
 
 #include "XMLHttpRequestClass.h"
 
+#include <ScriptNetworkPolicy.h>
+
 #include <QEventLoop>
-#include <QHostAddress>
 #include <qurlquery.h>
 
 #include <AccountManager.h>
@@ -24,7 +25,6 @@
 
 #include "ResourceRequestObserver.h"
 #include "ScriptEngine.h"
-#include "ScriptEngineLogging.h"
 
 const QString METAVERSE_API_URL = NetworkingConstants::METAVERSE_SERVER_URL().toString() + "/api/";
 
@@ -36,6 +36,10 @@ XMLHttpRequestClass::XMLHttpRequestClass(QScriptEngine* engine) :
 
     _request.setAttribute(QNetworkRequest::FollowRedirectsAttribute, true);
     _timer.setSingleShot(true);
+    if (auto scriptEngine = qobject_cast<ScriptEngine*>(engine)) {
+        _origin = scriptEngine->currentScriptOrigin();
+        _ruled = scriptEngine->isClientSide();
+    }
 }
 
 XMLHttpRequestClass::~XMLHttpRequestClass() {
@@ -61,6 +65,8 @@ QString XMLHttpRequestClass::getStatusText() const {
 }
 
 void XMLHttpRequestClass::abort() {
+    ++_generation;
+    _deciding = false;
     abortRequest();
 }
 
@@ -148,76 +154,93 @@ void XMLHttpRequestClass::send() {
 }
 
 void XMLHttpRequestClass::send(const QScriptValue& data) {
-    if (_readyState == OPENED && !_reply) {
-
-        if (!data.isNull()) {
-            if (data.isObject()) {
-                _sendData = qscriptvalue_cast<QByteArray>(data);
-            } else {
-                _sendData = data.toString().toUtf8();
-            }
+    if (_readyState != OPENED || _reply || _deciding) {
+        return;
+    }
+    if (!data.isNull()) {
+        if (data.isObject()) {
+            _sendData = qscriptvalue_cast<QByteArray>(data);
+        } else {
+            _sendData = data.toString().toUtf8();
         }
-
-        if (!isUrlAllowed()) {
-            qCWarning(scriptengine) << "XMLHttpRequest to" << _url.toDisplayString() << "isn't allowed for this script";
-            _errorCode = QNetworkReply::ContentAccessDenied;
-            setReadyState(DONE);
-            emit requestComplete();
-            return;
-        }
-
+    }
+    if (!_ruled) {
         doSend();
-
-        if (!_async) {
-            QEventLoop loop;
-            connect(this, SIGNAL(requestComplete()), &loop, SLOT(quit()));
-            loop.exec();
-        }
+    } else {
+        // the network rule for a script's own requests: judged at once, or after a name lookup
+        _deciding = true;
+        const int generation = ++_generation;
+        ScriptNetworkPolicy::decide(_url, _origin, this, [this, generation](const ScriptNetworkPolicy::Decision& decision) {
+            if (generation != _generation) {
+                return;     // aborted meanwhile
+            }
+            if (decision.allowed) {
+                _deciding = false;
+                doSend();
+                return;
+            }
+            // refused: ends as a failed request does, after send() has returned
+            const QString reason = decision.reason;
+            QMetaObject::invokeMethod(this, [this, generation, reason] {
+                if (generation == _generation) {
+                    _deciding = false;
+                    refuse(reason);
+                }
+            }, Qt::QueuedConnection);
+        });
+    }
+    if (!_async && _readyState != DONE) {
+        QEventLoop loop;
+        connect(this, SIGNAL(requestComplete()), &loop, SLOT(quit()));
+        loop.exec();
     }
 }
 
-// The user's own scripts may request anything. Other scripts (a world's scripts on the visitor's computer, the
-// servers' scripts, agents) use the web and the world's assets: http, https and atp. A world's scripts on a
-// visitor's computer also can't reach that computer itself or its local network by address.
-bool XMLHttpRequestClass::isUrlAllowed() const {
-    auto scriptEngine = qobject_cast<ScriptEngine*>(_engine);
-    if (scriptEngine && scriptEngine->isClientScript()) {
-        return true;
+void XMLHttpRequestClass::refuse(const QString& reason) {
+    if (auto scriptEngine = qobject_cast<ScriptEngine*>(_engine)) {
+        scriptEngine->scriptWarningMessage(ScriptNetworkPolicy::refusalLine(_origin, _url, reason));
     }
-
-    const QString scheme = _url.scheme().toLower();
-    if (scheme != "http" && scheme != "https" && scheme != "atp") {
-        return false;
-    }
-
-    if (!scriptEngine || scriptEngine->getContext() == "entity_client") {
-        const QString host = _url.host().toLower();
-        if (host == "localhost" || host.endsWith(".localhost")) {
-            return false;
-        }
-        QHostAddress address(host);
-        bool isIPv4 = false;
-        quint32 ipv4 = address.toIPv4Address(&isIPv4);
-        if (isIPv4) {
-            address = QHostAddress(ipv4);  // an IPv4 address written as IPv6 (::ffff:a.b.c.d)
-        }
-        if (!address.isNull() && (address.isLoopback() || address.isLinkLocal() || address.isSiteLocal() ||
-                                  address.isUniqueLocalUnicast() || address.isMulticast() ||
-                                  address.isInSubnet(QHostAddress("10.0.0.0"), 8) ||
-                                  address.isInSubnet(QHostAddress("172.16.0.0"), 12) ||
-                                  address.isInSubnet(QHostAddress("192.168.0.0"), 16) ||
-                                  address.isInSubnet(QHostAddress("100.64.0.0"), 10) ||
-                                  address.isInSubnet(QHostAddress("0.0.0.0"), 8))) {
-            return false;
-        }
-    }
-    return true;
+    _errorCode = QNetworkReply::ContentAccessDenied;
+    setReadyState(DONE);
+    emit requestComplete();
 }
 
 void XMLHttpRequestClass::doSend() {
     DependencyManager::get<ResourceRequestObserver>()->update(_url, -1, "XMLHttpRequestClass::doSend");
+    const bool ruled = _ruled && ScriptNetworkPolicy::applies(_origin);
+    if (ruled) {
+        // a redirect is judged as the request was
+        _request.setAttribute(QNetworkRequest::FollowRedirectsAttribute, false);
+        _request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::UserVerifiedRedirectPolicy);
+    }
     _reply = NetworkAccessManager::getInstance().sendCustomRequest(_request, _method.toLatin1(), _sendData);
     connectToReply(_reply);
+    if (ruled) {
+        QNetworkReply* reply = _reply;
+        connect(reply, &QNetworkReply::redirected, this, [this, reply](const QUrl& url) {
+            if (reply->url().scheme().toLower() == "https" && url.scheme().toLower() != "https") {
+                // a secure request stays secure
+                if (auto scriptEngine = qobject_cast<ScriptEngine*>(_engine)) {
+                    scriptEngine->scriptWarningMessage(ScriptNetworkPolicy::refusalLine(_origin, url, "a redirect from https to a plain address"));
+                }
+                reply->abort();
+                return;
+            }
+            ScriptNetworkPolicy::decide(url, _origin, this, [this, reply, url](const ScriptNetworkPolicy::Decision& decision) {
+                if (_reply != reply) {
+                    return;
+                }
+                if (decision.allowed) {
+                    emit reply->redirectAllowed();
+                    return;
+                }
+                if (auto scriptEngine = qobject_cast<ScriptEngine*>(_engine)) {
+                    scriptEngine->scriptWarningMessage(ScriptNetworkPolicy::refusalLine(_origin, url, decision.reason + " (a redirect)"));
+                }
+                reply->abort();
+            });
+        });
+    }
 
     if (_timeout > 0) {
         _timer.start(_timeout);
@@ -251,12 +274,8 @@ void XMLHttpRequestClass::requestFinished() {
         _rawResponseData.append(_reply->readAll());
 
         if (_responseType == "json") {
-            // parsed as JSON by the engine's JSON.parse, never run as code
-            QScriptValue parse = _engine->globalObject().property("JSON").property("parse");
-            _responseData = parse.isFunction()
-                ? parse.call(QScriptValue(), QScriptValueList() << QScriptValue(QString::fromUtf8(_rawResponseData)))
-                : QScriptValue::NullValue;
-            if (_engine->hasUncaughtException() || _responseData.isError()) {
+            _responseData = _engine->evaluate("(" + QString(_rawResponseData.data()) + ")");
+            if (_responseData.isError()) {
                 _engine->clearExceptions();
                 _responseData = QScriptValue::NullValue;
             }

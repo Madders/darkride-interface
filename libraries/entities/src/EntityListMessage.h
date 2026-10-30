@@ -42,6 +42,8 @@ namespace EntityListMessage {
     bool decodeRequest(const QByteArray& data, quint32& requestNumber);
 
     QByteArray encodeReply(quint32 requestNumber, const QVector<Record>& records);
+    // the reply's request number alone, read before anything is unpacked
+    bool readReplyNumber(const QByteArray& data, quint32& requestNumber);
     bool decodeReply(const QByteArray& data, quint32& requestNumber, QVector<Record>& records);
 }
 

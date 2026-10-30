@@ -32,7 +32,8 @@ class PanelTheme : public QObject, public Dependency {
     /// a loaded file's colours (key → "#rrggbb" or "#aarrggbb"), its "name" and its "base" scheme; empty when none
     Q_PROPERTY(QVariantMap custom READ getCustom NOTIFY changed)
     /// the skin on (ui/Skins.h): { name, colors, frames: { part: { source, hover, pressed, checked, disabled, slice,
-    /// padding } }, fontFamily }; empty when none. Its colours go over the scheme's; its frames, the panel controls draw.
+    /// padding } }, fontFamily, decorations: [{ source, at, offset, size, stretch }] }; empty when none. Its colours go
+    /// over the scheme's; its frames, the panel controls draw; its decorations on a panel, the pages draw.
     Q_PROPERTY(QVariantMap skin READ getSkin NOTIFY changed)
 
 public:

@@ -30,6 +30,7 @@
 #include <ShapeInfo.h>
 
 #include "InterfaceLogging.h"
+#include "ui/RightsLine.h"
 
 namespace {
     const glm::u8vec3 SHAPE_COLOR { 190, 190, 190 };       // Unity's default material, more or less
@@ -81,9 +82,24 @@ namespace {
 
 }
 
+QString EditorUpload::uploadingStatus(const QString& fileName, int percent, const QString& more, bool fromComputer) {
+    QString status = percent >= 100 ? QString("Processing %1…%2").arg(fileName, more)
+                                    : QString("Uploading %1 %2%%3").arg(fileName).arg(percent).arg(more);
+    return fromComputer ? status + " · " + rights::sentence() : status;
+}
+
 QString EditorUpload::safeFileName(const QString& name) {
     QString s = name;
     s.replace(QRegularExpression("[^A-Za-z0-9._-]+"), "_");
+    // at most 64 characters, its ending kept (".preview.jpg", an extension): a long entity or file name made paths
+    // past Windows' 260 (an impostor's cache file; qa's 1.1 review #24)
+    const int MAX_LENGTH = 64;
+    const int MAX_ENDING = 20;
+    if (s.length() > MAX_LENGTH) {
+        int dot = s.indexOf('.', s.length() - MAX_ENDING);
+        QString ending = dot >= 0 ? s.mid(dot) : QString();
+        s = s.left(MAX_LENGTH - ending.length()) + ending;
+    }
     return s;
 }
 
@@ -114,11 +130,13 @@ const QVector<EditorCreate::Item>& EditorCreate::items() {
         { "track", "Track", "", EntityTypes::Track },
         { "trackcar", "Track Car", "", EntityTypes::Shape },
         // ready-made things (Caity, 10-24): a mirror, and vehicles to drive at once, the Test Track's own as physics
-        // tuned them (tests-manual/physics-baseline: landrover.js, aircraft-rig.js, airship-rig.js; the monorail's
+        // tuned them (tests-manual/physics-baseline: landrover.js, kart-rig.js, aircraft-rig.js, airship-rig.js; the monorail's
         // loop and car). Later here: a scripted-avatar slot, a sound emitter, a wind source
         { "mirror", "Mirror", "Special items", EntityTypes::Shape, true },
         { "vehicle-car", "Car", "Special items/Vehicles", EntityTypes::Box, false, "editor/vehicles/car.json", 0.0f, false,
           "A four-wheeled car: get in its driver's seat to drive" },
+        { "vehicle-kart", "Go-kart", "Special items/Vehicles", EntityTypes::Box, false, "editor/vehicles/kart.json", 0.0f, false,
+          "A one-seat go-kart, small enough for a doorway" },
         { "vehicle-rail", "Rail", "Special items/Vehicles", EntityTypes::Track, false, "editor/vehicles/rail.json", 20.0f,
           false, "A loop of monorail track with a car that stops at its station: walk up the ramp to the platform to board" },
         { "vehicle-airship", "Airship", "Special items/Vehicles", EntityTypes::Box, false, "editor/vehicles/airship.json",
@@ -228,6 +246,10 @@ EntityItemProperties EditorCreate::properties(const QString& key, const glm::vec
         p.setName("Zone");
         p.setDimensions(glm::vec3(10.0f));
         p.setShapeType(SHAPE_TYPE_BOX);
+        // its own sun, casting shadows: a zone without them looked flat (Caity, 10-25). The engine's defaults (the
+        // sun inherited, no shadows) stay, so saved worlds and scripts' zones are as they were
+        p.setKeyLightMode((uint32_t)COMPONENT_MODE_ENABLED);
+        p.getKeyLight().setCastShadows(true);
     } else if (key == "particles") {
         p.setType(EntityTypes::ParticleEffect);
         p.setName("Particles");

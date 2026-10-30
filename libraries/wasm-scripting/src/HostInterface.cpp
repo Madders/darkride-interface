@@ -41,6 +41,24 @@ QString typeNameOf(int typeId) {
     return name ? QString::fromUtf8(name) : QString("type %1").arg(typeId);
 }
 
+// An enum of the method's own class that Qt hasn't registered by name (Q_ENUM registers it only on first use, so
+// "Probe::Mode" can be unknown to QMetaType::type): carried as its number, as QtScript carries it (it, too, looks
+// the name up among the class's enumerators).
+bool isOwnEnum(const QMetaMethod& method, QByteArray name) {
+    const QMetaObject* meta = method.enclosingMetaObject();
+    if (!meta) {
+        return false;
+    }
+    int scope = name.lastIndexOf("::");
+    if (scope != -1) {
+        if (name.left(scope) != meta->className()) {
+            return false;
+        }
+        name = name.mid(scope + 2);
+    }
+    return meta->indexOfEnumerator(name.constData()) != -1;
+}
+
 // A parameter's type id. moc leaves an enum declared with its unqualified name ("Mode") unresolved; the
 // registered name is the qualified one ("Probe::Mode"), so that is tried with the method's class scope. A
 // pointer to a const object ("const AudioEffectOptions*") is registered, if at all, without the const.
@@ -56,6 +74,26 @@ int parameterTypeOf(const QMetaMethod& method, int index) {
     type = QMetaType::type(name.constData());
     if (type == QMetaType::UnknownType && !name.contains("::") && method.enclosingMetaObject()) {
         type = QMetaType::type((QByteArray(method.enclosingMetaObject()->className()) + "::" + name).constData());
+    }
+    if (type == QMetaType::UnknownType && isOwnEnum(method, name)) {
+        type = QMetaType::Int;
+    }
+    return type;
+}
+
+// The return type's id, the same way: a method returning its class's own enum ("Mode") was refused as a type the host
+// interface cannot carry (Performance.getRefreshRateRegime, once it returned Performance's own enum, 2026-10-26).
+int returnTypeOf(const QMetaMethod& method) {
+    int type = method.returnType();
+    if (type != QMetaType::UnknownType) {
+        return type;
+    }
+    QByteArray name = method.typeName();
+    if (!name.contains("::") && method.enclosingMetaObject()) {
+        type = QMetaType::type((QByteArray(method.enclosingMetaObject()->className()) + "::" + name).constData());
+    }
+    if (type == QMetaType::UnknownType && isOwnEnum(method, name)) {
+        type = QMetaType::Int;
     }
     return type;
 }
@@ -556,12 +594,21 @@ const QVector<int>& HostInterface::candidates(const QMetaObject* meta, const QBy
     QVector<int> indices;
     for (int i = meta->methodCount() - 1; i >= 0; --i) {
         QMetaMethod method = meta->method(i);
-        if (method.access() != QMetaMethod::Private && method.methodType() != QMetaMethod::Constructor &&
-            method.methodType() != QMetaMethod::Signal && method.name() == name) {
+        if (callable(method) && method.name() == name) {
             indices.append(i);
         }
     }
     return _candidates.insert(key, indices).value();
+}
+
+// The rules describe() gives the guest, enforced for every form of a call (a plain name, "#index", a signature):
+// a module that does not go through the shim must not reach what the shim never shows. A private method and a
+// constructor are not a script's; a signal is not callable; and nothing QObject itself declares is, deleteLater
+// above all (an object the application owns, deleted under it).
+bool HostInterface::callable(const QMetaMethod& method) {
+    return method.access() != QMetaMethod::Private && method.methodType() != QMetaMethod::Constructor &&
+           method.methodType() != QMetaMethod::Signal && method.enclosingMetaObject() != &QObject::staticMetaObject &&
+           method.name() != "deleteLater";
 }
 
 namespace {
@@ -705,7 +752,7 @@ QVariant HostInterface::invoke(QObject* object, int methodIndex, const QVector<i
         generic[i] = QGenericArgument(QMetaType::typeName(type), type == QMetaType::QVariant ? &converted[i] : converted[i].constData());
     }
 
-    const int returnType = method.returnType();
+    const int returnType = returnTypeOf(method);
     bool invoked = false;
     QVariant result;
     if (returnType == QMetaType::Void) {
@@ -717,7 +764,8 @@ QVariant HostInterface::invoke(QObject* object, int methodIndex, const QVector<i
         return QVariant();
     } else {
         void* buffer = QMetaType::create(returnType);
-        QGenericReturnArgument returnArgument(QMetaType::typeName(returnType), buffer);
+        // the method's own spelling of the type: QMetaMethod::invoke compares it with the name given here
+        QGenericReturnArgument returnArgument(method.typeName(), buffer);
         invoked = method.invoke(object, Qt::DirectConnection, returnArgument, generic[0], generic[1], generic[2], generic[3],
                                 generic[4], generic[5], generic[6], generic[7], generic[8], generic[9]);
         if (invoked) {
@@ -757,14 +805,14 @@ QVariant HostInterface::callWithCbor(ObjectTable::Handle handle, const QByteArra
     if (name.startsWith('#')) {
         bool ok = false;
         int index = name.mid(1).toInt(&ok);
-        if (!ok || index < 0 || index >= meta->methodCount()) {
+        if (!ok || index < 0 || index >= meta->methodCount() || !callable(meta->method(index))) {
             error = QString("%1 has no method %2").arg(QString::fromUtf8(meta->className()), QString::fromUtf8(methodName));
             return QVariant();
         }
         indices.append(index);
     } else if (name.contains('(')) {
         int index = meta->indexOfMethod(QMetaObject::normalizedSignature(name.constData()).constData());
-        if (index < 0) {
+        if (index < 0 || !callable(meta->method(index))) {
             error = QString("%1 has no method %2").arg(QString::fromUtf8(meta->className()), QString::fromUtf8(methodName));
             return QVariant();
         }
@@ -939,5 +987,9 @@ bool HostInterface::disconnect(int connection) {
 }
 
 void HostInterface::release(ObjectTable::Handle handle) {
+    // a registered global (Entities, MyAvatar, the engine itself) stays: every script of the engine shares the table
+    if (_objects.isGlobal(handle)) {
+        return;
+    }
     _objects.release(handle);
 }

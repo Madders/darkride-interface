@@ -349,8 +349,9 @@ void EntityTreeRenderer::reloadEntityScripts() {
     for (const auto& entry : _entitiesInScene) {
         const auto& renderer = entry.second;
         const auto& entity = renderer->getEntity();
-        if (!entity->getScript().isEmpty()) {
-            _entitiesScriptEngine->loadEntityScript(entity->getEntityItemID(), resolveScriptURL(entity->getScript()), true);
+        QString scriptUrl = entity->getScriptToRun();
+        if (!scriptUrl.isEmpty()) {
+            _entitiesScriptEngine->loadEntityScript(entity->getEntityItemID(), resolveScriptURL(scriptUrl), true);
         }
     }
 }
@@ -695,6 +696,62 @@ void EntityTreeRenderer::preUpdate() {
     }
 }
 
+void EntityTreeRenderer::updateAvatarChildren() {
+    PROFILE_RANGE(simulation_physics, "ETR::updateAvatarChildren");
+    if (!_tree || _shuttingDown) {
+        return;
+    }
+    auto scene = _viewState->getMain3DScene();
+    if (!scene) {
+        return;
+    }
+    std::unordered_set<EntityItemID> changedEntities;
+    _changedEntitiesGuard.withWriteLock([&] {
+        changedEntities.swap(_changedEntities);
+    });
+    if (changedEntities.empty()) {
+        return;
+    }
+
+    // the ones under an avatar are updated now; the world's other changes go back for the next frame's pass, with its
+    // time budget and priority sort (the dead and those without a renderable are dropped, as that pass drops them)
+    std::vector<EntityRendererPointer> underAvatars;
+    for (auto it = changedEntities.begin(); it != changedEntities.end();) {
+        EntityItemPointer entity = getEntity(*it);
+        if (entity && entity->hasAncestorOfType(NestableType::Avatar)) {
+            if (!entity->isDead()) {
+                if (EntityRendererPointer renderable = renderableForEntityId(*it)) {
+                    underAvatars.push_back(renderable);
+                }
+            }
+            it = changedEntities.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (!changedEntities.empty()) {
+        _changedEntitiesGuard.withWriteLock([&] {
+            _changedEntities.insert(changedEntities.begin(), changedEntities.end());
+        });
+    }
+    if (underAvatars.empty()) {
+        return;
+    }
+
+    // as the AUTOMATIC pass updates them; the stats and the budget's average cost are left to that pass. Outside the
+    // budget: in a crowd every moving avatar's children land here each frame (avatars, 10-28), so the count is shown
+    {
+        PROFILE_RANGE_EX(simulation_physics, "UpdateAvatarChildren", 0xffff00ff, (uint64_t)underAvatars.size());
+        render::Transaction transaction;
+        for (const EntityRendererPointer& renderable : underAvatars) {
+            bool changed = renderable->entityHasChanged();
+            renderable->getEntity()->setNeedsRenderUpdate(true);
+            renderable->updateInScene(scene, transaction, changed);
+        }
+        scene->enqueueTransaction(transaction);
+    }
+}
+
 void EntityTreeRenderer::update(bool simulate) {
     PROFILE_RANGE(simulation_physics, "ETR::update");
     PerformanceTimer perfTimer("ETRupdate");
@@ -802,7 +859,7 @@ void EntityTreeRenderer::findBestZoneAndMaybeContainingEntities(QSet<EntityItemI
             }
 
             auto isZone = entity->getType() == EntityTypes::Zone;
-            auto hasScript = !entity->getScript().isEmpty();
+            auto hasScript = !entity->getScriptToRun().isEmpty();
 
             // only consider entities that are zones or have scripts, all other entities can
             // be ignored because they can't have events fired on them.
@@ -1360,7 +1417,8 @@ void EntityTreeRenderer::checkAndCallPreload(const EntityItemID& entityID, bool 
             return;
         }
         bool shouldLoad = entity->shouldPreloadScript() && _entitiesScriptEngine;
-        QString scriptUrl = entity->getScript();
+        // "" while the entity's scripts are off: unloaded, as when its script is cleared
+        QString scriptUrl = entity->getScriptToRun();
         if ((shouldLoad && unloadFirst) || scriptUrl.isEmpty()) {
             if (_entitiesScriptEngine) {
                 if (_currentEntitiesInside.contains(entityID)) {

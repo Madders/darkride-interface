@@ -647,6 +647,11 @@ void VehicleSimulation::chooseInput(Vehicle& vehicle, uint32_t step) {
     quint64 now = usecTimestampNow();
     VehicleInput local;
     bool haveLocal = localControls(vehicle, local);
+    if (haveLocal) {
+        shapeSteering(vehicle, local);
+    } else {
+        vehicle.steering = 0.0f;   // the next driver starts with the wheels straight
+    }
     const VehiclePropertyGroup& group = vehicle.entity->getVehicleProperties();
 
     if (isAuthority(vehicle)) {
@@ -712,6 +717,26 @@ void VehicleSimulation::chooseInput(Vehicle& vehicle, uint32_t step) {
     if (stateLocalTime == 0 || now > stateLocalTime + DRIVER_SILENCE) {
         easeOff(vehicle);
     }
+}
+
+// The local driver's steering (keyboard, gamepad or script), eased toward the ask and held to what the tyres take at
+// this speed (WheeledVehicleSpec::steeringFor), before it is applied, recorded and sent: the authority applies what the
+// driver saw, a 1.0.2 server included. Wheeled vehicles only; the airship's rudder and the aircraft's flight assistant
+// have their own.
+void VehicleSimulation::shapeSteering(Vehicle& vehicle, VehicleInput& input) {
+    if (vehicle.airship || vehicle.aircraft) {
+        return;
+    }
+    float speed = 0.0f;
+    if (JPH::Body* body = vehicle.state->getBody()) {
+        // over the ground, not along the nose: a slide must not raise the limit and feed itself
+        glm::vec3 velocity = joltToGLM(body->GetLinearVelocity());
+        glm::vec3 gravity = vehicle.state->getBodyGravity();
+        glm::vec3 up = glm::length2(gravity) > 0.0f ? -glm::normalize(gravity) : glm::vec3(0.0f, 1.0f, 0.0f);
+        speed = glm::length(velocity - up * glm::dot(velocity, up));
+    }
+    input.steering = vehicle.spec.steeringFor(vehicle.steering, input.steering, speed, PHYSICS_ENGINE_FIXED_SUBSTEP);
+    vehicle.steering = input.steering;
 }
 
 // Nobody is driving, or whoever was has gone quiet: a car eases off and holds the brake, an airship stops thrusting,

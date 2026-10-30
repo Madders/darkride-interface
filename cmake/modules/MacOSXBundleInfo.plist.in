@@ -44,6 +44,8 @@ ${MACOSX_BUNDLE_URL_TYPES}	<key>LSEnvironment</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Darkride uses your microphone so the people near you in a world can hear you.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Darkride uses your camera, only when you turn on face tracking, to move your avatar's face. The picture never leaves your computer.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
 	<string>Darkride opens your Downloads folder when you import an avatar or a model.</string>
 	<key>NSDocumentsFolderUsageDescription</key>

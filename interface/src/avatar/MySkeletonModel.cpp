@@ -12,6 +12,8 @@
 #include <DebugDraw.h>
 #include <CubicHermiteSpline.h>
 
+#include <controllers/UserInputMapper.h>
+
 #include "Application.h"
 #include "InterfaceLogging.h"
 #include "AnimUtil.h"
@@ -149,6 +151,12 @@ void MySkeletonModel::updateRig(float deltaTime, glm::mat4 parentTransform) {
         glm::quat headRot = Quaternions::Y_180 * head->getFinalOrientationInLocalFrame() * Quaternions::Y_180;
         params.primaryControllerPoses[Rig::PrimaryControllerType_Head] = AnimPose(glm::vec3(1.0f), headRot, glm::vec3(0.0f));
         params.primaryControllerFlags[Rig::PrimaryControllerType_Head] = 0;
+
+        // face tracking turns the head on top of the animation (in the avatar's frame; the rig's is turned 180)
+        auto headTurn = DependencyManager::get<UserInputMapper>()->getPoseState(controller::Action::HEAD_TURN);
+        if (headTurn.isValid()) {
+            params.headTurn = avatarToRigPose.rot() * headTurn.getRotation() * glm::inverse(avatarToRigPose.rot());
+        }
     }
 
     //

@@ -24,7 +24,8 @@ public:
         const QUuid& getPathID() const { return _pathID; }
         const bool& doesPathIgnorePicks() const { return _pathIgnorePicks; }
 
-        void setLineWidth(float width) { _lineWidth = width; }
+        // one width for the whole line; a line made with several (strokeWidths) keeps them, from the hand to the end
+        void setLineWidth(float width) { _lineWidth = width; _lineWidths.clear(); }
         float getLineWidth() const { return _lineWidth; }
 
         void cleanup() override;
@@ -37,6 +38,7 @@ public:
 
         bool _pathIgnorePicks;
         float _lineWidth;
+        QVector<float> _lineWidths;   // more than two: the line is drawn with that many points, tapering as they say
     };
 
     LaserPointer(const QVariant& rayProps, const RenderStateMap& renderStates, const DefaultRenderStateMap& defaultRenderStates, bool hover, const PointerTriggers& triggers,

@@ -139,6 +139,15 @@ int ObjectTable::sweepLingering() {
     return _lingering.size();
 }
 
+bool ObjectTable::isGlobal(Handle handle) const {
+    for (auto it = _globals.constBegin(); it != _globals.constEnd(); ++it) {
+        if (it.value() == handle) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void ObjectTable::registerGlobal(const QString& name, QObject* object) {
     _globals.insert(name, handleFor(object));
 }

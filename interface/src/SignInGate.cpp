@@ -16,6 +16,7 @@
 #include "SignInGate.h"
 
 #include <QtCore/QThread>
+#include <QtQuick/QQuickItem>
 
 #include <AccountManager.h>
 #include <AddressManager.h>
@@ -24,6 +25,7 @@
 #include <EntityScriptingInterface.h>
 #include <MainWindow.h>
 #include <MessagesClient.h>
+#include <OffscreenUi.h>
 #include <PathUtils.h>
 #include <ScriptEngines.h>
 #include <shared/GlobalAppProperties.h>
@@ -32,9 +34,11 @@
 #include "Application.h"
 #include "avatar/AvatarManager.h"
 #include "ClientOptions.h"
+#include "InterfaceLogging.h"
 #include "ui/Skins.h"
 #include "editor/Editor.h"
 #include "ui/SystemToolbar.h"
+#include "ui/WindowLayout.h"
 #include "ui/DialogsManager.h"
 #include "ui/Keyboard.h"
 #include "ui/LoginDialog.h"
@@ -74,6 +78,13 @@ void SignInGate::showLoginScreen() {
     _poppedUpSetting.set(_poppedUp);
     dialogsManager->showLoginDialog();
     StartupProfiler::instant("sign-in dialog opened");
+    if (!_pageCheck.isActive()) {
+        _pageCheck.setInterval(1000);
+        connect(&_pageCheck, &QTimer::timeout, this, &SignInGate::checkSignInPage, Qt::UniqueConnection);
+        _pageMissingFor = 0;
+        _pageState.clear();
+        _pageCheck.start();
+    }
     emit loginDialogFocusEnabled();
     qApp->getWindow()->setWindowTitle(labelledTitle("Darkride"));
 }
@@ -90,7 +101,7 @@ void SignInGate::pauseUntilLoginDetermined() {
     _previousAvatarTargetScale = myAvatar->getTargetScale();
     _previousAvatarSkeletonModel = myAvatar->getSkeletonModelURL().toString();
     myAvatar->setTargetScale(1.0f);
-    myAvatar->setSkeletonModelURLFromScript(myAvatar->defaultFullAvatarModelUrl().toString());
+    myAvatar->setSkeletonModelURLFromScript(MyAvatar::defaultAvatarURL().toString());
     myAvatar->setEnableMeshVisible(false);
 
     qApp->getControllerScriptingInterface()->disableMapping(STANDARD_TO_ACTION_MAPPING_NAME);
@@ -145,9 +156,13 @@ void SignInGate::resumeAfterLoginDialogActionTaken() {
         return;
     }
 
+    _pageCheck.stop();
+
     // either bar, floating or on a side, may show now (each still waits for the desktop: none in VR), and the skin
     SystemToolbar::instance()->setAllowed(true);
     DependencyManager::get<Skins>()->setHeld(false);
+    // the panels where they were left, chat's open again if it was (once a run: nothing moved under the sign-in screen)
+    WindowLayout::instance()->restore();
     if (qApp->isHMDMode() || !qApp->getDesktopTabletBecomesToolbarSetting()) {
         qApp->getApplicationCompositor().getReticleInterface()->setAllowMouseCapture(true);
         qApp->getApplicationCompositor().getReticleInterface()->setVisible(true);
@@ -198,6 +213,9 @@ void SignInGate::resumeAfterLoginDialogActionTaken() {
         // This is done so we don't get a "connection time-out" message when we haven't passed in a URL.
         if (ClientOptions::get().hasUrl) {
             QMetaObject::invokeMethod(&qApp->getDomainSession(), &DomainSession::goToStartingLocation, Qt::QueuedConnection);
+        } else {
+            // stays put, but follows a link it was opened with (nothing happens without one)
+            qApp->getDomainSession().noStartingLocation();
         }
     } else {
         QMetaObject::invokeMethod(&qApp->getDomainSession(), &DomainSession::goToStartingLocation, Qt::QueuedConnection);
@@ -213,7 +231,10 @@ void SignInGate::resumeAfterLoginDialogActionTaken() {
     qApp->getViewState().restorePreviousMode();
     _startUpFinished = true;
     StartupProfiler::instant("signed in: scripts loading, going to the starting location");
-    qApp->getRefreshRateManager().setRefreshRateRegime(RefreshRateManager::RefreshRateRegime::FOCUS_ACTIVE);
+    // the app's actual state: a player who switched to another app while this one loaded is not in front (on Windows,
+    // Qt's application state can say active then: Display::isAppInFront asks Windows)
+    qApp->getRefreshRateManager().setRefreshRateRegime(qApp->getDisplay().isAppInFront() ?
+        RefreshRateManager::RefreshRateRegime::FOCUS_ACTIVE : RefreshRateManager::RefreshRateRegime::UNFOCUS);
     _signInPending = false;
 }
 
@@ -323,6 +344,42 @@ void SignInGate::update() {
     if (!_loginDialogID.isNull()) {
         _loginStateManager.update(getMyAvatar()->getDominantHand(), _loginDialogID);
         updateLoginDialogPosition();
+    }
+}
+
+void SignInGate::checkSignInPage() {
+    if (!_signInPending || !_poppedUp || qApp->isHMDMode()) {
+        _pageCheck.stop();
+        return;
+    }
+    auto offscreenUi = DependencyManager::get<OffscreenUi>();
+    QQuickItem* root = offscreenUi ? offscreenUi->getRootItem() : nullptr;
+    // the desktop's sign-in page, by the object name HIFI_QML_DEF gives it (LoginDialog::NAME is private)
+    QQuickItem* page = root ? root->findChild<QQuickItem*>("LoginDialog") : nullptr;
+    // on screen: there, shown, not see-through, with some of it inside the window's UI
+    QRectF place;
+    bool shown = false;
+    if (page && root) {
+        place = page->mapRectToItem(root, QRectF(0, 0, page->width(), page->height()));
+        shown = page->isVisible() && page->opacity() > 0.01 && place.intersects(QRectF(0, 0, root->width(), root->height()));
+    }
+    const QString state = !root ? "no UI root" : !page ? "no page" :
+        QString("page %1, opacity %2, at %3,%4 %5x%6 of %7x%8").arg(page->isVisible() ? "visible" : "hidden")
+            .arg(page->opacity()).arg(place.x()).arg(place.y()).arg(place.width()).arg(place.height())
+            .arg(root->width()).arg(root->height());
+    if (state != _pageState) {
+        _pageState = state;
+        qCDebug(interfaceapp) << "Sign-in page:" << state;
+    }
+    if (shown) {
+        _pageMissingFor = 0;
+        return;
+    }
+    if (++_pageMissingFor >= 2) {
+        qCWarning(interfaceapp) << "Sign-in page: not on screen for 2 s while signing in; putting it back";
+        _pageMissingFor = 0;
+        DependencyManager::get<DialogsManager>()->showLoginDialog();
+        emit loginDialogFocusEnabled();
     }
 }
 

@@ -88,6 +88,26 @@ void loadOldINIFile(QSettings& settings) {
     QSettings::setDefaultFormat(JSON_FORMAT);
 }
 
+QString setSettingsPathFromEnvironment() {
+    const QString appDataPath = QString::fromLocal8Bit(qgetenv("TIVOLI_APP_DATA_DIR"));
+    if (appDataPath.isEmpty()) {
+        return QString();
+    }
+    QString path = QString::fromLocal8Bit(qgetenv("XDG_CONFIG_HOME"));
+#ifndef Q_OS_WIN
+    if (!path.isEmpty()) {
+        return QString();
+    }
+#endif
+    if (path.isEmpty()) {
+        path = appDataPath;
+    }
+    // the JSON settings file, and the old INI one loadOldINIFile imports from
+    QSettings::setPath(JSON_FORMAT, QSettings::UserScope, path);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, path);
+    return path;
+}
+
 QStringList splitArgs(const QString& string, int idx) {
     int length = string.length();
     Q_ASSERT(length > 0);

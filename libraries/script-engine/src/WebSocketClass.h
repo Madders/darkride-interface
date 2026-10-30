@@ -15,6 +15,7 @@
 #include <QObject>
 #include <QScriptEngine>
 #include <QWebSocket>
+#include <QUrl>
 
 /**jsdoc
  * Provides a bi-directional, event-driven communication session between the script and another WebSocket connection. It is a 
@@ -25,6 +26,11 @@
  * {@link WebSocketServer} class in server entity and assignment client scripts.
  *
  * <p><strong>Note:</strong> Does not support secure, <code>wss:</code> protocol.</p>
+ *
+ * <p>On a person's client, a script that came over the network (a world's script) may connect to public hosts only: not to
+ * services on that computer or on its network. A refused connection fails as an unreachable one does (onerror, then onclose
+ * with code 1006), with the reason in the script's log. A script loaded from the computer itself, or any script of a world
+ * served from that computer or its network, keeps every address.</p>
  *
  * @class WebSocket
  * @param {string|WebSocket} urlOrWebSocket - The URL to connect to or an existing {@link WebSocket} to reuse the connection of.
@@ -229,8 +235,14 @@ private:
     QScriptValue _onOpenEvent;
 
     QString _binaryType;
+    QUrl _origin;                // where the script making the connection came from
+    bool _ruled { false };       // whether the network rule for a script's own requests holds here (a person's client)
 
     void initialize();
+    /// Ends the connection as refused by the network rule (ScriptNetworkPolicy): a connection that fails, with the
+    /// reason in the script's log.
+    void refuse(const QUrl& target, const QString& reason);
+    void fireClose(int code, const QString& reason, bool wasClean);
 
 private slots:
     void handleOnClose();

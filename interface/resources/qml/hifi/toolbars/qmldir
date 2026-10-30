@@ -1,4 +1,5 @@
 module toolbars
+BarButton 1.0 BarButton.qml
 StateImage 1.0 StateImage.qml
 Toolbar 1.0 Toolbar.qml
 ToolbarButton 1.0 ToolbarButton.qml

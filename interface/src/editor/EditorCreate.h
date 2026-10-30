@@ -69,6 +69,10 @@ public:
     QString fileName() const { return _fileName; }
     // the name a file is stored under: letters, digits, dot, dash and underscore; anything else becomes "_"
     static QString safeFileName(const QString& name);
+    // Build mode's status while a file goes up: "Uploading chair.glb 40%", or from 100 "Processing chair.glb…" (sent;
+    // the server is storing it), then more (" (+2 more)"); for a file from this computer, the rights line after it
+    // (ui/RightsLine.h), all the while it goes up
+    static QString uploadingStatus(const QString& fileName, int percent, const QString& more, bool fromComputer);
 
 signals:
     void progress(qint64 sent, qint64 total);

@@ -13,6 +13,7 @@
 #include <QtCore/QCborArray>
 #include <QtCore/QCborMap>
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDateTime>
 #include <QtCore/QPointer>
 #include <QtCore/QSharedPointer>
 #include <QtCore/QUrl>
@@ -24,7 +25,7 @@
 
 #include "TestObjects.h"
 
-QTEST_MAIN(ValueCodecTests)
+QTEST_GUILESS_MAIN(ValueCodecTests)
 
 namespace {
 
@@ -686,8 +687,68 @@ void ValueCodecTests::testDirectEncodingMatchesTheTree() {
         QVERIFY2(direct == tree, qPrintable(QString("%1 (%2): %3, the tree gives %4").arg(value.toString(), value.typeName())
                                                 .arg(QString::fromLatin1(direct.toHex()), QString::fromLatin1(tree.toHex()))));
     }
-    // the rest still go through the tree
-    QCOMPARE(codec.encode(QVariant(QVariantList { 1, "two" })), codec.toCbor(QVariant(QVariantList { 1, "two" })).toCbor());
+    // lists and maps, item by item: the member orders of the known shapes, nesting, and items that still go
+    // through the tree (a URL, bytes, a date, a CBOR value)
+    QVariantMap large;
+    for (int i = 0; i < 300; ++i) {
+        large.insert(QString("key%1").arg(i, 3, 10, QChar('0')), i % 3 ? QVariant(i * 0.5) : QVariant(QString::number(i)));
+    }
+    QVariantHash hash;
+    hash.insert("one", 1);
+    hash.insert("two", QVariantList { 2, "2" });
+    hash.insert("three", QVariantMap { { "x", 3 }, { "y", 4 } });
+    const QVariantList containers {
+        QVariant(QVariantList()), QVariant(QVariantMap()), QVariant(QStringList()), QVariant(QVariantHash()),
+        QVariant(QVariantList { 1, "two" }), QVariant(QStringList { "a", "", "héllo" }),
+        QVariant(QVariantMap { { "z", 3 }, { "x", 1 }, { "y", 2 } }),
+        QVariant(QVariantMap { { "w", 4 }, { "z", 3 }, { "x", 1 }, { "y", 2 } }),
+        QVariant(QVariantMap { { "y", 2 }, { "x", 1 } }),
+        QVariant(QVariantMap { { "blue", 3 }, { "green", 2 }, { "red", 1 } }),
+        QVariant(QVariantMap { { "x", 1 }, { "z", 3 }, { "q", 2 } }),
+        QVariant(QVariantMap { { "red", 1 }, { "blue", 3 }, { "alpha", 2 } }),
+        QVariant(QVariantMap { { "position", QVariant::fromValue(glm::vec3(1.0f, 2.0f, 3.0f)) },
+                               { "list", QVariantList { QVariantMap { { "a", QVariant() } }, QVariantList { true } } },
+                               { "id", QUuid("{6ba7b810-9dad-11d1-80b4-00c04fd430c8}") }, { "none", QUuid() } }),
+        QVariant(QVariantList { QUrl("https://example.invalid/x"), QByteArray("\x01\x02"), QDateTime::fromMSecsSinceEpoch(0, Qt::UTC),
+                                QVariant::fromValue(QCborValue(QCborMap { { "kept", "as it is" } })) }),
+        QVariant(large), QVariant(hash),
+    };
+    for (const QVariant& value : containers) {
+        QByteArray direct = codec.encode(value);
+        QByteArray tree = codec.toCbor(value).toCbor();
+        QVERIFY2(direct == tree, qPrintable(QString("%1: %2, the tree gives %3").arg(value.typeName())
+                                                .arg(QString::fromLatin1(direct.left(80).toHex()), QString::fromLatin1(tree.left(80).toHex()))));
+    }
+}
+
+// A large map, as a host call returning one many times a second sends it: written directly, in O(n).
+void ValueCodecTests::benchmarkLargeMap() {
+    ValueCodec codec;
+    QVariantMap map;
+    for (int i = 0; i < 500; ++i) {
+        map.insert(QString("action%1").arg(i), double(i) * 0.25);
+    }
+    const QVariant value(map);
+    QByteArray bytes;
+    QBENCHMARK {
+        bytes = codec.encode(value);
+    }
+    QVERIFY(bytes.size() > 500);
+}
+
+// The same map through the tree (a QCborMap), as encode() wrote it before: for comparison.
+void ValueCodecTests::benchmarkLargeMapThroughTheTree() {
+    ValueCodec codec;
+    QVariantMap map;
+    for (int i = 0; i < 500; ++i) {
+        map.insert(QString("action%1").arg(i), double(i) * 0.25);
+    }
+    const QVariant value(map);
+    QByteArray bytes;
+    QBENCHMARK {
+        bytes = codec.toCbor(value).toCbor();
+    }
+    QCOMPARE(bytes, codec.encode(value));
 }
 
 // genericTypeOf gives the type of the value fromCbor makes, without making it.

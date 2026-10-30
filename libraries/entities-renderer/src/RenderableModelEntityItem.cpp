@@ -261,6 +261,8 @@ EntityItemProperties RenderableModelEntityItem::getProperties(const EntityProper
         properties.setTextureNames(_originalTextures);
     }
 
+    // scripts call this on their own threads while the main thread changes the model: read only what the model keeps for
+    // any thread (its materials and geometry are the main thread's)
     ModelPointer model = getModel();
     if (model) {
         properties.setRenderInfoVertexCount(model->getRenderInfoVertexCount());
@@ -269,10 +271,10 @@ EntityItemProperties RenderableModelEntityItem::getProperties(const EntityProper
         properties.setRenderInfoDrawCalls(model->getRenderInfoDrawCalls());
         properties.setRenderInfoHasTransparent(model->getRenderInfoHasTransparent());
 
-        if (model->isLoaded()) {
+        Extents meshExtents;
+        if (model->getCachedUnscaledMeshExtents(meshExtents)) {
             // TODO: improve naturalDimensions in the future,
             //       for now we've added this hack for setting natural dimensions of models
-            Extents meshExtents = model->getHFMModel().getUnscaledMeshExtents();
             properties.setNaturalDimensions(meshExtents.maximum - meshExtents.minimum);
             properties.calculateNaturalPosition(meshExtents.minimum, meshExtents.maximum);
         }
@@ -945,24 +947,13 @@ QStringList RenderableModelEntityItem::getJointNames() const {
 }
 
 QVariantMap RenderableModelEntityItem::getModelExtras() const {
+    // scripts call this on their own threads (Entities.getModelExtras): the model keeps a copy of the extras, made on
+    // the main thread as its geometry arrives, since a reload or a new modelURL can free the geometry under a script
+    // walking it (getProperties had the same race)
     QVariantMap result;
     auto model = getModel();
-    if (model && model->isActive()) {
-        const HFMModel& hfmModel = model->getHFMModel();
-        QVariantMap objects;
-        for (const auto& joint : hfmModel.joints) {
-            if (!joint.extras.isEmpty()) {
-                objects[joint.name] = joint.extras;
-            }
-        }
-        QVariantMap materials;
-        for (const auto& material : hfmModel.materials) {
-            if (!material.extras.isEmpty()) {
-                materials[material.name] = material.extras;
-            }
-        }
-        result["objects"] = objects;
-        result["materials"] = materials;
+    if (model) {
+        model->getCachedExtras(result);
     }
     return result;
 }

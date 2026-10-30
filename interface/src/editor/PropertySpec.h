@@ -75,6 +75,8 @@ struct PropertySpec {
     // (no brackets: "a and b or c" is a and b, or c), or empty
     QString showWhen;
     bool readOnly { false };
+    bool header { false };  // in the Inspector's header (Unity's): Visible beside the name, the other ticks under them
+    bool headerIcon { false };  // shown as one of the header's toggle icons (the Hierarchy rows'), not as a field
 };
 
 struct PropertySection {

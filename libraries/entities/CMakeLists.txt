@@ -1,6 +1,7 @@
 set(TARGET_NAME entities)
 setup_hifi_library(Network Script)
 target_openssl()
+target_zlib()
 include_hifi_library_headers(hfm)
 include_hifi_library_headers(fbx)
 include_hifi_library_headers(gpu)

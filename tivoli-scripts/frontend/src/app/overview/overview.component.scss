@@ -104,8 +104,9 @@
 	}
 }
 
-// the AI resident pill beside a name (the full line is the title)
-.badge.ai {
+// the AI resident's or the bot's pill beside a name (the full line is the title)
+.badge.ai,
+.badge.bot {
 	display: inline-block;
 	vertical-align: middle;
 	background-color: #3f51b5;
@@ -115,4 +116,9 @@
 	font-size: 0.7em;
 	font-weight: 700;
 	margin-left: 4px;
+}
+
+// a bot: scripted, not AI; slate, as on its nametag
+.badge.bot {
+	background-color: #546e7a;
 }

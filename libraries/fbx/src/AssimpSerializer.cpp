@@ -10,6 +10,9 @@
 //
 
 #include "AssimpSerializer.h"
+#include "FSTReader.h"
+
+#include <algorithm>
 
 #include <algorithm>
 
@@ -34,6 +37,7 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QSet>
 #include <QtCore/QtEndian>
 
 // disabled because it causes crashes with Assimp::DefaultLogger::WriteToStreams
@@ -447,6 +451,38 @@ aiAnimMesh* AssimpSerializer::getBlendshapeByName(QString name, aiMesh* mMesh) {
 }
 
 void AssimpSerializer::processMeshes(const hifi::VariantHash& mapping) {
+    // The model's own blend shapes (hfm::Model::ownBlendshapeNames), when the .fst asks for them, as FBXSerializer keeps
+    // them: each of a mesh's shapes that no standard name takes, by its name, in a slot after the standard ones
+    const hifi::VariantHash ownBlendshapeDefaults = mapping.value("blendshapeDefault").toHash();
+    const bool keepOwnBlendshapes = !ownBlendshapeDefaults.isEmpty() ||
+        mapping.value("ownBlendshapes").toString().trimmed().compare("true", Qt::CaseInsensitive) == 0;
+    QHash<QString, int> ownBlendshapeSlots;
+
+    // a shape's offsets from the mesh, times its weight, for the vertices it moves
+    auto fillBlendshape = [](hfm::Blendshape& blendshape, const aiMesh* mMesh, const aiAnimMesh* animMesh, float weight) {
+        for (size_t vertexIndex = 0; vertexIndex < animMesh->mNumVertices; vertexIndex++) {
+            auto v = (asVec3(animMesh->mVertices[vertexIndex]) - asVec3(mMesh->mVertices[vertexIndex])) * weight;
+
+            auto n = animMesh->HasNormals() ?
+                (asVec3(animMesh->mNormals[vertexIndex]) - asVec3(mMesh->mNormals[vertexIndex])) * weight :
+                vec3(0.0f);
+
+            auto t = animMesh->HasTangentsAndBitangents() ?
+                (asVec3(animMesh->mTangents[vertexIndex]) - asVec3(mMesh->mTangents[vertexIndex])) * weight :
+                vec3(0.0f);
+
+            if (isEmptyVec3(v) && isEmptyVec3(n) && isEmptyVec3(t)) {
+                continue;
+            }
+
+            blendshape.indices.push_back(vertexIndex);
+
+            blendshape.vertices.push_back(v);
+            if (animMesh->HasNormals()) blendshape.normals.push_back(n);
+            if (animMesh->HasTangentsAndBitangents()) blendshape.tangents.push_back(t);
+        }
+    };
+
     for (size_t meshIndex = 0; meshIndex < scene->mNumMeshes; meshIndex++) {
         aiMesh* mMesh = scene->mMeshes[meshIndex];
 
@@ -501,10 +537,11 @@ void AssimpSerializer::processMeshes(const hifi::VariantHash& mapping) {
             }
         }
 
-        hifi::VariantHash blendshapeMappings = mapping.value("bs").toHash();
+        hifi::VariantHash blendshapeMappings = FSTReader::getBlendshapeMappings(mapping);
 
         if (mMesh->mNumAnimMeshes > 0) {
             bool isBlendshapeChannelNamesEmpty = hfmModel->blendshapeChannelNames.size() == 0;
+            QSet<QString> standardShapes;   // this mesh's shapes the standard names take
 
             QStringList morphTargetNames;
             for (size_t i = 0; i < mMesh->mNumAnimMeshes; i++) {
@@ -566,6 +603,7 @@ void AssimpSerializer::processMeshes(const hifi::VariantHash& mapping) {
                     if (animMesh == nullptr) {
                         continue;
                     }
+                    standardShapes.insert(QString(animMesh->mName.C_Str()));
                     const bool sourceHasNormals = animMesh->HasNormals() && mMesh->HasNormals();
                     const bool sourceHasTangents = animMesh->HasTangentsAndBitangents() && mMesh->HasTangentsAndBitangents();
                     hasNormals = hasNormals || sourceHasNormals;
@@ -581,6 +619,7 @@ void AssimpSerializer::processMeshes(const hifi::VariantHash& mapping) {
                     }
                 }
 
+                // what the sources sum to, for the vertices it moves
                 for (size_t vertexIndex = 0; vertexIndex < vertexCount; vertexIndex++) {
                     const auto& v = vertices[vertexIndex];
                     const auto& n = normals[vertexIndex];
@@ -596,6 +635,35 @@ void AssimpSerializer::processMeshes(const hifi::VariantHash& mapping) {
                     if (hasTangents) blendshapePtr->tangents.push_back(t);
                 }
             }
+
+            if (keepOwnBlendshapes) {
+                for (size_t i = 0; i < mMesh->mNumAnimMeshes; i++) {
+                    const aiAnimMesh* animMesh = mMesh->mAnimMeshes[i];
+                    const QString name = animMesh->mName.C_Str();
+                    if (name.isEmpty() || standardShapes.contains(name)) {
+                        continue;
+                    }
+                    auto slot = ownBlendshapeSlots.find(name);
+                    if (slot == ownBlendshapeSlots.end()) {
+                        slot = ownBlendshapeSlots.insert(name, hfmModel->ownBlendshapeNames.size());
+                        hfmModel->ownBlendshapeNames << name;
+                    }
+                    const int index = (int)Blendshapes::BlendshapeCount + *slot;
+                    if (meshPtr->blendshapes.size() <= index) {
+                        meshPtr->blendshapes.resize(index + 1);
+                    }
+                    fillBlendshape(meshPtr->blendshapes[index], mMesh, animMesh, 1.0f);
+                }
+            }
+        }
+    }
+
+    // the own blend shapes' starting weights
+    hfmModel->ownBlendshapeDefaults.fill(0.0f, hfmModel->ownBlendshapeNames.size());
+    for (auto it = ownBlendshapeDefaults.begin(); it != ownBlendshapeDefaults.end(); ++it) {
+        const int slot = hfmModel->ownBlendshapeNames.indexOf(it.key());
+        if (slot >= 0) {
+            hfmModel->ownBlendshapeDefaults[slot] = glm::clamp(it.value().toFloat(), 0.0f, 1.0f);
         }
     }
 }
@@ -996,6 +1064,151 @@ public:
 };
 #endif
 
+static const unsigned int UNUSED_VERTEX = 0xffffffff;
+
+// Keeps of a mesh's per-vertex `array` the vertices `remap` gives a place to, at that place
+template <typename T>
+static void keepVertices(T*& array, const std::vector<unsigned int>& remap, unsigned int count) {
+    if (!array) {
+        return;
+    }
+    T* kept = new T[count];
+    for (size_t vertexIndex = 0; vertexIndex < remap.size(); vertexIndex++) {
+        if (remap[vertexIndex] != UNUSED_VERTEX) {
+            kept[remap[vertexIndex]] = array[vertexIndex];
+        }
+    }
+    delete[] array;
+    array = kept;
+}
+
+// Drops the vertices no face uses from each skinned mesh, with their morph targets and bone weights, and the bones then
+// left weighting nothing. Where a glTF's primitives share one vertex buffer (VRoid's do), Assimp gives each primitive's
+// mesh the whole buffer, and every bone that weights any of it. Joining identical vertices then left a bone whose weights
+// were all on the other primitives' vertices with its old vertex numbers (JoinVerticesProcess keeps a bone's weights when
+// none of them carries over), and those numbers now pointed at this mesh's own vertices: three-vrm-girl's hair came out
+// weighted to her hand. The vertices keep their order, so the join that follows gives what it gave before for the rest.
+static void compactSkinnedMeshes(aiScene* scene) {
+    for (unsigned int meshIndex = 0; meshIndex < scene->mNumMeshes; meshIndex++) {
+        aiMesh* mesh = scene->mMeshes[meshIndex];
+        if (mesh->mNumBones == 0) {
+            continue;
+        }
+
+        std::vector<unsigned int> remap(mesh->mNumVertices, UNUSED_VERTEX);
+        for (unsigned int faceIndex = 0; faceIndex < mesh->mNumFaces; faceIndex++) {
+            const aiFace& face = mesh->mFaces[faceIndex];
+            for (unsigned int i = 0; i < face.mNumIndices; i++) {
+                if (face.mIndices[i] < mesh->mNumVertices) {
+                    remap[face.mIndices[i]] = 0;
+                }
+            }
+        }
+        unsigned int count = 0;
+        for (auto& place : remap) {
+            if (place != UNUSED_VERTEX) {
+                place = count++;
+            }
+        }
+        if (count == 0 || count == mesh->mNumVertices) {
+            continue;
+        }
+
+        keepVertices(mesh->mVertices, remap, count);
+        keepVertices(mesh->mNormals, remap, count);
+        keepVertices(mesh->mTangents, remap, count);
+        keepVertices(mesh->mBitangents, remap, count);
+        for (auto& colors : mesh->mColors) {
+            keepVertices(colors, remap, count);
+        }
+        for (auto& textureCoords : mesh->mTextureCoords) {
+            keepVertices(textureCoords, remap, count);
+        }
+        for (unsigned int animMeshIndex = 0; animMeshIndex < mesh->mNumAnimMeshes; animMeshIndex++) {
+            aiAnimMesh* animMesh = mesh->mAnimMeshes[animMeshIndex];
+            if (animMesh->mNumVertices != mesh->mNumVertices) {
+                continue;
+            }
+            keepVertices(animMesh->mVertices, remap, count);
+            keepVertices(animMesh->mNormals, remap, count);
+            keepVertices(animMesh->mTangents, remap, count);
+            keepVertices(animMesh->mBitangents, remap, count);
+            for (auto& colors : animMesh->mColors) {
+                keepVertices(colors, remap, count);
+            }
+            for (auto& textureCoords : animMesh->mTextureCoords) {
+                keepVertices(textureCoords, remap, count);
+            }
+            animMesh->mNumVertices = count;
+        }
+        for (unsigned int faceIndex = 0; faceIndex < mesh->mNumFaces; faceIndex++) {
+            aiFace& face = mesh->mFaces[faceIndex];
+            for (unsigned int i = 0; i < face.mNumIndices; i++) {
+                face.mIndices[i] = face.mIndices[i] < mesh->mNumVertices ? remap[face.mIndices[i]] : 0;
+            }
+        }
+
+        unsigned int keptBones = 0;
+        for (unsigned int boneIndex = 0; boneIndex < mesh->mNumBones; boneIndex++) {
+            aiBone* bone = mesh->mBones[boneIndex];
+            const bool hadWeights = bone->mNumWeights > 0;
+            unsigned int keptWeights = 0;
+            for (unsigned int weightIndex = 0; weightIndex < bone->mNumWeights; weightIndex++) {
+                const aiVertexWeight& weight = bone->mWeights[weightIndex];
+                if (weight.mVertexId < mesh->mNumVertices && remap[weight.mVertexId] != UNUSED_VERTEX) {
+                    bone->mWeights[keptWeights++] = aiVertexWeight(remap[weight.mVertexId], weight.mWeight);
+                }
+            }
+            bone->mNumWeights = keptWeights;
+            if (hadWeights && keptWeights == 0) {
+                delete bone;
+            } else {
+                mesh->mBones[keptBones++] = bone;
+            }
+        }
+        mesh->mNumBones = keptBones;
+        if (keptBones == 0) {
+            delete[] mesh->mBones;
+            mesh->mBones = nullptr;
+        }
+        mesh->mNumVertices = count;
+    }
+}
+
+// A glTF binary's chunks start on 4-byte boundaries: the JSON chunk is padded with spaces to a multiple of 4 (glTF 2.0,
+// "Binary glTF Layout"). Some exporters leave the padding out (16 of 45 VRMs in one collection, 10-27), and Assimp then
+// looks for the BIN chunk 1-3 bytes too far on and gives up ("GLTF: BIN chunk missing"). With the BIN chunk straight
+// after the unpadded JSON, this puts the padding in, in a copy; anything else (a padded file, one whose padding is there
+// but not counted, which Assimp reads, or not a glTF binary) comes back as it is.
+static hifi::ByteArray padGlbJsonChunk(const hifi::ByteArray& data) {
+    const int HEADER = 12;
+    const int CHUNK_HEADER = 8;
+    const quint32 MAGIC_GLTF = 0x46546C67;
+    const quint32 CHUNK_JSON = 0x4E4F534A;
+    const quint32 CHUNK_BIN = 0x004E4942;
+    if (data.size() < HEADER + 2 * CHUNK_HEADER || qFromLittleEndian<quint32>(data.constData()) != MAGIC_GLTF ||
+        qFromLittleEndian<quint32>(data.constData() + HEADER + 4) != CHUNK_JSON) {
+        return data;
+    }
+    const quint32 jsonLength = qFromLittleEndian<quint32>(data.constData() + HEADER);
+    const int padding = (4 - jsonLength % 4) % 4;
+    if (padding == 0 || jsonLength > (quint32)(data.size() - HEADER - 2 * CHUNK_HEADER)) {
+        return data;
+    }
+    const int jsonEnd = HEADER + CHUNK_HEADER + (int)jsonLength;
+    if (qFromLittleEndian<quint32>(data.constData() + jsonEnd + 4) != CHUNK_BIN) {
+        return data;
+    }
+    hifi::ByteArray padded;
+    padded.reserve(data.size() + padding);
+    padded.append(data.constData(), jsonEnd);
+    padded.append(padding, ' ');
+    padded.append(data.constData() + jsonEnd, data.size() - jsonEnd);
+    qToLittleEndian<quint32>(qFromLittleEndian<quint32>(data.constData() + 8) + padding, padded.data() + 8);
+    qToLittleEndian<quint32>(jsonLength + padding, padded.data() + HEADER);
+    return padded;
+}
+
 HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi::VariantHash& mapping, const hifi::URL& inputUrl) {
 	url = inputUrl;
 
@@ -1037,27 +1250,22 @@ HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi
     // https://arbook.icg.tugraz.at/schmalstieg/Schmalstieg_351.pdf
     importer.SetPropertyInteger(AI_CONFIG_PP_ICL_PTCACHE_SIZE, 64);
 
-    // Not for a skinned glTF (or VRM): where primitives share their vertex buffers, as VRoid's do, Assimp gives each
-    // primitive's mesh the whole buffer, and joining identical vertices then mixed up their bone weights. three-vrm-girl's
-    // hair vertices came out weighted Head 1 and LeftHandRing3 1, and followed her hand as it moved. Each mesh keeps the
-    // buffer's unused vertices instead, which only the memory notices. A glTF without skins has no weights to mix up, and
-    // is joined as before.
-    const QString lowerExt = ext.toLower();
-    const bool isGltf = lowerExt == "gltf" || lowerExt == "glb" || lowerExt == "vrm";
-    const bool sharesVertexBuffers = isGltf && (vrm.isVRM() || data.contains("\"skins\""));
-    const unsigned int joinIdenticalVertices = sharesVertexBuffers ? 0 : aiProcess_JoinIdenticalVertices;
+    // Joining identical vertices, and the steps Assimp runs after it, wait until each skinned mesh holds only the
+    // vertices its faces use (compactSkinnedMeshes)
+    const unsigned int AFTER_COMPACTING = aiProcess_JoinIdenticalVertices | aiProcess_LimitBoneWeights | aiProcess_ImproveCacheLocality;
 
+    const hifi::ByteArray glb = padGlbJsonChunk(data);
+    if (glb.size() != data.size()) {
+        qCDebug(modelformat) << "AssimpSerializer::read" << url.fileName() << "has its JSON chunk unpadded: padded it";
+    }
     scene = importer.ReadFileFromMemory(
-        data.constData(), data.size(),
+        glb.constData(), glb.size(),
         // aiProcess_CalcTangentSpace |
-        joinIdenticalVertices |
         aiProcess_ValidateDataStructure | // refuses scenes whose indices or counts don't add up
         aiProcess_Triangulate |
         aiProcess_RemoveComponent |
         aiProcess_GenNormals | 
-        aiProcess_SplitLargeMeshes | // split large meshes every 1 million verticies and triangles
-        aiProcess_LimitBoneWeights |
-        aiProcess_ImproveCacheLocality |
+        aiProcess_SplitLargeMeshes | // split large meshes every 1 million verticies and triangles (now before joining)
         // aiProcess_RemoveRedundantMaterials | // ends up removing necessary materials...
         aiProcess_PopulateArmatureData | 
         aiProcess_FindInstances | // can be slow but instances duplicate meshes
@@ -1067,7 +1275,11 @@ HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi
         // Assimp knows a VRM by what it is, a glTF binary
         (ext.toLower() == "vrm" ? QString("glb") : ext).toLocal8Bit()
     );
-    
+    if (scene) {
+        compactSkinnedMeshes(const_cast<aiScene*>(scene));
+        scene = importer.ApplyPostProcessing(AFTER_COMPACTING);
+    }
+
     if (!scene) {
         qCDebug(modelformat) << "AssimpSerializer::read Error parsing model file"<<importer.GetErrorString();
         return nullptr;

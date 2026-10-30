@@ -14,6 +14,8 @@
 
 #include "InterfaceLogging.h"
 
+#include <SharedUtil.h>
+
 #include <QtGui/QScreen>
 #include <QtGui/QWindow>
 
@@ -120,8 +122,15 @@ static const std::array<int, RefreshRateManager::RefreshRateRegime::REGIME_NUM> 
     { 60, 60, 60, 2, 30, 30}
 };
 
+// Unfocus 30: while another app is in front the frames are at most glanced at, so the display's rate (999) only burns
+// cores and battery. 30, not 15: a player often keeps the world in view beside the app in front (another screen, half
+// the screen), where 30 still moves smoothly. The game loop (physics, this avatar's data to others) has its own pace.
+// FocusInactive RESTING_RATE (Caity, 10-27: "resting rate in"): in front but untouched and still, half the display's
+// rate, every other refresh, from 120 Hz up (72 on 144 Hz); below 120 Hz it stays at the display's rate, since a rate
+// under 60, or one that isn't a whole fraction of the display's, would move others' avatars unevenly. On a 144 Hz Mac,
+// 60 instead of 144 halved the client's CPU energy standing still (performance, 10-27).
 static const std::array<int, RefreshRateManager::RefreshRateRegime::REGIME_NUM> DISPLAY_BASED_PROFILE = {
-    { 999, 999, 999, 2, 30, 30}
+    { 999, RefreshRateManager::RESTING_RATE, 30, 2, 30, 30}
 };
 
 static const std::array<
@@ -208,9 +217,31 @@ RefreshRateManager::RefreshRateRegime RefreshRateManager::getRefreshRateRegime()
 void RefreshRateManager::setRefreshRateRegime(RefreshRateManager::RefreshRateRegime refreshRateRegime) {
     if (isValidRefreshRateRegime(refreshRateRegime) && (_refreshRateRegime != refreshRateRegime)) {
         _refreshRateRegime = refreshRateRegime;
+        // in front again (or for the first time, after start-up): the inactive count starts now, not at the first input
+        if (refreshRateRegime == RefreshRateRegime::FOCUS_ACTIVE && _uxMode == UXMode::DESKTOP) {
+            _inactiveTimer->start();
+        }
         updateRefreshRateController();
+        // one line a change (a wake or a rest every few seconds at most), with the time, to line up with an input's
+        qCDebug(interfaceapp).noquote() << "Refresh regime" << QString::fromStdString(refreshRateRegimeToString(refreshRateRegime))
+            << "target" << _activeRefreshRate << "Hz at usec" << usecTimestampNow();
     }
+}
 
+void RefreshRateManager::noteCameraTransform(const glm::mat4& eyeToWorld) {
+    // measured from the pose at the last activity, not from the last frame, so the slow sway of an idle avatar's head
+    // (first person) doesn't count while a ride's or a vehicle's steady motion does, within a few frames
+    static const float MOVE_METERS = 0.02f;
+    static const float TURN_COSINE = 0.99985f;  // about 1 degree
+    const glm::vec3 position(eyeToWorld[3]);
+    const glm::vec3 forward = glm::normalize(-glm::vec3(eyeToWorld[2]));
+    if (!_restPoseValid || glm::distance(position, _restPosition) > MOVE_METERS ||
+        glm::dot(forward, _restForward) < TURN_COSINE) {
+        _restPosition = position;
+        _restForward = forward;
+        _restPoseValid = true;
+        resetInactiveTimer();
+    }
 }
 
 void RefreshRateManager::setScreenCap(int maxRate) {
@@ -245,6 +276,10 @@ void RefreshRateManager::updateRefreshRateController() const {
         QScreen* screen = handle ? handle->screen() : nullptr;
         int displayRefreshRate = screen ? qRound(screen->refreshRate()) : 0;
 
+        if (targetRefreshRate == RESTING_RATE) {
+            const int MIN_RESTING_DISPLAY_RATE = 120;
+            targetRefreshRate = displayRefreshRate >= MIN_RESTING_DISPLAY_RATE ? displayRefreshRate / 2 : 999;
+        }
         if (targetRefreshRate >= 900) {
             targetRefreshRate = displayRefreshRate;
             // incase refreshRate() is incorrect

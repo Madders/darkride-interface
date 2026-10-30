@@ -82,6 +82,20 @@ private slots:
     int privateSlot() { return 6; }
 };
 
+/// Enum results: Qt's own (Q_ENUM) and one Qt doesn't know (a class that is not a QObject, no Q_ENUM), as
+/// RefreshRateManager's were when Performance.getRefreshRateRegime returned one.
+class EnumProbe : public QObject {
+    Q_OBJECT
+public:
+    enum Mode { Idle, Stopped = 10 };
+    Q_ENUM(Mode)
+    struct Plain {
+        enum Level { Low, High = 7 };
+    };
+    Q_INVOKABLE Mode currentMode() const { return Stopped; }
+    Q_INVOKABLE Plain::Level plainLevel() const { return Plain::High; }
+};
+
 class QtScriptOverloadTests : public QObject {
     Q_OBJECT
 private slots:
@@ -89,6 +103,7 @@ private slots:
     void testPlainValueTwinIsAmbiguous();
     void testMembersByAccess();
     void testVariantResults();
+    void testEnumResults();
 };
 
 #endif // hifi_QtScriptOverloadTests_h

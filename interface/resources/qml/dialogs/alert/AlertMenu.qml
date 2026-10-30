@@ -16,6 +16,7 @@ QQC2.ComboBox {
     id: menu
 
     property real unit: 1
+    readonly property AlertLook look: AlertLook {}
 
     width: parent ? parent.width : implicitWidth
     implicitHeight: 24 * unit
@@ -28,15 +29,15 @@ QQC2.ComboBox {
             radius: 9 * menu.unit
             color: "transparent"
             border.width: 3
-            border.color: Qt.rgba(10 / 255, 132 / 255, 1, 0.45)
+            border.color: menu.look.focus
             visible: menu.visualFocus
         }
         Rectangle {
             anchors.fill: parent
             radius: 6 * menu.unit
-            color: menu.down ? Qt.rgba(1, 1, 1, 0.08) : Qt.rgba(0, 0, 0, 0.28)
+            color: menu.down ? menu.look.hover : menu.look.well
             border.width: 1
-            border.color: Qt.rgba(1, 1, 1, 0.14)
+            border.color: menu.look.wellBorder
         }
     }
 
@@ -46,7 +47,7 @@ QQC2.ComboBox {
         text: menu.displayText
         textFormat: Text.PlainText
         font: menu.font
-        color: "#ffffff"
+        color: menu.look.title
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
     }
@@ -60,7 +61,7 @@ QQC2.ComboBox {
             var context = getContext("2d");
             context.reset();
             context.scale(width / 9, height / 12);
-            context.strokeStyle = Qt.rgba(1, 1, 1, 0.74);
+            context.strokeStyle = menu.look.text;
             context.lineWidth = 1.3;
             context.lineCap = "round";
             context.lineJoin = "round";
@@ -86,13 +87,13 @@ QQC2.ComboBox {
             text: modelData
             textFormat: Text.PlainText
             font: menu.font
-            color: "#ffffff"
+            color: highlighted ? "#ffffff" : menu.look.title
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
         }
         background: Rectangle {
             radius: 4 * menu.unit
-            color: highlighted ? "#0b6bd8" : "transparent"
+            color: highlighted ? menu.look.tint : "transparent"
         }
     }
 
@@ -113,9 +114,9 @@ QQC2.ComboBox {
 
         background: Rectangle {
             radius: 8 * menu.unit
-            color: "#323236"
+            color: menu.look.menu
             border.width: 1
-            border.color: Qt.rgba(1, 1, 1, 0.12)
+            border.color: menu.look.menuBorder
         }
     }
 }

@@ -8,19 +8,22 @@
 # results/server-check-<engine>/,
 # prints the AGENT-CHECK and SERVER-CHECK lines and the CRITICAL ones, stops the sandbox and takes the settings out
 # again; a sandbox that was running before is started again as it was.
-#   tests-manual/wasm-scripting/server-check.sh qtscript|wasm [seconds, 40]
+#   tests-manual/wasm-scripting/server-check.sh qtscript|wasm|default [seconds, 70]
+# default sets no DARKRIDE_RUN_JS_ON_WASM: the servers run on the build's own default engine. SERVER_CHECK_BUILD names
+# another checkout's build to run (the servers and the client), such as a hands-on build.
 set -e
-ENGINE=${1:?usage: server-check.sh qtscript|wasm [seconds]}
+ENGINE=${1:?usage: server-check.sh qtscript|wasm|default [seconds]}
 SECONDS_RUN=${2:-70}
 D=$(cd "$(dirname "$0")" && pwd)
-BUILD=$(cd "$D/../../build" && pwd)
+BUILD=$(cd "${SERVER_CHECK_BUILD:-$D/../../build}" && pwd)
 ROOT=$HOME/tivoli-sandboxes/wasm
 SERVE=http://127.0.0.1:43110/tests-manual/wasm-scripting
 OUT=$D/results/server-check-$ENGINE
 case "$ENGINE" in
     qtscript) ON_WASM=0 ;;
     wasm) ON_WASM=1 ;;
-    *) echo "usage: server-check.sh qtscript|wasm [seconds]" >&2; exit 2 ;;
+    default) ON_WASM="" ;;
+    *) echo "usage: server-check.sh qtscript|wasm|default [seconds]" >&2; exit 2 ;;
 esac
 
 settings() {
@@ -57,7 +60,7 @@ PY
 stop_sandbox() {
     for part in domain-server assignment-client; do
         [ -f "$ROOT/$part.pid" ] && kill "$(cat "$ROOT/$part.pid")" 2>/dev/null || true
-        rm -f "$ROOT/$part.pid"
+        rm -f "${ROOT:?}/${part:?}.pid"
     done
     for i in $(seq 1 15); do
         pgrep -f "$BUILD/(domain-server|assignment-client)" > /dev/null || return 0
@@ -90,10 +93,10 @@ if os.path.exists(path):
         print("removed %d entities of an earlier run from the sandbox's world" % (len(entities) - len(kept)))
 PY
 MARK=$(mktemp)
-DARKRIDE_RUN_JS_ON_WASM=$ON_WASM SANDBOX_ASSIGNMENTS=7 "$HOME/git/tivolicloud/domain-sandbox.sh" wasm "$BUILD" 43102
+env ${ON_WASM:+DARKRIDE_RUN_JS_ON_WASM=$ON_WASM} SANDBOX_ASSIGNMENTS=7 "$HOME/git/tivolicloud/domain-sandbox.sh" wasm "$BUILD" 43102
 # a client without the right to change locks edits through the filter; its own scripts stay on QtScript in both runs
 sleep 5
-DARKRIDE_RUN_JS_ON_WASM=0 "$D/run-client.sh" server-check-filter 65 --url hifi://localhost:43102 \
+DARKRIDE_RUN_JS_ON_WASM=0 CLIENT_APP="$BUILD/interface/Darkride.app" "$D/run-client.sh" server-check-filter 65 --url hifi://localhost:43102 \
     --testScript "$D/filter-client.js" > /dev/null 2>&1 &
 CLIENT_RUN=$!
 sleep $((SECONDS_RUN - 5))

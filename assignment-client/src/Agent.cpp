@@ -141,18 +141,38 @@ Agent::Agent(ReceivedMessage& message) :
     _avatarAudioTimer.setTimerType(Qt::PreciseTimer);
 }
 
-void Agent::playAvatarSound(SharedSoundPointer sound) {
+void Agent::playAvatarSound(SharedSoundPointer sound, float volume) {
     // this must happen on Agent's main thread
     if (QThread::currentThread() != thread()) {
-        QMetaObject::invokeMethod(this, "playAvatarSound", Q_ARG(SharedSoundPointer, sound));
+        QMetaObject::invokeMethod(this, "playAvatarSound", Q_ARG(SharedSoundPointer, sound), Q_ARG(float, volume));
         return;
     } else {
-        // TODO: seems to add occasional artifact in tests.  I believe it is
-        // correct to do this, but need to figure out for sure, so commenting this
-        // out until I verify.
-        // _numAvatarSoundSentBytes = 0;
+        // a sound still playing is cut short, and the new one starts at its beginning: kept at the old one's offset, a
+        // shorter sound was read from past its end
+        if (_avatarSound) {
+            finishAvatarSound(false);
+        }
+        _avatarSoundVolume = glm::clamp(volume, 0.0f, 1.0f);
         setAvatarSound(sound);
     }
+}
+
+void Agent::stopAvatarSound() {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, "stopAvatarSound");
+        return;
+    }
+    if (_avatarSound) {
+        finishAvatarSound(false);
+    }
+}
+
+void Agent::finishAvatarSound(bool completed) {
+    _avatarSound.clear();
+    _numAvatarSoundSentBytes = 0;
+    _flushEncoder = true;
+    _shouldMuteRecordingAudio = false;
+    emit avatarSoundFinished(completed);
 }
 
 void Agent::handleOctreePacket(QSharedPointer<ReceivedMessage> message, SharedNodePointer senderNode) {
@@ -326,6 +346,16 @@ void Agent::nodeActivated(SharedNodePointer activatedNode) {
     }
     if (activatedNode->getType() == NodeType::AudioMixer) {
         negotiateAudioFormat();
+    }
+    if (activatedNode->getType() == NodeType::AvatarMixer && _isAvatar) {
+        // an identity set before the mixer's socket was up went nowhere (sendIdentityPacket clears the change anyway),
+        // and the mixer shows nobody an avatar it has no identity for: send it again, as Interface does
+        // (DomainSession::nodeActivated). A restarted mixer gets it this way too. The avatar lives on the main thread.
+        auto scriptedAvatar = DependencyManager::get<ScriptableAvatar>();
+        QMetaObject::invokeMethod(scriptedAvatar.data(), [scriptedAvatar] {
+            scriptedAvatar->markIdentityDataChanged();
+            scriptedAvatar->resetLastSent();
+        });
     }
 }
 
@@ -643,6 +673,38 @@ void Agent::setIsListeningToAudioStream(bool isListeningToAudioStream) {
     _isListeningToAudioStream = isListeningToAudioStream;
 }
 
+// an entity parented to this agent's own avatar had no parent here (the avatar list holds only the others): it sat at
+// the origin, the entity server filed it there, and visitors near the agent never got it
+void Agent::setAvatarAsParent(bool isParent) {
+    if (isParent && !_avatarAsParent) {
+        _avatarAsParent = std::shared_ptr<SpatiallyNestable>(DependencyManager::get<ScriptableAvatar>().data(),
+                                                             [](SpatiallyNestable*) {});
+    } else if (!isParent && _avatarAsParent) {
+        if (_avatarAsParent.use_count() > 1) {
+            // a copy kept past here would point at the avatar after the DependencyManager deletes it
+            qWarning() << "Agent: the avatar is still held in" << _avatarAsParent.use_count() - 1
+                       << "places as it stops being a parent";
+        }
+        _avatarAsParent.reset();
+    }
+    if (DependencyManager::isSet<AssignmentParentFinder>()) {
+        DependencyManager::get<AssignmentParentFinder>()->setOwnAvatar(_avatarAsParent);
+    }
+}
+
+void Agent::updateAvatarChildren() {
+    // an avatar without children (most) costs nothing here
+    if (!_avatarAsParent || !_avatarAsParent->hasChildren()) {
+        return;
+    }
+    EntityTreePointer tree = _entityViewer.getTree();
+    if (tree) {
+        tree->withWriteLock([&] {
+            tree->updateEntityQueryAACube(_avatarAsParent, &_entityEditSender, false, true);
+        });
+    }
+}
+
 void Agent::setIsNoiseGateEnabled(bool isNoiseGateEnabled) {
     if (QThread::currentThread() != thread()) {
         QMetaObject::invokeMethod(this, "setIsNoiseGateEnabled", Q_ARG(bool, isNoiseGateEnabled));
@@ -675,6 +737,7 @@ void Agent::setIsAvatar(bool isAvatar) {
 
             connect(_scriptEngine.data(), &ScriptEngine::update,
                     scriptableAvatar.data(), &ScriptableAvatar::update, Qt::QueuedConnection);
+            connect(_scriptEngine.data(), &ScriptEngine::update, this, &Agent::updateAvatarChildren);
 
             // tell the avatarAudioTimer to start ticking
             QMetaObject::invokeMethod(&_avatarAudioTimer, "start");
@@ -688,7 +751,9 @@ void Agent::setIsAvatar(bool isAvatar) {
         }
 
         _entityEditSender.setMyAvatar(scriptableAvatar.data());
+        setAvatarAsParent(true);
     } else {
+        setAvatarAsParent(false);
         if (_avatarQueryTimer) {
             _avatarQueryTimer->stop();
             delete _avatarQueryTimer;
@@ -724,8 +789,11 @@ void Agent::setIsAvatar(bool isAvatar) {
 
             disconnect(_scriptEngine.data(), &ScriptEngine::update,
                        scriptableAvatar.data(), &ScriptableAvatar::update);
+            disconnect(_scriptEngine.data(), &ScriptEngine::update, this, &Agent::updateAvatarChildren);
 
             QMetaObject::invokeMethod(&_avatarAudioTimer, "stop");
+            // with the audio stopped, a line still playing would never end
+            stopAvatarSound();
         }
 
         _entityEditSender.setMyAvatar(nullptr);
@@ -836,13 +904,22 @@ void Agent::processAgentAvatarAudio() {
 
         int16_t numAvailableSamples = AudioConstants::NETWORK_FRAME_SAMPLES_PER_CHANNEL;
         const int16_t* nextSoundOutput = NULL;
+        // held until the packet is written: nextSoundOutput points into it, and a line that ends this frame lets its
+        // sound go
+        AudioDataPointer audioData;
+        // this frame of the sound at its volume, when that's below full: nextSoundOutput points here instead
+        int16_t scaledSamples[AudioConstants::NETWORK_FRAME_SAMPLES_PER_CHANNEL];
 
+        if (_avatarSound && _avatarSound->isFailed()) {
+            // a sound that could not be loaded never plays: it is over, not completed
+            finishAvatarSound(false);
+        }
         if (_avatarSound && _avatarSound->isReady()) {
             if (isPlayingRecording && !_shouldMuteRecordingAudio) {
                 _shouldMuteRecordingAudio = true;
             }
             
-            auto audioData = _avatarSound->getAudioData();
+            audioData = _avatarSound->getAudioData();
             nextSoundOutput = reinterpret_cast<const int16_t*>(audioData->rawData()
                     + _numAvatarSoundSentBytes);
 
@@ -850,6 +927,12 @@ void Agent::processAgentAvatarAudio() {
                 ? AudioConstants::NETWORK_FRAME_BYTES_PER_CHANNEL
                 : audioData->getNumBytes() - _numAvatarSoundSentBytes;
             numAvailableSamples = (int16_t)numAvailableBytes / sizeof(int16_t);
+            if (_avatarSoundVolume < 1.0f) {
+                for (int i = 0; i < numAvailableSamples; ++i) {
+                    scaledSamples[i] = int16_t(float(nextSoundOutput[i]) * _avatarSoundVolume);
+                }
+                nextSoundOutput = scaledSamples;
+            }
 
 
             // check if the all of the _numAvatarAudioBufferSamples to be sent are silence
@@ -862,15 +945,8 @@ void Agent::processAgentAvatarAudio() {
 
             _numAvatarSoundSentBytes += numAvailableBytes;
             if (_numAvatarSoundSentBytes == (int)audioData->getNumBytes()) {
-                // we're done with this sound object - so set our pointer back to NULL
-                // and our sent bytes back to zero
-                _avatarSound.clear();
-                _numAvatarSoundSentBytes = 0;
-                _flushEncoder = true;
-
-                if (_shouldMuteRecordingAudio) {
-                    _shouldMuteRecordingAudio = false;
-                }
+                // we're done with this sound object: played to its end
+                finishAvatarSound(true);
             }
         }
 
@@ -957,6 +1033,9 @@ void Agent::processAgentAvatarAudio() {
 }
 
 void Agent::aboutToFinish() {
+    // before the parent finder and the avatar go
+    setAvatarAsParent(false);
+
     // our entity tree is going to go away so tell that to the EntityScriptingInterface
     DependencyManager::get<EntityScriptingInterface>()->setEntityTree(nullptr);
 

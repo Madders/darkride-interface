@@ -41,6 +41,22 @@ const QString HIFI_URL_SCHEME_HTTPS = "https";
 const QString HIFI_URL_SCHEME_FTP = "ftp";
 const QString URL_SCHEME_ATP = "atp";
 const QString URL_SCHEME_TEA = "tea";
+// A world's address also comes as tivoli:// (the app's old name: the website's world links, and a scheme the app
+// registers) or darkride://. Both mean the same as hifi://.
+const QString URL_SCHEME_TIVOLI = "tivoli";
+const QString URL_SCHEME_DARKRIDE = "darkride";
+
+inline bool isWorldAddressScheme(const QString& scheme) {
+    return scheme == URL_SCHEME_HIFI || scheme == URL_SCHEME_TIVOLI || scheme == URL_SCHEME_DARKRIDE;
+}
+
+// a world address in any of those schemes, as hifi://; any other URL as it is
+inline QUrl asHifiAddress(QUrl url) {
+    if (url.scheme() != URL_SCHEME_HIFI && isWorldAddressScheme(url.scheme())) {
+        url.setScheme(URL_SCHEME_HIFI);
+    }
+    return url;
+}
 
 const QStringList KNOWN_SCHEMES = QStringList()
     << "about"

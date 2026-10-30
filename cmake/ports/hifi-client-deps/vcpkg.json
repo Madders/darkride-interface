@@ -29,6 +29,10 @@
     {
       "name": "sranipal",
       "platform": "windows"
+    },
+    {
+      "name": "tensorflow-lite",
+      "platform": "osx | windows"
     }
   ]
 }

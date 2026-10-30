@@ -49,8 +49,22 @@ Item {
         readonly property int minHeight: 120
         readonly property int minHeightButton: 36
         property int maxHeight: root.height
+        property bool resizing: false
 
         function resize() {
+            // The desktop's page fills the window (LoginDialog.qml binds root's size to it): nothing to fit. And the size
+            // this works out is root's own plus a step (mainContainer follows root), so every call grew it: called a
+            // moment later (Qt.callLater, 10-25 morning), each call set off the next, at every pass of the event loop,
+            // the form slid off the bottom and the main thread never rested (Caity's MacBook, 10-25: only the navy
+            // showed, and nothing could be clicked). The headset's page (OverlayLoginDialog.qml) fills its surface the
+            // same way, and fitting it cut it short: the form loads before the page has a size, so the fit made it
+            // 480 x 134 and the surface's own size then only stretched it to ~218 tall, the rest of the surface left
+            // white over the password and Log In (Caity's VR sitting, 10-29). Only the tablet's dialog fits its content,
+            // at once and once: root's change calls back here, and is let go.
+            if (!root.isTablet || resizing) {
+                return;
+            }
+            resizing = true;
             maxWidth = root.width;
             maxHeight = root.height;
             var targetWidth = Math.max(titleWidth, mainContainer.width);
@@ -62,6 +76,7 @@ Item {
             }
 
             parent.height = root.height = Math.max(d.minHeight, Math.min(d.maxHeight, targetHeight)) + hifi.dimensions.contentSpacing.y;
+            resizing = false;
         }
     }
 
@@ -92,8 +107,7 @@ Item {
         id: mainContainer
         width: root.width
         height: root.height
-        // later, not in the change itself: resize() sets root's size, which this item's binds to (a binding loop)
-        onHeightChanged: Qt.callLater(d.resize); onWidthChanged: Qt.callLater(d.resize);
+        onHeightChanged: d.resize(); onWidthChanged: d.resize();
 
         LoginDialog.LoginDialogLightbox {
             id: lightboxPopup;

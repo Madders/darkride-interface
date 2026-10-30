@@ -129,6 +129,8 @@ public:
 
     // a vehicle's mass is the number on its spec sheet (vehicle.mass), not a density times a volume
     float getMass() const override;
+    // m: the correction a vehicle is still blending in (PHYSICS.md 4.6), 0 when none (the chase camera's trace)
+    float getCorrectionDistance() const { return _correctionBlendTime > 0.0f ? glm::length(_correctionOffset) : 0.0f; }
 protected:
     void setBody(JPH::Body* body, PhysicsWorld* world) override;
 

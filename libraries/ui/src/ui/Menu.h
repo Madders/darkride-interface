@@ -58,6 +58,9 @@ class Menu : public QMenuBar {
     Q_OBJECT
 public:
     static const int UNSPECIFIED_POSITION = -1;
+    // a ticked item with this property true keeps its tick out of the saved settings, so the start doesn't trigger it
+    // again: its tick shows something else's state (View > Panels, a panel's being open)
+    static constexpr const char* TICK_NOT_SAVED = "tickNotSaved";
 
     Menu();
 

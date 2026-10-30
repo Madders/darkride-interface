@@ -147,6 +147,7 @@ enum EntityPropertyList
     PROP_SCRIPT,
     PROP_SCRIPT_TIMESTAMP,
     PROP_SERVER_SCRIPTS,
+    PROP_SCRIPTS_ENABLED,
 
     // Certifiable Properties
     PROP_ITEM_NAME,

@@ -25,7 +25,7 @@
 #include <WasmEditFilterEngine.h>
 #include <WasmScriptEngine.h>
 
-QTEST_MAIN(EditFilterTests)
+QTEST_GUILESS_MAIN(EditFilterTests)
 
 namespace {
 
@@ -70,6 +70,12 @@ filter.wantsZoneProperties = "boundingBox";
 const char* THROWS = "function filter(properties, type) { throw new Error('no edits today'); }";
 const char* NO_FUNCTION = "var filter = 3;";
 const char* SYNTAX_ERROR = "function filter(properties, type { return true; }";
+// what a filter sees of Script: the engine's own members, without QObject's
+const char* REPORTS_SCRIPT = R"(
+function filter(properties, type) {
+    return { userData: typeof Script.deleteLater + " " + typeof Script.destroyed };
+}
+)";
 
 struct Outcome {
     QString filter;
@@ -283,6 +289,14 @@ void EditFilterTests::testFiltersOnBothEngines() {
         QVERIFY2(onWebAssembly[i].line() == onQtScript[i].line(),
                  qPrintable("WebAssembly: " + onWebAssembly[i].line() + "\n   QtScript: " + onQtScript[i].line()));
     }
+}
+
+void EditFilterTests::testFilterScriptObject() {
+    useQtScript();
+    World world;
+    const auto reports = runFilter("reports-script", REPORTS_SCRIPT, world.zoneID, world);
+    QVERIFY(find(reports, "reports-script", "edit").loaded);
+    QCOMPARE(find(reports, "reports-script", "edit").out.value("userData").toString(), QString("undefined undefined"));
 }
 
 void EditFilterTests::testRunawayFilterOnWebAssembly() {

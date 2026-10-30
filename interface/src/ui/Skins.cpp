@@ -51,7 +51,7 @@ const QStringList ALLOWED_SUFFIXES { "json", "png", "jpg", "jpeg", "ttf", "otf",
 const QString SKIN_FILE = "skin.json";
 const QStringList FRAME_PARTS { "window", "menuBar", "menu", "menuItem", "bar", "barButton", "toolbar", "toolButton",
                                 "viewport", "panel", "panelTitle", "card", "button", "field", "tab", "scrollBar",
-                                "scrollHandle", "statusBar" };
+                                "scrollHandle", "statusBar", "popup" };
 const QStringList FRAME_STATES { "image", "hover", "pressed", "checked", "disabled" };
 const QStringList PLACES { "top-left", "top", "top-right", "left", "center", "right", "bottom-left", "bottom",
                            "bottom-right" };
@@ -452,6 +452,8 @@ QString styleSheet(const Skin& skin) {
                    colorOf(text));
 
     sheet += rules(skin, "panelTitle", "QDockWidget::title", {}, "padding-left: 8px; ");
+    // the title bar of a panel that floats as well as docks, chat's (ui/DockTitleBar.h): the same frame
+    sheet += rules(skin, "panelTitle", "QWidget#DockTitleBar", {});
     if (!titleText.isEmpty()) {
         sheet += "QDockWidget { color: " + titleText + "; }\n";
     }
@@ -460,6 +462,31 @@ QString styleSheet(const Skin& skin) {
         sheet += "QDockWidget QLabel, QDockWidget QCheckBox, QDockWidget QRadioButton { color: " + text + "; }\n";
     }
     sheet += rules(skin, "card", "QGroupBox", {});
+
+    // checkboxes: the system's box is drawn for Darkride's dark panels, and its white tick all but vanished on a light
+    // skin (Sunny Yogurt's Inspector, 10-24); with a skin's colours they are drawn in them: an empty box on the card
+    // colour, a ticked one filled with the tint and a white tick
+    const QString tint = color(skin, "tint");
+    if (!tint.isEmpty()) {
+        auto first = [&skin](std::initializer_list<const char*> keys, const QString& otherwise) {
+            for (const char* key : keys) {
+                const QString value = color(skin, key);
+                if (!value.isEmpty()) {
+                    return value;
+                }
+            }
+            return otherwise;
+        };
+        const QString box = first({ "card", "fill", "background" }, "#ffffff");
+        const QString edge = first({ "tertiaryText", "secondaryText", "text" }, "#8a8a8a");
+        const QString faint = first({ "fill", "separator" }, box);
+        sheet += "QCheckBox::indicator { width: 13px; height: 13px; border-radius: 3px; border: 1px solid " + edge +
+                 "; background: " + box + "; }\n";
+        sheet += "QCheckBox::indicator:checked { background: " + tint + "; border-color: " + tint +
+                 "; image: url(:/styles/skin-check.svg); }\n";
+        sheet += "QCheckBox::indicator:disabled { background: " + faint + "; }\n";
+        sheet += "QCheckBox::indicator:checked:disabled { background: " + edge + "; border-color: " + edge + "; }\n";
+    }
 
     sheet += rules(skin, "button", "QPushButton",
                    { { "hover", "QPushButton:hover" }, { "pressed", "QPushButton:pressed" },
@@ -520,7 +547,8 @@ void setWindowSheet(QMainWindow* window, const QString& part) {
     }
 }
 
-// the QML panels' share: colours, and each frame's pictures as file: addresses with its slice and padding
+// the QML panels' share: colours, each frame's pictures as file: addresses with its slice and padding, and the
+// decorations on a panel
 QVariantMap panelSkin(const Skin& skin) {
     QVariantMap frames;
     for (auto it = skin.frames.begin(); it != skin.frames.end(); ++it) {
@@ -532,8 +560,21 @@ QVariantMap panelSkin(const Skin& skin) {
         frame["padding"] = QVariantList { it->padding[0], it->padding[1], it->padding[2], it->padding[3] };
         frames[it.key()] = frame;
     }
+    // the decorations on a panel, which the QML panels draw over their frame (qml/darkride/panel/SkinDecorations.qml)
+    QVariantList decorations;
+    for (const auto& decoration : skin.decorations) {
+        if (decoration.on != "panel") {
+            continue;
+        }
+        decorations.append(QVariantMap {
+            { "source", QUrl::fromLocalFile(decoration.image).toString() },
+            { "at", decoration.at },
+            { "offset", QVariantList { decoration.offset.x(), decoration.offset.y() } },
+            { "size", decoration.size.isValid() ? QVariantList { decoration.size.width(), decoration.size.height() } : QVariantList() },
+            { "stretch", decoration.stretch } });
+    }
     return QVariantMap { { "name", skin.name }, { "colors", skin.colors }, { "frames", frames },
-                         { "fontFamily", skin.fontFamily } };
+                         { "fontFamily", skin.fontFamily }, { "decorations", decorations } };
 }
 
 }   // namespace

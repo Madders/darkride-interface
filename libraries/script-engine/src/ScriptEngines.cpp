@@ -182,7 +182,7 @@ void ScriptEngines::shutdownScripting() {
 
     // We need to wait for each engine we stopped to be done running before we proceed, because we don't want any of
     // the scripts final "scriptEnding()" or pending "update()" methods from accessing any application state after we
-    // leave this stopAllScripts() method. Every one of them is waited on, not just those still running: a script that
+    // leave this shutdownScripting() method. Every one of them is waited on, not just those still running: a script that
     // finished while we waited on an earlier one still has its thread to quit and join, which takes no time.
     for (const auto& scriptEngine : stoppedEngines) {
         QString scriptName = scriptEngine->getFilename();
@@ -350,12 +350,16 @@ void ScriptEngines::loadScripts() {
         auto url = script.toUrl();
         if (!url.isEmpty()) {
             // a script of the app's own that the app no longer has (deleted from the repo, as the old Create app's
-            // system/create/edit.js was, 10-24) is left out, and so drops off the list when it is next saved
+            // system/create/edit.js was, 10-24) is left out, and so drops off the list when it is next saved.
+            // expandScriptPath gives a URL path ("/C:/..." on Windows), so the file is looked for by its local path.
             const QUrl normalized = normalizeScriptURL(url);
-            if (normalized.scheme() == "file" && normalized.path().startsWith("/~/") &&
-                !QFileInfo::exists(expandScriptPath(normalized.path()))) {
-                qCDebug(scriptengine) << "A saved script the app no longer has is left out:" << url;
-                continue;
+            if (normalized.scheme() == "file" && normalized.path().startsWith("/~/")) {
+                QUrl expanded = normalized;
+                expanded.setPath(expandScriptPath(normalized.path()));
+                if (!QFileInfo::exists(expanded.toLocalFile())) {
+                    qCDebug(scriptengine) << "A saved script the app no longer has is left out:" << url;
+                    continue;
+                }
             }
             if (defaultScriptsOverrideSet && url == DEFAULT_SCRIPTS_LOCATION) {
                 _defaultScriptsWasRunning = true;

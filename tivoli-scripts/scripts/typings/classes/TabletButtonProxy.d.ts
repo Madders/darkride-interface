@@ -13,6 +13,7 @@ declare interface TabletButtonProxyButtonProperties {
 	activeHoverText: string;
 	captionColor: string;
 	backgroundColor: string;
+	badge: number;
 	isActive: boolean;
 	isEntered: boolean;
 	buttonEnabled: boolean;

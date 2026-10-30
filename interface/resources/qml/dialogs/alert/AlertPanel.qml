@@ -29,6 +29,8 @@ Rectangle {
     property var buttons: []
     // What the alert asks for, between the text and the buttons.
     default property alias fields: fieldColumn.data
+    // Darkride's colours, or a skin's (SKINS.md, stage 2)
+    readonly property AlertLook look: AlertLook {}
 
     signal clicked(var value)
 
@@ -98,9 +100,20 @@ Rectangle {
     width: 260 * unit
     implicitHeight: column.implicitHeight + 36 * unit
     radius: 12 * unit
-    color: "#2b2b2e"
-    border.width: 1
-    border.color: Qt.rgba(1, 1, 1, 0.10)
+    color: look.frame ? "transparent" : look.panel
+    border.width: look.frame ? 0 : 1
+    border.color: look.panelBorder
+
+    // a skin's popup frame, 9-slice, in place of the rounded panel
+    BorderImage {
+        anchors.fill: parent
+        visible: !!panel.look.frame
+        source: panel.look.frame ? panel.look.frame.source : ""
+        border.left: panel.look.frame ? panel.look.frame.slice[0] : 0
+        border.top: panel.look.frame ? panel.look.frame.slice[1] : 0
+        border.right: panel.look.frame ? panel.look.frame.slice[2] : 0
+        border.bottom: panel.look.frame ? panel.look.frame.slice[3] : 0
+    }
 
     Column {
         id: column
@@ -127,7 +140,7 @@ Rectangle {
             textFormat: panel.title !== "" ? Text.PlainText : Text.AutoText
             wrapMode: Text.Wrap
             horizontalAlignment: Text.AlignHCenter
-            color: "#ffffff"
+            color: panel.look.title
             font.pixelSize: 13 * unit
             font.bold: true
             lineHeightMode: Text.FixedHeight
@@ -141,8 +154,8 @@ Rectangle {
             text: panel.shownText
             wrapMode: Text.Wrap
             horizontalAlignment: Text.AlignHCenter
-            color: Qt.rgba(1, 1, 1, 0.74)
-            linkColor: "#4c9ffe"
+            color: panel.look.text
+            linkColor: panel.look.link
             font.pixelSize: 11 * unit
             lineHeightMode: Text.FixedHeight
             lineHeight: 15 * unit
@@ -172,9 +185,9 @@ Rectangle {
                 onClicked: panel.detailsOpen = !panel.detailsOpen
                 background: Rectangle {
                     radius: 5 * unit
-                    color: disclose.down ? Qt.rgba(1, 1, 1, 0.08) : "transparent"
+                    color: disclose.down ? panel.look.hover : "transparent"
                     border.width: disclose.visualFocus ? 2 : 0
-                    border.color: Qt.rgba(10 / 255, 132 / 255, 1, 0.59)
+                    border.color: panel.look.focus
                 }
                 contentItem: Item {
                     Row {
@@ -184,7 +197,7 @@ Rectangle {
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
                             text: "Details"
-                            color: Qt.rgba(1, 1, 1, 0.74)
+                            color: panel.look.text
                             font.pixelSize: 11 * unit
                         }
                         // The chevron, pointing right while closed and down while open.
@@ -199,7 +212,7 @@ Rectangle {
                                 var context = getContext("2d");
                                 context.reset();
                                 context.scale(width / 10, height / 10);
-                                context.strokeStyle = Qt.rgba(1, 1, 1, 0.74);
+                                context.strokeStyle = panel.look.text;
                                 context.lineWidth = 1.4;
                                 context.lineCap = "round";
                                 context.lineJoin = "round";
@@ -225,9 +238,9 @@ Rectangle {
                 height: 112 * unit
                 visible: panel.detailsOpen
                 radius: 6 * unit
-                color: Qt.rgba(0, 0, 0, 0.28)
+                color: panel.look.well
                 border.width: 1
-                border.color: Qt.rgba(1, 1, 1, 0.08)
+                border.color: panel.look.wellBorder
 
                 QQC2.ScrollView {
                     anchors.fill: parent
@@ -239,8 +252,8 @@ Rectangle {
                         readOnly: true
                         selectByMouse: true
                         wrapMode: TextEdit.Wrap
-                        color: Qt.rgba(1, 1, 1, 0.78)
-                        selectionColor: "#0b6bd8"
+                        color: panel.look.title
+                        selectionColor: panel.look.tint
                         selectedTextColor: "#ffffff"
                         font.pixelSize: 11 * unit
                         topPadding: 7 * unit

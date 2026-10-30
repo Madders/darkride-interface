@@ -337,14 +337,16 @@ QCborValue ValueCodec::encodeAssociative(const QVariant& value) const {
     return encodeVariantMap(items);
 }
 
+namespace {
+
 // A QVariantMap is sorted by key, so a colour that came through one reads {blue, green, red}. The shapes
-// scripts know by their member order are written in it: {x, y, z}, {x, y, z, w}, {red, green, blue}.
-QCborValue ValueCodec::encodeVariantMap(const QVariantMap& items) const {
+// scripts know by their member order are written in it: {x, y, z}, {x, y, z, w}, {red, green, blue}. Null for
+// any other map, written in its own order.
+const QStringList* memberOrder(const QVariantMap& items) {
     static const QStringList VEC2 { "x", "y" };
     static const QStringList VEC3 { "x", "y", "z" };
     static const QStringList QUAT { "x", "y", "z", "w" };
     static const QStringList COLOR { "red", "green", "blue" };
-    QCborMap map;
     const QStringList* order = nullptr;
     const int count = items.size();
     if (count == 2 && items.contains("x") && items.contains("y")) {
@@ -357,16 +359,24 @@ QCborValue ValueCodec::encodeVariantMap(const QVariantMap& items) const {
         order = &COLOR;
     }
     if (order) {
-        bool complete = true;
         for (const QString& key : *order) {
-            complete = complete && items.contains(key);
-        }
-        if (complete) {
-            for (const QString& key : *order) {
-                map.insert(key, toCbor(items.value(key)));
+            if (!items.contains(key)) {
+                return nullptr;
             }
-            return map;
         }
+    }
+    return order;
+}
+
+} // namespace
+
+QCborValue ValueCodec::encodeVariantMap(const QVariantMap& items) const {
+    QCborMap map;
+    if (const QStringList* order = memberOrder(items)) {
+        for (const QString& key : *order) {
+            map.insert(key, toCbor(items.value(key)));
+        }
+        return map;
     }
     for (auto it = items.constBegin(); it != items.constEnd(); ++it) {
         map.insert(it.key(), toCbor(it.value()));
@@ -714,6 +724,51 @@ bool ValueCodec::encodeDirectly(const QVariant& value, QByteArray& out) const {
             }
             return true;
         }
+        // Lists and maps item by item, each item directly or, when it isn't one of these types, through the tree.
+        // Building a QCborMap costs a lookup of every key as it goes in (it is a flat array), so a map of n keys
+        // cost n^2 compares: a host call returning a large map many times a second (the controller dispatcher's
+        // timers) spent most of its thread there.
+        case QMetaType::QStringList: {
+            const QStringList items = value.toStringList();
+            appendHead(out, 4, quint64(items.size()));
+            for (const QString& item : items) {
+                appendText(out, item);
+            }
+            return true;
+        }
+        case QMetaType::QVariantList: {
+            const QVariantList items = value.toList();
+            appendHead(out, 4, quint64(items.size()));
+            for (const QVariant& item : items) {
+                encodeItem(item, out);
+            }
+            return true;
+        }
+        case QMetaType::QVariantMap: {
+            const QVariantMap items = value.toMap();
+            appendHead(out, 5, quint64(items.size()));
+            if (const QStringList* order = memberOrder(items)) {
+                for (const QString& key : *order) {
+                    appendText(out, key);
+                    encodeItem(items.value(key), out);
+                }
+            } else {
+                for (auto it = items.constBegin(); it != items.constEnd(); ++it) {
+                    appendText(out, it.key());
+                    encodeItem(it.value(), out);
+                }
+            }
+            return true;
+        }
+        case QMetaType::QVariantHash: {
+            const QVariantHash items = value.toHash();
+            appendHead(out, 5, quint64(items.size()));
+            for (auto it = items.constBegin(); it != items.constEnd(); ++it) {
+                appendText(out, it.key());
+                encodeItem(it.value(), out);
+            }
+            return true;
+        }
         default:
             break;
     }
@@ -742,6 +797,12 @@ bool ValueCodec::encodeDirectly(const QVariant& value, QByteArray& out) const {
         return true;
     }
     return false;
+}
+
+void ValueCodec::encodeItem(const QVariant& value, QByteArray& out) const {
+    if (!encodeDirectly(value, out)) {
+        out.append(toCbor(value).toCbor());
+    }
 }
 
 QByteArray ValueCodec::encode(const QVariant& value) const {

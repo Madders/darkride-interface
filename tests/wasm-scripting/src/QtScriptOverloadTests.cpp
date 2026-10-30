@@ -10,7 +10,7 @@
 
 #include <QtScript/QScriptEngine>
 
-QTEST_MAIN(QtScriptOverloadTests)
+QTEST_GUILESS_MAIN(QtScriptOverloadTests)
 
 namespace {
 
@@ -85,3 +85,15 @@ void QtScriptOverloadTests::testVariantResults() {
     QCOMPARE(evaluate("typeof probe.flag() + ':' + probe.flag()"), QString("boolean:true"));
 }
 
+void QtScriptOverloadTests::testEnumResults() {
+    // QtScript, too, can't return an enum Qt doesn't know: it throws, and asks for the type to be registered
+    QScriptEngine engine;
+    EnumProbe probe;
+    engine.globalObject().setProperty("probe", engine.newQObject(&probe));
+    QCOMPARE(engine.evaluate("probe.currentMode()").toInt32(), 10);
+    engine.evaluate("probe.plainLevel()");
+    QVERIFY(engine.hasUncaughtException());
+    QString message = engine.uncaughtException().toString();
+    engine.clearExceptions();
+    QVERIFY2(message.contains("unknown return type"), qPrintable(message));
+}

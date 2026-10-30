@@ -40,6 +40,9 @@ using namespace render::entities;
 
 ZoneEntityRenderer::ZoneEntityRenderer(const EntityItemPointer& entity) : Parent(entity) {
     _background->setSkybox(std::make_shared<ProceduralSkybox>(entity->getCreated()));
+    // A zone with no ambient picture is lit by the built-in sphere from the start. setAmbientURL("") returns early
+    // while the URL is still empty, so without this the sphere stayed black until a picture was set and cleared.
+    _ambientLight->setAmbientSpherePreset(gpu::SphericalHarmonics::BREEZEWAY);
     auto entityScriptingInterface = DependencyManager::get<EntityScriptingInterface>();
 }
 

@@ -49,6 +49,7 @@ private:
     bool _returnPose { false };
     Pose _lastPoseRead;
     Pose _lastPoseWritten;
+    bool _poseWritten { false };
 };
 
 } // namespace controller

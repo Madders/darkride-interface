@@ -15,27 +15,19 @@
 #include <memory>
 #include <vector>
 
-#include <QBoxLayout>
 #include <QDateTime>
-#include <QDialog>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QKeyEvent>
-#include <QLabel>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QNetworkReply>
 #include <QNetworkRequest>
-#include <QPainter>
-#include <QPlainTextEdit>
-#include <QPropertyAnimation>
-#include <QPushButton>
 #include <QRegExp>
-#include <QScreen>
-#include <QTimer>
-#include <QToolButton>
 #include <QUrl>
 #include <QtConcurrent/QtConcurrentRun>
 
+#include <AccountManager.h>
 #include <AssimpSerializer.h>
 #include <AutoRig.h>
 #include <AvatarWriter.h>
@@ -48,6 +40,7 @@
 #include <NetworkAccessManager.h>
 #include <OBJSerializer.h>
 #include <PathUtils.h>
+#include <SharedUtil.h>
 #include <StandardSkeleton.h>
 #include <UnityAvatar.h>
 #include <UnityPackage.h>
@@ -59,6 +52,7 @@
 #include "InterfaceLogging.h"
 #include "MyAvatar.h"
 #include "editor/EditorCreate.h"
+#include "ui/Popup.h"
 
 namespace {
 
@@ -99,12 +93,10 @@ HFMModel::Pointer readModel(const QString& path) {
     if (suffix == "fbx") {
         return FBXSerializer().read(data, mapping, url);
     }
-    if (suffix == "gltf" || suffix == "glb") {
-        return GLTFSerializer().read(data, mapping, url);
-    }
     if (suffix == "obj") {
         return OBJSerializer().read(data, mapping, url);
     }
+    // glTF too, as the model cache reads it (GLTFSerializer ignores interleaved vertex buffers, as Meshy's are)
     return AssimpSerializer().read(data, mapping, url);
 }
 
@@ -164,301 +156,9 @@ QString avatarFolder(const QString& name) {
     return folder;
 }
 
-// The importer's alerts and banner, in the design language Caity chose for all of Darkride's popups (10-18): a narrow
-// centred alert in the manner of macOS, with a picture on top, a bold title, at most one short line, and full-width
-// buttons, side by side when there are two (Cancel on the left, the default on the right) and stacked when there are
-// more (the default on top), the default in blue; further detail sits behind a small Details fold-out, in a scrolling
-// field. A success gets no alert but a banner in the window's corner that fades by itself. The viewer's other popups
-// share this design in QML (interface/resources/qml/dialogs/alert/AlertPanel.qml).
-namespace popup {
-
-const int ALERT_WIDTH = 260;
-const int BANNER_WIDTH = 300;
-#ifdef Q_OS_MAC
-const int SHADOW = 0;  // macOS draws a frameless window's shadow from its opaque pixels
-#else
-const int SHADOW = 24;  // elsewhere the popup paints its own
-#endif
-
-enum class Role { Default, Cancel, Plain };
-
-struct Button {
-    QString label;  // "&&" for an ampersand: a button reads "&" as a keyboard shortcut mark
-    Role role;
-};
-
-const char* const STYLE = R"(
-QLabel { background: transparent; }
-QLabel#title { color: #ffffff; font-size: 13px; font-weight: bold; }
-QLabel#text { color: rgba(255, 255, 255, 189); font-size: 11px; }
-QLabel#bannerTitle { color: #ffffff; font-size: 13px; font-weight: 600; }
-QLabel#bannerText { color: rgba(255, 255, 255, 189); font-size: 12px; }
-QToolButton#details { color: rgba(255, 255, 255, 189); font-size: 11px; border: none; background: transparent; padding: 2px 4px; }
-QPlainTextEdit#detailsText { color: rgba(255, 255, 255, 199); font-size: 11px; background: rgba(0, 0, 0, 71);
-    border: 1px solid rgba(255, 255, 255, 20); border-radius: 6px; padding: 4px 6px; }
-QPushButton { color: #ffffff; font-size: 13px; border: none; border-radius: 7px; background: rgba(255, 255, 255, 36); padding: 0 10px; }
-QPushButton:pressed { background: rgba(255, 255, 255, 56); }
-QPushButton[role="default"] { background: #0b6bd8; }
-QPushButton[role="default"]:pressed { background: #0a5bb8; }
-QPushButton:focus { border: 2px solid rgba(10, 132, 255, 150); }
-)";
-
-// The rounded panel every popup is drawn on, with its shadow where the system draws none.
-void paintPanel(QWidget* widget, qreal radius) {
-    QPainter painter(widget);
-    painter.setRenderHint(QPainter::Antialiasing);
-    const QRectF panel = QRectF(widget->rect()).adjusted(SHADOW + 0.5, SHADOW + 0.5, -SHADOW - 0.5, -SHADOW - 0.5);
-    painter.setPen(Qt::NoPen);
-    for (int spread = SHADOW; spread > 0; spread -= 2) {
-        const qreal fade = 1.0 - (qreal)spread / SHADOW;
-        painter.setBrush(QColor(0, 0, 0, (int)(10 * fade * fade)));
-        painter.drawRoundedRect(panel.adjusted(-spread, -spread + SHADOW / 3, spread, spread + SHADOW / 3),
-                                radius + spread, radius + spread);
-    }
-    painter.setBrush(QColor(43, 43, 46));
-    painter.setPen(QPen(QColor(255, 255, 255, 26), 1.0));
-    painter.drawRoundedRect(panel, radius, radius);
-}
-
-// A popup's height for its fixed width. (adjustSize asks the layout for its height at the layout's own preferred
-// width, narrower than the popup, so wrapped lines got counted twice and left gaps under them.)
-void fitHeight(QWidget* popup) {
-    popup->ensurePolished();
-    QLayout* layout = popup->layout();
-    layout->activate();
-    popup->resize(popup->width(), layout->hasHeightForWidth() ? layout->totalHeightForWidth(popup->width())
-                                                              : layout->totalSizeHint().height());
-}
-
-// A picture at a size in points, sharp on a high-density screen.
-QPixmap sized(const QPixmap& picture, int points, qreal devicePixelRatio) {
-    if (picture.isNull()) {
-        return picture;
-    }
-    QPixmap result = picture.scaled(QSize(points, points) * devicePixelRatio, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    result.setDevicePixelRatio(devicePixelRatio);
-    return result;
-}
-
-// The Details fold-out's chevron, pointing right while closed and down while open.
-QIcon chevron(bool open) {
-    const qreal ratio = 2.0;
-    QPixmap pixmap(QSize(10, 10) * ratio);
-    pixmap.setDevicePixelRatio(ratio);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(QPen(QColor(255, 255, 255, 189), 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    QPolygonF line;
-    if (open) {
-        line << QPointF(2.0, 3.5) << QPointF(5.0, 6.5) << QPointF(8.0, 3.5);
-    } else {
-        line << QPointF(3.5, 2.0) << QPointF(6.5, 5.0) << QPointF(3.5, 8.0);
-    }
-    painter.drawPolyline(line);
-    return QIcon(pixmap);
-}
-
-class Alert : public QDialog {
-public:
-    Alert(const QPixmap& picture, const QString& title, const QString& text, const QString& details,
-          const std::vector<Button>& buttons, QWidget* parent) :
-        QDialog(parent, Qt::Dialog | Qt::FramelessWindowHint) {
-        setAttribute(Qt::WA_TranslucentBackground);
-        setWindowModality(Qt::ApplicationModal);
-        setWindowTitle(title);
-        setFocusPolicy(Qt::StrongFocus);  // the alert holds the focus, so Return and Escape reach it
-        setStyleSheet(STYLE);
-        setFixedWidth(ALERT_WIDTH + 2 * SHADOW);
-        auto layout = new QVBoxLayout(this);
-        layout->setContentsMargins(SHADOW + 16, SHADOW + 20, SHADOW + 16, SHADOW + 16);
-        layout->setSpacing(0);
-
-        auto pictureLabel = new QLabel();
-        pictureLabel->setPixmap(sized(picture, 64, devicePixelRatioF()));
-        pictureLabel->setAlignment(Qt::AlignCenter);
-        layout->addWidget(pictureLabel);
-        layout->addSpacing(12);
-        layout->addWidget(label("title", title));
-        if (!text.isEmpty()) {
-            layout->addSpacing(6);
-            layout->addWidget(label("text", text));
-        }
-        if (!details.isEmpty()) {
-            layout->addSpacing(6);
-            auto toggle = new QToolButton();
-            toggle->setObjectName("details");
-            toggle->setText("Details");
-            toggle->setIcon(chevron(false));
-            toggle->setIconSize(QSize(10, 10));
-            toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-            toggle->setLayoutDirection(Qt::RightToLeft);  // the chevron after the word
-            toggle->setFocusPolicy(Qt::TabFocus);
-            toggle->setAttribute(Qt::WA_MacShowFocusRect, false);
-            layout->addWidget(toggle, 0, Qt::AlignHCenter);
-            auto box = new QPlainTextEdit(details);
-            box->setObjectName("detailsText");
-            box->setReadOnly(true);
-            box->setFixedHeight(112);
-            box->setFrameShape(QFrame::NoFrame);
-            box->setAttribute(Qt::WA_MacShowFocusRect, false);
-            box->setVisible(false);
-            layout->addSpacing(4);
-            layout->addWidget(box);
-            QObject::connect(toggle, &QToolButton::clicked, this, [this, toggle, box]() {
-                const bool open = !box->isVisible();
-                box->setVisible(open);
-                toggle->setIcon(chevron(open));
-                fitHeight(this);
-            });
-        }
-        layout->addSpacing(details.isEmpty() ? 16 : 12);
-
-        // Two buttons side by side, Cancel always on the left (Caity, 10-19) and the default on the right; more,
-        // stacked with the default on top.
-        const bool sideBySide = buttons.size() == 2;
-        auto row = sideBySide ? (QBoxLayout*)new QHBoxLayout() : (QBoxLayout*)new QVBoxLayout();
-        row->setSpacing(8);
-        std::vector<int> order;
-        for (int i = 0; i < (int)buttons.size(); i++) {
-            if (buttons[i].role == Role::Default && _default < 0) {
-                _default = i;
-            } else {
-                order.push_back(i);
-            }
-            if (buttons[i].role == Role::Cancel && _cancel < 0) {
-                _cancel = i;
-            }
-        }
-        if (_default >= 0) {
-            if (sideBySide) {
-                order.push_back(_default);
-            } else {
-                order.insert(order.begin(), _default);
-            }
-        }
-        if (sideBySide && _cancel >= 0 && order.front() != _cancel) {
-            order.erase(std::find(order.begin(), order.end(), _cancel));
-            order.insert(order.begin(), _cancel);
-        }
-        for (int i : order) {
-            auto button = new QPushButton(buttons[i].label);
-            button->setProperty("role", i == _default ? "default" : "plain");
-            button->setFixedHeight(28);
-            button->setAutoDefault(false);
-            button->setFocusPolicy(Qt::TabFocus);  // no focus ring until the keyboard moves between buttons
-            button->setAttribute(Qt::WA_MacShowFocusRect, false);
-            QObject::connect(button, &QPushButton::clicked, this, [this, i]() {
-                _answer = i;
-                accept();
-            });
-            row->addWidget(button, 1);
-        }
-        layout->addLayout(row);
-        fitHeight(this);
-    }
-
-    int answer() const { return _answer; }
-
-protected:
-    void paintEvent(QPaintEvent*) override { paintPanel(this, 12.0); }
-
-    // Return is the default button, Escape the cancel button, as in every Mac alert.
-    void keyPressEvent(QKeyEvent* event) override {
-        if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) && _default >= 0) {
-            _answer = _default;
-            accept();
-        } else if (event->key() == Qt::Key_Escape) {
-            _answer = _cancel;
-            reject();
-        } else {
-            QDialog::keyPressEvent(event);
-        }
-    }
-
-    // Over the middle of the window, a third of the way down, where Mac alerts appear.
-    void showEvent(QShowEvent* event) override {
-        QDialog::showEvent(event);
-        QWidget* anchor = parentWidget() ? parentWidget()->window() : nullptr;
-        const QRect area = anchor ? anchor->geometry() : screen()->availableGeometry();
-        move(area.center().x() - width() / 2, area.top() + (area.height() - height()) / 3);
-        setFocus();
-    }
-
-private:
-    QLabel* label(const char* name, const QString& text) {
-        auto result = new QLabel(text);
-        result->setObjectName(name);
-        result->setWordWrap(true);
-        result->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
-        return result;
-    }
-
-    int _answer { -1 };
-    int _default { -1 };
-    int _cancel { -1 };
-};
-
-// A note that comes and goes in the top right corner of the window: clicked, it goes at once.
-class Banner : public QWidget {
-public:
-    Banner(const QPixmap& picture, const QString& title, const QString& text, QWidget* anchor, int milliseconds = 4500) :
-        QWidget(anchor, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus) {
-        setAttribute(Qt::WA_TranslucentBackground);
-        setAttribute(Qt::WA_ShowWithoutActivating);
-        setAttribute(Qt::WA_DeleteOnClose);
-        setStyleSheet(STYLE);
-        setFixedWidth(BANNER_WIDTH + 2 * SHADOW);
-        auto layout = new QHBoxLayout(this);
-        layout->setContentsMargins(SHADOW + 12, SHADOW + 10, SHADOW + 12, SHADOW + 10);
-        layout->setSpacing(10);
-        auto pictureLabel = new QLabel();
-        pictureLabel->setPixmap(sized(picture, 40, devicePixelRatioF()));
-        pictureLabel->setFixedSize(40, 40);
-        layout->addWidget(pictureLabel, 0, Qt::AlignVCenter);
-        auto words = new QVBoxLayout();
-        words->setSpacing(2);
-        auto titleLabel = new QLabel(title);
-        titleLabel->setObjectName("bannerTitle");
-        titleLabel->setWordWrap(true);
-        auto textLabel = new QLabel(text);
-        textLabel->setObjectName("bannerText");
-        textLabel->setWordWrap(true);
-        words->addWidget(titleLabel);
-        words->addWidget(textLabel);
-        layout->addLayout(words, 1);
-        fitHeight(this);
-        if (anchor) {
-            const QRect area = anchor->window()->geometry();
-            move(area.right() - width() - 16 + SHADOW, area.top() + 16 - SHADOW);
-            setWindowOpacity(0.0);
-            show();
-            fade(1.0, 180);
-            QTimer::singleShot(milliseconds, this, [this]() { fade(0.0, 400, true); });
-        }
-    }
-
-protected:
-    void paintEvent(QPaintEvent*) override { paintPanel(this, 14.0); }
-    void mousePressEvent(QMouseEvent*) override { close(); }
-
-private:
-    void fade(qreal to, int milliseconds, bool thenClose = false) {
-        auto animation = new QPropertyAnimation(this, "windowOpacity", this);
-        animation->setDuration(milliseconds);
-        animation->setEndValue(to);
-        if (thenClose) {
-            QObject::connect(animation, &QPropertyAnimation::finished, this, &QWidget::close);
-        }
-        animation->start(QAbstractAnimation::DeleteWhenStopped);
-    }
-};
-
-}
-
-QPixmap appIcon() {
-    return QPixmap(PathUtils::resourcesPath() + "images/darkride-logo.png");
-}
+// The importer's alerts and banner are Darkride's popups (ui/Popup.h), in the design language Caity chose for all of
+// them (10-18); appIcon is popup's.
+using popup::appIcon;
 
 // An error from below as a sentence of its own: "it was cut" becomes "It was cut."
 QString sentence(QString text) {
@@ -472,11 +172,15 @@ QString sentence(QString text) {
     return text;
 }
 
-// One of the importer's questions. Returns the chosen button's place in the list, or -1.
+// One of the importer's questions. Returns the chosen button's place in the list, or -1. With rightsLine, the rights
+// line sits under the buttons: one of them puts the avatar where others see it.
 int ask(const QString& title, const QString& text, const std::vector<popup::Button>& buttons,
-        const QString& details = QString()) {
+        const QString& details = QString(), bool rightsLine = false) {
     qCDebug(interfaceapp) << "Import Avatar: asking" << title;
     popup::Alert alert(appIcon(), title, text, details, buttons, qApp->getWindow());
+    if (rightsLine) {
+        alert.addRightsLine();
+    }
     alert.exec();
     const int answer = alert.answer();
     qCDebug(interfaceapp) << "Import Avatar: answered" << (answer < 0 ? QString("nothing") : buttons[answer].label);
@@ -510,10 +214,11 @@ void wear(const QString& fstPath, const QString& name) {
 }
 
 // An avatar on this computer goes out to others as a blank address (AvatarData::getWireSafeSkeletonModelURL), so they
-// see the default. In My Files it has a web address everyone loads: the model goes up with the files it names beside
-// it (game rips name their textures; anything else in the folder stays here), then the .fst with its filename line
-// pointing beside it, and the client wears that copy. One file at a time, through the editor's upload. Its picture
-// (AvatarThumbnails: a snap of it, worn, from the front) goes up before the .fst, which names it on a `preview` line.
+// see the default. In My Files it has a web address others' apps load: the model goes up with the files it names
+// beside it (game rips name their textures; anything else in the folder stays here), then the .fst with its filename
+// line pointing beside it; the folder is made private, and the client wears that copy. One file at a time, through
+// the editor's upload. Its picture (AvatarThumbnails: a snap of it, worn, from the front) goes up before the .fst,
+// which names it on a `preview` line.
 struct Share {
     QString name;
     QString fstName;
@@ -531,9 +236,16 @@ using SharePointer = std::shared_ptr<Share>;
 
 // The web copy is worn only once its .fst reads back from the web: a failed avatar load falls back to the default
 // without a word, and the files host sent every .fst labelled gzip over plain text until metaverse 19f3c7d (10-13).
+// The folder is private by now, so the check carries the player's login, as the avatar's own load does
+// (HTTPResourceRequest); the files host passes a private file through itself, never redirecting it to the CDN, so the
+// check follows no redirect and the login goes nowhere else.
 void wearOnceItReadsBack(const SharePointer& share, const QString& url) {
     QNetworkRequest request { QUrl(url) };
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+    const auto& token = DependencyManager::get<AccountManager>()->getAccountInfo().getAccessToken();
+    if (!token.token.isEmpty() && !token.isExpired()) {
+        request.setRawHeader(ACCESS_TOKEN_AUTHORIZATION_HEADER, token.authorizationHeaderValue());
+    }
     // A check, so it neither reads nor writes the disk cache: Qt unpacks the gzip itself here and would cache the
     // unpacked body under the gzip label, which the avatar's own load (HTTPResourceRequest) then fails to unpack.
     request.setAttribute(QNetworkRequest::CacheLoadControlAttribute, QNetworkRequest::AlwaysNetwork);
@@ -551,7 +263,43 @@ void wearOnceItReadsBack(const SharePointer& share, const QString& url) {
         }
         qCDebug(interfaceapp) << "Import Avatar:" << share->name << "reads back from" << url;
         wearUrl(url, share->name);
-        announce(share->name + " is in My Files", "You're wearing it, and everyone can see it.");
+        announce(share->name + " is in My Files",
+                 "You're wearing it. It's private: people see it on you in Darkride, but it has no public link.");
+    });
+}
+
+// Wear & Keep's folder is private (the server's tea-only flag): its files go only to signed-in Darkride apps, so
+// people in a world see the avatar on its owner, but it has no public link (Caity 10-28, "safe wear"). The server
+// sets a whole folder at once, and its call is a switch: a new folder's files are all public, so one call makes them
+// private, and a second goes only if the answer says the folder went the other way.
+void makePrivateThenWear(const SharePointer& share, const QString& url, bool again = false) {
+    QNetworkRequest request = DependencyManager::get<AccountManager>()->createRequest("/api/user/files/folder/tea-only",
+                                                                                      AccountManagerAuth::Required);
+    const QString leftPublic = "It's in My Files, but anyone with its link could download it: make it private there, "
+                               "or delete it. You're still wearing the copy on this computer.";
+    if (request.url().isEmpty()) {
+        warn("Couldn't make " + share->name + " private", "You're signed out. " + leftPublic);
+        return;
+    }
+    QUrl requestUrl = request.url();
+    requestUrl.setQuery("path=" + QString::fromLatin1(QUrl::toPercentEncoding(share->remoteFolder)), QUrl::StrictMode);
+    request.setUrl(requestUrl);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    QNetworkReply* reply = NetworkAccessManager::getInstance().post(request, QByteArray());
+    QObject::connect(reply, &QNetworkReply::finished, reply, [reply, share, url, again, leftPublic]() {
+        reply->deleteLater();
+        const bool answered = reply->error() == QNetworkReply::NoError;
+        const bool isPrivate = answered && QJsonDocument::fromJson(reply->readAll()).object().value("tea").toBool();
+        qCDebug(interfaceapp) << "Import Avatar:" << share->name << "folder" << share->remoteFolder
+                              << (!answered ? "not made private: " + reply->errorString()
+                                            : isPrivate ? QString("is private") : QString("came back public"));
+        if (isPrivate) {
+            wearOnceItReadsBack(share, url);
+        } else if (answered && !again) {
+            makePrivateThenWear(share, url, true);
+        } else {
+            warn("Couldn't make " + share->name + " private", leftPublic);
+        }
     });
 }
 
@@ -602,7 +350,7 @@ void shareNext(const SharePointer& share) {
             return;
         }
         qCDebug(interfaceapp) << "Import Avatar:" << share->name << "is in My Files at" << url;
-        wearOnceItReadsBack(share, url);
+        makePrivateThenWear(share, url);
     });
 }
 
@@ -686,19 +434,21 @@ void shareAvatar(const QString& fstPath, const QString& name) {
     });
 }
 
-// Asked once an avatar is ready. Wear & Keep (wear it and put it in My Files) is the default; the importer's notes
-// go in the details.
+// Asked once an avatar is ready. Test Locally (wear it from this computer; nothing leaves it) is the default, so a
+// press of Return never uploads a bought avatar (Caity 10-28, "safe wear"); Wear & Keep also puts it in My Files,
+// private. The importer's notes go in the details.
 void offerToWear(const QString& fstPath, const QString& name, const QString& notes) {
     const int answer = ask(name + " is ready",
-                           "Keep it in My Files so everyone can see it, or try it on this computer first.",
-                           { { "Wear && Keep", popup::Role::Default },
-                             { "Test Locally", popup::Role::Plain },
+                           "Try it on this computer, or wear it and keep it in My Files. A kept avatar is private: "
+                           "people see it on you in Darkride, but it has no public link.",
+                           { { "Test Locally", popup::Role::Default },
+                             { "Wear && Keep", popup::Role::Plain },
                              { "Not Now", popup::Role::Cancel } },
-                           notes);
+                           notes, true);
     if (answer == 0 || answer == 1) {
         wear(fstPath, name);
     }
-    if (answer == 0) {
+    if (answer == 1) {
         shareAvatar(fstPath, name);
     }
 }
@@ -956,6 +706,44 @@ void AvatarImporter::importFile(const QString& path) {
         QMetaObject::invokeMethod(qApp, [import]() {
             decide(import);
         }, Qt::QueuedConnection);
+    });
+}
+
+void AvatarImporter::importLink(const QUrl& url) {
+    if (url.isLocalFile()) {
+        importFile(url.toLocalFile());
+        return;
+    }
+    const QString fileName = QFileInfo(url.path()).fileName();
+    announce("Downloading " + fileName, "It's imported once it's here.");
+    QNetworkRequest request { url };
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setHeader(QNetworkRequest::UserAgentHeader, TIVOLI_CLOUD_VR_USER_AGENT);
+    QNetworkReply* reply = NetworkAccessManager::getInstance().get(request);
+    QObject::connect(reply, &QNetworkReply::finished, qApp, [reply, url, fileName]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            qCDebug(interfaceapp) << "Import Avatar: download failed" << url << reply->errorString();
+            warn("Couldn't download " + fileName, sentence(reply->errorString()));
+            return;
+        }
+        // kept beside the imported avatars, a new name each time, as avatarFolder does
+        const QString folder = PathUtils::getAppDataPath() + "Avatars/Downloads/";
+        QDir().mkpath(folder);
+        const QString base = avatarName(fileName);
+        const QString suffix = "." + QFileInfo(fileName).suffix();
+        QString path = folder + base + suffix;
+        for (int n = 2; QFileInfo::exists(path); n++) {
+            path = folder + base + "-" + QString::number(n) + suffix;
+        }
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly) || file.write(reply->readAll()) < 0) {
+            warn("Couldn't save " + fileName, sentence(file.errorString()));
+            return;
+        }
+        file.close();
+        qCDebug(interfaceapp) << "Import Avatar: downloaded" << url << "to" << path;
+        importFile(path);
     });
 }
 

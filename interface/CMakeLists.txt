@@ -75,7 +75,7 @@ endif ()
 
 find_package(
   Qt5 COMPONENTS
-  Gui Widgets Multimedia Network Qml Quick Script Svg
+  Gui Widgets Multimedia Network Qml Quick QuickWidgets Script Svg
   ${PLATFORM_QT_COMPONENTS}
   WebChannel WebSockets
 )
@@ -305,7 +305,7 @@ endif ()
 target_link_libraries(
   ${TARGET_NAME}
   Qt5::Gui Qt5::Network Qt5::Multimedia Qt5::Widgets
-  Qt5::Qml Qt5::Quick Qt5::Script Qt5::Svg
+  Qt5::Qml Qt5::Quick Qt5::QuickWidgets Qt5::Script Qt5::Svg
   Qt5::WebChannel
   ${PLATFORM_QT_LIBRARIES}
 )
@@ -410,9 +410,6 @@ else()
     # the developer test scripts are for the repo, not for players
     COMMAND "${CMAKE_COMMAND}" -E remove_directory
       "${INTERFACE_EXEC_DIR}/scripts/developer/tests"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-      "${PROJECT_SOURCE_DIR}/resources/serverless/tutorial.json"
-      "${RESOURCES_DEV_DIR}/serverless/tutorial.json"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
       "${PROJECT_SOURCE_DIR}/resources/serverless/redirect.json"
       "${RESOURCES_DEV_DIR}/serverless/redirect.json"

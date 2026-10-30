@@ -9,6 +9,9 @@
 #include "EntityListMessage.h"
 
 #include <QtCore/QDataStream>
+#include <QtCore/QtEndian>
+
+#include <zlib.h>
 
 namespace EntityListMessage {
     const QString CHANNEL = QStringLiteral("darkride.entityList");
@@ -19,6 +22,11 @@ namespace EntityListMessage {
         const quint8 KIND_REPLY = 2;
         const quint32 MAX_RECORDS = 1000000;
         const int MAX_NAME_BYTES = 65535;
+        // a reply's body unpacks to no more than this (about a million entities with short names), and holds no more
+        // records than its bytes can (each one at least this)
+        const quint32 MAX_BODY_BYTES = 64 * 1024 * 1024;
+        const int MIN_RECORD_BYTES = 16 + 16 + 1 + 1 + 8 + 4 * 4 + 2;
+        const int HEADER_BYTES = 6;
 
         void setUp(QDataStream& stream) {
             stream.setByteOrder(QDataStream::LittleEndian);
@@ -76,23 +84,40 @@ namespace EntityListMessage {
         return data;
     }
 
-    bool decodeReply(const QByteArray& data, quint32& requestNumber, QVector<Record>& records) {
-        records.clear();
+    bool readReplyNumber(const QByteArray& data, quint32& requestNumber) {
         QDataStream header(data);
         setUp(header);
-        if (!readHeader(header, KIND_REPLY, requestNumber)) {
+        return readHeader(header, KIND_REPLY, requestNumber);
+    }
+
+    bool decodeReply(const QByteArray& data, quint32& requestNumber, QVector<Record>& records) {
+        records.clear();
+        if (!readReplyNumber(data, requestNumber)) {
             return false;
         }
-        const int HEADER_BYTES = 6;
-        QByteArray body = qUncompress(data.mid(HEADER_BYTES));
-        if (body.isEmpty()) {
+        // the body as qCompress made it: its size (big-endian), then zlib's stream. Unpacked with zlib into exactly
+        // that many bytes (qUncompress grows past the size it's given)
+        const int SIZE_BYTES = 4;
+        if (data.size() < HEADER_BYTES + SIZE_BYTES) {
+            return false;
+        }
+        const uchar* packed = reinterpret_cast<const uchar*>(data.constData()) + HEADER_BYTES;
+        const quint32 bodyBytes = qFromBigEndian<quint32>(packed);
+        if (bodyBytes < sizeof(quint32) || bodyBytes > MAX_BODY_BYTES) {
+            return false;
+        }
+        QByteArray body(bodyBytes, Qt::Uninitialized);
+        uLongf unpacked = bodyBytes;
+        if (uncompress(reinterpret_cast<Bytef*>(body.data()), &unpacked, packed + SIZE_BYTES,
+                       (uLong)(data.size() - HEADER_BYTES - SIZE_BYTES)) != Z_OK || unpacked != bodyBytes) {
             return false;
         }
         QDataStream stream(body);
         setUp(stream);
         quint32 count = 0;
         stream >> count;
-        if (stream.status() != QDataStream::Ok || count > MAX_RECORDS) {
+        if (stream.status() != QDataStream::Ok || count > MAX_RECORDS ||
+            count > (bodyBytes - sizeof(quint32)) / MIN_RECORD_BYTES) {
             return false;
         }
         records.reserve((int)count);

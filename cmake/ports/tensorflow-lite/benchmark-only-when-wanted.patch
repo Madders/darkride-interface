@@ -1,0 +1,19 @@
+--- a/tensorflow/lite/CMakeLists.txt
++++ b/tensorflow/lite/CMakeLists.txt
+@@ -840,6 +840,8 @@
+ # tensorflow/lite directory structure for generated headers.
+ set(TFLITE_GENERATED_HEADERS_DIR ${CMAKE_BINARY_DIR}/tensorflow/lite)
+ 
++# The benchmark tool and the protos only it uses (they need protobuf): only when the tool is wanted
++if(TFLITE_ENABLE_BENCHMARK_MODEL)
+ # Add the profiling proto directory.
+ add_subdirectory(${TFLITE_SOURCE_DIR}/profiling/proto)
+ 
+@@ -851,6 +853,7 @@
+ 
+ # The benchmark tool.
+ add_subdirectory(${TFLITE_SOURCE_DIR}/tools/benchmark)
++endif()
+ 
+ # The label_image example.
+ add_subdirectory(${TFLITE_SOURCE_DIR}/examples/label_image)

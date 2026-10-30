@@ -19,6 +19,8 @@
 class MixerAvatar : public AvatarData {
     Q_OBJECT
 public:
+    MixerAvatar() { setIsMixerAvatar(true); }
+
     bool getNeedsHeroCheck() const { return _needsHeroCheck; }
     void setNeedsHeroCheck(bool needsHeroCheck = true) { _needsHeroCheck = needsHeroCheck; }
 

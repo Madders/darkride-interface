@@ -4,7 +4,7 @@
 //
 //  Application's asks and dialogs. The questions the client puts to the viewer: the ban confirmation
 //  (userKickConfirmation); the avatar, script and attachment asks for a dropped or opened URL (askToSetAvatarUrl,
-//  askToLoadScript, askToWearAvatarAttachmentUrl, displayAvatarAttachmentWarning); the URL handler's "open this
+//  with the Avatar panel's wearAvatarLink, askToLoadScript, askToWearAvatarAttachmentUrl, displayAvatarAttachmentWarning); the URL handler's "open this
 //  file?" ask (showUrlHandler), with openDirectory, which opens a folder past it. The dialogs and windows it opens:
 //  showDialog (on the tablet, or on the desktop), the script logs, the asset server (showAssetServerWidget), the model
 //  packager, the open-script and run-from-the-web dialogs with the remembered folder (loadDialog,
@@ -95,11 +95,38 @@ void Application::userKickConfirmation(const QUuid& nodeID) {
 }
 
 bool Application::askToSetAvatarUrl(const QString& url) {
+    askToWearAvatar(url, true);
+    return true;
+}
+
+// The Avatar panel's Wear from Link…: Wear was pressed already, so an .fst link is worn at once unless it has a license
+// to agree to first; a .glb link is downloaded and imported (rigged, then Test Locally or Wear & Keep); any other model
+// link is worn as it is, as the panel's URL field did.
+void Application::wearAvatarLink(const QString& link) {
+    const QUrl url = QUrl::fromUserInput(link.trimmed());
+    if (!url.isValid() || url.isEmpty()) {
+        return;
+    }
+    const QString suffix = QFileInfo(url.path()).suffix().toLower();
+    qCDebug(interfaceapp) << "Wear from Link:" << url;
+    if (suffix == "glb") {
+        AvatarImporter::importLink(url);
+    } else if (suffix == "fst" || url.isLocalFile()) {
+        askToWearAvatar(url.toString(), false);
+    } else {
+        const QString name = QFileInfo(url.path()).fileName();
+        getMyAvatar()->useFullAvatarURL(url, name);
+        emit fullAvatarURLChanged(url.toString(), name);
+    }
+}
+
+// A dropped or opened .fst link asks "Wear it?" first (askFirst), or only about its license when it has one
+void Application::askToWearAvatar(const QString& url, bool askFirst) {
     QUrl realUrl(url);
     if (realUrl.isLocalFile()) {
         // an avatar on this computer goes through the importer, as with File > Import Avatar
         AvatarImporter::importFile(realUrl.toLocalFile());
-        return true;
+        return;
     }
 
     // Download the FST file, to attempt to determine its model type
@@ -139,6 +166,8 @@ bool Application::askToSetAvatarUrl(const QString& url) {
                 qCDebug(interfaceapp) << "Declined to agree to avatar license";
             }
         });
+    } else if (!askFirst) {
+        wear();
     } else {
         ModalDialogListener* dlg = OffscreenUi::asyncQuestion("Wear " + shownName + "?",
                                                               realUrl.host().isEmpty() ? QString() : "From " + realUrl.host() + ".",
@@ -154,8 +183,6 @@ bool Application::askToSetAvatarUrl(const QString& url) {
             }
         });
     }
-
-    return true;
 }
 
 

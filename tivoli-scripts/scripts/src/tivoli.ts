@@ -1,5 +1,4 @@
 import { Buttons } from "./buttons/buttons";
-import { ChatUI } from "./chat";
 import { ConnectionSounds } from "./connection-sounds";
 import { SignalManager } from "./lib/signal-manager";
 import { initNametags } from "./nametags";
@@ -26,7 +25,6 @@ class Tivoli {
 
 	buttons = tryInit(() => new Buttons());
 
-	chat = tryInit(() => new ChatUI());
 	overview = tryInit(() => new Overview());
 
 	nametags: { cleanup: () => any } = null;
@@ -90,7 +88,6 @@ class Tivoli {
 
 		if (this.buttons) this.buttons.cleanup();
 
-		if (this.chat) this.chat.cleanup();
 		if (this.overview) this.overview.cleanup();
 
 		if (this.nametags) this.nametags.cleanup();

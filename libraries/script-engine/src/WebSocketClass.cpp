@@ -14,6 +14,8 @@
 
 #include "WebSocketClass.h"
 
+#include <ScriptNetworkPolicy.h>
+
 #include "ScriptEngine.h"
 
 WebSocketClass::WebSocketClass(QScriptEngine* engine, QString url) :
@@ -21,7 +23,34 @@ WebSocketClass::WebSocketClass(QScriptEngine* engine, QString url) :
     _engine(engine)
 {
     initialize();
-    _webSocket->open(url);
+    if (auto scriptEngine = qobject_cast<ScriptEngine*>(engine)) {
+        _origin = scriptEngine->currentScriptOrigin();
+        _ruled = scriptEngine->isClientSide();
+    }
+    const QUrl target(url);
+    if (!_ruled) {
+        _webSocket->open(target);
+        return;
+    }
+    // the network rule for a script's own requests: judged at once, or after a name lookup
+    ScriptNetworkPolicy::decide(target, _origin, this, [this, target](const ScriptNetworkPolicy::Decision& decision) {
+        if (decision.allowed) {
+            _webSocket->open(target);
+        } else {
+            refuse(target, decision.reason);
+        }
+    });
+}
+
+void WebSocketClass::refuse(const QUrl& target, const QString& reason) {
+    if (auto scriptEngine = qobject_cast<ScriptEngine*>(_engine)) {
+        scriptEngine->scriptWarningMessage(ScriptNetworkPolicy::refusalLine(_origin, target, reason));
+    }
+    // as a connection that fails: after the script has attached its handlers
+    QMetaObject::invokeMethod(this, [this] {
+        handleOnError(QAbstractSocket::SocketAccessError);
+        fireClose(QWebSocketProtocol::CloseCodeAbnormalDisconnection, "not allowed by the network rule", false);
+    }, Qt::QueuedConnection);
 }
 
 WebSocketClass::WebSocketClass(QScriptEngine* engine, QWebSocket* qWebSocket) :
@@ -82,12 +111,17 @@ void WebSocketClass::close(QWebSocketProtocol::CloseCode closeCode, QString reas
  */
 void WebSocketClass::handleOnClose() {
     bool hasError = (_webSocket->error() != QAbstractSocket::UnknownSocketError);
+    fireClose(hasError ? QWebSocketProtocol::CloseCodeAbnormalDisconnection : _webSocket->closeCode(),
+              _webSocket->closeReason(), !hasError);
+}
+
+void WebSocketClass::fireClose(int code, const QString& reason, bool wasClean) {
     if (_onCloseEvent.isFunction()) {
         QScriptValueList args;
         QScriptValue arg = _engine->newObject();
-        arg.setProperty("code", hasError ? QWebSocketProtocol::CloseCodeAbnormalDisconnection : _webSocket->closeCode());
-        arg.setProperty("reason", _webSocket->closeReason());
-        arg.setProperty("wasClean", !hasError);
+        arg.setProperty("code", code);
+        arg.setProperty("reason", reason);
+        arg.setProperty("wasClean", wasClean);
         args << arg;
         _onCloseEvent.call(QScriptValue(), args);
     }
@@ -175,6 +209,16 @@ void WebSocketClass::handleOnMessage(const QString& message) {
  * @callback WebSocket~onOpenCallback
  */
 void WebSocketClass::handleOnOpen() {
+    if (_ruled && ScriptNetworkPolicy::applies(_origin) && ScriptNetworkPolicy::isPrivateAddress(_webSocket->peerAddress())) {
+        // the name led here after it was judged (an answer that changed): nothing goes over this connection
+        if (auto scriptEngine = qobject_cast<ScriptEngine*>(_engine)) {
+            scriptEngine->scriptWarningMessage(ScriptNetworkPolicy::refusalLine(_origin, _webSocket->requestUrl(),
+                "it connected to an address on this machine or its network (" + _webSocket->peerAddress().toString() + ")"));
+        }
+        handleOnError(QAbstractSocket::SocketAccessError);
+        _webSocket->close(QWebSocketProtocol::CloseCodePolicyViolated, "not allowed by the network rule");
+        return;
+    }
     if (_onOpenEvent.isFunction()) {
         _onOpenEvent.call();
     }

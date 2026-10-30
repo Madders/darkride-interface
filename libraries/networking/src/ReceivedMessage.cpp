@@ -95,42 +95,57 @@ void ReceivedMessage::appendPacket(NLPacket& packet) {
     }
 }
 
+// How many of a buffer's bytes are left from a position, never less than none. Sizes and positions can come from the
+// packet itself (a string's length, a seek past a field), so every read keeps inside the buffer whatever they say.
+static size_t bytesLeftFrom(const QByteArray& buffer, qint64 position) {
+    return position >= 0 && position < buffer.size() ? (size_t)(buffer.size() - position) : 0;
+}
+
+static size_t boundedSize(qint64 size, size_t bytesLeft) {
+    return size > 0 ? std::min((size_t)size, bytesLeft) : 0;
+}
+
 qint64 ReceivedMessage::peek(char* data, qint64 size) {
-    size_t bytesLeft = _data.size() - _position;
-    size_t sizeRead = std::min((size_t)size, bytesLeft);
-    memcpy(data, _data.constData() + _position, sizeRead);
+    size_t sizeRead = boundedSize(size, bytesLeftFrom(_data, _position));
+    if (sizeRead > 0) {
+        memcpy(data, _data.constData() + _position, sizeRead);
+    }
     return sizeRead;
 }
 
 qint64 ReceivedMessage::read(char* data, qint64 size) {
-    size_t bytesLeft = _data.size() - _position;
-    size_t sizeRead = std::min((size_t)size, bytesLeft);
-    memcpy(data, _data.constData() + _position, sizeRead);
-    _position += sizeRead;
+    size_t sizeRead = boundedSize(size, bytesLeftFrom(_data, _position));
+    if (sizeRead > 0) {
+        memcpy(data, _data.constData() + _position, sizeRead);
+        _position += sizeRead;
+    }
     return sizeRead;
 }
 
 qint64 ReceivedMessage::readHead(char* data, qint64 size) {
-    size_t bytesLeft = _headData.size() - _position;
-    size_t sizeRead = std::min((size_t)size, bytesLeft);
-    memcpy(data, _headData.constData() + _position, sizeRead);
-    _position += sizeRead;
+    size_t sizeRead = boundedSize(size, bytesLeftFrom(_headData, _position));
+    if (sizeRead > 0) {
+        memcpy(data, _headData.constData() + _position, sizeRead);
+        _position += sizeRead;
+    }
     return sizeRead;
 }
 
 QByteArray ReceivedMessage::peek(qint64 size) {
-    return _data.mid(_position, size);
+    size_t sizeRead = boundedSize(size, bytesLeftFrom(_data, _position));
+    return sizeRead > 0 ? _data.mid(_position, (int)sizeRead) : QByteArray();
 }
 
 QByteArray ReceivedMessage::read(qint64 size) {
-    auto data = _data.mid(_position, size);
-    _position += size;
+    auto data = peek(size);
+    _position += data.size();
     return data;
 }
 
 QByteArray ReceivedMessage::readHead(qint64 size) {
-    auto data = _headData.mid(_position, size);
-    _position += size;
+    size_t sizeRead = boundedSize(size, bytesLeftFrom(_headData, _position));
+    auto data = sizeRead > 0 ? _headData.mid(_position, (int)sizeRead) : QByteArray();
+    _position += data.size();
     return data;
 }
 
@@ -139,17 +154,24 @@ QByteArray ReceivedMessage::readAll() {
 }
 
 QString ReceivedMessage::readString() {
-    uint32_t size;
+    uint32_t size = 0;
     readPrimitive(&size);
-    //Q_ASSERT(size <= _size - _position);
-    auto string = QString::fromUtf8(_data.constData() + _position, size);
-    _position += size;
+    size_t sizeRead = boundedSize(size, bytesLeftFrom(_data, _position));
+    if (sizeRead == 0) {
+        return QString();
+    }
+    auto string = QString::fromUtf8(_data.constData() + _position, (int)sizeRead);
+    _position += sizeRead;
     return string;
 }
 
 QByteArray ReceivedMessage::readWithoutCopy(qint64 size) {
-    QByteArray data { QByteArray::fromRawData(_data.constData() + _position, size) };
-    _position += size;
+    size_t sizeRead = boundedSize(size, bytesLeftFrom(_data, _position));
+    if (sizeRead == 0) {
+        return QByteArray();
+    }
+    QByteArray data { QByteArray::fromRawData(_data.constData() + _position, (int)sizeRead) };
+    _position += sizeRead;
     return data;
 }
 

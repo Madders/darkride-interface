@@ -14,6 +14,7 @@
 #include <QtCore/QString>
 #include <QtCore/QVariantMap>
 
+#include <PathUtils.h>
 #include <plugins/PluginUtils.h>
 #include <RegisteredMetaTypes.h>
 
@@ -24,24 +25,51 @@
 #include "raypick/PickScriptingInterface.h"
 #include "scripting/ControllerScriptingInterface.h"
 
-static const float SEARCH_SPHERE_SIZE = 0.0132f;
-static const QVariantMap SEARCH_SPHERE = {{"x", SEARCH_SPHERE_SIZE},
-                                            {"y", SEARCH_SPHERE_SIZE},
-                                            {"z", SEARCH_SPHERE_SIZE}};
+// the in-world lasers' look (Caity 10-28, look A, scripts/system/libraries/pointersUtils.js): a fine cyan tube that fades
+// out and a soft dot where it hits. The sign-in screen's two pointers come before those scripts run, so they're made here;
+// they were still High Fidelity's red, blue and pink (Caity's bug batch, 10-29)
+static const QVariantMap LASER_COLOR = {{"red", 0}, {"green", 175}, {"blue", 255}};
+static const QVariantMap DOT_COLOR = {{"red", 150}, {"green", 220}, {"blue", 255}};   // lighter, so its centre reads white-hot
+static const float DOT_SIZE = 0.015f;   // a metre away (the end scales with distance)
 
 static const int DEFAULT_SEARCH_SPHERE_DISTANCE = 1000; // how far from camera to search intersection?
 
-static const QVariantMap COLORS_GRAB_SEARCHING_HALF_SQUEEZE = {{"red", 10},
-                                                                {"green", 10},
-                                                                {"blue", 255}};
+// the ray steadied as the in-world lasers' is (controllerDispatcher.js): a One Euro filter on its direction
+static const QVariantMap LASER_SMOOTHING = {{"minCutoff", 1.0f}, {"beta", 1.5f}};
 
-static const QVariantMap COLORS_GRAB_SEARCHING_FULL_SQUEEZE = {{"red", 250},
-                                                                {"green", 10},
-                                                                {"blue", 10}};
+static QVariantMap laserPath() {
+    return {
+        {"type", "line3d"},
+        {"color", LASER_COLOR},
+        {"visible", true},
+        {"alpha", 1.0f},
+        {"solid", true},
+        {"glow", 1.0f},
+        {"faceCamera", true},
+        {"isUVModeStretch", true},
+        {"textures", PathUtils::resourcesUrl("images/lasers/fade.png").toString()},
+        {"strokeWidths", QVariantList({0.006f, 0.0045f, 0.003f})},
+        {"ignoreRayIntersection", true}, // always ignore this
+        {"drawInFront", true}, // Even when burried inside of something, show it.
+        {"drawHUDLayer", false}
+    };
+}
 
-static const QVariantMap COLORS_GRAB_DISTANCE_HOLD = {{"red", 238},
-                                                        {"green", 75},
-                                                        {"blue", 214}};
+static QVariantMap laserDot() {
+    return {
+        {"type", "image3d"},
+        {"url", PathUtils::resourcesUrl("images/lasers/dot.png").toString()},
+        {"dimensions", QVariantMap({{"x", DOT_SIZE}, {"y", DOT_SIZE}, {"z", 0.001f}})},
+        {"color", DOT_COLOR},
+        {"alpha", 1.0f},
+        {"emissive", true},
+        {"billboardMode", "full"},
+        {"ignoreRayIntersection", true},
+        {"drawInFront", true}, // Even when burried inside of something, show it.
+        {"drawHUDLayer", false},
+        {"visible", true}
+    };
+}
 
 
 
@@ -60,61 +88,12 @@ void LoginStateManager::tearDown() {
 }
 
 void LoginStateManager::setUp() {
-    QVariantMap fullPathRenderState {
-        {"type", "line3d"},
-        {"color", COLORS_GRAB_SEARCHING_FULL_SQUEEZE},
-        {"visible", true},
-        {"alpha", 1.0f},
-        {"solid", true},
-        {"glow", 1.0f},
-        {"ignoreRayIntersection", true}, // always ignore this
-        {"drawInFront", true}, // Even when burried inside of something, show it.
-        {"drawHUDLayer", false}
-    };
-    QVariantMap fullEndRenderState {
-        {"type", "sphere"},
-        {"dimensions", SEARCH_SPHERE},
-        {"solid", true},
-        {"color", COLORS_GRAB_SEARCHING_FULL_SQUEEZE},
-        {"alpha", 0.9f},
-        {"ignoreRayIntersection", true},
-        {"drawInFront", true}, // Even when burried inside of something, show it.
-        {"drawHUDLayer", false},
-        {"visible", true}
-    };
-    QVariantMap halfPathRenderState {
-        {"type", "line3d"},
-        {"color", COLORS_GRAB_SEARCHING_HALF_SQUEEZE},
-        {"visible", true},
-        {"alpha", 1.0f},
-        {"solid", true},
-        {"glow", 1.0f},
-        {"ignoreRayIntersection", true}, // always ignore this
-        {"drawInFront", true}, // Even when burried inside of something, show it.
-        {"drawHUDLayer", false}
-    };
-    QVariantMap halfEndRenderState {
-        {"type", "sphere"},
-        {"dimensions", SEARCH_SPHERE},
-        {"solid", true},
-        {"color", COLORS_GRAB_SEARCHING_HALF_SQUEEZE},
-        {"alpha", 0.9f},
-        {"ignoreRayIntersection", true},
-        {"drawInFront", true}, // Even when burried inside of something, show it.
-        {"drawHUDLayer", false},
-        {"visible", true}
-    };
-    QVariantMap holdPathRenderState {
-        {"type", "line3d"},
-        {"color", COLORS_GRAB_DISTANCE_HOLD},
-        {"visible", true},
-        {"alpha", 1.0f},
-        {"solid", true},
-        {"glow", 1.0f},
-        {"ignoreRayIntersection", true}, // always ignore this
-        {"drawInFront", true}, // Even when burried inside of something, show it.
-        {"drawHUDLayer", false},
-    };
+    // "full" is the one the sign-in screen shows, while a hand points at it: the line and the dot
+    const QVariantMap halfPathRenderState = laserPath();
+    const QVariantMap halfEndRenderState = laserDot();
+    const QVariantMap fullPathRenderState = laserPath();
+    const QVariantMap fullEndRenderState = laserDot();
+    const QVariantMap holdPathRenderState = laserPath();
     QVariantMap halfRenderStateIdentifier {
         {"name", "half"},
         {"path", halfPathRenderState},
@@ -176,7 +155,8 @@ void LoginStateManager::setUp() {
         { "hover", true },
         { "scaleWithParent", true },
         { "distanceScaleEnd", true },
-        { "hand", leftHand }
+        { "hand", leftHand },
+        { "smoothing", LASER_SMOOTHING }
     };
     leftPointerProperties["renderStates"] = _renderStates;
     leftPointerProperties["defaultRenderStates"] = _defaultRenderStates;
@@ -203,7 +183,8 @@ void LoginStateManager::setUp() {
         { "hover", true },
         { "scaleWithParent", true },
         { "distanceScaleEnd", true },
-        { "hand", rightHand }
+        { "hand", rightHand },
+        { "smoothing", LASER_SMOOTHING }
     };
     rightPointerProperties["renderStates"] = _renderStates;
     rightPointerProperties["defaultRenderStates"] = _defaultRenderStates;

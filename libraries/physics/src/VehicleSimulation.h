@@ -270,6 +270,7 @@ private:
         AircraftForces aircraftForces;
         // inputs
         VehicleInput applied;                 // the last input applied, with its sequence
+        float steering { 0.0f };              // the local driver's steering as the wheels took it (shapeSteering)
         uint32_t nextSequence { 1 };          // the driver's next
         InputBuffer inputs;                   // the authority's: a remote driver's inputs by tick (round 10)
         QUuid queueDriver;                    // whose inputs the buffer holds
@@ -350,6 +351,7 @@ private:
     bool isAuthority(const Vehicle& vehicle) const;
     bool localControls(const Vehicle& vehicle, VehicleInput& input) const;
     void chooseInput(Vehicle& vehicle, uint32_t step);
+    void shapeSteering(Vehicle& vehicle, VehicleInput& input);
     void easeOff(Vehicle& vehicle);
     // the model takes this substep's input: the wheeled controller's driver input, or an airship's forces on its body
     void applyModelInput(Vehicle& vehicle, const VehicleInput& input, float dt);

@@ -407,9 +407,11 @@ export class ButtonManager {
 		return buttonData;
 	}
 
-	// A button whose panel is Darkride's own QML (ARCHITECTURE.md §5.2.1), not a web page: on the desktop a window
-	// placed and sized as the web panels are, in a headset the tablet's screen. The page reads and sets the engine's
-	// values itself through its context properties, so there is no event handler between them.
+	// A button whose panel is Darkride's own QML (ARCHITECTURE.md §5.2.1), not a web page: on the desktop the panel's
+	// dock (Panels, interface/src/ui/Panels.h), which floats, docks beside the 3D view or tabs with another panel, or a
+	// window placed and sized as the web panels are for a panel without one; in a headset the tablet's screen. The page
+	// reads and sets the engine's values itself through its context properties, so there is no event handler between
+	// them.
 	addQmlButton(
 		name: string,
 		icon: string,
@@ -425,6 +427,10 @@ export class ButtonManager {
 			iconPadding: backgroundColor == null ? 0 : 8,
 			sortOrder,
 		});
+		// a dock is the engine's: it stays open beside other panels, and the button follows it however it opens or
+		// closes (its close box, View > Panels)
+		const docked =
+			typeof Panels != "undefined" && Panels.names().indexOf(name) >= 0;
 		// the desktop window is made on the first open, so the page does no work until it is wanted
 		let window: OverlayWindow = null;
 		const makeWindow = () => {
@@ -460,6 +466,8 @@ export class ButtonManager {
 			if (this.inVr()) {
 				this.tablet.loadQMLSource(qmlUrl);
 				HMD.openTablet();
+			} else if (docked) {
+				Panels.open(name);
 			} else {
 				for (const panel of this.panels) {
 					panel.window.setVisible(false);
@@ -491,15 +499,35 @@ export class ButtonManager {
 			if ((inVr || force) && this.tablet.isPathLoaded(qmlUrl)) {
 				this.tablet.gotoHomeScreen();
 			}
-			if ((!inVr || force) && window != null) {
+			if ((!inVr || force) && docked) {
+				Panels.close(name);
+			} else if ((!inVr || force) && window != null) {
 				window.setVisible(false);
 			}
 		};
 
 		const buttonData: ButtonData = { button, panel: null, open, close };
 
+		if (docked) {
+			// open from the saved layout before this script started, or opened and closed by the player
+			const follow = (open: boolean) => {
+				if (this.inVr() || open == visible) return;
+				visible = open;
+				button.editProperties({ isActive: open });
+			};
+			follow(Panels.isOpen(name));
+			this.signalManager.connect(
+				Panels.openChanged,
+				(panelName: string, open: boolean) => {
+					if (panelName == name) follow(open);
+				},
+			);
+		}
+
 		this.signalManager.connect(button.clicked, () => {
-			if (visible) close();
+			// a dock open behind another panel's tab comes in front; in front, it closes
+			if (docked && !this.inVr()) Panels.toggle(name);
+			else if (visible) close();
 			else open();
 		});
 		// the tablet showing something else
@@ -509,9 +537,16 @@ export class ButtonManager {
 				if (this.inVr() && visible && newCurrentUrl != qmlUrl) close();
 			},
 		);
-		// switching between the desktop and a headset
+		// switching between the desktop and a headset: a dock stays on the desktop as the player left it
 		this.signalManager.connect(HMD.displayModeChanged, () => {
-			close(true);
+			if (!docked) {
+				close(true);
+				return;
+			}
+			if (this.tablet.isPathLoaded(qmlUrl)) this.tablet.gotoHomeScreen();
+			visible = !this.inVr() && Panels.isOpen(name);
+			seenOpen = false;
+			button.editProperties({ isActive: visible });
 		});
 
 		this.buttons.push(buttonData);

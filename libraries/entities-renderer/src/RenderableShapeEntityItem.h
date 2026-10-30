@@ -63,7 +63,8 @@ private:
     // a mirror (userData "mirror": "picture" or "screen"): registered with Mirrors (render-utils). Picture mode shows
     // its picture as an emissive map; Screen mode draws the glass itself (doRender) with the picture of the frame
     bool _mirror { false };
-    bool _mirrorScreen { false };  // screen mode: the glass draws its picture by screen position (else as a map)
+    bool _mirrorScreen { false };   // screen mode: the glass draws its picture by screen position (else as a map)
+    bool _mirrorScreenWanted { false };   // the userData says screen; _mirrorScreen is that only on a flat display
     bool _mirrorShown { false };   // Picture mode: it has a picture this frame (else it shows its colour)
     QUuid _mirrorId;
     uint32_t _mirrorGeneration { 0 };

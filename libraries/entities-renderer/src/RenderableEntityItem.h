@@ -69,6 +69,14 @@ public:
     static glm::vec4 calculatePulseColor(const glm::vec4& color, const PulsePropertyGroup& pulseProperties, quint64 start);
     static glm::vec3 calculatePulseColor(const glm::vec3& color, const PulsePropertyGroup& pulseProperties, quint64 start);
 
+    // The transform a billboarded entity draws with: turned to the camera (EntityItem::getBillboardRotation) and, while
+    // the finished picture is shown flipped left to right (RenderArgs::_mirrored: the selfie view on a flat screen, the
+    // mirror camera), mirrored about its own vertical axis too, so that it reads the right way round on the screen:
+    // the name tags over people's heads in View > Selfie (Caity, 2026-10-29). What is fixed in the world stays as a
+    // mirror shows it. Returns whether the transform was mirrored (its X scale negated, which turns the faces inside
+    // out: a draw that culls back faces must cull front faces then, as Font does).
+    static bool applyBillboard(Transform& transform, BillboardMode billboardMode, RenderArgs* args);
+
     virtual uint32_t metaFetchMetaSubItems(ItemIDs& subItems) const override;
     virtual Item::Bound getBound() override;
 

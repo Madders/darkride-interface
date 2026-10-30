@@ -108,6 +108,16 @@ bool Application::event(QEvent* event) {
         return false;
     }
 
+    // a link (or a file) the app is opened with arrives as it starts, before the menu exists and before it can go
+    // anywhere: kept for the starting location (DomainSession::goToStartingLocation), which goes there
+    if (event->type() == QEvent::FileOpen && !_domainSession.startingLocationChosen()) {
+        QUrl url = static_cast<QFileOpenEvent*>(event)->url();
+        if (!url.isEmpty()) {
+            _domainSession.keepStartupLink(url.toString());
+        }
+        return true;
+    }
+
     if (!Menu::getInstance()) {
         return false;
     }
@@ -242,7 +252,8 @@ bool Application::eventFilter(QObject* object, QEvent* event) {
     }
 #endif
 
-    if (eventType == QEvent::KeyPress || eventType == QEvent::KeyRelease || eventType == QEvent::MouseMove) {
+    if (eventType == QEvent::KeyPress || eventType == QEvent::KeyRelease || eventType == QEvent::MouseMove ||
+        eventType == QEvent::MouseButtonPress || eventType == QEvent::Wheel) {
         getRefreshRateManager().resetInactiveTimer();
     }
 

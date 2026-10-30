@@ -19,7 +19,8 @@
 //  The screen lifts once the client has left the old world (its physics or its connection gone), the new world is
 //  connected, its physics is on and the avatar's own model has loaded
 //  (MyAvatar.isSkeletonModelLoaded; at most 10 s more after physics). A cancel, a refused connection, or 90 s without
-//  arriving lifts it anyway; so does the viewer giving up on a world that doesn't answer (its connection failure
+//  arriving lifts it anyway. Cancel is there on every way in after 3 s: back to the world it came from, or, with none
+//  (the first arrival), to an empty world of the viewer's own with Explore open; so does the viewer giving up on a world that doesn't answer (its connection failure
 //  window opens), or a hop's place not found. While it is up, the arrival waits for what is near the avatar to be
 //  ready for physics and
 //  drawn, even where the zone would let the avatar move at once (Window.setArrivalWaitsForNearby): no pop-in under the
@@ -46,6 +47,11 @@
     var AVATAR_GRACE = 10;        // s after physics: an avatar that has not loaded by then no longer holds the screen
     var LAUNCH_RELEASE_DELAY = 600;   // ms: the desktop screen's fade-in, after which it covers the launch screen
     var TICK = 50;                // ms
+    // Cancel with nowhere to go back to (the first world after sign-in didn't come, or isn't there): an empty world the
+    // viewer carries, always there, and Explore open on it to choose where to go (Caity, 10-25: a first run on her
+    // MacBook sat under this screen with no way out)
+    var EMPTY_PLACE = "file:///~/serverless/empty.json";
+    var EXPLORE_CHANNEL = "com.tivolicloud.explore";   // the bar's Explore opens on "open" (tivoli-scripts buttons.ts)
     // the headset card on a desktop as well (for testing, or a client without the desktop screen)
     var CARD_ON_DESKTOP = Settings.getValue("worldLoading/cardOnDesktop", false) === true ||
         Settings.getValue("worldLoading/cardOnDesktop", false) === "true";
@@ -211,9 +217,10 @@
         } else if (way.progress >= 0) {
             way.progress = 1;   // the whole world is in: the bar stays full until the screen lifts
         }
-        // the buttons: Cancel wherever there is somewhere to go back to, Show me now while a world loads whole
+        // the buttons: Cancel on every way in (back where it came from, or an empty place), Show me now while a world
+        // loads whole
         var offered = now - way.started >= BUTTONS_AFTER;
-        send(true, status, way.progress, offered && canGoBack(), offered && loading.active);
+        send(true, status, way.progress, offered && canCancel(), offered && loading.active);
 
         if (HMD.active || CARD_ON_DESKTOP) {
             showCard(status, now);
@@ -428,6 +435,12 @@
         return way.kind === "hop" ? !!way.from && (!way.left || location.canGoBack()) : location.canGoBack();
     }
 
+    // a hop always has the world it left (going back, a hop's Cancel is taken away); the first arrival, or a world
+    // loading whole, has the history's last world or else the empty place
+    function canCancel() {
+        return !!way && (way.kind !== "hop" || canGoBack());
+    }
+
     // Cancel: back to the world this way left, under the screen as any hop (an arrival there, with its name and
     // picture); before the old world was left, the hop just stops. Show me now: stop waiting for the whole world.
     function onLoadingScreenButtonPressed(button) {
@@ -439,7 +452,14 @@
             if (loadingState().active && Window.showWorldNow) {
                 Window.showWorldNow();
             }
-        } else if (button === "cancel" && canGoBack()) {
+        } else if (button === "cancel" && canCancel()) {
+            if (!canGoBack()) {
+                print("World loading: Cancel pressed, going to an empty place and opening Explore");
+                end();
+                location.handleLookupString(EMPTY_PLACE);
+                Messages.sendLocalMessage(EXPLORE_CHANNEL, "open");
+                return;
+            }
             var from = way.from;
             print("World loading: Cancel pressed, " + (way.kind === "hop" && !way.left ? "the hop stops" :
                 "going back to \"" + (from ? from.world : "") + "\""));

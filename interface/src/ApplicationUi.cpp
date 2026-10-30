@@ -195,15 +195,20 @@ void Application::initializeUi() {
         }
     }
 
-    auto compositorHelper = DependencyManager::get<CompositorHelper>();
-    connect(compositorHelper.data(), &CompositorHelper::allowMouseCaptureChanged, this, [=] {
+    // in headset mode the desktop mouse drives the headset's pointer and the window shows none, unless capture is off or
+    // the headset is off the player's head: then the system arrow, so the window's menus can be reached
+    auto updateHmdCursor = [=] {
         if (isHMDMode()) {
             auto compositorHelper = DependencyManager::get<CompositorHelper>(); // don't capture outer smartpointer
-            _windowCursor.show(compositorHelper->getAllowMouseCapture() ?
-                       Cursor::Manager::lookupIcon(_preferredCursor.get()) :
-                       Cursor::Icon::SYSTEM);
+            bool headsetsPointer = compositorHelper->getAllowMouseCapture() && !getActiveDisplayPlugin()->isHeadsetOff();
+            _windowCursor.show(headsetsPointer ? Cursor::Manager::lookupIcon(_preferredCursor.get()) : Cursor::Icon::SYSTEM);
         }
-    });
+    };
+    auto compositorHelper = DependencyManager::get<CompositorHelper>();
+    connect(compositorHelper.data(), &CompositorHelper::allowMouseCaptureChanged, this, updateHmdCursor);
+    connect(DependencyManager::get<HMDScriptingInterface>().data(), &HMDScriptingInterface::mountedChanged, this, updateHmdCursor);
+    // after start-up's own handler, which sets the preferred cursor for the new mode
+    connect(this, &Application::activeDisplayPluginChanged, this, updateHmdCursor);
 
     // Pre-create a couple of offscreen surfaces to speed up tablet UI
     auto offscreenSurfaceCache = DependencyManager::get<OffscreenQmlSurfaceCache>();

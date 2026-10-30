@@ -18,6 +18,7 @@ private slots:
     void initTestCase();
     void testFiltersOnBothEngines();
     void testRunawayFilterOnWebAssembly();
+    void testFilterScriptObject();
 };
 
 #endif // hifi_EditFilterTests_h

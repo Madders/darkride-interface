@@ -64,6 +64,7 @@
 #include "scripting/MenuScriptingInterface.h"
 #include "graphics-scripting/GraphicsScriptingInterface.h"
 #include "scripting/SettingsScriptingInterface.h"
+#include "scripting/ScriptSettingsInterface.h"
 #include "scripting/WindowScriptingInterface.h"
 #include "scripting/RatesScriptingInterface.h"
 #include "scripting/SelectionScriptingInterface.h"
@@ -77,6 +78,8 @@
 #include "scripting/DiskCacheScriptingInterface.h"
 #include "avatar/AvatarThumbnails.h"
 #include "ui/MetaverseRequests.h"
+#include "ui/Panels.h"
+#include "chat/FriendsScriptingInterface.h"
 #include "ui/Skins.h"
 #include "ui/SystemToolbar.h"
 #if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
@@ -128,6 +131,7 @@ void Application::onDesktopRootContextCreated(QQmlContext* surfaceContext) {
     // Darkride's own panels (the Settings panel first): the disk cache's size and place, and the metaverse's API
     surfaceContext->setContextProperty("DiskCache", DependencyManager::get<DiskCacheScriptingInterface>().data());
     surfaceContext->setContextProperty("MetaverseRequests", DependencyManager::get<MetaverseRequests>().data());
+    surfaceContext->setContextProperty("Friends", DependencyManager::get<FriendsScriptingInterface>().data());
     surfaceContext->setContextProperty("AvatarThumbnails", DependencyManager::get<AvatarThumbnails>().data());
     surfaceContext->setContextProperty("SystemToolbar", SystemToolbar::instance());
     surfaceContext->setContextProperty("Skins", DependencyManager::get<Skins>().data());
@@ -240,9 +244,11 @@ void Application::setupQmlSurface(QQmlContext* surfaceContext, bool setAdditiona
         surfaceContext->setContextProperty("Performance", new PerformanceScriptingInterface());
         surfaceContext->setContextProperty("DiskCache", DependencyManager::get<DiskCacheScriptingInterface>().data());
         surfaceContext->setContextProperty("MetaverseRequests", DependencyManager::get<MetaverseRequests>().data());
+        surfaceContext->setContextProperty("Friends", DependencyManager::get<FriendsScriptingInterface>().data());
         surfaceContext->setContextProperty("AvatarThumbnails", DependencyManager::get<AvatarThumbnails>().data());
         surfaceContext->setContextProperty("SystemToolbar", SystemToolbar::instance());
         surfaceContext->setContextProperty("Skins", DependencyManager::get<Skins>().data());
+        surfaceContext->setContextProperty("Panels", DependencyManager::get<Panels>().data());
 
         surfaceContext->setContextProperty("Account", AccountServicesScriptingInterface::getInstance()); // DEPRECATED - TO BE REMOVED
         surfaceContext->setContextProperty("GlobalServices", AccountServicesScriptingInterface::getInstance()); // DEPRECATED - TO BE REMOVED
@@ -295,6 +301,7 @@ void Application::registerScriptEngineWithApplicationServices(const ScriptEngine
 
     if (property(hifi::properties::TEST).isValid()) {
         scriptEngine->registerGlobalObject("Test", TestScriptingInterface::getInstance());
+        scriptEngine->setTestApiRegistered();
     }
 
     scriptEngine->registerGlobalObject("PlatformInfo", PlatformInfoScriptingInterface::getInstance());
@@ -359,7 +366,9 @@ void Application::registerScriptEngineWithApplicationServices(const ScriptEngine
     scriptEngine->registerGlobalObject("Menu", MenuScriptingInterface::getInstance());
     scriptEngine->registerGlobalObject("DesktopPreviewProvider", DependencyManager::get<DesktopPreviewProvider>().data());
     scriptEngine->registerGlobalObject("Stats", Stats::getInstance());
-    scriptEngine->registerGlobalObject("Settings", SettingsScriptingInterface::getInstance());
+    // one Settings object per engine: it knows the engine's scripts' origin, and a script from the network may not
+    // write the settings that steer the client (ScriptSettingsInterface)
+    scriptEngine->registerGlobalObject("Settings", new ScriptSettingsInterface(scriptEngine.data()));
     scriptEngine->registerGlobalObject("Snapshot", DependencyManager::get<Snapshot>().data());
     scriptEngine->registerGlobalObject("AudioStats", DependencyManager::get<AudioClient>()->getStats().data());
     scriptEngine->registerGlobalObject("AudioScope", DependencyManager::get<AudioScope>().data());
@@ -372,6 +381,8 @@ void Application::registerScriptEngineWithApplicationServices(const ScriptEngine
     scriptEngine->registerGlobalObject("Pointers", DependencyManager::get<PointerScriptingInterface>().data());
     scriptEngine->registerGlobalObject("TextToSpeech", DependencyManager::get<TTSScriptingInterface>().data());
     scriptEngine->registerGlobalObject("Chat", DependencyManager::get<ChatScriptingInterface>().data());
+    scriptEngine->registerGlobalObject("Panels", DependencyManager::get<Panels>().data());
+    scriptEngine->registerGlobalObject("Friends", DependencyManager::get<FriendsScriptingInterface>().data());
     scriptEngine->registerGlobalObject("DiskCache", DependencyManager::get<DiskCacheScriptingInterface>().data());
 
     // Caches
@@ -394,7 +405,10 @@ void Application::registerScriptEngineWithApplicationServices(const ScriptEngine
     qScriptRegisterMetaType(scriptEngine.data(), worldDetailQualityToScriptValue, worldDetailQualityFromScriptValue);
 
     scriptEngine->registerGlobalObject("Keyboard", DependencyManager::get<KeyboardScriptingInterface>().data());
-    scriptEngine->registerGlobalObject("Performance", new PerformanceScriptingInterface());
+    // one per engine (its signals are emitted on the engine's thread); gone with the engine
+    auto performance = new PerformanceScriptingInterface();
+    connect(scriptEngine.data(), &QObject::destroyed, performance, &QObject::deleteLater);
+    scriptEngine->registerGlobalObject("Performance", performance);
 
     scriptEngine->registerGlobalObject("Paths", DependencyManager::get<PathUtils>().data());
 

@@ -36,6 +36,8 @@ private slots:
     void testDecodeArguments();
     void testMalformedInput();
     void testDirectEncodingMatchesTheTree();
+    void benchmarkLargeMap();
+    void benchmarkLargeMapThroughTheTree();
     void testGenericTypes();
 };
 

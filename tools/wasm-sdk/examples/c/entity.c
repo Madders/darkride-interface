@@ -7,6 +7,8 @@
  *  such entity. It counts the entities it serves, greets each in preload, answers clicks by changing the
  *  entity's colour, reports collisions, and offers one method to remote callers (`ping`, which writes who
  *  called into the entity's name). Built with build.sh (wasi-sdk) into entity.wasm.
+ *  In this release the engine runs it only where DARKRIDE_WASM_ENTITY_SCRIPTS=1 is set in the client's or
+ *  server's environment (for development).
  *
  *  Distributed under the Apache License, Version 2.0.
  *  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html

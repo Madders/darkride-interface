@@ -14,7 +14,8 @@
 //  QtScript); and, in an entities engine (the client's and the entity script server's), the entity scripts:
 //  JavaScript ones inside the guest, .wasm ones each as an instance of its module, one per URL however many
 //  entities run it, every instance in this engine's thread and object table. Which engine a .js file or an
-//  entities engine loads on is the setting runJavaScriptOnWebAssembly (Developer > Scripting in the client);
+//  entities engine loads on is runJavaScriptOnWebAssembly(): this one, unless the setting says QtScript (Developer >
+//  Scripting in the client);
 //  .wasm files always load here.
 //
 //  Lifecycle, as the QtScript engine's: loadURL fetches the script; scriptLoaded makes ScriptEngines run the
@@ -82,8 +83,9 @@ public:
     /// The runtime every module of this process is compiled by.
     static std::shared_ptr<WasmRuntime> runtime();
 
-    /// The setting: JavaScript client scripts and the entities engines load on this engine instead of the
-    /// QtScript one.
+    /// Whether JavaScript client scripts, agents' scripts and the entities engines load on this engine: yes, unless
+    /// the setting (Developer > Scripting > Run JavaScript on QtScript) or DARKRIDE_RUN_JS_ON_QTSCRIPT=1 says QtScript;
+    /// DARKRIDE_RUN_JS_ON_WASM=1 or 0 chooses for one process. Without the guest module, JavaScript runs on QtScript.
     static bool runJavaScriptOnWebAssembly();
     static void setRunJavaScriptOnWebAssembly(bool on);
     /// The engine chosen for one JavaScript client script (in the Running Scripts window), over the setting until
@@ -159,12 +161,20 @@ public:
     /// Script.resolvePath with the parent given.
     Q_INVOKABLE QString resolvePathFrom(const QString& path, const QString& parentUrl) const;
     /// Script.include's rules: {"url"} or {"reason"} when the file is not to be included.
-    Q_INVOKABLE QVariantMap resolveInclude(const QString& file, const QString& parentUrl, const QString& sandboxUrl = QString()) const;
+    Q_INVOKABLE QVariantMap resolveInclude(const QString& file, const QString& parentUrl, const QString& sandboxUrl = QString());
     /// Script.require.resolve's rules: {"url"} or {"error", "type"}.
     Q_INVOKABLE QVariantMap resolveModule(const QString& moduleId, const QString& relativeTo, const QString& parentUrl,
-                                          const QString& sandboxUrl = QString()) const;
-    /// A script's text through the script cache, synchronously: {"url", "status", "success", "contents"}.
-    Q_INVOKABLE QVariantMap fetchScript(const QString& url, bool forceDownload);
+                                          const QString& sandboxUrl = QString());
+    /// A script's text through the script cache, synchronously: {"url", "status", "success", "contents"}, for
+    /// Script.include and Script.require; sandboxUrl is the guest's claim of the entity script running (verified).
+    /// A file of this machine is served by Script.include's rule (the app's own scripts, a local script's files, a
+    /// file under the entity script's own folder); the rest by the network rule for a script's own requests.
+    Q_INVOKABLE QVariantMap fetchScript(const QString& url, bool forceDownload, const QString& sandboxUrl = QString());
+    QUrl verifiedScriptOrigin(const QString& claimed) const override;
+    /// The guest's claim of the entity script running, checked against the entity scripts this engine loaded: a
+    /// claim it did not load counts as the entities engine itself (about:Entities, never local). Empty for a client
+    /// script or an agent, which have no entity scripts and whose code is the engine's own.
+    QUrl verifiedSandbox(const QString& claimed) const;
     /// Script.dumpApi for this engine: the globals record the guest composed, written under the usual root.
     Q_INVOKABLE bool dumpApi(const QString& path, const QVariantMap& globals);
     using ScriptEngine::dumpApi;

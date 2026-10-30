@@ -144,6 +144,10 @@ Item::Bound MeshPartPayload::getBound() const {
 }
 
 ShapeKey MeshPartPayload::getShapeKey() const {
+    return buildShapeKey(true);
+}
+
+ShapeKey MeshPartPayload::buildShapeKey(bool allowOwnPipeline) const {
     ShapeKey::Builder builder;
     graphics::MaterialPointer material = _drawMaterials.empty() ? nullptr : _drawMaterials.top().material;
     graphics::MaterialKey drawMaterialKey = _drawMaterials.getMaterialKey();
@@ -152,7 +156,7 @@ ShapeKey MeshPartPayload::getShapeKey() const {
         builder.withTranslucent();
     }
 
-    if (material && material->isProcedural() && material->isReady()) {
+    if (allowOwnPipeline && material && material->isProcedural() && material->isReady()) {
         builder.withOwnPipeline();
     } else {
         builder.withMaterial();
@@ -172,6 +176,17 @@ ShapeKey MeshPartPayload::getShapeKey() const {
     }
 
     return builder.build();
+}
+
+bool MeshPartPayload::bindPlainPipeline(RenderArgs* args, const render::ShapeKey& plainKey) const {
+    if (!args->_shapePlumber) {
+        return false;
+    }
+    // the pass's own flags ride on the item's (renderShape ORs its global key in): a shadow pass's, the wireframe's
+    render::ShapeKey key = plainKey | render::ShapeKey(render::ShapeKey::Flags(args->_itemShapeKey));
+    key._flags.reset(render::ShapeKey::OWN_PIPELINE);
+    // picking a pipeline sets it on the batch and runs its batch setter (the lights, in forward)
+    return (bool)args->_shapePlumber->pickPipeline(args, key);
 }
 
 void MeshPartPayload::drawCall(gpu::Batch& batch) const {
@@ -207,19 +222,30 @@ void MeshPartPayload::render(RenderArgs* args) {
 
     if (!_drawMaterials.empty() && _drawMaterials.top().material && _drawMaterials.top().material->isProcedural() &&
         _drawMaterials.top().material->isReady()) {
-        if (enableMaterialProceduralShaders == false) return;
         auto procedural = std::static_pointer_cast<graphics::ProceduralMaterial>(_drawMaterials.top().material);
         auto& schema = _drawMaterials.getSchemaBuffer().get<graphics::MultiMaterial::Schema>();
         glm::vec4 outColor = glm::vec4(ColorUtils::tosRGBVec3(schema._albedo), schema._opacity);
         outColor = procedural->getColor(outColor);
         const bool forward = DeferredLightingEffect::isForwardLit(args);
-        procedural->prepare(batch, _worldFromLocalTransform.getTranslation(), _worldFromLocalTransform.getScale(),
-                            _worldFromLocalTransform.getRotation(), _created,
-                            ProceduralProgramKey(outColor.a < 1.0f, false, false, forward));
-        if (forward) {
-            DependencyManager::get<DeferredLightingEffect>()->setupForwardLightingBatch(args, batch);
+        const ProceduralProgramKey programKey(outColor.a < 1.0f, false, false, forward);
+        // a shadow pass wants depth alone (see ModelMeshPartPayload::render)
+        const bool plainShadow = args->_renderMode == RenderArgs::RenderMode::SHADOW_RENDER_MODE && !procedural->hasVertexShader();
+        if (plainShadow || !enableMaterialProceduralShaders || procedural->compilationFailed(programKey)) {
+            // the plain material underneath, through the standard pipeline (bindPlainPipeline)
+            if (!bindPlainPipeline(args, buildShapeKey(false))) {
+                return;
+            }
+            if (RenderPipelines::bindMaterials(_drawMaterials, batch, args->_renderMode, args->_enableTexturing)) {
+                args->_details._materialSwitches++;
+            }
+        } else {
+            procedural->prepare(batch, _worldFromLocalTransform.getTranslation(), _worldFromLocalTransform.getScale(),
+                                _worldFromLocalTransform.getRotation(), _created, programKey);
+            if (forward) {
+                DependencyManager::get<DeferredLightingEffect>()->setupForwardLightingBatch(args, batch);
+            }
+            batch._glColor4f(outColor.r, outColor.g, outColor.b, outColor.a);
         }
-        batch._glColor4f(outColor.r, outColor.g, outColor.b, outColor.a);
     } else {
         // apply material properties
         if (RenderPipelines::bindMaterials(_drawMaterials, batch, args->_renderMode, args->_enableTexturing)) {
@@ -498,6 +524,10 @@ void ModelMeshPartPayload::updateKey(const render::ItemKey& key) {
         builder.withSubMetaCulled();
     }
 
+    if (_hidden) {
+        builder.withInvisible();
+    }
+
     _itemKey = builder.build();
 }
 
@@ -531,9 +561,10 @@ void ModelMeshPartPayload::setShapeKey(bool invalidateShapeKey, PrimitiveMode pr
         }
     }
 
-    if (material && material->isProcedural() && material->isReady()) {
-        builder.withOwnPipeline();
-    } else {
+    // the plain key, the part's whether or not its material has a custom shader (bindPlainPipeline draws with it when
+    // the shader can't)
+    ShapeKey::Builder plain(builder);
+    {
         bool hasTangents = drawMaterialKey.isNormalMap() && _hasTangents;
         bool hasLightmap = drawMaterialKey.isLightMap();
         bool isUnlit = drawMaterialKey.isUnlit();
@@ -542,24 +573,30 @@ void ModelMeshPartPayload::setShapeKey(bool invalidateShapeKey, PrimitiveMode pr
             hasTangents = hasLightmap = false;
         }
 
-        builder.withMaterial();
+        plain.withMaterial();
 
         if (hasTangents) {
-            builder.withTangents();
+            plain.withTangents();
         }
         if (hasLightmap) {
-            builder.withLightMap();
+            plain.withLightMap();
         }
         if (isUnlit) {
-            builder.withUnlit();
+            plain.withUnlit();
         }
         if (material) {
-            builder.withCullFaceMode(material->getCullFaceMode());
+            plain.withCullFaceMode(material->getCullFaceMode());
         }
     }
+    _plainShapeKey = plain.build();
 
+    if (material && material->isProcedural() && material->isReady()) {
+        builder.withOwnPipeline();
+        _shapeKey = builder.build();
+    } else {
+        _shapeKey = _plainShapeKey;
+    }
     _prevUseDualQuaternionSkinning = useDualQuaternionSkinning;
-    _shapeKey = builder.build();
 }
 
 ShapeKey ModelMeshPartPayload::getShapeKey() const {
@@ -593,6 +630,11 @@ void ModelMeshPartPayload::render(RenderArgs* args) {
     if (!args || (args->_renderMode == RenderArgs::RenderMode::DEFAULT_RENDER_MODE && _cauterized)) {
         return;
     }
+    // hidden (Model::setShapesHidden): the invisible key keeps a part out of the scene's own fetch, but a group's
+    // parts (an avatar's) reach the passes through their parent (MetaToSubItems), whatever their key
+    if (_hidden) {
+        return;
+    }
     // settled by getInstancing for this pass (GPU instancing): the impostor choice and the level were made then
     const bool settled = _settledPass != 0 && _settledPass == args->_instancingPass;
     // the model's impostor card stands in for it in this view, or the two dissolve into each other (IMPOSTORS.md 2.4)
@@ -622,21 +664,35 @@ void ModelMeshPartPayload::render(RenderArgs* args) {
     }
 
     if (_shapeKey.hasOwnPipeline()) {
-        if (enableMaterialProceduralShaders == false || !sceneIsReady) {
-            return;
-        }
         auto procedural = std::static_pointer_cast<graphics::ProceduralMaterial>(_drawMaterials.top().material);
         auto& schema = _drawMaterials.getSchemaBuffer().get<graphics::MultiMaterial::Schema>();
         glm::vec4 outColor = glm::vec4(ColorUtils::tosRGBVec3(schema._albedo), schema._opacity);
         outColor = procedural->getColor(outColor);
         const bool forward = DeferredLightingEffect::isForwardLit(args);
-        procedural->prepare(batch, _worldFromLocalTransform.getTranslation(), _worldFromLocalTransform.getScale(),
-                            _worldFromLocalTransform.getRotation(), _created,
-                            ProceduralProgramKey(outColor.a < 1.0f, _shapeKey.isDeformed(), _shapeKey.isDualQuatSkinned(), forward));
-        if (forward) {
-            DependencyManager::get<DeferredLightingEffect>()->setupForwardLightingBatch(args, batch);
+        const ProceduralProgramKey programKey(outColor.a < 1.0f, _shapeKey.isDeformed(), _shapeKey.isDualQuatSkinned(), forward);
+        // a shadow pass wants depth alone: a part whose shader only colours its pixels casts its mesh's shadow through
+        // the standard shadow pipeline (one pipeline for all such parts, no shader setup a draw); a shader that moves
+        // vertices keeps its own program there, so its shadow follows the moved shape. 20 Lightlings' three neon parts
+        // in four cascades were 240 full-shader draws a frame, each with Procedural::prepare (performance's crowd run,
+        // 2026-10-28)
+        const bool plainShadow = args->_renderMode == RenderArgs::RenderMode::SHADOW_RENDER_MODE && !procedural->hasVertexShader();
+        if (plainShadow || !enableMaterialProceduralShaders || !sceneIsReady || procedural->compilationFailed(programKey)) {
+            // the plain material underneath, through the standard pipeline (bindPlainPipeline): the part shows, and
+            // the shader takes over when it can
+            if (!bindPlainPipeline(args, _plainShapeKey)) {
+                return;
+            }
+            if (RenderPipelines::bindMaterials(_drawMaterials, batch, args->_renderMode, args->_enableTexturing)) {
+                args->_details._materialSwitches++;
+            }
+        } else {
+            procedural->prepare(batch, _worldFromLocalTransform.getTranslation(), _worldFromLocalTransform.getScale(),
+                                _worldFromLocalTransform.getRotation(), _created, programKey);
+            if (forward) {
+                DependencyManager::get<DeferredLightingEffect>()->setupForwardLightingBatch(args, batch);
+            }
+            batch._glColor4f(outColor.r, outColor.g, outColor.b, outColor.a);
         }
-        batch._glColor4f(outColor.r, outColor.g, outColor.b, outColor.a);
     } else {
         // apply material properties
         if (RenderPipelines::bindMaterials(_drawMaterials, batch, args->_renderMode, args->_enableTexturing)) {
@@ -698,7 +754,7 @@ namespace {
 
 render::Instancing ModelMeshPartPayload::getInstancing(RenderArgs* args) {
     render::Instancing answer(render::Instancing::NONE);
-    if (!args || (args->_renderMode == RenderArgs::RenderMode::DEFAULT_RENDER_MODE && _cauterized)) {
+    if (!args || (args->_renderMode == RenderArgs::RenderMode::DEFAULT_RENDER_MODE && _cauterized) || _hidden) {
         return answer;
     }
     if (_impostorSwitch && !_impostorSwitch->evaluate(args).model) {

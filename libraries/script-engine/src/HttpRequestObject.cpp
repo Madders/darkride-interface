@@ -11,11 +11,15 @@
 #include <QtCore/QEventLoop>
 #include <QtCore/QJsonDocument>
 
+#include <QtCore/QPointer>
+
 #include <NetworkAccessManager.h>
 #include <NetworkingConstants.h>
+#include <ScriptNetworkPolicy.h>
 #include <SharedUtil.h>
 
 #include "ResourceRequestObserver.h"
+#include "ScriptEngine.h"
 
 HttpRequestObject::HttpRequestObject(QObject* parent) : QObject(parent), _timer(this) {
     _request.setAttribute(QNetworkRequest::FollowRedirectsAttribute, true);
@@ -59,25 +63,95 @@ void HttpRequestObject::send() {
 }
 
 void HttpRequestObject::send(const QVariant& data) {
-    if (_readyState != OPENED || _reply) {
+    if (_readyState != OPENED || _reply || _deciding) {
         return;
     }
     if (data.isValid() && !data.isNull()) {
         _sendData = data.type() == QVariant::ByteArray ? data.toByteArray() : data.toString().toUtf8();
     }
-    doSend();
-    if (!_async) {
+    if (!_ruled) {
+        doSend();
+    } else {
+        // the network rule for a script's own requests: judged at once, or after a name lookup
+        _deciding = true;
+        const int generation = ++_generation;
+        ScriptNetworkPolicy::decide(_url, _origin, this, [this, generation](const ScriptNetworkPolicy::Decision& decision) {
+            if (generation != _generation) {
+                return;     // aborted meanwhile
+            }
+            if (decision.allowed) {
+                _deciding = false;
+                doSend();
+                return;
+            }
+            // refused: ends as a failed request does, after send() has returned
+            const QString reason = decision.reason;
+            QMetaObject::invokeMethod(this, [this, generation, reason] {
+                if (generation == _generation) {
+                    _deciding = false;
+                    refuse(reason);
+                }
+            }, Qt::QueuedConnection);
+        });
+    }
+    if (!_async && _readyState != DONE) {
         QEventLoop loop;
         connect(this, &HttpRequestObject::requestComplete, &loop, &QEventLoop::quit);
         loop.exec();
     }
 }
 
+void HttpRequestObject::refuse(const QString& reason) {
+    _timer.stop();
+    if (_logger) {
+        _logger(ScriptNetworkPolicy::refusalLine(_origin, _url, reason));
+    }
+    _errorCode = QNetworkReply::ContentAccessDenied;
+    _lastStatus = 0;
+    _lastStatusText.clear();
+    _headers.clear();
+    _sendData.clear();
+    setReadyState(DONE);
+    emit requestComplete();
+}
+
 void HttpRequestObject::doSend() {
     DependencyManager::get<ResourceRequestObserver>()->update(_url, -1, "HttpRequestObject::doSend");
+    const bool ruled = _ruled && ScriptNetworkPolicy::applies(_origin);
+    if (ruled) {
+        // a redirect is judged as the request was
+        _request.setAttribute(QNetworkRequest::FollowRedirectsAttribute, false);
+        _request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::UserVerifiedRedirectPolicy);
+    }
     _reply = NetworkAccessManager::getInstance().sendCustomRequest(_request, _method.toLatin1(), _sendData);
     connect(_reply, &QNetworkReply::finished, this, &HttpRequestObject::onFinished);
     connect(_reply, &QNetworkReply::downloadProgress, this, &HttpRequestObject::onDownloadProgress);
+    if (ruled) {
+        QNetworkReply* reply = _reply;
+        connect(reply, &QNetworkReply::redirected, this, [this, reply](const QUrl& url) {
+            if (reply->url().scheme().toLower() == "https" && url.scheme().toLower() != "https") {
+                // a secure request stays secure
+                if (_logger) {
+                    _logger(ScriptNetworkPolicy::refusalLine(_origin, url, "a redirect from https to a plain address"));
+                }
+                reply->abort();
+                return;
+            }
+            ScriptNetworkPolicy::decide(url, _origin, this, [this, reply, url](const ScriptNetworkPolicy::Decision& decision) {
+                if (_reply != reply) {
+                    return;
+                }
+                if (decision.allowed) {
+                    emit reply->redirectAllowed();
+                    return;
+                }
+                if (_logger) {
+                    _logger(ScriptNetworkPolicy::refusalLine(_origin, url, decision.reason + " (a redirect)"));
+                }
+                reply->abort();
+            });
+        });
+    }
     if (_timeout > 0) {
         _timer.start(_timeout);
     }
@@ -128,6 +202,8 @@ void HttpRequestObject::onFinished() {
 }
 
 void HttpRequestObject::abort() {
+    ++_generation;
+    _deciding = false;
     abortRequest();
 }
 
@@ -173,10 +249,23 @@ void HttpRequestObject::setReadyState(ReadyState state) {
     }
 }
 
+
 // --- the factory ---------------------------------------------------------------------------------------------------
 
-HttpRequestObject* HttpRequestFactory::createRequest() {
-    return new HttpRequestObject(this);
+HttpRequestFactory::HttpRequestFactory(ScriptEngine* engine) : QObject(engine), _engine(engine) {}
+
+HttpRequestObject* HttpRequestFactory::createRequest(const QString& origin) {
+    auto request = new HttpRequestObject(this);
+    if (_engine) {
+        request->setOrigin(_engine->verifiedScriptOrigin(origin), _engine->isClientSide());
+        QPointer<ScriptEngine> engine(_engine);
+        request->setLogger([engine](const QString& line) {
+            if (engine) {
+                engine->scriptWarningMessage(line);
+            }
+        });
+    }
+    return request;
 }
 
 void HttpRequestFactory::dispose(QObject* request) {

@@ -25,6 +25,7 @@
 #include <NetworkAccessManager.h>
 
 #include "ImpostorEditor.h"
+#include "ScriptEditor.h"
 #include "TerrainCapsEditor.h"
 #include "TerrainLayersEditor.h"
 #include "TrackPointsEditor.h"
@@ -424,8 +425,10 @@ PropertyEditor* PropertyEditor::create(const PropertySpec& spec, QWidget* parent
             return editor;
         }
         case PropertyKind::Slider: return new NumberEditor(spec, parent);
-        case PropertyKind::String:
-        case PropertyKind::Url: return new TextEditor(spec, parent);
+        case PropertyKind::String: return new TextEditor(spec, parent);
+        case PropertyKind::Url:
+            // Script and Server Script: the link, and what the script is doing now with Reload under it
+            return ScriptEditor::isFor(spec) ? (PropertyEditor*)new ScriptEditor(spec, parent) : new TextEditor(spec, parent);
         case PropertyKind::Json: return new JsonEditor(spec, parent);
         case PropertyKind::Image: return new ImageEditor(spec, parent);
         case PropertyKind::UserData: return new UserDataEditor(spec, parent);

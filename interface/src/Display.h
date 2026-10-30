@@ -27,6 +27,7 @@
 #ifndef hifi_Display_h
 #define hifi_Display_h
 
+#include <memory>
 #include <mutex>
 
 #include <QtCore/QObject>
@@ -38,9 +39,14 @@
 
 #include <plugins/Forward.h>
 
+class QAbstractNativeEventFilter;
+
 class Display : public QObject {
     Q_OBJECT
 public:
+    Display();    // on Windows, starts listening for the front app's changes (WM_ACTIVATEAPP)
+    ~Display();
+
     void initializePlugins();   // the plug-ins found and given the GPU context, the default and then the saved one activated, the headset's auto-switch started (was initializeDisplayPlugins, less the first frame)
 
     DisplayPluginPointer getActiveDisplayPlugin() const;   // under the lock from another thread; on the main thread, the mode made current when there is none yet
@@ -67,6 +73,7 @@ public:
     void raise();
     void raiseWindow() const;
     bool isForeground() const;
+    bool isAppInFront() const;   // the player's front app is this one: on Windows the foreground window's process, elsewhere Qt's application state
 
     void resizeGL();                  // the render size, the camera's projection and the UI's size follow the plug-in
     void updateWindowTitle() const;   // the world's name, the client label first, the build's branch on a dev build
@@ -81,6 +88,8 @@ public:
 public slots:
     void activeChanged(Qt::ApplicationState state);   // the foreground flag and the refresh-rate regime
     void windowMinimizedChanged(bool minimized);      // the plug-in deactivated while minimized, idle events kept coming
+    void foregroundChanged(bool inFront);             // Windows' word that this app came to the front or went behind
+    void checkForeground();                           // Windows, twice a second: the regime follows whose window is in front
 
 signals:
     void activeDisplayPluginChanged();   // after a successful change; Application relays it
@@ -97,6 +106,8 @@ private:
     glm::uvec2 _renderResolution;
     bool _isForeground{ true };   // starts out assumed to be in foreground
     QTimer _minimizedWindowTimer;
+    std::unique_ptr<QAbstractNativeEventFilter> _foregroundFilter;   // Windows only: WM_ACTIVATEAPP, which Qt's application state can miss
+    QTimer _foregroundCheck;   // Windows only: checkForeground's
 
     // the window's screen, followed: moved to another screen, or the screen's rate changed, the pacing takes the new
     // rate (until the 10-21 review it was read only when the profile or the regime changed)

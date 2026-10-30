@@ -13,6 +13,8 @@
 
 #include <QMetaType>
 #include <QRunnable>
+#include <QCoreApplication>
+#include <QThread>
 #include <QThreadPool>
 
 #include <unordered_map>
@@ -169,7 +171,10 @@ void Model::setOffset(const glm::vec3& offset) {
     _snappedToRegistrationPoint = false;
 }
 
+// main thread only: it walks the materials, which the main thread changes (a script's textures edit, the opacity check
+// in areTexturesLoaded). Called from a script thread it raced those changes and could corrupt a material's texture map.
 void Model::calculateTextureInfo() {
+    _textureInfoRequested = false;
     if (!_hasCalculatedTextureInfo && isLoaded() && getNetworkModel()->areTexturesLoaded() && !_modelMeshRenderItems.isEmpty()) {
         size_t textureSize = 0;
         int textureCount = 0;
@@ -186,13 +191,31 @@ void Model::calculateTextureInfo() {
     }
 }
 
+// off the main thread: the last values, and one queued request to work them out again if they aren't final
+void Model::requestTextureInfo() {
+    if (_hasCalculatedTextureInfo) {
+        return;
+    }
+    if (QThread::currentThread() == thread()) {
+        calculateTextureInfo();
+    } else if (!_textureInfoRequested.exchange(true)) {
+        // a weak pointer, not this: the caller's ModelPointer may be the last one, so the Model can go on the caller's
+        // thread while the main thread runs the request; locked there, the main thread holds it while it works
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [weakModel = weak_from_this()] {
+            if (auto model = weakModel.lock()) {
+                model->calculateTextureInfo();
+            }
+        }, Qt::QueuedConnection);
+    }
+}
+
 size_t Model::getRenderInfoTextureSize() {
-    calculateTextureInfo();
+    requestTextureInfo();
     return _renderInfoTextureSize;
 }
 
 int Model::getRenderInfoTextureCount() {
-    calculateTextureInfo();
+    requestTextureInfo();
     return _renderInfoTextureCount;
 }
 
@@ -1008,6 +1031,26 @@ bool Model::isVisible() const {
     return _renderItemKeyGlobalFlags.isVisible();
 }
 
+void Model::setShapesHidden(const std::set<unsigned int>& shapeIDs, const render::ScenePointer& scene) {
+    if (shapeIDs == _hiddenShapes) {
+        return;
+    }
+    _hiddenShapes = shapeIDs;
+    if (!scene) {
+        return;   // the render items take it when they're made (createRenderItemSet)
+    }
+    auto renderItemsKey = _renderItemKeyGlobalFlags;
+    render::Transaction transaction;
+    for (unsigned int shapeID = 0; shapeID < _modelMeshRenderItemIDs.size(); shapeID++) {
+        const bool hidden = isShapeHidden(shapeID);
+        transaction.updateItem<ModelMeshPartPayload>(_modelMeshRenderItemIDs[shapeID], [hidden, renderItemsKey](ModelMeshPartPayload& data) {
+            data.setHidden(hidden);
+            data.updateKey(renderItemsKey);
+        });
+    }
+    scene->enqueueTransaction(transaction);
+}
+
 void Model::setCanCastShadow(bool castShadow, const render::ScenePointer& scene) {
     if (Model::canCastShadow() != castShadow) {
         auto keyBuilder = render::ItemKey::Builder(_renderItemKeyGlobalFlags);
@@ -1190,6 +1233,8 @@ void Model::removeFromScene(const render::ScenePointer& scene, render::Transacti
     _renderInfoVertexCount = 0;
     _renderInfoDrawCalls = 0;
     _renderInfoTextureSize = 0;
+    _renderInfoTextureCount = 0;
+    _hasCalculatedTextureInfo = false;
     _renderInfoHasTransparent = false;
 }
 
@@ -1381,8 +1426,45 @@ void Model::loadURLFinished(bool success) {
         if (_renderGeometry) {
             _renderGeometry->setTextureLoadPriority(this, _loadingPriority);
         }
+        if (isLoaded()) {
+            const HFMModel& hfmModel = getHFMModel();
+            QVariantMap objects;
+            for (const auto& joint : hfmModel.joints) {
+                if (!joint.extras.isEmpty()) {
+                    objects[joint.name] = joint.extras;
+                }
+            }
+            QVariantMap materials;
+            for (const auto& material : hfmModel.materials) {
+                if (!material.extras.isEmpty()) {
+                    materials[material.name] = material.extras;
+                }
+            }
+            std::lock_guard<std::mutex> lock(_cachedMeshExtentsMutex);
+            _cachedUnscaledMeshExtents = hfmModel.getUnscaledMeshExtents();
+            _cachedExtras.clear();
+            _cachedExtras["objects"] = objects;
+            _cachedExtras["materials"] = materials;
+            _hasCachedUnscaledMeshExtents = true;
+        }
     }
     emit setURLFinished(success);
+}
+
+bool Model::getCachedUnscaledMeshExtents(Extents& extents) const {
+    std::lock_guard<std::mutex> lock(_cachedMeshExtentsMutex);
+    if (_hasCachedUnscaledMeshExtents) {
+        extents = _cachedUnscaledMeshExtents;
+    }
+    return _hasCachedUnscaledMeshExtents;
+}
+
+bool Model::getCachedExtras(QVariantMap& extras) const {
+    std::lock_guard<std::mutex> lock(_cachedMeshExtentsMutex);
+    if (_hasCachedUnscaledMeshExtents) {
+        extras = _cachedExtras;
+    }
+    return _hasCachedUnscaledMeshExtents;
 }
 
 bool Model::getJointPositionInWorldFrame(int jointIndex, glm::vec3& position) const {
@@ -1596,7 +1678,8 @@ void Model::updateClusterMatrices() {
 void Model::updateBlendshapes() {
     // post the blender if we're not currently waiting for one to finish
     auto modelBlender = DependencyManager::get<ModelBlender>();
-    if (modelBlender->shouldComputeBlendshapes() && getHFMModel().hasBlendedMeshes() && _blendshapeCoefficients != _blendedBlendshapeCoefficients) {
+    // the cheap test first: the coefficients change on a blink, a word or an expression; hasBlendedMeshes walks the meshes
+    if (modelBlender->shouldComputeBlendshapes() && _blendshapeCoefficients != _blendedBlendshapeCoefficients && getHFMModel().hasBlendedMeshes()) {
         _blendedBlendshapeCoefficients = _blendshapeCoefficients;
         modelBlender->noteRequiresBlend(getThisPointer());
     }
@@ -1604,10 +1687,16 @@ void Model::updateBlendshapes() {
 
 void Model::deleteGeometry() {
     _deleteGeometryCounter++;
+    _hiddenShapes.clear();   // its shapes' numbers belong to the geometry
     _shapeStates.clear();
     _meshStates.clear();
     _rig.destroyAnimGraph();
     _blendedBlendshapeCoefficients.clear();
+    {
+        std::lock_guard<std::mutex> lock(_cachedMeshExtentsMutex);
+        _hasCachedUnscaledMeshExtents = false;
+        _cachedExtras.clear();
+    }
     _renderGeometry.reset();
 }
 
@@ -1659,6 +1748,7 @@ void Model::createRenderItemSet() {
         const auto& shape = shapes[shapeID];
 
         _modelMeshRenderItems << std::make_shared<ModelMeshPartPayload>(shared_from_this(), shape.mesh, shape.meshPart, shapeID, transform, offset, _created);
+        _modelMeshRenderItems.back()->setHidden(isShapeHidden(shapeID));
 
         auto material = getNetworkModel()->getShapeMaterial(shapeID);
         _modelMeshMaterialNames.push_back(material ? material->getName() : "");
@@ -1912,6 +2002,18 @@ static void packBlendshapeOffsets(BlendshapeOffsetUnpacked* unpacked, Blendshape
 static auto& packBlendshapeOffsets = packBlendshapeOffsets_ref;
 #endif
 
+// the packing of a zero offset, made once with the packer itself (it is not all-zero bits: the length packs as 1.0f)
+static const BlendshapeOffsetPacked& packedZeroBlendshapeOffset() {
+    static const BlendshapeOffsetPacked zero = [] {
+        BlendshapeOffsetUnpacked unpacked;
+        memset(&unpacked, 0, sizeof(unpacked));
+        BlendshapeOffsetPacked packed;
+        packBlendshapeOffsets(&unpacked, &packed, 1);
+        return packed;
+    }();
+    return zero;
+}
+
 class Blender : public QRunnable {
 public:
 
@@ -1966,15 +2068,33 @@ void Blender::run() {
         }
         int numVertsInMesh = meshIter->vertices.size();
         blendedMeshSizes.push_back(numVertsInMesh);
+        auto packed = packedBlendshapeOffsets.data() + offset;
+
+        // a mesh none of whose shapes is in use this blend (a hidden hairstyle, a face at rest) takes the packed zero
+        // offset for every vertex: no clearing, no accumulation, no packing. The Lightling's hidden twin tails (10.1k
+        // vertices, one shape at 0) were cleared and re-packed at every blink of every Lightling in view (avatars and
+        // performance, 2026-10-28)
+        const float EPSILON = 0.0001f;
+        const int numShapes = qMin(_blendshapeCoefficients.size(), meshIter->blendshapes.size());
+        // per slot: a mesh's blendshapes are indexed by the model's slots, with empty entries for the shapes it lacks,
+        // so a blink (slot 0) must not count for a mesh whose only shape sits at slot 88 (avatars' catch)
+        bool anyShapeInUse = false;
+        for (int i = 0; i < numShapes && !anyShapeInUse; i++) {
+            anyShapeInUse = _blendshapeCoefficients.at(i) >= EPSILON && !meshIter->blendshapes.at(i).indices.isEmpty();
+        }
+        if (!anyShapeInUse) {
+            std::fill(packed, packed + numVertsInMesh, packedZeroBlendshapeOffset());
+            offset += numVertsInMesh;
+            continue;
+        }
 
         // initialize offsets to zero
         memset(unpackedBlendshapeOffsets.data(), 0, numVertsInMesh * sizeof(BlendshapeOffsetUnpacked));
 
         // for each blendshape in this mesh, accumulate the offsets into unpackedBlendshapeOffsets.
         const float NORMAL_COEFFICIENT_SCALE = 0.01f;
-        for (int i = 0, n = qMin(_blendshapeCoefficients.size(), meshIter->blendshapes.size()); i < n; i++) {
+        for (int i = 0; i < numShapes; i++) {
             float vertexCoefficient = _blendshapeCoefficients.at(i);
-            const float EPSILON = 0.0001f;
             if (vertexCoefficient < EPSILON) {
                 continue;
             }
@@ -1995,7 +2115,6 @@ void Blender::run() {
 
         // convert unpackedBlendshapeOffsets into packedBlendshapeOffsets for the gpu.
         auto unpacked = unpackedBlendshapeOffsets.data();
-        auto packed = packedBlendshapeOffsets.data() + offset;
         packBlendshapeOffsets(unpacked, packed, numVertsInMesh);
 
         offset += numVertsInMesh;

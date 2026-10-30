@@ -20,6 +20,7 @@ private slots:
     void axlesAndDrive();
     void seatsAndGears();
     void inputPacket();
+    void steering();
 };
 
 #endif // hifi_VehicleSpecTests_h

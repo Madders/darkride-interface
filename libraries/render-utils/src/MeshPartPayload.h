@@ -61,6 +61,13 @@ public:
     virtual void bindMesh(gpu::Batch& batch);
     virtual void bindTransform(gpu::Batch& batch, RenderArgs::RenderMode renderMode) const;
 
+    // A part whose material has a custom shader draws through the shader's own pipeline (its key says so). When the shader
+    // can't draw (Settings > Custom Shaders on Models off, the world still loading, a shader this GPU doesn't compile) the
+    // part draws its plain material instead (a colour, textures, a glow), through the pass's standard pipeline for the
+    // plain key, so that nothing vanishes (the Lightling's body, 10-28). The plumber comes with the args (DrawTask).
+    bool bindPlainPipeline(RenderArgs* args, const render::ShapeKey& plainKey) const;
+    render::ShapeKey buildShapeKey(bool allowOwnPipeline) const;   // getShapeKey's; false = the plain key
+
     // Payload resource cached values
     Transform _worldFromLocalTransform;
     int _partIndex = 0;
@@ -131,6 +138,9 @@ public:
 
     void updateKey(const render::ItemKey& key) override;
 
+    // a part left out of every pass, its shadow too, until shown again (Model::setShapesHidden)
+    void setHidden(bool hidden) { _hidden = hidden; }
+
     // matrix palette skinning
     void updateClusterBuffer(const std::vector<glm::mat4>& clusterMatrices);
 
@@ -178,6 +188,7 @@ public:
     ClusterBufferType _clusterBufferType{ ClusterBufferType::Matrices };
 
     int _meshIndex;
+    bool _hidden { false };
     int _shapeID;
     uint32_t _deformerIndex;
 
@@ -194,6 +205,7 @@ private:
     gpu::BufferPointer _meshBlendshapeBuffer;
     int _meshNumVertices;
     render::ShapeKey _shapeKey{ render::ShapeKey::Builder::invalid() };
+    render::ShapeKey _plainShapeKey{ render::ShapeKey::Builder::invalid() };   // _shapeKey without the shader's own pipeline (bindPlainPipeline)
     bool _prevUseDualQuaternionSkinning{ false };
     bool _cauterized{ false };
     std::shared_ptr<ImpostorSwitch> _impostorSwitch;

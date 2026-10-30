@@ -15,10 +15,13 @@
 
 (function() { // BEGIN LOCAL_SCOPE
 
-var headset; // The preferred headset. Default to the first one found in the following list.
+var headset; // The preferred headset: the one last used, else the first one found in the following list.
 var displayMenuName = "Display";
 var desktopMenuItemName = "Desktop";
-['HTC Vive', 'Oculus Rift', 'WindowMS'].forEach(function (name) {
+// OpenXR's display is named "OpenXR"; without it in the list a Quest over Link had no Leave VR button, and no way back
+// to the desktop from inside the headset (Caity's Quest 3 test, 10-28). The HMD Simulator (HIFI_DEBUG_HMD) is last.
+var HEADSETS = ['OpenXR', 'Oculus Rift', 'HTC Vive', 'WindowMS', 'HMD Simulator'];
+HEADSETS.forEach(function (name) {
     if (!headset && Menu.menuItemExists(displayMenuName, name)) {
         headset = name;
     }
@@ -46,6 +49,12 @@ var switchToDesktop = "Leave VR";
 function onHmdChanged(isHmd) {
     HMD.closeTablet();
     if (isHmd) {
+        // Enter VR goes back to this one
+        HEADSETS.forEach(function (name) {
+            if (Menu.menuItemExists(displayMenuName, name) && Menu.isOptionChecked(name)) {
+                headset = name;
+            }
+        });
         button.editProperties({
             icon: "icons/tablet-icons/switch-desk-i.svg",
             text: switchToDesktop

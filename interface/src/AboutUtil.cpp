@@ -40,6 +40,27 @@ QString AboutUtil::getBuildVersion() const {
     return BuildInfo::VERSION;
 }
 
+QString AboutUtil::getBuildCommit() const {
+    return BuildInfo::BUILD_COMMIT;
+}
+
+QString AboutUtil::getBuildLine() const {
+    // the commit names a build exactly; a build number where there is no commit (a tree outside git)
+    const QString build = !BuildInfo::BUILD_COMMIT.isEmpty() ? BuildInfo::BUILD_COMMIT : BuildInfo::BUILD_NUMBER;
+    // PR and nightly builds append "-<commit>" to the version (cmake/macros/SetPackagingParameters.cmake), which this
+    // line shows as the build already, or a bare "-" when the packager passes no commit ("PR1-"); a suffix of the
+    // version's own ("-beta") stays
+    QString version = BuildInfo::VERSION;
+    const int dash = version.lastIndexOf('-');
+    if (dash > 0) {
+        const QString tail = version.mid(dash + 1);
+        if (tail.isEmpty() || (!build.isEmpty() && (build.startsWith(tail) || tail.startsWith(build)))) {
+            version.truncate(dash);
+        }
+    }
+    return "Darkride " + version + (build.isEmpty() ? QString() : QString::fromUtf8(" \u00b7 build ") + build);
+}
+
 QString AboutUtil::getQtVersion() const {
     return qVersion();
 }

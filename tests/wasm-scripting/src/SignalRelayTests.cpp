@@ -17,7 +17,7 @@
 
 #include "TestObjects.h"
 
-QTEST_MAIN(SignalRelayTests)
+QTEST_GUILESS_MAIN(SignalRelayTests)
 
 namespace {
 

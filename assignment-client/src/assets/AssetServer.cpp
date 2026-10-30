@@ -408,7 +408,8 @@ void AssetServer::handleDeleteMappingsOperation(ReceivedMessage& message, bool h
 
         QStringList mappingsToDelete;
 
-        for (int i = 0; i < numberOfDeletedMappings; ++i) {
+        // as many names as the message holds
+        for (int i = 0; i < numberOfDeletedMappings && message.getBytesLeftToRead() > 0; ++i) {
             auto mapping = message.readString();
 
             if (!mapping.startsWith(AssetUtils::HIDDEN_BAKED_CONTENT_FOLDER)) {
@@ -452,14 +453,9 @@ void AssetServer::handleRenameMappingOperation(ReceivedMessage& message, bool ha
 }
 
 void AssetServer::handleSetBakingEnabledOperation(ReceivedMessage& message, bool hasWriteAccess, NLPacketList& replyPacket) {
-    // the asset server no longer bakes; a client that still asks is told the operation failed
-    bool enabled { true };
-    message.readPrimitive(&enabled);
-    int numberOfMappings { 0 };
-    message.readPrimitive(&numberOfMappings);
-    for (int i = 0; i < numberOfMappings; ++i) {
-        message.readString();
-    }
+    // the asset server no longer bakes; a client that still asks is told the operation failed (nothing of the request
+    // is used)
+    Q_UNUSED(message);
     replyPacket.writePrimitive(hasWriteAccess ? AssetUtils::AssetServerError::MappingOperationFailed
                                               : AssetUtils::AssetServerError::PermissionDenied);
 }

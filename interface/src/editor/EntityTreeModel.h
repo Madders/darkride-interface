@@ -40,8 +40,10 @@ public:
         LockedRole,
         VisibleRole,
         CreatedRole,    // when the entity was made (usecs): the Hierarchy lists siblings in that order, as Unity does
-        LoadedRole      // false for an entity the server listed that this client does not have
+        LoadedRole,     // false for an entity the server listed that this client does not have
+        ScriptsRole     // a Scripts value: whether the entity has a client or server script, and whether they run
     };
+    enum Scripts { NoScripts, ScriptsRun, ScriptsOff };
 
     explicit EntityTreeModel(QObject* parent = nullptr);
     ~EntityTreeModel();
@@ -63,6 +65,8 @@ public:
     bool listedPlace(const QUuid& id, AACube& cube, QString& name) const;
     int count() const { return _nodes.size(); }
     int loadedCount() const;
+    // how many of the entities here have their scripts turned off (scriptsEnabled false), for everyone
+    int scriptsOffCount() const;
 
     QModelIndex index(int row, int column, const QModelIndex& parent = QModelIndex()) const override;
     QModelIndex parent(const QModelIndex& index) const override;
@@ -117,6 +121,7 @@ private:
         EntityTypes::EntityType type { EntityTypes::Unknown };
         bool locked { false };
         bool visible { true };
+        Scripts scripts { NoScripts };
         quint64 created { 0 };
         QString loadProblem;    // setLoadProblem
         QUuid parentID;

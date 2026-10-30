@@ -43,6 +43,7 @@ Column {
 
         Text {
             text: picker.currentText
+            textFormat: Text.PlainText
             color: Theme.secondaryText
             font.pixelSize: Theme.bodySize
         }

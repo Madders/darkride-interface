@@ -10,9 +10,12 @@
 
 #include <QtCore/QSet>
 #include <QtCore/QUuid>
+#include <QtGui/QPainter>
 #include <QtGui/QResizeEvent>
+#include <QtWidgets/QAbstractButton>
 #include <QtWidgets/QFrame>
 #include <QtWidgets/QGridLayout>
+#include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QStyle>
@@ -22,14 +25,96 @@
 #include "../PropertySpec.h"
 #include "PropertyEditors.h"
 #include "ImpostorEditor.h"
+#include "ScriptEditor.h"
 #include "TerrainCapsEditor.h"
 #include "TerrainLayersEditor.h"
 #include "TrackPointsEditor.h"
 #include "UserDataEditor.h"
 #include "VehiclePartsEditor.h"
+#include "../../ui/DockTitleBar.h"
 
 namespace {
     const QString NULL_UUID = QUuid().toString(QUuid::WithoutBraces);
+    const QString VISIBLE_KEY = QStringLiteral("visible");
+    const QString LOCKED_KEY = QStringLiteral("locked");
+
+    // the ticks that are the entity's own say what they do for everyone
+    const QHash<QString, QString> TICK_TIPS {
+        { "visible", "Visible to everyone. Untick it to hide this for everyone." },
+        { "ignorePickIntersection", "Everyone's clicks, lasers and teleports go through it, in Build mode and out of "
+                                    "it. (The pointer above is your own clicks', in Build mode.)" },
+    };
+
+    // the header's toggle icons, as the Hierarchy's rows have them; what a click does, for the selection alone
+    const char* const TOGGLE_NAMES[] = { "Hide", "NoPick", "Lock", "Scripts" };
+    QString toggleTip(int toggle, HierarchyPanel::ToggleLook look) {
+        const bool on = look == HierarchyPanel::On;
+        const bool mixed = look == HierarchyPanel::Mixed;
+        switch (toggle) {
+            case HierarchyPanel::Hide:
+                return on ? "Hidden in your view only. Click to show it."
+                     : mixed ? "Some of these are hidden in your view. Click to hide them all."
+                             : "Hide it in your view only, while you build. Everyone else still sees it.";
+            case HierarchyPanel::NoPick:
+                return on ? "Your clicks in the 3D view pass through it. Click to select it by clicking again."
+                     : mixed ? "Your clicks pass through some of these. Click for all of them."
+                             : "Let your clicks in the 3D view pass through it, while you build (the Entities list "
+                               "still selects it). Only for you.";
+            case HierarchyPanel::Lock:
+                return on ? "Locked for everyone: no one can move, change or delete it. Click to unlock it."
+                     : mixed ? "Some of these are locked. Click to lock them all."
+                             : "Lock it for everyone: no one can move, change or delete it until it's unlocked.";
+            default:
+                return on ? "Its scripts are off, for everyone. Click to run them again."
+                     : mixed ? "Some of these have their scripts off. Click to turn them all off."
+                             : "Turn its scripts off, for everyone: they stop running (a door stops opening) and "
+                               "keep their links, until they're turned on again.";
+        }
+    }
+
+    // one of the header's toggles, drawn as the Hierarchy's rows draw it (HierarchyPanel::paintToggle): bright while
+    // on, dim while off, a dash under it while mixed
+    class ToggleIcon : public QAbstractButton {
+    public:
+        ToggleIcon(int toggle, QWidget* parent) : QAbstractButton(parent), _toggle(toggle) {
+            setObjectName(QString("EditorInspectorToggle") + TOGGLE_NAMES[toggle]);
+            setFixedSize(26, 22);
+            setFocusPolicy(Qt::NoFocus);
+            setAttribute(Qt::WA_Hover);
+        }
+        void setState(const HierarchyPanel::ToggleState& state) {
+            _state = state;
+            setProperty("look", state.look == HierarchyPanel::On ? "on" : state.look == HierarchyPanel::Mixed ? "mixed" : "off");
+            setProperty("usable", state.usable);
+            setToolTip(state.usable ? toggleTip(_toggle, state.look) : state.why);
+            update();
+        }
+        bool usable() const { return _state.usable; }
+
+    protected:
+        void paintEvent(QPaintEvent*) override {
+            QPainter painter(this);
+            painter.setRenderHint(QPainter::Antialiasing);
+            const bool hovered = underMouse() && _state.usable;
+            if (hovered) {
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(QColor(255, 255, 255, 20));
+                painter.drawRoundedRect(QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0), 4.0, 4.0);
+                painter.setBrush(Qt::NoBrush);
+            }
+            const bool on = _state.look == HierarchyPanel::On;
+            const bool mixed = _state.look == HierarchyPanel::Mixed;
+            painter.setPen(QPen(HierarchyPanel::toggleColor(on || mixed, hovered, _state.usable), 1.2));
+            HierarchyPanel::paintToggle(painter, (HierarchyPanel::Toggle)_toggle, QRectF(rect()).adjusted(0.0, -1.0, 0.0, -1.0), on);
+            if (mixed) {
+                painter.drawLine(QPointF(width() / 2.0 - 2.5, height() - 2.0), QPointF(width() / 2.0 + 2.5, height() - 2.0));
+            }
+        }
+
+    private:
+        int _toggle;
+        HierarchyPanel::ToggleState _state;
+    };
 
     // the value of a property as text, for the show-when rules
     QString valueText(const QVariant& value) {
@@ -42,8 +127,8 @@ namespace {
 
 InspectorPanel::InspectorPanel(QWidget* parent) : QDockWidget("Inspector", parent) {
     setObjectName("EditorInspector");
-    setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    setFeatures(QDockWidget::DockWidgetClosable);   // fixed in place, see HierarchyPanel
+    setFeatures(DockWidgetClosable | DockWidgetMovable | DockWidgetFloatable);   // anywhere, see HierarchyPanel
+    DockTitleBar::attach(this);
     setMinimumWidth(340);   // room for a label and three vector fields
 
     auto body = new QWidget(this);
@@ -76,6 +161,8 @@ InspectorPanel::InspectorPanel(QWidget* parent) : QDockWidget("Inspector", paren
     _title = new QLabel(_content);
     _title->setObjectName("EditorInspectorTitle");
     _title->setWordWrap(true);
+    // entity names are the world's: shown as typed, never as styled text
+    _title->setTextFormat(Qt::PlainText);
     _contentLayout->addWidget(_title);
     // what the selection could not load (setLoadProblem), under the title; hidden while nothing has failed
     _loadProblem = new QLabel(_content);
@@ -98,10 +185,31 @@ void InspectorPanel::setReadOnly(bool readOnly, const QString& reason) {
     applyReadOnly();
 }
 
+void InspectorPanel::setCanLock(bool canLock, const QString& why) {
+    if (canLock != _canLock || why != _noLockWhy) {
+        _canLock = canLock;
+        _noLockWhy = why;
+        applyReadOnly();
+    }
+}
+
+void InspectorPanel::setToggleStates(const QVector<HierarchyPanel::ToggleState>& states) {
+    _toggleStates = states;
+    for (int t = 0; t < _toggleIcons.size() && t < states.size(); ++t) {
+        static_cast<ToggleIcon*>(_toggleIcons[t])->setState(states[t]);
+    }
+}
+
 void InspectorPanel::applyReadOnly() {
-    // the fields grey out; the labels stay live so Copy still works on them (they do not scrub)
-    for (auto& row : _rows) {
-        row.editor->setEnabled(!_readOnly);
+    // the fields grey out; the labels stay live so Copy still works on them (they do not scrub). With everything
+    // selected locked, they all do (the world refuses their changes): the header's padlock unlocks
+    for (auto it = _rows.begin(); it != _rows.end(); ++it) {
+        it->editor->setEnabled(!_readOnly && !_allLocked);
+    }
+    if (_lockNote) {
+        _lockNote->setText(_canLock ? "Locked. Click the padlock above to unlock it."
+                                    : "Locked, and you can't unlock things in this world.");
+        _lockNote->setVisible(_allLocked && !_readOnly);
     }
 }
 
@@ -239,23 +347,93 @@ QWidget* InspectorPanel::buildSection(const QString& sectionId, QWidget* parent)
     }
     frameLayout->addWidget(body);
 
+    // the section's header, as Unity's: the Visible tick and the name on one line, the other ticks under them (a
+    // Mac checkbox each, its name beside it), then a note while everything selected is locked
+    QWidget* head = nullptr;
+    QHBoxLayout* headLine = nullptr;
+    QHBoxLayout* headTicks = nullptr;
     int rowIndex = 0;
     for (auto spec : specs) {
-        auto editor = PropertyEditor::create(*spec, body);
-        auto label = editor->createLabel(body);
-        label->setObjectName("EditorInspectorLabel");
-        bool parts = spec->kind == PropertyKind::VehicleWheels || spec->kind == PropertyKind::VehicleSeats
-            || spec->kind == PropertyKind::TrackPoints;
-        bool tall = spec->kind == PropertyKind::Json || spec->kind == PropertyKind::UserData
-            || spec->kind == PropertyKind::CollisionMask || spec->kind == PropertyKind::TerrainLayers
-            || spec->kind == PropertyKind::Impostor || parts;
-        grid->addWidget(label, rowIndex, 0, Qt::AlignLeft | (tall ? Qt::AlignTop : Qt::AlignVCenter));
-        if (spec->kind == PropertyKind::UserData || spec->kind == PropertyKind::TerrainLayers || spec->kind == PropertyKind::Impostor || parts) {
-            grid->addWidget(editor, rowIndex, 0, 1, 2);   // its section's header names it: it takes the whole width
-        } else {
-            grid->addWidget(editor, rowIndex, 1);
+        if (spec->headerIcon) {
+            continue;   // one of the header's toggle icons
         }
-        ++rowIndex;
+        PropertyEditor* editor = nullptr;
+        QWidget* label = nullptr;
+        if (spec->header) {
+            if (!head) {
+                head = new QWidget(frame);
+                head->setObjectName("EditorInspectorHead");
+                auto headLayout = new QVBoxLayout(head);
+                headLayout->setContentsMargins(8, 4, 4, 2);
+                headLayout->setSpacing(4);
+                headLine = new QHBoxLayout();
+                headLine->setSpacing(6);
+                headLayout->addLayout(headLine);
+                headTicks = new QHBoxLayout();
+                headTicks->setSpacing(14);
+                headLayout->addLayout(headTicks);
+                // the Hierarchy rows' toggles, for the selection
+                auto icons = new QHBoxLayout();
+                icons->setSpacing(2);
+                _toggleIcons.clear();
+                for (int t = HierarchyPanel::Hide; t <= HierarchyPanel::Scripts; ++t) {
+                    auto icon = new ToggleIcon(t, head);
+                    if (t < _toggleStates.size()) {
+                        icon->setState(_toggleStates[t]);
+                    }
+                    connect(icon, &QAbstractButton::clicked, this, [this, icon, t] {
+                        if (icon->usable()) {
+                            emit toggleClicked(t);
+                        }
+                    });
+                    icons->addWidget(icon);
+                    _toggleIcons << icon;
+                }
+                icons->addStretch(1);
+                headLayout->addLayout(icons);
+                _lockNote = new QLabel(head);
+                _lockNote->setObjectName("EditorInspectorLockNote");
+                _lockNote->setWordWrap(true);
+                _lockNote->hide();
+                headLayout->addWidget(_lockNote);
+                frameLayout->insertWidget(frameLayout->indexOf(body), head);
+            }
+            editor = PropertyEditor::create(*spec, head);
+            editor->setToolTip(TICK_TIPS.value(spec->key));
+            if (auto tick = qobject_cast<BoolEditor*>(editor)) {
+                if (spec->key == VISIBLE_KEY) {
+                    editor->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+                    headLine->addWidget(editor);   // before the name, as Unity's active tick
+                } else {
+                    // each takes a share of the line: held to its size hint, the style sheet's spacing (editor.qss)
+                    // cuts the end off its name
+                    tick->setText(spec->label);
+                    editor->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+                    headTicks->addWidget(editor);
+                }
+            } else {
+                headLine->addWidget(editor, 1);
+            }
+        } else {
+            editor = PropertyEditor::create(*spec, body);
+            if (TICK_TIPS.contains(spec->key)) {
+                editor->setToolTip(TICK_TIPS.value(spec->key));
+            }
+            label = editor->createLabel(body);
+            label->setObjectName("EditorInspectorLabel");
+            bool parts = spec->kind == PropertyKind::VehicleWheels || spec->kind == PropertyKind::VehicleSeats
+                || spec->kind == PropertyKind::TrackPoints;
+            bool tall = spec->kind == PropertyKind::Json || spec->kind == PropertyKind::UserData
+                || spec->kind == PropertyKind::CollisionMask || spec->kind == PropertyKind::TerrainLayers
+                || spec->kind == PropertyKind::Impostor || parts || ScriptEditor::isFor(*spec);
+            grid->addWidget(label, rowIndex, 0, Qt::AlignLeft | (tall ? Qt::AlignTop : Qt::AlignVCenter));
+            if (spec->kind == PropertyKind::UserData || spec->kind == PropertyKind::TerrainLayers || spec->kind == PropertyKind::Impostor || parts) {
+                grid->addWidget(editor, rowIndex, 0, 1, 2);   // its section's header names it: it takes the whole width
+            } else {
+                grid->addWidget(editor, rowIndex, 1);
+            }
+            ++rowIndex;
+        }
 
         QString key = spec->key;
         connect(editor, &PropertyEditor::editBegan, this, [this, key] { emit editBegan(key); });
@@ -282,10 +460,12 @@ QWidget* InspectorPanel::buildSection(const QString& sectionId, QWidget* parent)
             connect(points, &TrackPointsEditor::pointChosen, this, &InspectorPanel::trackPointChosen);
         }
         // right-click on a label: Copy and Paste the row's value, as Unity does
-        label->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(label, &QWidget::customContextMenuRequested, editor, [editor, label](const QPoint& pos) {
-            editor->showValueMenu(label->mapToGlobal(pos));
-        });
+        if (label) {
+            label->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(label, &QWidget::customContextMenuRequested, editor, [editor, label](const QPoint& pos) {
+                editor->showValueMenu(label->mapToGlobal(pos));
+            });
+        }
         _rows.insert(key, Row { spec, label, editor });
     }
     _sections.insert(sectionId, frame);
@@ -307,6 +487,14 @@ void InspectorPanel::applyValues(const QVector<EntityItemProperties>& snapshots,
             caps->showTerrain(snapshots.size() == 1 ? snapshots.first().getID() : QUuid(), snapshots.size() > 1);
             continue;
         }
+        if (auto script = qobject_cast<ScriptEditor*>(row.editor)) {
+            // the entities its status line is about and its Reload reloads
+            QList<QUuid> ids;
+            for (const auto& snapshot : snapshots) {
+                ids << snapshot.getID();
+            }
+            script->setEntities(ids);
+        }
         if (auto impostor = qobject_cast<ImpostorEditor*>(row.editor)) {
             // the entities its Bake button bakes, beside the entry it shows
             QList<QUuid> ids;
@@ -324,6 +512,14 @@ void InspectorPanel::applyValues(const QVector<EntityItemProperties>& snapshots,
         row.editor->setValue(first, mixed);
     }
     applyVisibility(snapshots.first());
+    bool allLocked = true;
+    for (const auto& snapshot : snapshots) {
+        allLocked = allLocked && PropertySpecs::get(LOCKED_KEY, snapshot).toBool();
+    }
+    if (allLocked != _allLocked) {
+        _allLocked = allLocked;
+        applyReadOnly();
+    }
 }
 
 bool InspectorPanel::conditionHolds(const QString& showWhen, const EntityItemProperties& first) const {
@@ -370,7 +566,9 @@ void InspectorPanel::applyVisibility(const EntityItemProperties& first) {
     QSet<QString> sectionsShown;
     for (auto it = _rows.begin(); it != _rows.end(); ++it) {
         bool shown = conditionHolds(it->spec->showWhen, first);
-        it->label->setVisible(shown);
+        if (it->label) {
+            it->label->setVisible(shown);
+        }
         it->editor->setVisible(shown);
         if (shown) {
             sectionsShown.insert(it->spec->section);

@@ -46,11 +46,7 @@ layout(location=0) in vec2 varTexCoord0;
 layout(location=0) out vec4 outFragColor;
         
 void main(void) {
-<@if HIFI_USE_MIRRORED@>
-    vec4 fragColorRaw = texture(colorMap, vec2(1.0 - varTexCoord0.x, varTexCoord0.y));
-<@else@>
     vec4 fragColorRaw = texture(colorMap, varTexCoord0);
-<@endif@>
     vec3 fragColor = fragColorRaw.xyz;
     // a NaN here is a shading fault at this fragment: black, which hides it, or magenta with Developer > Render >
     // Show NaN Pixels on, so it can be found
@@ -78,7 +74,13 @@ void main(void) {
         // For debugging purposes, we may want to see what the colors look like before the automatic OpenGL 
         // conversion mentioned above, so we undo it here
         tonedColor = pow(srcColor, vec3(GAMMA_22));
-    } 
+    }
 
+<@if HIFI_USE_FSR@>
+    // for upscaling (fsrEasu): the square root of the linear colour (gamma 2.0) in a plain 8-bit buffer, the
+    // perceptual space FSR works in; fsrRcas squares it back for the sRGB framebuffer
+    outFragColor = vec4(sqrt(clamp(tonedColor, 0.0, 1.0)), 1.0);
+<@else@>
     outFragColor = vec4(tonedColor, 1.0);
+<@endif@>
 }

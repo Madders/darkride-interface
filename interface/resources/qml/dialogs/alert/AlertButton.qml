@@ -17,6 +17,7 @@ QQC2.AbstractButton {
     id: button
 
     property real unit: 1
+    readonly property AlertLook look: AlertLook {}
     // "default", "destructive" or "plain"
     property string role: "plain"
 
@@ -26,10 +27,10 @@ QQC2.AbstractButton {
 
     background: Rectangle {
         radius: 7 * button.unit
-        color: button.role === "default" ? (button.down ? "#0a5bb8" : "#0b6bd8")
-                                         : (button.down ? Qt.rgba(1, 1, 1, 0.22) : Qt.rgba(1, 1, 1, 0.14))
+        color: button.role === "default" ? (button.down ? button.look.tintPressed : button.look.tint)
+                                         : (button.down ? button.look.buttonPressed : button.look.button)
         border.width: button.visualFocus ? 2 : 0
-        border.color: Qt.rgba(10 / 255, 132 / 255, 1, 0.59)
+        border.color: button.look.focus
     }
 
     contentItem: Text {
@@ -40,7 +41,8 @@ QQC2.AbstractButton {
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
-        color: button.role === "destructive" ? "#ff6961" : "#ffffff"
+        color: button.role === "destructive" ? button.look.destructive
+             : button.role === "default" ? "#ffffff" : button.look.buttonText
         font.pixelSize: 13 * button.unit
         font.weight: button.role === "default" ? Font.Medium : Font.Normal
     }

@@ -74,9 +74,16 @@ public:
 
     // the render engine's config of a slot's view: switched off while the slot idles, so nothing is drawn for it
     void setSlotView(int slot, QObject* viewConfig) { _slotViews[slot] = viewConfig; }
+    // a stereo display's eyes, as the gpu context holds them: each eye's projection and its view offset from the
+    // camera; the two eyes sit side by side in the viewport, each in half its width
+    struct Eyes {
+        glm::mat4 projection[2];
+        glm::mat4 view[2];
+    };
     // from the render task, once a frame before the slots are drawn: gives the frame's slots to the mirrors in view
-    // (the viewport is the main view's: origin and size)
-    void plan(const ViewFrustum& view, const glm::ivec4& viewport);
+    // (the viewport is the main view's: origin and size; in stereo, the eyes, so a picture is sized to an eye's
+    // pixels rather than the culling view's)
+    void plan(const ViewFrustum& view, const glm::ivec4& viewport, const Eyes* eyes = nullptr);
     const Slot& slot(int index) const { return _slots[index]; }
     // where an idle slot's view goes: a few texels (the half-resolution passes need a size)
     const gpu::FramebufferPointer& idleFramebuffer();
@@ -111,7 +118,7 @@ private:
     };
     // what a mirror seen from the view wants; false when it is out of view, edge-on, too small, or the viewer is
     // behind it
-    bool cameraFor(const Surface& surface, const ViewFrustum& view, const glm::ivec4& viewport, Want& want) const;
+    bool cameraFor(const Surface& surface, const ViewFrustum& view, const glm::ivec4& viewport, const Eyes* eyes, Want& want) const;
     // Screen mode, once the slot's picture has its size: the picture covers the glass's rectangle and the pixels
     // past it up to the picture's size, at the screen's own pixel density; the camera's projection is cropped to
     // that region, and the region is kept for the glass

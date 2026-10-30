@@ -313,10 +313,6 @@
             var name = location.placename;
             domainName = name.charAt(0).toUpperCase() + name.slice(1);
             var doRequest = true;
-            if (name.length === 0 && location.href === "file:///~/serverless/tutorial.json") {
-                domainName = "Serverless Domain (Tutorial)";
-                doRequest = false;
-            }
             var domainNameLeftMargin = getLeftMargin(domainNameTextID, domainName);
             var textProperties = {
                 text: domainName,

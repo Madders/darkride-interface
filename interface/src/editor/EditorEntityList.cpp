@@ -48,13 +48,15 @@ void EditorEntityList::onData(QString channel, QByteArray data, QUuid senderID, 
     if (localOnly || channel != EntityListMessage::CHANNEL || senderID != _serverID) {
         return;
     }
+    // only the answer to the latest request, once (late is fine), is unpacked: an answer to an older one is superseded
+    // by the one on its way, and anything else is dropped unread
     quint32 number = 0;
-    QVector<EntityListMessage::Record> records;
-    if (!EntityListMessage::decodeReply(data, number, records)) {
+    if ((_state != State::Waiting && _state != State::Unanswered) ||
+        !EntityListMessage::readReplyNumber(data, number) || number != _requestNumber) {
         return;
     }
-    // an answer to an older request is superseded by the one on its way
-    if (number != _requestNumber) {
+    QVector<EntityListMessage::Record> records;
+    if (!EntityListMessage::decodeReply(data, number, records)) {
         return;
     }
     _timeout.stop();

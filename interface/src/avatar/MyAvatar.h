@@ -1400,6 +1400,14 @@ public:
      */
     Q_INVOKABLE float getIKErrorOnLastSolve() const;
 
+    // The default avatar, which a new player wears and the Avatar panel's Default puts back: the Lightling, at its fixed
+    // web address, so every viewer (1.0.x too) loads the same model and its poses fit. An empty address on the wire still
+    // means AvatarData's default, the mannequin, which 1.0.x players and agents without an avatar of their own wear.
+    static QUrl defaultAvatarURL();
+    // This app reads the default avatar's folder from its own copy (resources/meshes/lightling), never the web: once the
+    // resource manager exists
+    static void useBuiltInDefaultAvatar();
+
     /**jsdoc
      * Randomizes the colors of the default avatar.
      * <code>MyAvatar.useFullAvatarURL(MyAvatar.getDefaultFullAvatarURL(), "Default")</code> will set you back.
@@ -2821,12 +2829,13 @@ private:
 
     bool cameraInsideHead(const glm::vec3& cameraPosition) const;
     // how much of your own avatar to hide from your own view because the third-person camera is right at it (camera
-    // collision pulls it in as far as the eyes in a corner, and the near plane would cut the avatar open): nothing, the
-    // head, or all of it; set each frame by updateCloseCamera, with a margin so it doesn't flicker as the camera eases out
+    // collision pulls it in as far as the eyes in a corner, and the near plane would cut the avatar open): nothing, or
+    // all of it, for the camera near the head or nearer still (preDisplaySide hides the whole avatar for both, 10-29);
+    // set each frame by updateCloseCamera, with a margin so it doesn't flicker as the camera eases out
     enum class CloseCamera { None, Head, Body };
     void updateCloseCamera(const glm::vec3& cameraPosition);
-    // whether the camera is within margin (meters) of the box around the head and everything on it (hair, ears, eyes:
-    // the shapes of every bone in _headBoneSet, as they are posed now), in the head's frame
+    // whether the camera is within margin (meters) of the head or anything on it (hair, ears, eyes): of any bone in
+    // _headBoneSet, the box around its shape in its own frame, as it is posed now
     bool cameraNearHeadShapes(const glm::vec3& cameraPosition, float margin) const;
 
     void updateEyeContactTarget(float deltaTime);
@@ -2918,6 +2927,10 @@ private:
     const float MAX_LOOK_AT_TIME_SCRIPT_CONTROL = 2.0f;
     glm::quat _lookAtPitch;
     glm::quat _lookAtYaw;
+    glm::quat _previousMotorRotation;           // the action motor's rotation in its frame last frame (updateMotors)
+    QUuid _previousMotorFrameID;
+    uint64_t _lastPhysicsStepCount { 0 };       // the physics' step the avatar last turned by (simulate)
+    bool _previousMotorRotationValid { false };
     // the frame the look-at yaw was last turned with, and that frame's orientation then (PHYSICS.md 4.4: the camera is
     // a member of the avatar's frame, so the look-at yaw turns with the frame's heading)
     QUuid _lookAtFrameID;
@@ -3227,6 +3240,7 @@ private:
     bool _endSitKeyPressComplete { false };
 
     glm::vec3 _cameraEyesOffset;
+    float _cameraHeadClearance { 0.0f };   // the camera's step forward that keeps the hidden head out of view
     float _landingAfterJumpTime { 0.0f };
 };
 

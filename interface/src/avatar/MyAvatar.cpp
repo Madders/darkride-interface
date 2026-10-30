@@ -38,6 +38,7 @@
 #include <udt/PacketHeaders.h>
 #include <PathUtils.h>
 #include <PerfStat.h>
+#include <ResourceManager.h>
 #include <SharedUtil.h>
 #include <SoundCache.h>
 #include <ModelEntityItem.h>
@@ -88,6 +89,11 @@ const int SCRIPTED_MOTOR_WORLD_FRAME = 2;
 const int SCRIPTED_MOTOR_SIMPLE_MODE = 0;
 const int SCRIPTED_MOTOR_DYNAMIC_MODE = 1;
 const QString& DEFAULT_AVATAR_COLLISION_SOUND_URL = "qrc:/sounds/Body_Hits_Impact.wav";
+// the default avatar's folder on the web (published once by metaverse and never changed: a new version gets a new folder)
+// and this app's own copy of it (MyAvatar::useBuiltInDefaultAvatar). The web copy is for 1.0.x viewers, a plain
+// Lightling without custom shaders; the one built in has them.
+const QString DEFAULT_AVATAR_FOLDER_URL = "https://cdn.darkride.ai/avatars/lightling-1/";
+const QString DEFAULT_AVATAR_BUILT_IN_FOLDER = "meshes/lightling/";
 
 const float MyAvatar::ZOOM_MIN = 0.5f;
 const float MyAvatar::ZOOM_MAX = 25.0f;
@@ -196,8 +202,7 @@ MyAvatar::MyAvatar(QThread* thread) :
     _scaleSetting(QStringList() << AVATAR_SETTINGS_GROUP_NAME << "scale", _targetScale),
     _yawSpeedSetting(QStringList() << AVATAR_SETTINGS_GROUP_NAME << "yawSpeed", _yawSpeed),
     _pitchSpeedSetting(QStringList() << AVATAR_SETTINGS_GROUP_NAME << "pitchSpeed", _pitchSpeed),
-    _fullAvatarURLSetting(QStringList() << AVATAR_SETTINGS_GROUP_NAME << "fullAvatarURL",
-                          AvatarData::defaultFullAvatarModelUrl()),
+    _fullAvatarURLSetting(QStringList() << AVATAR_SETTINGS_GROUP_NAME << "fullAvatarURL", defaultAvatarURL()),
     _fullAvatarModelNameSetting(QStringList() << AVATAR_SETTINGS_GROUP_NAME << "fullAvatarModelName", _fullAvatarModelName),
     _animGraphURLSetting(QStringList() << AVATAR_SETTINGS_GROUP_NAME << "animGraphURL", QUrl("")),
     _displayNameSetting(QStringList() << AVATAR_SETTINGS_GROUP_NAME << "displayName", ""),
@@ -898,7 +903,21 @@ void MyAvatar::simulate(float deltaTime, bool inView) {
             }
         }
 
-        updateOrientation(deltaTime);
+        // The avatar turns by the time the physics moved the world on this frame (its paced clock: whole refreshes,
+        // eased to the wall clock), not by the wall clock: the walk is stepped on the physics' clock, and a turn on the
+        // other comes out ahead of it or behind whenever a frame is early or late. When the frame time changes with
+        // heading that happens at the same headings every lap, and a run in circles drifts (GitHub #15). The wall clock
+        // in a frame the physics doesn't step (it is off: loading, no world) or holds (a clock too far ahead): the turn
+        // never gets 0, which updateOrientation divides by (the mouse's smoothed turn, the look-at yaw speed).
+        float turnTime = deltaTime;
+        const PhysicsEnginePointer& engine = _characterController.getPhysicsEngine();
+        if (engine && engine->getStepCount() != _lastPhysicsStepCount) {
+            _lastPhysicsStepCount = engine->getStepCount();
+            if (engine->getLastSteppedTime() > FLT_EPSILON) {
+                turnTime = engine->getLastSteppedTime();
+            }
+        }
+        updateOrientation(turnTime);
         updatePosition(deltaTime);
         updateViewBoom();
     }
@@ -1295,7 +1314,7 @@ void MyAvatar::restoreRoleAnimation(const QString& role) {
 
 void MyAvatar::saveAvatarUrl() {
     if (qApp->getSaveAvatarOverrideUrl() || !qApp->getAvatarOverrideUrl().isValid()) {
-        _fullAvatarURLSetting.set(_fullAvatarURLFromPreferences == AvatarData::defaultFullAvatarModelUrl() ?
+        _fullAvatarURLSetting.set(_fullAvatarURLFromPreferences == defaultAvatarURL() ?
                                   "" :
                                   _fullAvatarURLFromPreferences.toString());
     }
@@ -1337,8 +1356,8 @@ void MyAvatar::saveData() {
     // --replaceAvatarURL (so _saveAvatarOverrideUrl is true)
     if (qApp->getSaveAvatarOverrideUrl() || !qApp->getAvatarOverrideUrl().isValid() ) {
         _fullAvatarURLSetting.set(
-            _fullAvatarURLFromPreferences == AvatarData::defaultFullAvatarModelUrl() ?
-            AvatarData::defaultFullAvatarModelUrl() :
+            _fullAvatarURLFromPreferences == defaultAvatarURL() ?
+            defaultAvatarURL() :
             _fullAvatarURLFromPreferences.toString()
         );
     }
@@ -2012,11 +2031,15 @@ void MyAvatar::loadData() {
     _pitchSpeed = _pitchSpeedSetting.get(_pitchSpeed);
 
     _prefOverrideAnimGraphUrl.set(_animGraphURLSetting.get().toString());
-    _fullAvatarURLFromPreferences = _fullAvatarURLSetting.get(QUrl(AvatarData::defaultFullAvatarModelUrl()));
+    _fullAvatarURLFromPreferences = _fullAvatarURLSetting.get(defaultAvatarURL());
     if (_fullAvatarURLFromPreferences.host().endsWith("tivolicloud.com", Qt::CaseInsensitive)) {
         // Avatars served by the Tivoli metaverse (e.g. the old randomized default) can no longer load.
         qCDebug(interfaceapp) << "Ignoring saved avatar URL from the defunct Tivoli metaverse:" << _fullAvatarURLFromPreferences;
-        _fullAvatarURLFromPreferences = AvatarData::defaultFullAvatarModelUrl();
+        _fullAvatarURLFromPreferences = defaultAvatarURL();
+    }
+    if (_fullAvatarURLFromPreferences.isEmpty() || _fullAvatarURLFromPreferences == AvatarData::defaultFullAvatarModelUrl()) {
+        // the default as earlier versions saved it (empty, or the mannequin's address): the default is the Lightling now
+        _fullAvatarURLFromPreferences = defaultAvatarURL();
     }
     _fullAvatarModelName = _fullAvatarModelNameSetting.get(DEFAULT_FULL_AVATAR_MODEL_NAME).toString();
 
@@ -2643,6 +2666,7 @@ void MyAvatar::resetFullAvatarURL() {
 
 void MyAvatar::randomizeDefaultAvatar() {
     bool isDefault = (
+        getSkeletonModelURL() == defaultAvatarURL() ||
         getSkeletonModelURL() == Avatar::defaultFullAvatarModelUrl() ||
         getSkeletonModelURL().isEmpty() ||
         getFullAvatarModelName() == "Default"
@@ -2653,22 +2677,31 @@ void MyAvatar::randomizeDefaultAvatar() {
     if (isDefault) {
         // reload if currently default
         useFullAvatarURL(
-            Avatar::defaultFullAvatarModelUrl(),
+            defaultAvatarURL(),
             DEFAULT_FULL_AVATAR_MODEL_NAME
         ); 
     }
 }
 
 QUrl MyAvatar::getDefaultFullAvatarURL() {
-    return Avatar::defaultFullAvatarModelUrl();
+    return defaultAvatarURL();
+}
+
+QUrl MyAvatar::defaultAvatarURL() {
+    return QUrl(DEFAULT_AVATAR_FOLDER_URL + "lightling.fst");
+}
+
+void MyAvatar::useBuiltInDefaultAvatar() {
+    // every request for the folder's files (the model, its materials, their shaders and pictures) is read from the copy
+    // in the app's resources: nothing is downloaded, and the default avatar shows at once, online or not
+    DependencyManager::get<ResourceManager>()->setUrlPrefixOverride(
+        DEFAULT_AVATAR_FOLDER_URL, PathUtils::resourcesUrl(DEFAULT_AVATAR_BUILT_IN_FOLDER).toString());
 }
 
 bool MyAvatar::isSkeletonModelLoaded() const {
-    if (!_skeletonModel || !_skeletonModel->isLoaded()) {
-        return false;
-    }
-    auto networkModel = _skeletonModel->getNetworkModel();
-    return networkModel && networkModel->areTexturesLoaded();
+    // Scripts call this on their own thread (worldLoading.js through every world load), so it reads the flag the main
+    // thread keeps, never the model's geometry or materials, which the main thread changes as they arrive.
+    return _skeletonModel && _skeletonModel->isLoadedWithTextures();
 }
 
 void MyAvatar::useFullAvatarURL(const QUrl& fullAvatarURL, const QString& modelName) {
@@ -2820,13 +2853,37 @@ void MyAvatar::updateMotors() {
             motorRotation = orientation * motorRotation;
         }
 
+        // The motors are set before the physics step and the avatar turns after it (updateOrientation, in update()),
+        // so each step goes straight along the heading it starts at and lands a little to one side. Even frames cancel
+        // that round a circle, but frames that are longer facing one way (more to draw there) don't, and the circle
+        // creeps (GitHub #15). The motor leads by half of last frame's turn: the step's middle heading. Taken in the
+        // frame's coordinates, so a turning frame's own turn isn't led; a change no steady turn makes in a frame (a
+        // snap turn, a teleport, a new frame) isn't led at all.
+        const float MOTOR_TURN_LEAD = 0.5f;
+        const float MAX_LED_TURN = glm::radians(10.0f);
+        glm::quat frameMotorRotation = toFrame * motorRotation;
+        glm::quat lead = Quaternions::IDENTITY;
+        QUuid frameID = getFrameID();
+        if (_previousMotorRotationValid && frameID == _previousMotorFrameID) {
+            glm::quat lastTurn = frameMotorRotation * glm::inverse(_previousMotorRotation);
+            if (fabsf(lastTurn.w) > cosf(0.5f * MAX_LED_TURN)) {
+                lead = glm::slerp(Quaternions::IDENTITY, lastTurn, MOTOR_TURN_LEAD);
+            }
+        }
+        _previousMotorRotation = frameMotorRotation;
+        _previousMotorFrameID = frameID;
+        _previousMotorRotationValid = true;
+        frameMotorRotation = lead * frameMotorRotation;
+
         if (_isPushing || _isBraking || !_isBeingPushed) {
-            _characterController.addMotor(_actionMotorVelocity, toFrame * motorRotation, horizontalMotorTimescale, verticalMotorTimescale);
+            _characterController.addMotor(_actionMotorVelocity, frameMotorRotation, horizontalMotorTimescale, verticalMotorTimescale);
         } else {
             // _isBeingPushed must be true --> disable action motor by giving it a long timescale,
             // otherwise it's attempt to "stand in in place" could defeat scripted motor/thrusts
-            _characterController.addMotor(_actionMotorVelocity, toFrame * motorRotation, INVALID_MOTOR_TIMESCALE);
+            _characterController.addMotor(_actionMotorVelocity, frameMotorRotation, INVALID_MOTOR_TIMESCALE);
         }
+    } else {
+        _previousMotorRotationValid = false;
     }
     if (_motionBehaviors & AVATAR_MOTION_SCRIPTED_MOTOR_ENABLED) {
         if (_scriptedMotorFrame == SCRIPTED_MOTOR_CAMERA_FRAME) {
@@ -3290,21 +3347,21 @@ void MyAvatar::attachmentDataToEntityProperties(const AttachmentData& data, Enti
 }
 
 void MyAvatar::initHeadBones() {
-    int neckJointIndex = -1;
+    // the head is hidden from its own joint down, and CauterizedModel collapses it to that joint: the neck stays whole.
+    // High Fidelity started at the neck, which folded the neck's skin (the collar, the tops of the shoulders) into one
+    // point under a first-person camera looking down (Caity's desk test s7, 10-29)
+    int headJointIndex = -1;
     if (_skeletonModel->isLoaded()) {
-        neckJointIndex = getJointIndex("Neck");
+        headJointIndex = getJointIndex("Head");
     }
-    if (neckJointIndex == -1) {
-        neckJointIndex = (getJointIndex("Head") - 1);
-        if (neckJointIndex < 0) {
-            // return if the head is not even there. can't cauterize!!
-            return;
-        }
+    if (headJointIndex < 0) {
+        // return if the head is not even there. can't cauterize!!
+        return;
     }
     _headBoneSet.clear();
     std::queue<int> q;
-    q.push(neckJointIndex);
-    _headBoneSet.insert(neckJointIndex);
+    q.push(headJointIndex);
+    _headBoneSet.insert(headJointIndex);
 
     // hfmJoints only hold links to parents not children, so we have to do a bit of extra work here.
     while (q.size() > 0) {
@@ -3529,10 +3586,13 @@ void MyAvatar::preDisplaySide(const RenderArgs* renderArgs) {
 
     // toggle using the cauterizedBones depending on where the camera is and the rendering pass type.
     const bool shouldDrawHead = shouldRenderHead(renderArgs);
-    const bool shouldDrawBody = _closeCamera != CloseCamera::Body;
+    // a close camera hides the whole avatar, even when only its head is in the way: the head alone collapses to its
+    // joint and leaves the neck open, and a camera held in behind you (a seat back, a wall) looks down into it
+    // (Caity's beta bug #3, 10-29, seated in the Cinema)
+    const bool shouldDrawBody = _closeCamera == CloseCamera::None;
     if (shouldDrawHead != _prevShouldDrawHead || shouldDrawBody != _prevShouldDrawBody) {
         _cauterizationNeedsUpdate = true;
-        // the whole body is hidden the way the head is, every bone collapsed to the neck in your own view only:
+        // the whole body is hidden the way the head is, every bone collapsed to the head joint in your own view only:
         // shadows and the secondary camera still draw it whole (CauterizedMeshPartPayload::bindTransform), and
         // simulate() hides the entities on any of its joints, as it does those on the head's
         if (shouldDrawBody) {
@@ -3570,7 +3630,7 @@ void MyAvatar::preDisplaySide(const RenderArgs* renderArgs) {
 
 void MyAvatar::updateCloseCamera(const glm::vec3& cameraPosition) {
     // not in first person, which hides the head already and shows the body on purpose, nor in the HMD's own view.
-    // No neck, nothing to collapse to (initHeadBones leaves the set empty)
+    // No head, nothing to collapse to (initHeadBones leaves the set empty)
     const CameraMode mode = qApp->getCamera().getMode();
     const bool firstPerson = mode == CAMERA_MODE_FIRST_PERSON || mode == CAMERA_MODE_FIRST_PERSON_LOOK_AT;
     if (firstPerson || qApp->isHMDMode() || !_skeletonModel || !_skeletonModel->isLoaded() || _headBoneSet.empty()) {
@@ -3609,7 +3669,7 @@ void MyAvatar::updateCloseCamera(const glm::vec3& cameraPosition) {
         _closeCamera = CloseCamera::None;
     }
     if (_closeCamera != was) {
-        static const char* NAMES[] = { "nothing", "the head", "the whole avatar" };
+        static const char* NAMES[] = { "nothing", "the whole avatar (near the head)", "the whole avatar (at the pivot)" };
         qCDebug(interfaceapp) << "the camera is" << distance << "from its pivot (camera mode" << (int)mode
                               << ", the avatar's size" << getModelScale() << (nearShapes ? ", near the head's shapes" : "")
                               << "): hiding" << NAMES[(int)_closeCamera];
@@ -3619,21 +3679,14 @@ void MyAvatar::updateCloseCamera(const glm::vec3& cameraPosition) {
 bool MyAvatar::cameraNearHeadShapes(const glm::vec3& cameraPosition, float margin) const {
     const Rig& rig = _skeletonModel->getRig();
     const HFMModel& hfmModel = _skeletonModel->getHFMModel();
-    const int headJointIndex = rig.indexOfJoint("Head");
-    AnimPose headPose;
-    if (headJointIndex < 0 || !rig.getAbsoluteJointPoseInRigFrame(headJointIndex, headPose)) {
-        return false;
-    }
-    // the head's frame without its scale, so the box and the margin are in meters, as the rig's frame is (the
-    // camera goes into the rig's frame as in cameraInsideHead)
-    const AnimPose rigToHead = AnimPose(headPose.rot(), headPose.trans()).inverse();
+    // the camera in the rig's frame, as in cameraInsideHead
     const AnimPose rigToWorld = AnimPose(getWorldOrientation() * Quaternions::Y_180, getWorldPosition());
-    const glm::vec3 camera = rigToHead * (rigToWorld.inverse() * cameraPosition);
+    const glm::vec3 camera = rigToWorld.inverse() * cameraPosition;
 
-    // each bone's shape is the extreme points of the vertices it moves (HFMModel::computeKdops), in its own frame
-    glm::vec3 minimum(FLT_MAX);
-    glm::vec3 maximum(-FLT_MAX);
-    bool any = false;
+    // Each bone's shape is the extreme points of the vertices it moves (HFMModel::computeKdops), in its own frame: the
+    // camera is tried against each bone's box there, without its scale so the margin stays in meters. One box around
+    // all of them in the head's frame grew with the head's turn when long hair hangs on: hair that stays put while the
+    // head turns fills the box out towards a camera in front (seen with face tracking's head turn, 10-25).
     for (int jointIndex : _headBoneSet) {
         if (jointIndex < 0 || jointIndex >= (int)hfmModel.joints.size()) {
             continue;
@@ -3643,16 +3696,20 @@ bool MyAvatar::cameraNearHeadShapes(const glm::vec3& cameraPosition, float margi
         if (points.empty() || !rig.getAbsoluteJointPoseInRigFrame(jointIndex, jointPose)) {
             continue;
         }
-        const AnimPose jointToHead = rigToHead * jointPose;
+        const glm::vec3 cameraInJoint = glm::inverse(jointPose.rot()) * (camera - jointPose.trans());
+        glm::vec3 minimum(FLT_MAX);
+        glm::vec3 maximum(-FLT_MAX);
         for (const glm::vec3& point : points) {
-            const glm::vec3 inHead = jointToHead * point;
-            minimum = glm::min(minimum, inHead);
-            maximum = glm::max(maximum, inHead);
-            any = true;
+            const glm::vec3 scaled = jointPose.scale() * point;
+            minimum = glm::min(minimum, scaled);
+            maximum = glm::max(maximum, scaled);
+        }
+        if (glm::all(glm::greaterThan(cameraInJoint, minimum - glm::vec3(margin))) &&
+            glm::all(glm::lessThan(cameraInJoint, maximum + glm::vec3(margin)))) {
+            return true;
         }
     }
-    return any && glm::all(glm::greaterThan(camera, minimum - glm::vec3(margin))) &&
-        glm::all(glm::lessThan(camera, maximum + glm::vec3(margin)));
+    return false;
 }
 
 int MyAvatar::sendAvatarDataPacket(bool sendAll) {
@@ -3887,20 +3944,31 @@ void MyAvatar::updateOrientation(float deltaTime) {
             const float AVATAR_TURNS_TO_CAM_IN_SPEED = 130.0f; // Degrees per second
             const float AVATAR_TURNS_TO_CAM_OUT_SPEED = 720.0f; // Degrees per second
 
-            float blend = (_shouldTurnToFaceCamera ? REORIENT_TURN_BLEND : REORIENT_FORWARD_BLEND) * timeScale;
+            float blendAt60 = _shouldTurnToFaceCamera ? REORIENT_TURN_BLEND : REORIENT_FORWARD_BLEND;
             if (mode == CAMERA_MODE_FIRST_PERSON_LOOK_AT && _lookAtYawSpeed > AVATAR_TURNS_TO_CAM_IN_SPEED) {
                 // When the camera is rotating fast we should accelerate the avatar's face forward speed
                 // to avoid showing the cauterized head;
                 float cameraYawSpeed = glm::min(_lookAtYawSpeed, AVATAR_TURNS_TO_CAM_OUT_SPEED);
-                float blendFactor = REORIENT_TURN_BLEND + REORIENT_FORWARD_BLEND * ((cameraYawSpeed - AVATAR_TURNS_TO_CAM_IN_SPEED) /
+                blendAt60 = REORIENT_TURN_BLEND + REORIENT_FORWARD_BLEND * ((cameraYawSpeed - AVATAR_TURNS_TO_CAM_IN_SPEED) /
                     (AVATAR_TURNS_TO_CAM_OUT_SPEED - AVATAR_TURNS_TO_CAM_IN_SPEED));
-                blend = glm::min(1.0f, blendFactor * timeScale);
             }
 
-            if (blend > 1.0f) {
-                blend = 1.0f;
+            // The body chases the camera's yaw as a continuous filter would, at the rate the blend has at 60 fps,
+            // whatever the frame rate (blend = 1 - e^-x), and aims a share of the way through this frame's turn of the
+            // camera (half of it at high frame rates, all of it when the blend is 1): the exact chase of a camera
+            // turning steadily through the frame. The body's heading at the frame's start is then its true one, which
+            // the walk steps from (updateMotors), so a run in circles doesn't drift where the frame time changes with
+            // heading (GitHub #15). A blend of x per frame instead lagged a whole frame's turn less than the chase.
+            float blend = 1.0f;
+            float turnShare = 1.0f;
+            if (blendAt60 < 1.0f) {
+                float x = -logf(1.0f - blendAt60) * timeScale;
+                blend = 1.0f - expf(-x);
+                if (x > FLT_EPSILON && blend > FLT_EPSILON) {
+                    turnShare = (1.0f - blend / x) / blend;
+                }
             }
-            glm::quat faceRotation = _lookAtYaw;
+            glm::quat faceRotation = glm::slerp(previousYaw, _lookAtYaw, turnShare);
             if (isMovingFwdBwd) {
                 if (isMovingSideways) {
                     // Reorient avatar to face camera diagonal
@@ -3910,6 +3978,7 @@ void MyAvatar::updateOrientation(float deltaTime) {
                     faceRotation = _lookAtYaw * glm::angleAxis(turnSign * 0.25f * PI, Vectors::UP);
                 } else if (mode == CAMERA_MODE_FIRST_PERSON_LOOK_AT) {
                     blend = 1.0f;
+                    faceRotation = _lookAtYaw;
                 }
             }
             if (!_characterController.getSeated()) {
@@ -7424,33 +7493,35 @@ glm::vec3 MyAvatar::getLookAtPivotPoint() {
 glm::vec3 MyAvatar::getCameraEyesPosition(float deltaTime) {
     glm::vec3 defaultEyesPosition = getLookAtPivotPoint();
 
-    glm::vec3 avatarFrontVector = getWorldOrientation() * Vectors::FRONT;
     glm::vec3 avatarUpVector = getWorldOrientation() * Vectors::UP;
     // Compute the offset between the default and real eye positions.
     glm::vec3 defaultEyesToEyesVector = getHead()->getEyePosition() - defaultEyesPosition;
-    const float FRONT_OFFSET_IDLE_MULTIPLIER = 3.5f;
     const float FRONT_OFFSET_JUMP_MULTIPLIER = 1.5f;
-    float frontOffset = FRONT_OFFSET_IDLE_MULTIPLIER * glm::length(defaultEyesPosition - getDefaultEyePosition());
-
-    // Looking down will move the camera forward to meet the real eye position
-    float mixAlpha = glm::dot(_lookAtPitch * Vectors::FRONT, -avatarUpVector);
+    // looking down, the camera keeps up with the real eyes' forward offset, its height the default's so it doesn't bob:
+    // looking down turns the head forward of the pivot (0.04 m at 40 deg down seated, 0.18 m at 80), and a camera left
+    // behind it sees the neck narrow into the hidden head's point (Caity's desk test s7, 10-29). High Fidelity moved it
+    // only past 45 deg down, and only up to 3.5 times the default eyes' offset
+    // along the view's heading, not the body's: in a quick turn the head follows the view before the body does, and a
+    // camera held on the body's front line looks down past the neck from beside it until the body catches up (Caity's
+    // batch-7 desk check, 10-29). Only along it: the head's sway from side to side as you walk stays out of the view
+    const glm::vec3 lookFront = _lookAtYaw * Vectors::FRONT;
+    const glm::vec3 lookFrontInBody = glm::inverse(getWorldOrientation()) * lookFront;
+    float frontOffset = glm::dot(defaultEyesToEyesVector, lookFront);
+    float lookingDown = glm::dot(_lookAtPitch * Vectors::FRONT, -avatarUpVector);
 
     bool isLanding = false;
     // When jumping the camera should follow the real eye on the Y coordenate
     float upOffset = 0.0f;
     if (isJumping() || _characterController.getState() == CharacterController::State::Takeoff) {
         upOffset = glm::dot(defaultEyesToEyesVector, avatarUpVector);
-        frontOffset = glm::dot(defaultEyesToEyesVector, avatarFrontVector) * FRONT_OFFSET_JUMP_MULTIPLIER;
-        mixAlpha = 1.0f;
+        frontOffset *= FRONT_OFFSET_JUMP_MULTIPLIER;
         _landingAfterJumpTime = 0.0f;
     } else {
-        // Limit the range effect from 45 to 0 degrees
-        // between the front camera and the down vectors
-        const float HEAD_OFFSET_RANGE_IN_DEGREES = 45.0f;
-        const float HEAD_OFFSET_RANGE_OUT_DEGREES = 0.0f;
-        float rangeIn = glm::cos(glm::radians(HEAD_OFFSET_RANGE_IN_DEGREES));
-        float rangeOut = glm::cos(glm::radians(HEAD_OFFSET_RANGE_OUT_DEGREES));
-        mixAlpha = mixAlpha < rangeIn ? 0.0f : (mixAlpha - rangeIn) / (rangeOut - rangeIn);
+        // none of it looking level, all of it from 30 deg down: the everyday view stays where it was, without the
+        // head's sway as you sprint (3.5 cm) or its lurch as you stop (6 cm) (walk-camera-test, 10-29)
+        const float FULL_FRONT_OFFSET_DEGREES = 30.0f;
+        float followEyes = glm::clamp(lookingDown / glm::sin(glm::radians(FULL_FRONT_OFFSET_DEGREES)), 0.0f, 1.0f);
+        frontOffset *= followEyes;
         const float WAIT_TO_LAND_TIME = 1.0f;
         if (_landingAfterJumpTime < WAIT_TO_LAND_TIME) {
             _landingAfterJumpTime += deltaTime;
@@ -7459,8 +7530,8 @@ glm::vec3 MyAvatar::getCameraEyesPosition(float deltaTime) {
     }
     const float FPS = 60.0f;
     float timeScale = deltaTime * FPS;
-    frontOffset = frontOffset < 0.0f ? 0.0f : mixAlpha * frontOffset;
-    glm::vec3 cameraOffset = upOffset * Vectors::UP + frontOffset * Vectors::FRONT;
+    frontOffset = frontOffset < 0.0f ? 0.0f : frontOffset;
+    glm::vec3 cameraOffset = upOffset * Vectors::UP + frontOffset * lookFrontInBody;
     const float JUMPING_TAU = 0.1f;
     const float NO_JUMP_TAU = 0.3f;
     const float LANDING_TAU = 0.05f;
@@ -7472,6 +7543,41 @@ glm::vec3 MyAvatar::getCameraEyesPosition(float deltaTime) {
     }
     _cameraEyesOffset = _cameraEyesOffset + (cameraOffset - _cameraEyesOffset) * min(1.0f, tau * timeScale);
     glm::vec3 estimatedCameraPosition = defaultEyesPosition + getWorldOrientation() * _cameraEyesOffset;
+
+    // The hidden head shrinks to the Head joint (CauterizedModel) and the neck's skin folds up to that point. Looking
+    // steeply down, the view's bottom edge reaches back past straight down, and from a camera high above the point it
+    // comes into view: walking carries the head 5-7 cm below the standing eye height the camera keeps (Caity's check of
+    // the 1.1.1 build, 10-30), more so with a wide field of view. So the camera steps forward along the heading until
+    // the point is behind that edge: at once, and easing back over a second or so, which holds it nearly steady through
+    // the steps of a walk. It looks at the ground then, so the step isn't seen
+    float clearance = 0.0f;
+    glm::vec3 headPosition;
+    int headIndex = _skeletonModel->getRig().indexOfJoint("Head");
+    if (lookingDown > 0.0f && _skeletonModel->getJointPositionInWorldFrame(headIndex, headPosition)) {
+        const glm::mat4& projection = qApp->getCamera().getProjection();
+        float halfFieldOfView = projection[1][1] > 0.0f ? atanf(1.0f / projection[1][1]) : 0.0f;
+        const float MARGIN_DEGREES = 5.0f;
+        const float MAX_PAST_STRAIGHT_DOWN_DEGREES = 60.0f;
+        float pastStraightDown = glm::min(asinf(glm::min(lookingDown, 1.0f)) + halfFieldOfView +
+                                          glm::radians(MARGIN_DEGREES) - 0.5f * PI,
+                                          glm::radians(MAX_PAST_STRAIGHT_DOWN_DEGREES));
+        if (pastStraightDown > 0.0f) {
+            const float MARGIN = 0.02f;   // meters, at the avatar's own scale
+            glm::vec3 headToCamera = estimatedCameraPosition - headPosition;
+            clearance = glm::dot(headToCamera, avatarUpVector) * tanf(pastStraightDown) + MARGIN * getModelScale() -
+                        glm::dot(headToCamera, lookFront);
+            const float MAX_CLEARANCE = 0.5f;
+            clearance = glm::clamp(clearance, 0.0f, MAX_CLEARANCE * getModelScale());
+        }
+    }
+    const float CLEARANCE_EASE_BACK_TIME = 0.5f;   // seconds; it rises at once
+    if (clearance >= _cameraHeadClearance) {
+        _cameraHeadClearance = clearance;
+    } else {
+        float easeBack = 1.0f - expf(-deltaTime / CLEARANCE_EASE_BACK_TIME);
+        _cameraHeadClearance += (clearance - _cameraHeadClearance) * easeBack;
+    }
+    estimatedCameraPosition += _cameraHeadClearance * lookFront;
     return estimatedCameraPosition;
 }
 

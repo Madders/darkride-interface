@@ -13,8 +13,6 @@ export class Buttons {
 	readonly exploreMappingName = "com.tivolicloud.explore";
 	// a local "open" here opens Explore: the viewer's "Can't reach" alert sends it
 	readonly exploreChannel = "com.tivolicloud.explore";
-	// the Explore panel asks for someone's profile: it saves the person and the tab, and People reads them as it opens
-	readonly peopleChannel = "Darkride-People";
 	// the sign-in screen asks for every panel to close here (ui/SignInGate.cpp), with "close"
 	readonly panelsChannel = "Darkride-Panels";
 
@@ -57,6 +55,14 @@ export class Buttons {
 			Script.resourcesPath() + "qml/darkride/PeoplePanel.qml",
 			"small",
 		);
+		// a badge on People for the friend requests waiting for you, the same red one as Chat's unread messages
+		// (social's Friends counts them from sign-in; F5, Caity 10-27 "friends as recommended")
+		if (typeof Friends != "undefined") {
+			const showRequests = () =>
+				people.button.editProperties({ badge: Math.max(0, Friends.requestCount) });
+			this.signalManager.connect(Friends.requestCountChanged, showRequests);
+			showRequests();
+		}
 
 		// explore: Darkride's Explore panel (qml/darkride/ExplorePanel.qml): worlds, their instances, hops
 		const explore = this.buttonManager.addQmlButton(
@@ -82,7 +88,6 @@ export class Buttons {
 				}
 			});
 		Messages.subscribe(this.exploreChannel);
-		Messages.subscribe(this.peopleChannel);
 		Messages.subscribe(this.panelsChannel);
 		this.signalManager.connect(
 			Messages.messageReceived,
@@ -94,10 +99,6 @@ export class Buttons {
 					!explore.button.getProperties().isActive
 				) {
 					explore.open();
-				}
-				if (channel == this.peopleChannel && localOnly && message == "profile") {
-					people.close();
-					people.open();
 				}
 				if (channel == this.panelsChannel && localOnly && message == "close") {
 					this.buttonManager.closeAll();
@@ -115,13 +116,8 @@ export class Buttons {
 		// 	MarketHandler,
 		// );
 
-		const things = this.buttonManager.addWebButton(
-			"Things",
-			'data:image/svg;xml,<svg fill="#fff" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#00bcd4" d="M0 0h8v24H0z"/><path fill="#ff9800" d="M8 0h8v24H8z"/><path fill="#ff5722" d="M16 0h8v24h-8z"/><g fill="#fff"><circle cx="7.2" cy="14.4" r="3.2"/><circle cx="14.8" cy="18" r="2"/><circle cx="15.2" cy="8.8" r="4.8"/></g></svg>',
-			null,
-			13,
-			"big",
-		);
+		// (Tivoli's "Things" web page had its button here: obsolete, gone (Caity 10-28); its page stays in
+		// frontend/src/app/things until the clean-up)
 
 		Controller.enableMapping(this.exploreMappingName);
 	}
@@ -129,7 +125,6 @@ export class Buttons {
 	cleanup = () => {
 		Controller.disableMapping(this.exploreMappingName);
 		Messages.unsubscribe(this.exploreChannel);
-		Messages.unsubscribe(this.peopleChannel);
 		Messages.unsubscribe(this.panelsChannel);
 
 		this.buttonManager.cleanup();

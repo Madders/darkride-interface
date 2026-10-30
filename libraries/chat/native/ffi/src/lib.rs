@@ -3,7 +3,7 @@
 
 use std::{
     ffi::{CStr, CString, c_char, c_int, c_uint, c_void},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -12,9 +12,11 @@ use darkride_chat_core::{Chat, Config};
 /// Called with each event as UTF-8 JSON, on one of the chat's own threads; the text is only valid during the call
 pub type EventCallback = extern "C" fn(event: *const c_char, user_data: *mut c_void);
 
+/// Where events go, until darkride_chat_free closes it: a thread of the chat's that finishes its work after the
+/// runtime's shutdown stopped waiting for it (a big file still being written, a folder still being deleted) then
+/// sends nothing, instead of calling into a host object that's gone
 struct Target {
-    callback: EventCallback,
-    user_data: *mut c_void,
+    to: Mutex<Option<(EventCallback, *mut c_void)>>,
 }
 
 // the host promises its callback and user data may be used from the chat's threads
@@ -23,10 +25,21 @@ unsafe impl Sync for Target {}
 
 impl Target {
     fn send(&self, event: String) {
-        if let Ok(event) = CString::new(event) {
-            (self.callback)(event.as_ptr(), self.user_data);
+        let to = self.to.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let (Some((callback, user_data)), Ok(event)) = (*to, CString::new(event)) {
+            callback(event.as_ptr(), user_data);
         }
     }
+
+    fn close(&self) {
+        *self.to.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+}
+
+/// What the host holds as a DarkrideChat: the chat, and where its events go
+pub struct Handle {
+    chat: Chat,
+    target: Arc<Target>,
 }
 
 /// The library's version, a static string
@@ -41,16 +54,17 @@ pub extern "C" fn darkride_chat_version() -> *const c_char {
 /// # Safety
 /// config is a NUL-terminated UTF-8 string; callback stays callable, and user_data valid, until darkride_chat_free.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn darkride_chat_new(config: *const c_char, callback: EventCallback, user_data: *mut c_void) -> *mut Chat {
+pub unsafe extern "C" fn darkride_chat_new(config: *const c_char, callback: EventCallback, user_data: *mut c_void) -> *mut Handle {
     if config.is_null() {
         return std::ptr::null_mut();
     }
     let Ok(text) = (unsafe { CStr::from_ptr(config) }).to_str() else { return std::ptr::null_mut() };
     let Ok(config) = serde_json::from_str::<Config>(text) else { return std::ptr::null_mut() };
-    let target = Target { callback, user_data };
-    let events = Arc::new(move |event: String| target.send(event));
+    let target = Arc::new(Target { to: Mutex::new(Some((callback, user_data))) });
+    let sink = target.clone();
+    let events = Arc::new(move |event: String| sink.send(event));
     match Chat::start(config, events) {
-        Ok(chat) => Box::into_raw(Box::new(chat)),
+        Ok(chat) => Box::into_raw(Box::new(Handle { chat, target })),
         Err(_) => std::ptr::null_mut(),
     }
 }
@@ -60,11 +74,11 @@ pub unsafe extern "C" fn darkride_chat_new(config: *const c_char, callback: Even
 /// # Safety
 /// chat is from darkride_chat_new and not freed; command is a NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn darkride_chat_command(chat: *const Chat, command: *const c_char) {
+pub unsafe extern "C" fn darkride_chat_command(chat: *const Handle, command: *const c_char) {
     if chat.is_null() || command.is_null() {
         return;
     }
-    let chat = unsafe { &*chat };
+    let chat = unsafe { &(*chat).chat };
     match (unsafe { CStr::from_ptr(command) }).to_str() {
         Ok(text) => chat.command(text),
         Err(_) => chat.command("not UTF-8"),
@@ -77,11 +91,11 @@ pub unsafe extern "C" fn darkride_chat_command(chat: *const Chat, command: *cons
 /// # Safety
 /// chat is from darkride_chat_new and not freed; not called from inside the callback.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn darkride_chat_wait_idle(chat: *const Chat, timeout_ms: c_uint) -> c_int {
+pub unsafe extern "C" fn darkride_chat_wait_idle(chat: *const Handle, timeout_ms: c_uint) -> c_int {
     if chat.is_null() {
         return 1;
     }
-    let chat = unsafe { &*chat };
+    let chat = unsafe { &(*chat).chat };
     chat.wait_idle(Duration::from_millis(timeout_ms.into())) as c_int
 }
 
@@ -90,8 +104,11 @@ pub unsafe extern "C" fn darkride_chat_wait_idle(chat: *const Chat, timeout_ms: 
 /// # Safety
 /// chat is from darkride_chat_new, freed once, and not called from inside the callback.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn darkride_chat_free(chat: *mut Chat) {
+pub unsafe extern "C" fn darkride_chat_free(chat: *mut Handle) {
     if !chat.is_null() {
-        drop(unsafe { Box::from_raw(chat) });
+        let handle = unsafe { Box::from_raw(chat) };
+        // closed first: nothing reaches the host from here on, even from a thread the shutdown leaves running
+        handle.target.close();
+        drop(handle);
     }
 }

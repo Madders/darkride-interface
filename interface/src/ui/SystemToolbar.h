@@ -45,8 +45,16 @@ public:
     /// the sign-in gate's say: a bar may show (false on the sign-in screen)
     void setAllowed(bool allowed);
 
+    /// back on the side its setting names, after the window's saved layout (ui/WindowLayout.h) put it where it was
+    /// when the layout was saved
+    void restorePlace();
+
     /// a skin is on: the bar drops its own look for the application's style sheet (Skins)
     void setSkinned(bool skinned);
+
+    /// the bar's own line icon for a button (look A), by its label and, for Audio, whether it's muted
+    /// ("icons/bar/audio-muted.svg"), or "" when the bar has none for it; the floating bar asks it too (BarButton.qml)
+    Q_INVOKABLE QString iconFor(const QString& text, bool muted) const;
 
 signals:
     void placeChanged();
@@ -55,7 +63,7 @@ protected:
     bool event(QEvent* event) override;   // a drag by the handle let go: remember the side it went to
 
 public:
-    /// shown or hidden only as updateVisibility wants: Build mode's saved window layout (QMainWindow::restoreState)
+    /// shown or hidden only as updateVisibility wants: the window's saved layout (QMainWindow::restoreState)
     /// holds this toolbar too, and restoring it showed this bar beside the floating one, or hid the docked one (10-24)
     void setVisible(bool visible) override;
 
@@ -64,9 +72,9 @@ private:
 
     void rebuild();
     void refresh(QToolButton* button, TabletButtonProxy* proxy);
+    void fitCells();   // every button the size of the largest
     void updateVisibility();
     void rememberArea();
-    int buttonSize() const;   // an icon's size: smaller in a column
     QPixmap buttonPicture(const QVariantMap& properties, bool active) const;
 
     QPointer<QMainWindow> _window;
@@ -76,6 +84,7 @@ private:
     // always waited: not on the sign-in screen
     bool _allowed { false };
     bool _wanted { false };   // updateVisibility's word, which setVisible keeps to
+    bool _skinned { false };  // a skin's style sheet draws the bar: the icons take its text colour
 };
 
 #endif // hifi_SystemToolbar_h

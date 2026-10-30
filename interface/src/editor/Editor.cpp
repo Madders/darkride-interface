@@ -34,16 +34,15 @@
 #include <QtGui/QMouseEvent>
 #include <QtGui/QWheelEvent>
 #include <QtCore/QEvent>
+#include <QtWidgets/QCheckBox>
 #include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QAbstractSpinBox>
 #include <QtWidgets/QAction>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QFileDialog>
-#include <QtWidgets/QInputDialog>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QMenu>
-#include <QtWidgets/QMessageBox>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QStatusBar>
 #include <QtWidgets/QTextEdit>
@@ -60,6 +59,7 @@
 #include <EntityTreeRenderer.h>
 #include <RenderableEntityItem.h>
 #include <LightEntityItem.h>
+#include <TextEntityItem.h>
 #include <ParticleEffectEntityItem.h>
 #include <VehiclePropertyGroup.h>
 #include <WheeledVehicleSpec.h>
@@ -92,11 +92,14 @@
 #include "PropertySpec.h"
 #include "ui/AssetsPanel.h"
 #include "ui/PanelTheme.h"
+#include "ui/Popup.h"
 #include "ui/HierarchyPanel.h"
 #include "ui/InspectorPanel.h"
 #include "ui/PropertyEditors.h"
 #include "ui/TerrainToolBar.h"
 #include "ui/ViewportContainer.h"
+#include "ui/WindowLayout.h"
+#include "chat/ChatWindow.h"
 #include <gl/GLHelpers.h>
 
 namespace {
@@ -126,6 +129,13 @@ namespace {
     const int STATUS_CLEAR_MS = 6000;             // how long a note on the status bar stays
     const QString SCALE_KEY = QStringLiteral("scale");
     const QString LOCKED_KEY = QStringLiteral("locked");
+    // a lock without the right is refused by the world with nothing on the screen: Locked (the Inspector's and the
+    // Hierarchy's) greys out and says why
+    const QString NO_LOCK_RIGHT = "You can't lock or unlock things in this world. That takes the world's "
+        "Lock / Unlock right, which its owner can give.";
+    const QString SCRIPTS_ENABLED_KEY = QStringLiteral("scriptsEnabled");
+    const int SCRIPTS_OFF_REMINDER_MS = 7000;   // the reminder, as build mode closes, that scripts are still off
+    const int HIDDEN_HERE_PASS_MS = 150;   // entities that arrived are hidden again this long after the last
     const QString RANGE_KEY = QStringLiteral("range");
     const QString VOXEL_SIZE_KEY = QStringLiteral("voxelSize");
     const QString CUTOFF_KEY = QStringLiteral("cutoff");
@@ -240,7 +250,7 @@ Editor::Editor() : _selection(this), _undo(this), _terrain(&_undo, this) {
     connect(&_arrivalTimer, &QTimer::timeout, this, [this] {
         if (!_goingTo.isNull() && _treeModel && !_treeModel->isLoaded(_goingTo)) {
             setStatus(QString("%1 hasn't arrived. It may have been deleted since the list was made: "
-                              "Refresh the Hierarchy.").arg(_goingToName), STATUS_CLEAR_MS);
+                              "Refresh the Entities list.").arg(_goingToName), STATUS_CLEAR_MS);
         }
         _goingTo = QUuid();
     });
@@ -265,6 +275,12 @@ void Editor::setReady() {
         }
     });
     connect(nodeList.data(), &NodeList::canRezTmpChanged, this, [this] {
+        if (_active) {
+            updateReadOnly();
+        }
+    });
+    // the Lock / Unlock right: the Inspector's Locked follows it
+    connect(nodeList.data(), &NodeList::isAllowedEditorChanged, this, [this] {
         if (_active) {
             updateReadOnly();
         }
@@ -324,6 +340,8 @@ void Editor::setActive(bool active) {
             _treeModel->attach();
         }
         refreshEntityList();
+        // what this builder hid is hidden in their view again
+        applyHiddenHere(true);
         _axesValid = false;
         updateAxes();
         refreshInspector(true);
@@ -332,6 +350,10 @@ void Editor::setActive(bool active) {
         setStatus(QString());
         _world->refresh();
     } else {
+        // everything shows again as everyone sees it
+        _hiddenHereTimer.stop();
+        applyHiddenHere(false);
+        remindOfScriptsOff();
         _boundsShapes.clear();
         _bounds.setShapes(_boundsShapes);
         endLightHandleDrag(false);
@@ -357,10 +379,7 @@ void Editor::setActive(bool active) {
             _gizmo.endDrag();
             _dragKind = DragKind::None;
         }
-        if (auto window = qApp->getWindow()) {
-            _layoutSetting.set(window->saveState());
-        }
-        showPanels(false);
+        showPanels(false);   // the window's layout saves itself as they go (ui/WindowLayout.h)
         // the keyboard goes back to the world: a field that had it would keep it, hidden, and the avatar's keys
         // with it
         focusViewport();
@@ -547,10 +566,13 @@ void Editor::updateReadOnly() {
     QString reason = readOnlyReason();
     if (_inspector) {
         _inspector->setReadOnly(_readOnly, reason);
+        _inspector->setCanLock(entities->canAdjustLocks(), NO_LOCK_RIGHT);
     }
     if (_hierarchy) {
         _hierarchy->setReadOnly(_readOnly, reason);
+        _hierarchy->setCanLock(!_readOnly && entities->canAdjustLocks(), _readOnly ? reason : NO_LOCK_RIGHT);
     }
+    updateInspectorToggles();
     if (_toolBar) {
         _toolBar->setCreateEnabled(!_readOnly);
     }
@@ -590,17 +612,10 @@ void Editor::createPanels() {
     }
     _panelsCreated = true;
 
-    // one dark stylesheet for the panels; scoped by object name so the rest of the window is untouched. Under a skin
-    // (ui/Skins.h) its colours become the skin's, and they follow the skin as it changes
-    QFile styleSheet(PathUtils::resourcesPath() + "styles/editor.qss");
-    if (styleSheet.open(QIODevice::ReadOnly)) {
-        _styleSource = QString::fromUtf8(styleSheet.readAll());
-    }
-
     _treeModel = new EntityTreeModel(this);
     // the style (and the Hierarchy's red and grey rows) from the skin, now and whenever it changes
+    loadStyle();
     applyStyle();
-    connect(DependencyManager::get<PanelTheme>().data(), &PanelTheme::changed, this, &Editor::applyStyle);
     connect(_treeModel, &EntityTreeModel::renameRequested, this, &Editor::rename);
     connect(_treeModel, &EntityTreeModel::reparentRequested, this, &Editor::reparent);
 
@@ -628,23 +643,43 @@ void Editor::createPanels() {
     connect(_hierarchy, &HierarchyPanel::goToRequested, this, &Editor::goToListed);
     connect(_hierarchy, &HierarchyPanel::refreshRequested, this, &Editor::refreshEntityList);
     connect(_hierarchy, &HierarchyPanel::contextMenuRequested, this, &Editor::showHierarchyMenu);
+    // the rows' eye, hand and lock
+    loadLocalStates();
+    _hierarchy->setLocalStates(_hiddenHere, _noPick);
+    connect(_hierarchy, &HierarchyPanel::toggleRequested, this,
+            [this](HierarchyPanel::Toggle toggle, const QList<QUuid>& ids, bool on) { onHierarchyToggle(toggle, ids, on); });
+    connect(_hierarchy, &HierarchyPanel::showAllRequested, this, &Editor::showAllHere);
+    _hiddenHereTimer.setSingleShot(true);
+    _hiddenHereTimer.setInterval(HIDDEN_HERE_PASS_MS);
+    connect(&_hiddenHereTimer, &QTimer::timeout, this, [this] {
+        if (_active) {
+            applyHiddenHere(true);
+        }
+    });
+    // an entity this builder hid comes back from the server as a new item, shown: hidden again as it arrives
+    auto hideArrivals = [this] {
+        if (_active && !_hiddenHere.isEmpty() && !_hiddenHereTimer.isActive()) {
+            _hiddenHereTimer.start();
+        }
+    };
+    connect(_treeModel, &QAbstractItemModel::rowsInserted, this, hideArrivals);
+    connect(_treeModel, &EntityTreeModel::entityLoaded, this, hideArrivals);
 
     _inspector = new InspectorPanel(window);
     connect(_inspector, &InspectorPanel::editBegan, this, &Editor::onInspectorEditBegan);
     connect(_inspector, &InspectorPanel::liveEdit, this, &Editor::onInspectorLiveEdit);
     connect(_inspector, &InspectorPanel::committed, this, &Editor::onInspectorCommitted);
+    // the header's toggle icons: the Hierarchy rows' rules, for the selection alone
+    connect(_inspector, &InspectorPanel::toggleClicked, this, [this](int toggle) {
+        if (_hierarchy) {
+            _hierarchy->toggleIds((HierarchyPanel::Toggle)toggle, _selection.ids());
+        }
+    });
     connect(_inspector, &InspectorPanel::editCancelled, this, &Editor::onInspectorEditCancelled);
     connect(_inspector, &InspectorPanel::uploadRequested, this, &Editor::onInspectorUpload);
 
-    // My Files along the bottom: its notes (a link copied, an upload's progress) go to the status bar
-    _assets = new AssetsPanel(window);
-    connect(_assets, &AssetsPanel::status, this, [this](const QString& text, int clearAfterMs) {
-        setStatus(text, clearAfterMs);
-    });
-    // the tools, the handle space, Frame and V work from the panel too
-    _assets->setKeyFallback([this](QKeyEvent* event) {
-        return event->type() == QEvent::KeyPress ? handleKeyPress(event) : handleKeyRelease(event);
-    });
+    // My Files along the bottom, made already if normal play opened it
+    myFilesPanel();
 
     _toolBar = new EditorToolBar(window);
     _toolBar->setGridChecked(_gridVisible);
@@ -701,31 +736,100 @@ void Editor::createPanels() {
     _statusLabel->setTextFormat(Qt::PlainText);
     _statusBar->addWidget(_statusLabel, 1);
 
-    window->addDockWidget(Qt::LeftDockWidgetArea, _hierarchy);
-    window->addDockWidget(Qt::RightDockWidgetArea, _inspector);
-    // the Assets panel runs under the Hierarchy and the viewport, as Unity's Project window does; the Inspector
-    // keeps the right side whole
-    window->setCorner(Qt::BottomLeftCorner, Qt::BottomDockWidgetArea);
-    window->addDockWidget(Qt::BottomDockWidgetArea, _assets);
+    // each panel where the window's saved layout has it (ui/WindowLayout.h, restored after sign-in), else where it
+    // starts
+    auto layout = WindowLayout::instance();
+    QList<QDockWidget*> across;
+    QList<int> widths;
+    if (!layout->restoreDock(_hierarchy)) {
+        window->addDockWidget(Qt::LeftDockWidgetArea, _hierarchy);
+        placeAbove(_hierarchy, Qt::LeftDockWidgetArea);
+        across << _hierarchy;
+        widths << 260;
+    }
+    if (!layout->restoreDock(_inspector)) {
+        window->addDockWidget(Qt::RightDockWidgetArea, _inspector);
+        placeAbove(_inspector, Qt::RightDockWidgetArea);
+        across << _inspector;
+        widths << 430;
+    }
+    layout->watch(_hierarchy);
+    layout->watch(_inspector);
     placeToolBars();
     _terrainBar->setVisible(false);
     window->setStatusBar(_statusBar);
     _statusBar->setVisible(false);
-    window->resizeDocks({ _hierarchy, _inspector }, { 260, 430 }, Qt::Horizontal);
-    window->resizeDocks({ _assets }, { 240 }, Qt::Vertical);
+    if (!across.isEmpty()) {
+        window->resizeDocks(across, widths, Qt::Horizontal);
+    }
+    // hidden until showPanels: normal play's layout from before Build mode had its own could show them (My Files is
+    // normal play's too, as that layout has it)
+    _hierarchy->hide();
+    _inspector->hide();
     qApp->installEventFilter(this);
 
-    QByteArray layout = _layoutSetting.get();
-    if (!layout.isEmpty()) {
-        window->restoreState(layout);
-    }
-    // a saved layout from before the panels were fixed can still float them, and one saved with both toolbars on
-    // one row would keep them there
-    _hierarchy->setFloating(false);
-    _inspector->setFloating(false);
-    _assets->setFloating(false);
+    // a layout saved with both toolbars on one row would keep them there
     placeToolBars();
     updateTerrainBar();   // the saved layout knows nothing of the tool
+}
+
+void Editor::loadStyle() {
+    if (!_styleSource.isEmpty()) {
+        return;
+    }
+    // one dark stylesheet for the panels; scoped by object name so the rest of the window is untouched. Under a skin
+    // (ui/Skins.h) its colours become the skin's, and they follow the skin as it changes
+    QFile styleSheet(PathUtils::resourcesPath() + "styles/editor.qss");
+    if (styleSheet.open(QIODevice::ReadOnly)) {
+        _styleSource = QString::fromUtf8(styleSheet.readAll());
+    }
+    applyStyle();
+    connect(DependencyManager::get<PanelTheme>().data(), &PanelTheme::changed, this, &Editor::applyStyle,
+            Qt::UniqueConnection);
+}
+
+QDockWidget* Editor::myFilesPanel() {
+    if (_assets) {
+        return _assets;
+    }
+    auto window = qApp->getWindow();
+    if (!window) {
+        return nullptr;
+    }
+    loadStyle();
+    gl::ViewChangeGuard guard;   // a panel coming back docked changes the GL view
+    _assets = new AssetsPanel(window);
+    // its notes (a link copied, an upload's progress) go to Build mode's status bar, or to its own foot in normal play
+    connect(_assets, &AssetsPanel::status, this, [this](const QString& text, int clearAfterMs) {
+        setStatus(text, clearAfterMs);
+    });
+    // the tools, the handle space, Frame and V work from the panel too, in Build mode
+    _assets->setKeyFallback([this](QKeyEvent* event) {
+        return event->type() == QEvent::KeyPress ? handleKeyPress(event) : handleKeyRelease(event);
+    });
+    // its listing is fetched as it shows (not tabbed behind another panel)
+    connect(_assets, &QDockWidget::visibilityChanged, _assets, &AssetsPanel::setActive);
+    // it runs under the Hierarchy and the viewport, as Unity's Project window does; the Inspector keeps the right side
+    // whole
+    window->setCorner(Qt::BottomLeftCorner, Qt::BottomDockWidgetArea);
+    // where the window's saved layout has it, open or closed as it was; asked before it's added anywhere, as adding it
+    // drops the layout's place for it
+    _assets->hide();
+    if (!WindowLayout::instance()->restoreDock(_assets)) {
+        window->addDockWidget(Qt::BottomDockWidgetArea, _assets);
+        window->resizeDocks({ _assets }, { 240 }, Qt::Vertical);
+        _assets->hide();
+    }
+    WindowLayout::instance()->watch(_assets);
+    return _assets;
+}
+
+QDockWidget* Editor::hierarchyPanel() const {
+    return _hierarchy;
+}
+
+QDockWidget* Editor::inspectorPanel() const {
+    return _inspector;
 }
 
 void Editor::placeToolBars() {
@@ -743,6 +847,10 @@ void Editor::placeToolBars() {
 }
 
 void Editor::focusViewport() {
+    // and from a web entity clicked before (the Cinema's remote): it keeps the keyboard otherwise, every key going to
+    // its page first (KeyboardFocus::deliverKeyEvent), since build mode's clicks never reach the app's own focus change;
+    // F, Delete and the rest did nothing (Caity's desk test, 10-29)
+    qApp->getKeyboardFocus().setFocusedEntity(UNKNOWN_ENTITY_ID);
     if (auto viewport = qApp->getPrimaryWidget()) {
         if (!viewport->hasFocus()) {
             viewport->setFocus(Qt::MouseFocusReason);
@@ -771,13 +879,61 @@ void Editor::showPanels(bool show) {
         QApplication::activePopupWidget()->close();
     }
     gl::ViewChangeGuard guard;   // panels coming and going change the window round the GL view
-    _hierarchy->setVisible(show);
-    _inspector->setVisible(show);
-    _assets->setVisible(show);
-    _assets->setActive(show);   // fetches the listing when shown
+    auto window = qApp->getWindow();
+    auto layout = WindowLayout::instance();
+    if (show) {
+        // Build mode's own arrangement, as it was left (normal play keeps its own: ui/WindowLayout.h); the first
+        // time, its panels where they start and the others as they are
+        if (!layout->enterBuildMode()) {
+            _hierarchy->show();
+            _inspector->show();
+            _assets->show();
+            for (const auto& share : _sharesToSize) {
+                if (share.first && share.second && !share.second->isHidden() && !share.second->isFloating()) {
+                    window->resizeDocks({ share.first, share.second }, { 3000, 2000 }, Qt::Vertical);
+                }
+            }
+        }
+        _sharesToSize.clear();
+        placeToolBars();   // the rows are placed here rather than left to a saved layout
+    } else {
+        layout->leaveBuildMode();
+        // the Hierarchy and the Inspector are Build mode's only, whatever normal play's arrangement says
+        _hierarchy->hide();
+        _inspector->hide();
+    }
     _toolBar->setVisible(show);
     _statusBar->setVisible(show);
     updateTerrainBar();
+}
+
+QList<QDockWidget*> Editor::otherDockedPanels() const {
+    QList<QDockWidget*> found;
+    auto window = qApp->getWindow();
+    if (!window) {
+        return found;
+    }
+    for (QDockWidget* dock : window->findChildren<QDockWidget*>()) {
+        if (dock != _hierarchy && dock != _inspector && dock != _assets && !dock->isHidden() && !dock->isFloating() &&
+            window->dockWidgetArea(dock) != Qt::NoDockWidgetArea) {
+            found << dock;
+        }
+    }
+    return found;
+}
+
+void Editor::placeAbove(QDockWidget* ours, Qt::DockWidgetArea area) {
+    auto window = qApp->getWindow();
+    for (QDockWidget* other : otherDockedPanels()) {
+        if (window->dockWidgetArea(other) == area) {
+            // added after it, ours would sit under it with only what it asks for (the Inspector came out 86 px tall
+            // under chat, 10-25); the sizes given later are shares, which Qt fits to the side
+            window->splitDockWidget(ours, other, Qt::Vertical);
+            // 3 to 2, once ours shows (showPanels)
+            _sharesToSize.append(qMakePair(QPointer<QDockWidget>(ours), QPointer<QDockWidget>(other)));
+            return;
+        }
+    }
 }
 
 namespace {
@@ -851,21 +1007,56 @@ void Editor::applyStyle() {
 }
 
 void Editor::resetLayout() {
+    // every panel back where it started (as Caity was told, 10-25), chat's too: floating at its first size and place,
+    // open or closed as it was. My Files docks along the bottom, closed in normal play (ui/WindowLayout::resetToDefault
+    // closes the bar's panels)
+    ChatWindow::resetDock();
+    WindowLayout::instance()->saveSoon();
     auto window = qApp->getWindow();
-    if (!_panelsCreated || !window) {
+    if (!window) {
         return;
     }
-    _hierarchy->setFloating(false);
-    _inspector->setFloating(false);
-    _assets->setFloating(false);
-    window->addDockWidget(Qt::LeftDockWidgetArea, _hierarchy);
-    window->addDockWidget(Qt::RightDockWidgetArea, _inspector);
-    window->addDockWidget(Qt::BottomDockWidgetArea, _assets);
-    window->resizeDocks({ _hierarchy, _inspector }, { 260, 430 }, Qt::Horizontal);
-    window->resizeDocks({ _assets }, { 240 }, Qt::Vertical);
-    placeToolBars();
-    showPanels(_active);
-    _layoutSetting.set(QByteArray());
+    {
+        gl::ViewChangeGuard guard;   // the panels moving resize the GL view
+        if (_assets) {
+            _assets->setFloating(false);
+            window->addDockWidget(Qt::BottomDockWidgetArea, _assets);
+            window->resizeDocks({ _assets }, { 240 }, Qt::Vertical);
+            _assets->setVisible(_active);
+        }
+        if (_panelsCreated) {
+            _hierarchy->setFloating(false);
+            _inspector->setFloating(false);
+            window->addDockWidget(Qt::LeftDockWidgetArea, _hierarchy);
+            window->addDockWidget(Qt::RightDockWidgetArea, _inspector);
+            window->resizeDocks({ _hierarchy, _inspector }, { 260, 430 }, Qt::Horizontal);
+        }
+    }
+    if (_panelsCreated) {
+        placeToolBars();
+        showPanels(_active);
+    }
+}
+
+void Editor::layoutApplied(bool savedInBuildMode) {
+    if (!_panelsCreated) {
+        return;   // Build mode's panels take their places from the layout when they're made
+    }
+    gl::ViewChangeGuard guard;   // panels coming and going change the window round the GL view
+    if (_active) {
+        // a layout from normal play has Build mode's panels closed
+        if (!savedInBuildMode) {
+            _hierarchy->show();
+            _inspector->show();
+        }
+        placeToolBars();
+    } else {
+        _hierarchy->hide();
+        _inspector->hide();
+    }
+    _toolBar->setVisible(_active);
+    _statusBar->setVisible(_active);
+    updateTerrainBar();
 }
 
 // --- every frame --------------------------------------------------------------------------------
@@ -1398,9 +1589,13 @@ bool Editor::pointerOverHierarchy() const {
 }
 
 QUuid Editor::pickAt(const QPoint& viewportPos) const {
+    return pickOnRay(pickRay(viewportPos));
+}
+
+QUuid Editor::pickOnRay(const PickRay& ray) const {
     // icons are drawn over everything, so they are picked first, as in Unity
-    QUuid icon = _lightGizmos.iconAt(pickRay(viewportPos));
-    return icon.isNull() ? pickEntity(viewportPos) : icon;
+    QUuid icon = _lightGizmos.iconAt(ray);
+    return icon.isNull() || excludedFromPicks(icon) ? pickEntityOnRay(ray) : icon;
 }
 
 float Editor::lightHandleValue(const PickRay& ray) const {
@@ -1712,6 +1907,13 @@ void Editor::refreshInspector(bool selectionChanged) {
         // a light handle's drag is an edit no field is making: the fields follow it
         _inspector->refreshValues(snapshots);
     }
+    updateInspectorToggles();
+}
+
+void Editor::updateInspectorToggles() {
+    if (_inspector && _hierarchy) {
+        _inspector->setToggleStates(_hierarchy->statesFor(_selection.ids()));
+    }
 }
 
 EntityItemProperties Editor::inspectorEdit(const QString& key, const QVariant& value, const glm::vec3& naturalSize,
@@ -1744,6 +1946,134 @@ EntityItemProperties Editor::inspectorEdit(const QString& key, const QVariant& v
     return properties;
 }
 
+// an Inspector edit that scales what it changes, and so its children
+static bool scalesChildren(const QString& key) {
+    return key == SCALE_KEY || key == QStringLiteral("dimensions");
+}
+
+// an entity's new size over its old, along each of its axes (1 along one it had no size on)
+static glm::vec3 sizeRatio(const glm::vec3& before, const glm::vec3& after) {
+    glm::vec3 ratio(1.0f);
+    for (int i = 0; i < 3; ++i) {
+        if (before[i] > 0.0f) {
+            ratio[i] = after[i] / before[i];
+        }
+    }
+    return ratio;
+}
+
+// a scale along a parent's x, y and z, seen along each axis of something turned by `rotation` in it: exact for a scale
+// the same along all three and for a turn by right angles; otherwise the nearest without a skew, which entities can't
+// have (Unity's children skew)
+static glm::vec3 scaleAlong(const glm::vec3& ratio, const glm::quat& rotation) {
+    return glm::vec3(glm::length(ratio * (rotation * Vectors::UNIT_X)), glm::length(ratio * (rotation * Vectors::UNIT_Y)),
+                     glm::length(ratio * (rotation * Vectors::UNIT_Z)));
+}
+
+QVector<Editor::ScaledChild> Editor::childrenToScale(const QList<QUuid>& ids) const {
+    QVector<ScaledChild> children;
+    auto tree = entityTree();
+    if (!tree) {
+        return children;
+    }
+    tree->withReadLock([&] {
+        auto add = [&](const EntityItemPointer& parent, int parentIndex) {
+            parent->forEachChild([&](const SpatiallyNestablePointer& nestable) {
+                if (nestable->getNestableType() != NestableType::Entity || ids.contains(nestable->getID())) {
+                    return;
+                }
+                auto child = std::static_pointer_cast<EntityItem>(nestable);
+                if (child->getLocked()) {
+                    return;
+                }
+                ScaledChild entry;
+                entry.id = child->getID();
+                entry.parent = parentIndex;
+                entry.localPosition = child->getLocalPosition();
+                entry.dimensions = child->getUnscaledDimensions();
+                entry.localRotation = child->getLocalOrientation();
+                quint16 joint = child->getParentJointIndex();
+                if (joint != INVALID_JOINT_INDEX) {
+                    entry.frame = parent->getAbsoluteJointRotationInObjectFrame(joint);
+                }
+                if (child->getType() == EntityTypes::Text) {
+                    entry.lineHeight = std::static_pointer_cast<TextEntityItem>(child)->getLineHeight();
+                } else if (child->getType() == EntityTypes::Light) {
+                    entry.falloff = std::static_pointer_cast<LightEntityItem>(child)->getFalloffRadius();
+                }
+                children << entry;
+            });
+        };
+        for (int i = 0; i < ids.size(); ++i) {
+            int first = children.size();
+            if (auto entity = tree->findEntityByEntityItemID(ids[i])) {
+                add(entity, -1 - i);
+            }
+            for (int j = first; j < children.size(); ++j) {
+                if (auto child = tree->findEntityByEntityItemID(children[j].id)) {
+                    add(child, j);
+                }
+            }
+        }
+    });
+    return children;
+}
+
+QVector<EntityItemProperties> Editor::childScaleEdits(const QVector<ScaledChild>& children,
+                                                      const QVector<glm::vec3>& ratios) {
+    QVector<EntityItemProperties> edits;
+    QVector<glm::vec3> own;   // each child's scale along its own axes, which its own children grow by
+    for (const auto& child : children) {
+        glm::vec3 ratio = child.parent < 0 ? ratios.value(-1 - child.parent, glm::vec3(1.0f)) : own[child.parent];
+        // its offset grows along its parent's axes (a joint's offset along the joint's)
+        glm::vec3 offset = glm::inverse(child.frame) * (ratio * (child.frame * child.localPosition));
+        own << scaleAlong(ratio, child.frame * child.localRotation);
+        glm::vec3 scale = own.last();
+        EntityItemProperties properties;
+        properties.setLocalPosition(offset);
+        if (child.falloff > 0.0f) {
+            // a light's range is a sphere: it grows by its mean, its glow with it
+            scale = glm::vec3((scale.x + scale.y + scale.z) / 3.0f);
+            properties.setFalloffRadius(child.falloff * scale.x);
+        }
+        properties.setLocalDimensions(glm::max(child.dimensions * scale, glm::vec3(MIN_DIMENSION)));
+        if (child.lineHeight > 0.0f) {
+            properties.setLineHeight(child.lineHeight * scale.y);
+        }
+        edits << properties;
+    }
+    return edits;
+}
+
+EntityItemProperties Editor::childScaleBefore(const ScaledChild& child) {
+    EntityItemProperties properties;
+    properties.setLocalPosition(child.localPosition);
+    properties.setLocalDimensions(child.dimensions);
+    if (child.falloff > 0.0f) {
+        properties.setFalloffRadius(child.falloff);
+    }
+    if (child.lineHeight > 0.0f) {
+        properties.setLineHeight(child.lineHeight);
+    }
+    return properties;
+}
+
+void Editor::sendChildScale(const QVector<ScaledChild>& children, const QVector<EntityItemProperties>& edits, bool final) {
+    auto entities = DependencyManager::get<EntityScriptingInterface>();
+    auto tree = entityTree();
+    for (int i = 0; i < children.size() && i < edits.size(); ++i) {
+        entities->editEntity(children[i].id, edits[i]);
+        if (!final && tree) {
+            // as for the entity scaled: while the drag lasts, the old collision shape is good enough
+            tree->withWriteLock([&] {
+                if (auto entity = tree->findEntityByEntityItemID(children[i].id)) {
+                    entity->clearDirtyFlags(Simulation::DIRTY_SHAPE | Simulation::DIRTY_MASS);
+                }
+            });
+        }
+    }
+}
+
 void Editor::onInspectorEditBegan(const QString& key) {
     // a scrub starts (or a colour picker opens): what the entities hold now is the undo point
     _inspectorEditKey = key;
@@ -1772,6 +2102,7 @@ void Editor::onInspectorEditBegan(const QString& key) {
         _inspectorBefore << before;
         _inspectorNatural << naturalSize;
     }
+    _inspectorChildren = scalesChildren(key) ? childrenToScale(_inspectorEditIds) : QVector<ScaledChild>();
 }
 
 void Editor::onInspectorLiveEdit(const QString& key, const QVariant& value) {
@@ -1798,8 +2129,14 @@ void Editor::applyLiveEdit(const QString& key, QVariant value) {
     _liveEditClock.restart();
     _liveEditValue = QVariant();
     auto entities = DependencyManager::get<EntityScriptingInterface>();
+    QVector<glm::vec3> ratios;
     for (int i = 0; i < _inspectorEditIds.size(); ++i) {
-        entities->editEntity(_inspectorEditIds[i], inspectorEdit(key, value, _inspectorNatural[i], _inspectorBefore[i]));
+        EntityItemProperties edit = inspectorEdit(key, value, _inspectorNatural[i], _inspectorBefore[i]);
+        entities->editEntity(_inspectorEditIds[i], edit);
+        ratios << sizeRatio(_inspectorBefore[i].getDimensions(), edit.getDimensions());
+    }
+    if (!_inspectorChildren.isEmpty()) {
+        sendChildScale(_inspectorChildren, childScaleEdits(_inspectorChildren, ratios), true);
     }
 }
 
@@ -1814,10 +2151,16 @@ void Editor::onInspectorEditCancelled(const QString& key) {
     for (int i = 0; i < _inspectorEditIds.size(); ++i) {
         entities->editEntity(_inspectorEditIds[i], _inspectorBefore[i]);
     }
+    QVector<EntityItemProperties> childrenBefore;
+    for (const auto& child : _inspectorChildren) {
+        childrenBefore << childScaleBefore(child);
+    }
+    sendChildScale(_inspectorChildren, childrenBefore, true);
     _inspectorEditKey.clear();
     _inspectorEditIds.clear();
     _inspectorBefore.clear();
     _inspectorNatural.clear();
+    _inspectorChildren.clear();
     refreshInspector(false);
 }
 
@@ -1847,6 +2190,7 @@ void Editor::commitInspectorEdit(const QString& key, const QVariant& value, cons
     QList<QUuid> ids;
     QVector<EntityItemProperties> before;
     QVector<glm::vec3> naturalSizes;
+    QVector<ScaledChild> children;
     bool alreadyApplied = key == _inspectorEditKey && !_inspectorEditIds.isEmpty();
     bool entryRefused = false;   // an entry of a JSON property, on an entity whose property can't hold it
     if (alreadyApplied) {
@@ -1854,6 +2198,7 @@ void Editor::commitInspectorEdit(const QString& key, const QVariant& value, cons
         ids = _inspectorEditIds;
         before = _inspectorBefore;
         naturalSizes = _inspectorNatural;
+        children = _inspectorChildren;
         _liveEditTimer.stop();
         applyLiveEdit(key, value);
     } else {
@@ -1884,11 +2229,15 @@ void Editor::commitInspectorEdit(const QString& key, const QVariant& value, cons
             before << properties;
             naturalSizes << naturalSize;
         }
+        if (scalesChildren(key)) {
+            children = childrenToScale(ids);
+        }
     }
     _inspectorEditKey.clear();
     _inspectorEditIds.clear();
     _inspectorBefore.clear();
     _inspectorNatural.clear();
+    _inspectorChildren.clear();
     if (ids.isEmpty() || (!alreadyApplied && !editable())) {
         if (entryRefused) {
             auto spec = PropertySpecs::find(key);
@@ -1901,8 +2250,17 @@ void Editor::commitInspectorEdit(const QString& key, const QVariant& value, cons
         return;
     }
     QVector<EntityItemProperties> after;
+    QVector<glm::vec3> ratios;
     for (int i = 0; i < ids.size(); ++i) {
         after << inspectorEdit(key, value, naturalSizes[i], before[i]);
+        ratios << sizeRatio(before[i].getDimensions(), after[i].getDimensions());
+    }
+    // the children in the same undo step (sent already when the value went out live)
+    QVector<EntityItemProperties> childEdits = childScaleEdits(children, ratios);
+    for (int i = 0; i < children.size(); ++i) {
+        ids << children[i].id;
+        before << childScaleBefore(children[i]);
+        after << childEdits[i];
     }
     if (key == TRACK_POINTS_KEY) {
         // the box follows the curve, as after a drag, an insert or a delete in the viewport; a scrub's points went out
@@ -1933,9 +2291,20 @@ PickRay Editor::pickRay(const QPoint& viewportPos) const {
 }
 
 QUuid Editor::pickEntity(const QPoint& viewportPos) const {
+    return pickEntityOnRay(pickRay(viewportPos));
+}
+
+QUuid Editor::pickEntityOnRay(const PickRay& ray) const {
+    // what this builder hid or made unpickable (the Hierarchy's eye and hand) lets the click through, to what's behind
+    QVector<EntityItemID> passedBy;
+    for (const auto& id : _hiddenHere) {
+        passedBy << id;
+    }
+    for (const auto& id : _noPick) {
+        passedBy << id;
+    }
     auto entities = DependencyManager::get<EntityScriptingInterface>();
-    auto result = entities->evalRayIntersectionVector(pickRay(viewportPos), worldPickFilter(),
-        QVector<EntityItemID>(), QVector<EntityItemID>());
+    auto result = entities->evalRayIntersectionVector(ray, worldPickFilter(), QVector<EntityItemID>(), passedBy);
     return result.intersects ? result.entityID : QUuid();
 }
 
@@ -2016,7 +2385,7 @@ QList<QUuid> Editor::entitiesInRect(const QRectF& rect) const {
     tree->withReadLock([&] {
         for (const auto& id : all) {
             auto entity = tree->findEntityByEntityItemID(id);
-            if (!entity || !entity->getVisible()) {
+            if (!entity || !entity->getVisible() || excludedFromPicks(id)) {
                 continue;
             }
             glm::vec4 clip = viewProjection * glm::vec4(entity->getWorldPosition(), 1.0f);
@@ -2066,7 +2435,18 @@ QPixmap Editor::inspectorPicture() const {
     return _inspector ? _inspector->contentPicture() : QPixmap();
 }
 
-void Editor::dragSelectionForTest(const glm::vec3& delta, const glm::quat& rotationDelta, bool rotate, bool begin, bool final) {
+void Editor::uploadFilesForTest(const QStringList& localPaths) {
+    if (_assets) {
+        _assets->uploadFilesForTest(localPaths);
+    }
+}
+
+QString Editor::statusForTest() const {
+    return _statusLabel ? _statusLabel->text() : QString();
+}
+
+void Editor::dragSelectionForTest(const glm::vec3& delta, const glm::quat& rotationDelta, bool rotate, bool begin, bool final,
+                                  const glm::vec3& scale, bool scaling) {
     if (!_active) {
         setActive(true);
     }
@@ -2080,7 +2460,7 @@ void Editor::dragSelectionForTest(const glm::vec3& delta, const glm::quat& rotat
         if (!tree) {
             return;
         }
-        DragKind kind = rotate ? DragKind::Rotate : DragKind::Move;
+        DragKind kind = rotate ? DragKind::Rotate : scaling ? DragKind::Scale : DragKind::Move;
         tree->withReadLock([&] {
             for (const auto& id : _selection.topLevel()) {
                 auto entity = tree->findEntityByEntityItemID(id);
@@ -2093,6 +2473,8 @@ void Editor::dragSelectionForTest(const glm::vec3& delta, const glm::quat& rotat
                 before.setPosition(position);
                 if (kind == DragKind::Rotate) {
                     before.setRotation(rotation);
+                } else if (kind == DragKind::Scale) {
+                    before.setDimensions(entity->getScaledDimensions());
                 }
                 _dragIds << id;
                 _dragPositions << position;
@@ -2104,6 +2486,7 @@ void Editor::dragSelectionForTest(const glm::vec3& delta, const glm::quat& rotat
         if (_dragIds.isEmpty()) {
             return;
         }
+        _dragChildren = kind == DragKind::Scale ? childrenToScale(_dragIds) : QVector<ScaledChild>();
         _dragKind = kind;
         _dragPivot = _dragPositions.first();
         _dragGizmoRotation = _gizmo.rotation();
@@ -2112,6 +2495,7 @@ void Editor::dragSelectionForTest(const glm::vec3& delta, const glm::quat& rotat
     }
     _dragDelta = delta;
     _dragRotationDelta = rotationDelta;
+    _dragScale = scale;
     applyDrag(final);
     if (final) {
         _dragKind = DragKind::None;
@@ -2277,18 +2661,8 @@ void Editor::rewriteStableLinks(const UserFiles& files) {
     qCDebug(interfaceapp) << "Use Stable Links:" << rewritten << "links in" << changed.size() << "entities;" << missing.size()
                           << "not in My Files;" << lockedLinks << "on locked entities";
 
-    // the report
-    QString summary;
-    if (rewritten > 0) {
-        summary = QString("%1 %2 to your files in %3 %4 now %5 the stable form, which keeps working when a file is moved or "
-                          "renamed. Undo puts them back.")
-                      .arg(rewritten).arg(rewritten == 1 ? "link" : "links").arg(changed.size())
-                      .arg(changed.size() == 1 ? "entity" : "entities").arg(rewritten == 1 ? "uses" : "use");
-    } else if (missing.isEmpty() && lockedLinks == 0) {
-        summary = "Nothing to change: no link in this world names one of your files by its path.";
-    } else {
-        summary = "No links were changed.";
-    }
+    // the report, in Darkride's popups (ui/Popup.h): a banner when every link it could change was changed, an alert
+    // with the reasons behind Details when some were left as they were
     QStringList notes;
     if (scriptsRestarting > 0) {
         notes << QString("%1 %2 with the new links.").arg(scriptsRestarting)
@@ -2307,21 +2681,34 @@ void Editor::rewriteStableLinks(const UserFiles& files) {
     }
     setStatus(rewritten > 0 ? QString("Use Stable Links: %1 %2 changed").arg(rewritten).arg(rewritten == 1 ? "link" : "links")
                             : QString("Use Stable Links: nothing changed"), STATUS_CLEAR_MS);
-    QMessageBox box(qApp->getWindow());
-    box.setWindowTitle(undoText);
-    box.setIcon(QMessageBox::Information);
-    box.setText(summary);
-    if (!notes.isEmpty()) {
-        box.setInformativeText(notes.join("\n\n"));
+    const int leftAlone = missing.size() + lockedLinks;
+    const QString title = QString("%1 %2 now stable").arg(rewritten).arg(rewritten == 1 ? "link" : "links");
+    const QString changedLine = QString("In %1 %2: %3 working when a file is moved or renamed. Undo puts %4 back.")
+                                    .arg(changed.size()).arg(changed.size() == 1 ? "entity" : "entities")
+                                    .arg(rewritten == 1 ? "it keeps" : "they keep").arg(rewritten == 1 ? "it" : "them");
+    if (leftAlone == 0) {
+        if (rewritten > 0) {
+            new popup::Banner(popup::appIcon(), title,
+                              changedLine + (scriptsRestarting > 0 ? " " + notes.first() : QString()), qApp->getWindow());
+        } else {
+            new popup::Banner(popup::appIcon(), "Nothing to change",
+                              "No link in this world names one of your files by its path.", qApp->getWindow());
+        }
+        return;
     }
+    QString details = (rewritten > 0 ? QStringList(changedLine) + notes : notes).join("\n\n");
     if (!missing.isEmpty()) {
         QStringList shown = missing.mid(0, MISSING_SHOWN);
         if (missing.size() > MISSING_SHOWN) {
             shown << QString("… and %1 more").arg(missing.size() - MISSING_SHOWN);
         }
-        box.setDetailedText(shown.join('\n'));
+        details += "\n\nNot in My Files:\n" + shown.join('\n');
     }
-    box.exec();
+    popup::Alert alert(popup::appIcon(), rewritten > 0 ? title : QString("No links were changed"),
+                       QString("%1 %2 left as %3 %4.").arg(leftAlone).arg(leftAlone == 1 ? "link was" : "links were")
+                           .arg(leftAlone == 1 ? "it" : "they").arg(leftAlone == 1 ? "was" : "were"),
+                       details, { { "OK", popup::Role::Default } }, qApp->getWindow());
+    alert.exec();
 }
 
 void Editor::frameSelection() {
@@ -2414,6 +2801,212 @@ void Editor::updateListNote() {
             break;
     }
     _hierarchy->setListNote(note);
+}
+
+QVariantMap Editor::setTerrainRandomAngleForTest(bool on) {
+    QVariantMap result;
+    auto random = _terrainBar ? _terrainBar->findChild<QCheckBox*>("EditorTerrainRandomAngle") : nullptr;
+    auto angle = _terrainBar ? _terrainBar->findChild<QWidget*>("EditorTerrainAngle") : nullptr;
+    result["found"] = random && angle;
+    if (random && angle) {
+        random->setChecked(on);
+        result["angleEnabled"] = angle->isEnabled();
+    }
+    return result;
+}
+
+float Editor::terrainStrokeForTest(const QUuid& id) {
+    auto tree = entityTree();
+    glm::vec3 position;
+    bool found = false;
+    if (tree) {
+        tree->withReadLock([&] {
+            if (auto entity = tree->findEntityByEntityItemID(id)) {
+                position = entity->getWorldPosition();
+                found = true;
+            }
+        });
+    }
+    if (!found) {
+        return -1.0f;
+    }
+    const float used = _terrain.angle();
+    QString refusal;
+    if (!_terrain.beginStroke(PickRay(position + glm::vec3(0.0f, 30.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f)), false, refusal)) {
+        return -1.0f;
+    }
+    _terrain.endStroke(false);
+    return used;
+}
+
+void Editor::loadLocalStates() {
+    if (_localStatesLoaded) {
+        return;
+    }
+    _localStatesLoaded = true;
+    for (const auto& text : _hiddenHereSetting.get()) {
+        _hiddenHere.insert(QUuid(text));
+    }
+    for (const auto& text : _noPickSetting.get()) {
+        _noPick.insert(QUuid(text));
+    }
+    _hiddenHere.remove(QUuid());
+    _noPick.remove(QUuid());
+}
+
+void Editor::saveLocalStates() {
+    auto texts = [](const QSet<QUuid>& ids) {
+        QStringList list;
+        for (const auto& id : ids) {
+            list << id.toString(QUuid::WithoutBraces);
+        }
+        list.sort();
+        return list;
+    };
+    _hiddenHereSetting.set(texts(_hiddenHere));
+    _noPickSetting.set(texts(_noPick));
+}
+
+void Editor::onHierarchyToggle(int toggle, const QList<QUuid>& ids, bool on) {
+    if (toggle == HierarchyPanel::Lock || toggle == HierarchyPanel::Scripts) {
+        // the entity's own Locked, or whether its scripts run, for everyone: one undo step for the row and what's
+        // under it (on is locked, or scripts off)
+        if (toggle == HierarchyPanel::Lock) {
+            commitInspectorEdit(LOCKED_KEY, on, ids);
+        } else {
+            commitInspectorEdit(SCRIPTS_ENABLED_KEY, !on, ids);
+        }
+        refreshInspector(false);
+        return;
+    }
+    QSet<QUuid>& states = toggle == HierarchyPanel::Hide ? _hiddenHere : _noPick;
+    for (const auto& id : ids) {
+        if (on) {
+            states.insert(id);
+        } else {
+            states.remove(id);
+        }
+    }
+    if (toggle == HierarchyPanel::Hide && _active) {
+        setLocallyHidden(ids, on);
+    }
+    saveLocalStates();
+    if (_hierarchy) {
+        _hierarchy->setLocalStates(_hiddenHere, _noPick);
+    }
+    updateInspectorToggles();   // the header's eye and pointer: no property changed to refresh it
+}
+
+void Editor::remindOfScriptsOff() {
+    // scripts turned off here stay off for everyone after build mode: said once as it closes, so a door left not
+    // opening isn't a surprise later (only to someone who can turn them on again)
+    int off = (_treeModel && !_readOnly) ? _treeModel->scriptsOffCount() : 0;
+    if (off == 0) {
+        _scriptsOffReminder.clear();
+        return;
+    }
+    QString title = off == 1 ? QString("1 entity has its scripts off")
+                             : QString("%1 entities have their scripts off").arg(off);
+    QString text = "They stay off for everyone until they're turned on again in Build mode, in the Entities list or the "
+                   "Inspector.";
+    _scriptsOffReminder = title + "\n" + text;
+    new popup::Banner(popup::appIcon(), title, text, qApp->getWindow(), SCRIPTS_OFF_REMINDER_MS);
+}
+
+void Editor::showAllHere() {
+    // this world's: what's hidden in other worlds stays as it was left there
+    QList<QUuid> here;
+    for (const auto& id : _hiddenHere) {
+        if (_treeModel && _treeModel->indexForId(id).isValid()) {
+            here << id;
+        }
+    }
+    onHierarchyToggle(HierarchyPanel::Hide, here, false);
+}
+
+void Editor::applyHiddenHere(bool hide) {
+    setLocallyHidden(_hiddenHere.values(), hide);
+}
+
+void Editor::setLocallyHidden(const QList<QUuid>& ids, bool hidden) {
+    auto tree = entityTree();
+    if (!tree) {
+        return;
+    }
+    QList<QUuid> changed;
+    tree->withReadLock([&] {
+        for (const auto& id : ids) {
+            auto entity = tree->findEntityByEntityItemID(id);
+            if (entity && entity->getLocallyVisible() == hidden) {
+                entity->setLocallyVisible(!hidden);
+                changed << id;
+            }
+        }
+    });
+    // the renderer takes the change on its next update, as it does an edit's
+    if (auto renderer = qApp->getEntities()) {
+        for (const auto& id : changed) {
+            renderer->onEntityChanged(id);
+        }
+    }
+}
+
+bool Editor::clickHierarchyToggle(const QString& which, const QUuid& id, bool onlyThis) {
+    if (!_hierarchy) {
+        return false;
+    }
+    auto toggle = which == "hide" ? HierarchyPanel::Hide : which == "pick" ? HierarchyPanel::NoPick
+                : which == "scripts" ? HierarchyPanel::Scripts : HierarchyPanel::Lock;
+    return _hierarchy->clickToggle(toggle, id, onlyThis);
+}
+
+QVariantMap Editor::hierarchyToggles(const QUuid& id) const {
+    QVariantMap result;
+    if (!_hierarchy) {
+        return result;
+    }
+    result["hidden"] = _hierarchy->isOn(HierarchyPanel::Hide, id);
+    result["noPick"] = _hierarchy->isOn(HierarchyPanel::NoPick, id);
+    result["locked"] = _hierarchy->isOn(HierarchyPanel::Lock, id);
+    result["scriptsOff"] = _hierarchy->isOn(HierarchyPanel::Scripts, id);
+    result["scriptsOffReminder"] = _scriptsOffReminder;
+    result["hiddenCount"] = _hierarchy->hiddenCount();
+    if (auto counts = _hierarchy->findChild<QLabel*>("EditorHierarchyCounts")) {
+        result["note"] = counts->text();
+    }
+    if (auto tree = qApp->getEntities() ? qApp->getEntities()->getTree() : nullptr) {
+        tree->withReadLock([&] {
+            if (auto entity = tree->findEntityByEntityItemID(id)) {
+                result["drawn"] = entity->getVisible() && entity->getLocallyVisible();
+            }
+        });
+    }
+    return result;
+}
+
+QUuid Editor::pickAtEntityForTest(const QUuid& id) const {
+    auto tree = qApp->getEntities() ? qApp->getEntities()->getTree() : nullptr;
+    glm::vec3 position;
+    bool found = false;
+    if (tree) {
+        tree->withReadLock([&] {
+            if (auto entity = tree->findEntityByEntityItemID(id)) {
+                position = entity->getWorldPosition();
+                found = true;
+            }
+        });
+    }
+    if (!found) {
+        return QUuid();
+    }
+    // the click's ray, from the camera through the entity's middle
+    glm::vec3 eye = _camera.position();
+    return pickOnRay(PickRay(eye, glm::normalize(position - eye)));
+}
+
+QList<QUuid> Editor::marqueeAllForTest() const {
+    auto viewport = qApp->getPrimaryWidget();
+    return viewport ? entitiesInRect(QRectF(viewport->rect())) : QList<QUuid>();
 }
 
 QVariantMap Editor::hierarchyCounts() const {
@@ -2541,6 +3134,7 @@ void Editor::beginGizmoDrag(GizmoHandle handle, const PickRay& ray) {
     if (_dragIds.isEmpty()) {
         return;
     }
+    _dragChildren = kind == DragKind::Scale ? childrenToScale(_dragIds) : QVector<ScaledChild>();
     _dragKind = kind;
     _dragPivot = _gizmo.position();
     _dragGizmoRotation = _gizmo.rotation();
@@ -2696,11 +3290,26 @@ void Editor::applyDrag(bool final) {
         }
         after << properties;
     }
+    QList<QUuid> ids = _dragIds;
+    QVector<EntityItemProperties> before = _dragBefore;
+    if (_dragKind == DragKind::Scale && !_dragChildren.isEmpty()) {
+        QVector<glm::vec3> ratios;
+        for (int i = 0; i < _dragIds.size(); ++i) {
+            ratios << sizeRatio(_dragDimensions[i], glm::max(_dragDimensions[i] * _dragScale, glm::vec3(MIN_DIMENSION)));
+        }
+        QVector<EntityItemProperties> childEdits = childScaleEdits(_dragChildren, ratios);
+        sendChildScale(_dragChildren, childEdits, final);
+        for (int i = 0; i < _dragChildren.size(); ++i) {
+            ids << _dragChildren[i].id;
+            before << childScaleBefore(_dragChildren[i]);
+            after << childEdits[i];
+        }
+    }
     bool changed = (_dragKind == DragKind::Move || _dragKind == DragKind::TrackPoint) ? _dragDelta != glm::vec3(0.0f)
                  : _dragKind == DragKind::Rotate ? _dragRotationDelta != glm::quat()
                  : _dragScale != glm::vec3(1.0f);
     if (final && changed) {
-        _undo.pushPropertyEdit(text, _dragIds, _dragBefore, after, true);
+        _undo.pushPropertyEdit(text, ids, before, after, true);
     }
 }
 
@@ -2876,11 +3485,13 @@ void Editor::importEntitiesFromUrl() {
     if (!_active || !editable()) {
         return;
     }
-    bool ok = false;
-    QString url = QInputDialog::getText(qApp->getWindow(), "Import Entities from URL",
-        "Address of an entities file (.json, .json.gz or .svo):", QLineEdit::Normal, QString(), &ok).trimmed();
-    if (ok && !url.isEmpty()) {
-        importEntities(url);
+    const popup::Field field { "https://…", QString() };
+    popup::Alert alert(popup::appIcon(), "Import Entities from URL", "A link to a .json, .json.gz or .svo file.",
+                       QString(), { { "Cancel", popup::Role::Cancel }, { "Import", popup::Role::Default } },
+                       qApp->getWindow(), &field);
+    alert.exec();
+    if (alert.answer() == 1) {
+        importEntities(alert.fieldText());
     }
 }
 
@@ -3224,10 +3835,12 @@ void Editor::createModelAt(const glm::vec3& point) {
     if (!_active || !editable()) {
         return;
     }
-    bool ok = false;
-    QString text = QInputDialog::getText(qApp->getWindow(), "Create Model", "Model URL (.glb, .gltf, .fbx or .obj):",
-        QLineEdit::Normal, QString(), &ok).trimmed();
-    if (!ok || text.isEmpty()) {
+    const popup::Field field { "https://…", QString() };
+    popup::Alert alert(popup::appIcon(), "Create Model", "A link to a .glb, .gltf, .fbx or .obj file.", QString(),
+                       { { "Cancel", popup::Role::Cancel }, { "Create", popup::Role::Default } }, qApp->getWindow(), &field);
+    alert.exec();
+    const QString text = alert.fieldText();
+    if (alert.answer() != 1 || text.isEmpty()) {
         return;
     }
     QUrl url(text);
@@ -3646,15 +4259,15 @@ void Editor::beginUpload(const QString& localPath, const glm::vec3& point, bool 
 
 void Editor::showUploadProgress(EditorUpload* upload) {
     ++_uploadsActive;
-    setStatus("Uploading " + upload->fileName() + " 0%");
+    setStatus(EditorUpload::uploadingStatus(upload->fileName(), 0, QString(), true));
     connect(upload, &EditorUpload::progress, this, [this, upload](qint64 sent, qint64 total) {
         if (total <= 0) {
             return;
         }
         if (sent >= total) {
-            setStatus("Processing " + upload->fileName() + "…");   // sent; the server is storing it
+            setStatus(EditorUpload::uploadingStatus(upload->fileName(), 100, QString(), true));
         } else {
-            setStatus(QString("Uploading %1 %2%").arg(upload->fileName()).arg((int)(sent * 100 / total)));
+            setStatus(EditorUpload::uploadingStatus(upload->fileName(), (int)(sent * 100 / total), QString(), true));
         }
     });
     connect(upload, &EditorUpload::failed, this, [this, upload](const QString& error) {
@@ -3774,6 +4387,10 @@ void Editor::setStatus(const QString& text, int clearAfterMs) {
     if (_statusLabel) {
         _statusLabel->setText(text);
         _statusLabel->setToolTip(text);   // the whole message, should the bar have had to cut it
+    }
+    // in normal play there's no status bar: My Files shows the note at its foot (an upload's progress, a link copied)
+    if (_assets) {
+        _assets->setNote(_active ? QString() : text);
     }
     if (clearAfterMs > 0 && !text.isEmpty()) {
         _statusTimer.start(clearAfterMs);

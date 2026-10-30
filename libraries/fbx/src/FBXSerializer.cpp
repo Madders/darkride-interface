@@ -10,6 +10,7 @@
 //
 
 #include "FBXSerializer.h"
+#include "FSTReader.h"
 
 #include <QBuffer>
 
@@ -433,7 +434,7 @@ HFMModel* FBXSerializer::extractHFMModel(const hifi::VariantHash& mapping, const
 
     std::map<QString, HFMLight> lights;
 
-    hifi::VariantHash blendshapeMappings = mapping.value("bs").toHash();
+    hifi::VariantHash blendshapeMappings = FSTReader::getBlendshapeMappings(mapping);
 
     QMultiHash<hifi::ByteArray, WeightedIndex> blendshapeIndices;
     for (int i = 0;; i++) {

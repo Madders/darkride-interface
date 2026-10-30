@@ -18,6 +18,7 @@ ColumnLayout {
 
     property string title: ""
     property string footer: ""
+    property bool rightsLine: false    // the rights line under the note: the card's rows put something where others see it
     default property alias rows: rowColumn.data
 
     Layout.fillWidth: true
@@ -27,6 +28,7 @@ ColumnLayout {
         Layout.fillWidth: true
         visible: section.title !== ""
         text: section.title.toUpperCase()
+        textFormat: Text.PlainText
         color: Theme.secondaryText
         font.pixelSize: Theme.sectionSize
         font.letterSpacing: 0.3 * Theme.unit
@@ -64,6 +66,7 @@ ColumnLayout {
         Layout.fillWidth: true
         visible: section.footer !== ""
         text: section.footer
+        textFormat: Text.PlainText
         color: Theme.secondaryText
         font.pixelSize: Theme.detailSize
         wrapMode: Text.WordWrap
@@ -71,5 +74,13 @@ ColumnLayout {
         rightPadding: Theme.cardPadding
         topPadding: 6 * Theme.unit
         lineHeight: 1.15
+    }
+
+    RightsLine {
+        Layout.fillWidth: true
+        visible: section.rightsLine
+        leftPadding: Theme.cardPadding
+        rightPadding: Theme.cardPadding
+        topPadding: (section.footer !== "" ? 4 : 6) * Theme.unit
     }
 }

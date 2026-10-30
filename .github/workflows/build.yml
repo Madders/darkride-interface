@@ -97,7 +97,7 @@ jobs:
         if: steps.qt-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          python -m pip install aqtinstall
+          python -m pip install aqtinstall==3.3.0
           python -m aqt install-qt windows desktop 5.15.2 win64_msvc2019_64 -m qtwebengine qtscript qtwebglplugin -O C:\Qt
 
       # saved straight away, so a build that fails later still keeps it
@@ -119,11 +119,14 @@ jobs:
       # vcpkg builds (or restores) the dependencies here, as part of configuring. The preset's own build folder is
       # in the checkout, on D:; -B keeps it short, on C:.
       - name: Configure
+        id: configure
         shell: pwsh
         run: cmake --preset vs2026 -B $env:BUILD_DIR
 
+      # only after a successful Configure: a partial cache saved under the final key would be hit by every later run
+      # and never saved again
       - name: Save vcpkg packages
-        if: always() && env.CACHE_SAVE == 'true' && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        if: steps.configure.outcome == 'success' && env.CACHE_SAVE == 'true' && steps.vcpkg-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: C:\dvcache

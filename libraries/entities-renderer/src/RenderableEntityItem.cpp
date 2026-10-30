@@ -825,6 +825,16 @@ void EntityRenderer::removeMaterial(graphics::MaterialPointer material, const st
     emit requestRenderUpdate();
 }
 
+bool EntityRenderer::applyBillboard(Transform& transform, BillboardMode billboardMode, RenderArgs* args) {
+    transform.setRotation(EntityItem::getBillboardRotation(transform.getTranslation(), transform.getRotation(), billboardMode,
+                                                           args->getViewFrustum().getPosition()));
+    if (billboardMode == BillboardMode::NONE || !args->_mirrored) {
+        return false;
+    }
+    transform.postScale(glm::vec3(-1.0f, 1.0f, 1.0f));   // about the entity's own vertical axis, through its centre
+    return true;
+}
+
 glm::vec4 EntityRenderer::calculatePulseColor(const glm::vec4& color,
                                               const PulsePropertyGroup& pulseProperties,
                                               quint64 start) {

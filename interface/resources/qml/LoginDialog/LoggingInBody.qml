@@ -36,6 +36,11 @@ Item {
         property int maxHeight: root.height
 
         function resize() {
+            // the desktop's and the headset's pages fill their window or surface: only the tablet's dialog fits its
+            // content (as LinkAccountBody.qml; here each fit made the page a step taller, in a binding loop)
+            if (!root.isTablet) {
+                return;
+            }
             maxWidth = root.width;
             maxHeight = root.height;
             var targetWidth = Math.max(titleWidth, mainContainer.width);

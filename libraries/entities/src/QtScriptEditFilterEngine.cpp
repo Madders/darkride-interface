@@ -68,7 +68,9 @@ bool QtScriptEditFilterEngine::load(const QString& source, const QString& url, Q
     _engine->setProperty("type", "edit_filter");
     _engine->setProperty("fileName", url);
     _engine->setProperty("entityID", _entityID);
-    _engine->globalObject().setProperty("Script", _engine->newQObject(_engine));
+    // Script without QObject's own methods, as the script engines' globals (ScriptEngine.cpp)
+    _engine->globalObject().setProperty("Script", _engine->newQObject(_engine, QScriptEngine::QtOwnership,
+        QScriptEngine::ExcludeDeleteLater | QScriptEngine::ExcludeSuperClassMethods | QScriptEngine::ExcludeChildObjects));
     if (DependencyManager::isSet<ScriptInitializers>()) {
         DependencyManager::get<ScriptInitializers>()->runScriptInitializers(_engine);
     }

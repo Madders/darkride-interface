@@ -30,6 +30,7 @@
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
+#include <QtCore/QTimer>
 #include <QtCore/QUuid>
 
 #include <SettingHandle.h>
@@ -61,6 +62,13 @@ signals:
 
 private:
     void updateLoginDialogPosition();
+    // While sign-in is pending on a desktop, the sign-in page is looked for each second and put back after 2 s without
+    // it (Caity, 10-25: a first run on her MacBook showed it for a second, then only the navy behind it, with nothing
+    // to click)
+    void checkSignInPage();
+    QTimer _pageCheck;
+    int _pageMissingFor{ 0 };   // seconds
+    QString _pageState;         // the last state logged
 
     bool _poppedUp{ false };
     Setting::Handle<bool> _poppedUpSetting{ "loginDialogPoppedUp", false };   // written for whoever reads the settings file; not read here

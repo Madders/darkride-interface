@@ -8,8 +8,10 @@
  *  (tivoli-scripts/frontend/src/styles.scss, the same as vr.darkride.ai), over Bootstrap 3, its switches,
  *  sweetalert and bootbox. Loaded after them, so it overrides them.
  *
- *  Distributed under the Apache License, Version 2.0.
- *  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+ *  Copyright 2026 Darkride.
+ *
+ *  Distributed under the MIT License.
+ *  See the accompanying file LICENSE-MIT or https://opensource.org/licenses/MIT
  */
 
 :root {

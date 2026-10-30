@@ -11,7 +11,6 @@ import QtQuick.Controls 2.2
 import QtQuick.Layouts 1.3
 import QtQuick.Window 2.2
 import QtGraphicalEffects 1.0
-import Qt.labs.settings 1.0
 import stylesUit 1.0
 import "../../controls"
 import controlsUit 1.0 as HifiControls
@@ -27,6 +26,20 @@ Item {
 
     property string title: "Controls"
     property var openVRDevices: ["HTC Vive", "Valve Index", "Valve HMD", "Valve"]
+
+    // Darkride's Settings > Controls opens this page (its Set Up… and Options… buttons): a device's name in this
+    // setting opens on that device's calibration, "" on the settings; read once as the page is made
+    readonly property string setUpSetting: "io.darkride.controls.setUp"
+    property string startDevice: ""
+    Component.onCompleted: {
+        startDevice = Settings.getValue(setUpSetting, "");
+        if (startDevice !== "") {
+            Settings.setValue(setUpSetting, "");
+            bar.currentIndex = 1;
+            stackView.clear();
+            stackView.push(inputConfigurationComponent);
+        }
+    }
 
     HifiConstants { id: hifi }
 
@@ -291,6 +304,11 @@ Item {
             }
 
             function initialize() {
+                // the device Darkride's Settings asked for, else the first
+                var wanted = box.model.indexOf(controllerSettings.startDevice);
+                if (wanted >= 0) {
+                    box.currentIndex = wanted;
+                }
                 changeSource();
             }
 

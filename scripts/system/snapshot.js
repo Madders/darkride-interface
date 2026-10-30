@@ -55,13 +55,10 @@ function removeFromStoryIDsToMaybeDelete(story_id) {
     print('storyIDsToMaybeDelete[] now:', JSON.stringify(storyIDsToMaybeDelete));
 }
 
+// the Settings panel's General tab, with its Snapshots section, as Settings > General... opens it (the old General
+// Settings window until 10-28)
 function openSnapSettings() {
-    if ((HMD.active && Settings.getValue("hmdTabletBecomesToolbar", false))
-        || (!HMD.active && Settings.getValue("desktopTabletBecomesToolbar", true))) {
-        Desktop.show("hifi/dialogs/GeneralPreferencesDialog.qml", "GeneralPreferencesDialog");
-    } else {
-        ui.openNewAppOnTop("hifi/tablet/TabletGeneralPreferences.qml");
-    }
+    Menu.triggerOption("General...");
 }
 
 function fileExtensionMatches(filePath, extension) {
@@ -558,7 +555,6 @@ function takeSnapshot(target) {
             });
             Window.takeSnapshot(false, includeAnimated, CAMERA_ASPECT_RATIO);
         }, Math.max(CAMERA_CAPTURE_DELAY, 3000 / renderRate));
-        UserActivityLogger.logAction("snaphshot_taken", { location: location.href });
         return;
     }
 
@@ -577,34 +573,10 @@ function takeSnapshot(target) {
     }, FINISH_SOUND_DELAY);
 }
     
+// High Fidelity's sharing asked its metaverse whether a world's "user stories" were open; Darkride's metaverse has no
+// user stories, so the answer is always no and nothing is asked (the request failed on every VR snapshot; Caity 10-29)
 function isDomainOpen(id, callback) {
-    print("Checking open status of domain with ID:", id);
-    var status = false;
-    if (id) {
-        var options = [
-            'now=' + new Date().toISOString(),
-            'include_actions=concurrency',
-            'domain_id=' + id.slice(1, -1),
-            'restriction=open,hifi' // If we're sharing, we're logged in
-            // If we're here, protocol matches, and it is online
-        ];
-        var url = METAVERSE_BASE + "/api/v1/user_stories?" + options.join('&');
-
-        request({
-            uri: url,
-            method: 'GET'
-        }, function (error, response) {
-            if (error || (response.status !== 'success')) {
-                print("ERROR getting open status of domain: ", error || response.status);
-            } else {
-                status = response.total_entries ? true : false;
-            }
-            print("Domain open status:", status);
-            callback(status);
-        });
-    } else {
-        callback(status);
-    }
+    callback(false);
 }
 
 function stillSnapshotTaken(pathStillSnapshot, notify) {
@@ -982,6 +954,17 @@ function cameraWindow(part, width, height, enabled) {
         enabled: enabled
     });
     overlay.webEventReceived.connect(onCameraEvent);
+    if (!enabled) {
+        // Window.qml enables a window each time it shows (enabled = visible), on the fade's first frame, after any
+        // setEnabled sent with setVisible; enabled, the frame took the mouse, and a press on the world raised it over
+        // the bars, where its band below the crop (on a window taller than a Snap, a 16:10 laptop) covered the
+        // shutter bar and took its clicks. Click-through again once shown, unless the review (in the frame) is open.
+        overlay.visibleChanged.connect(function () {
+            if (!camera.reviewOpen) {
+                overlay.setEnabled(false);
+            }
+        });
+    }
     return overlay;
 }
 

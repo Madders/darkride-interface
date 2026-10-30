@@ -25,6 +25,7 @@
 class AABox;
 
 namespace render {
+    class ShapePlumber;
     class RenderDetails {
     public:
         enum Type {
@@ -121,6 +122,9 @@ namespace render {
         std::shared_ptr<gpu::Context> _context;
         std::shared_ptr<gpu::Framebuffer> _blitFramebuffer;
         std::shared_ptr<render::ShapePipeline> _shapePipeline;
+        // while a shape item draws: the plumber its pass picks pipelines from, for an item whose own pipeline (a custom
+        // shader) can't draw and falls back to a plain one (MeshPartPayload::bindPlainPipeline)
+        const render::ShapePlumber* _shapePlumber { nullptr };
         std::stack<ViewFrustum> _viewFrustums;
         glm::ivec4 _viewport { 0.0f, 0.0f, 1.0f, 1.0f };
         glm::vec3 _boomOffset { 0.0f, 0.0f, 1.0f };
@@ -157,6 +161,12 @@ namespace render {
         RenderMethod _renderMethod { DEFERRED };
         DebugFlags _debugFlags { RENDER_DEBUG_NONE };
         gpu::Batch* _batch = nullptr;
+
+        // the finished picture is shown flipped left to right, as a mirror shows you: the selfie view (Caity's design,
+        // 2026-10-28: like FaceTime's own picture) and the full-screen mirror camera. ToneMapAndResample flips the
+        // picture; the 2D UI, drawn after it, stays readable; the pick ray flips with it (ViewState::computePickRay).
+        // Never a stereo view
+        bool _mirrored { false };
 
         uint32_t _globalShapeKey { 0 };
         uint32_t _itemShapeKey { 0 };

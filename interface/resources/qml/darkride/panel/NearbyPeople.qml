@@ -7,7 +7,9 @@
 //  while active, in name order, so a row being dragged isn't rebuilt under the mouse and rows don't move as people
 //  walk about. The engine forgets a person's volume when they or you leave; a mute is mutual (Users.personalMute);
 //  a block hides them and their voice from you (Users.ignore), and a blocked row stays until you leave, so it can be
-//  unblocked.
+//  unblocked. A bot whose host hasn't switched "Show in lists" on is left out while it's quiet, and listed while it
+//  speaks or makes noise and for a little after (Caity 10-26, option a): the metaverse's list of who's in this world
+//  says which session is a bot and its show_in_lists, asked on arrival and again when someone new comes.
 //
 //  Copyright 2026 Darkride.
 //
@@ -30,6 +32,62 @@ Item {
         id: people
     }
 
+    // the metaverse's word on each session here, by session id without braces: { kind, shown }
+    // (GET /api/v1/users?status=<domain>, for the signed in; metaverse website-1029 4be078a). Asked again, every 5 s
+    // at most, only when someone arrives who wasn't here at the last ask (a visitor it doesn't list isn't asked again)
+    property var accounts: ({})
+    property var askedAbout: ({})
+    property string accountsDomain: ""
+    property real accountsAsked: 0
+    property var lastHeard: ({})   // session id -> when a quiet-listed bot was last heard
+    readonly property real heardFor: 10000   // ms a bot stays listed after it was last heard
+
+    function bare(id) {
+        return String(id).replace(/[{}]/g, "").toLowerCase();
+    }
+    function askAccounts() {
+        var domain = String(AddressManager.domainID);
+        var none = "00000000-0000-0000-0000-000000000000";
+        // asked signed out too: the metaverse then answers 401 and everyone stays listed, as before
+        if (bare(domain) === "" || bare(domain) === none) {
+            return;
+        }
+        accountsDomain = domain;
+        accountsAsked = Date.now();
+        var present = {};
+        AvatarList.getAvatarIdentifiers().forEach(function (id) { present[String(id)] = true; });
+        askedAbout = present;
+        MetaverseRequests.send("GET", "/api/v1/users?status=" + encodeURIComponent(bare(domain)), null,
+                               function (error, code, answer) {
+            if (error) {
+                if (code !== 401) {
+                    console.log("People: who's here failed: " + code + " " + error);
+                }
+                return;
+            }
+            var users = (answer && answer.data && answer.data.users) || (answer && answer.users) || [];
+            var known = {};
+            users.forEach(function (user) {
+                if (user && user.location && user.location.node_id) {
+                    known[bare(user.location.node_id)] = { kind: user.kind || "", shown: user.show_in_lists !== false };
+                }
+            });
+            accounts = known;
+        });
+    }
+    // left out of the list now: a bot not shown in lists that hasn't been heard for a while
+    function quietBot(id, loudness) {
+        var account = accounts[bare(id)];
+        if (!account || account.kind !== "bot" || account.shown) {
+            return false;
+        }
+        var now = Date.now();
+        if (loudness > 30) {   // audioLoudness: speaking or making noise (the meters reach 1 at 3000)
+            lastHeard[id] = now;
+        }
+        return !(lastHeard[id] && now - lastHeard[id] < heardFor);
+    }
+
     Timer {
         interval: 250
         repeat: true
@@ -43,6 +101,16 @@ Item {
         var mine = String(MyAvatar.sessionUUID);
         var ids = AvatarList.getAvatarIdentifiers().map(function (id) { return String(id); }).filter(function (id) {
             return id !== "" && id !== mine && id !== "{00000000-0000-0000-0000-000000000000}";
+        });
+        // the metaverse asked again on arriving in a world, and when someone it hasn't told about is here
+        var stale = String(AddressManager.domainID) !== accountsDomain
+            || ids.some(function (id) { return !askedAbout[id]; });
+        if (stale && Date.now() - accountsAsked > 5000) {
+            askAccounts();
+        }
+        ids = ids.filter(function (id) {
+            var avatar = AvatarList.getAvatar(id);
+            return !avatar || !quietBot(id, avatar.audioLoudness);
         });
         for (var i = people.count - 1; i >= 0; i--) {
             if (ids.indexOf(people.get(i).id) === -1 && !people.get(i).blocked) {

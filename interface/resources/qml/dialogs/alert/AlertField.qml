@@ -17,6 +17,7 @@ QQC2.TextField {
 
     property real unit: 1
     property bool monospace: false
+    readonly property AlertLook look: AlertLook {}
 
     width: parent ? parent.width : implicitWidth
     implicitHeight: 24 * unit
@@ -26,9 +27,9 @@ QQC2.TextField {
     bottomPadding: 0
     verticalAlignment: TextInput.AlignVCenter
     selectByMouse: true
-    color: "#ffffff"
-    placeholderTextColor: Qt.rgba(1, 1, 1, 0.4)
-    selectionColor: "#0b6bd8"
+    color: look.title
+    placeholderTextColor: look.placeholder
+    selectionColor: look.tint
     selectedTextColor: "#ffffff"
     font.pixelSize: (monospace ? 11 : 12) * unit
     font.family: monospace ? (Qt.platform.os === "osx" ? "Menlo" : (Qt.platform.os === "windows" ? "Consolas" : "monospace"))
@@ -41,15 +42,15 @@ QQC2.TextField {
             radius: 9 * field.unit
             color: "transparent"
             border.width: 3
-            border.color: Qt.rgba(10 / 255, 132 / 255, 1, 0.45)
+            border.color: field.look.focus
             visible: field.activeFocus
         }
         Rectangle {
             anchors.fill: parent
             radius: 6 * field.unit
-            color: Qt.rgba(0, 0, 0, 0.28)
+            color: field.look.well
             border.width: 1
-            border.color: Qt.rgba(1, 1, 1, 0.14)
+            border.color: field.look.wellBorder
         }
     }
 }

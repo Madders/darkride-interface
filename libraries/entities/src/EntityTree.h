@@ -165,6 +165,11 @@ public:
 
     int processEraseMessage(ReceivedMessage& message, const SharedNodePointer& sourceNode);
     int processEraseMessageDetails(const QByteArray& buffer, const SharedNodePointer& sourceNode);
+
+    // whether a node's rights cover changing an entity (a temporary rez right: temporary entities only), and deleting it
+    // with its children (unlocked too)
+    static bool senderMayChange(const SharedNodePointer& senderNode, const EntityItemPointer& entity);
+    static bool senderMayDelete(const SharedNodePointer& senderNode, const EntityItemPointer& entity);
     bool shouldEraseEntity(EntityItemID entityID, const SharedNodePointer& sourceNode);
 
 
@@ -297,6 +302,7 @@ signals:
 protected:
 
     void recursivelyFilterAndCollectForDelete(const EntityItemPointer& entity, std::vector<EntityItemPointer>& entitiesToDelete, bool force) const;
+    void sendBackRefusedEdit(const EntityItemPointer& entity, const EntityItemProperties& refused);
     void processRemovedEntities(const DeleteEntityOperator& theOperator);
     bool updateEntity(EntityItemPointer entity, const EntityItemProperties& properties,
             const SharedNodePointer& senderNode = SharedNodePointer(nullptr), bool isPhysics = false);

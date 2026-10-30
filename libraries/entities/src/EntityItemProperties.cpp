@@ -541,6 +541,7 @@ EntityPropertyFlags EntityItemProperties::getChangedProperties() const {
     CHECK_PROPERTY_CHANGE(PROP_SCRIPT, script);
     CHECK_PROPERTY_CHANGE(PROP_SCRIPT_TIMESTAMP, scriptTimestamp);
     CHECK_PROPERTY_CHANGE(PROP_SERVER_SCRIPTS, serverScripts);
+    CHECK_PROPERTY_CHANGE(PROP_SCRIPTS_ENABLED, scriptsEnabled);
 
     // Certifiable Properties
     CHECK_PROPERTY_CHANGE(PROP_ITEM_NAME, itemName);
@@ -861,6 +862,10 @@ EntityPropertyFlags EntityItemProperties::getChangedProperties() const {
  *     If you update the property's value, the <code>script</code> is re-downloaded and reloaded. This is how the "reload" 
  *     button beside the "script URL" field in properties tab of the Create app works.
  * @property {string} serverScripts="" - The URL of the server entity script, if any, that is attached to the entity.
+ * @property {boolean} scriptsEnabled=true - <code>true</code> if the entity's client and server entity scripts run, 
+ *     <code>false</code> if they don't. Setting it to <code>false</code> unloads them everywhere (their <code>unload</code> 
+ *     methods are called) and keeps them unloaded, for everyone, until it is set back to <code>true</code>; then they load 
+ *     again as if their URLs had just been set. <code>script</code> and <code>serverScripts</code> keep their URLs.
  *
  * @property {Uuid} parentID=Uuid.NULL - The ID of the entity or avatar that the entity is parented to. A value of 
  *     {@link Uuid(0)|Uuid.NULL} is used if the entity is not parented.
@@ -1759,6 +1764,7 @@ Value EntityItemProperties::copyToScriptValueOf(Engine* engine, bool skipDefault
     COPY_PROPERTY_TO_QSCRIPTVALUE(PROP_SCRIPT, script);
     COPY_PROPERTY_TO_QSCRIPTVALUE(PROP_SCRIPT_TIMESTAMP, scriptTimestamp);
     COPY_PROPERTY_TO_QSCRIPTVALUE(PROP_SERVER_SCRIPTS, serverScripts);
+    COPY_PROPERTY_TO_QSCRIPTVALUE(PROP_SCRIPTS_ENABLED, scriptsEnabled);
 
     // Certifiable Properties
     COPY_PROPERTY_TO_QSCRIPTVALUE(PROP_ITEM_NAME, itemName);
@@ -2213,6 +2219,7 @@ void EntityItemProperties::copyFromScriptValueOf(const Value& object, bool honor
     COPY_PROPERTY_FROM_QSCRIPTVALUE(script, QString, setScript);
     COPY_PROPERTY_FROM_QSCRIPTVALUE(scriptTimestamp, quint64, setScriptTimestamp);
     COPY_PROPERTY_FROM_QSCRIPTVALUE(serverScripts, QString, setServerScripts);
+    COPY_PROPERTY_FROM_QSCRIPTVALUE(scriptsEnabled, bool, setScriptsEnabled);
 
     // Certifiable Properties
     COPY_PROPERTY_FROM_QSCRIPTVALUE(itemName, QString, setItemName);
@@ -2520,6 +2527,7 @@ void EntityItemProperties::merge(const EntityItemProperties& other) {
     COPY_PROPERTY_IF_CHANGED(script);
     COPY_PROPERTY_IF_CHANGED(scriptTimestamp);
     COPY_PROPERTY_IF_CHANGED(serverScripts);
+    COPY_PROPERTY_IF_CHANGED(scriptsEnabled);
 
     // Certifiable Properties
     COPY_PROPERTY_IF_CHANGED(itemName);
@@ -2920,6 +2928,7 @@ bool EntityItemProperties::getPropertyInfo(const QString& propertyName, EntityPr
         ADD_PROPERTY_TO_MAP(PROP_SCRIPT, Script, script, QString);
         ADD_PROPERTY_TO_MAP(PROP_SCRIPT_TIMESTAMP, ScriptTimestamp, scriptTimestamp, quint64);
         ADD_PROPERTY_TO_MAP(PROP_SERVER_SCRIPTS, ServerScripts, serverScripts, QString);
+        ADD_PROPERTY_TO_MAP(PROP_SCRIPTS_ENABLED, ScriptsEnabled, scriptsEnabled, bool);
 
         // Certifiable Properties
         ADD_PROPERTY_TO_MAP(PROP_ITEM_NAME, ItemName, itemName, QString);
@@ -3424,6 +3433,7 @@ OctreeElement::AppendState EntityItemProperties::encodeEntityEditPacket(PacketTy
             APPEND_ENTITY_PROPERTY(PROP_SCRIPT, properties.getScript());
             APPEND_ENTITY_PROPERTY(PROP_SCRIPT_TIMESTAMP, properties.getScriptTimestamp());
             APPEND_ENTITY_PROPERTY(PROP_SERVER_SCRIPTS, properties.getServerScripts());
+            APPEND_ENTITY_PROPERTY(PROP_SCRIPTS_ENABLED, properties.getScriptsEnabled());
 
             // Certifiable Properties
             APPEND_ENTITY_PROPERTY(PROP_ITEM_NAME, properties.getItemName());
@@ -3945,6 +3955,7 @@ bool EntityItemProperties::decodeEntityEditPacket(const unsigned char* data, int
     READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_SCRIPT, QString, setScript);
     READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_SCRIPT_TIMESTAMP, quint64, setScriptTimestamp);
     READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_SERVER_SCRIPTS, QString, setServerScripts);
+    READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_SCRIPTS_ENABLED, bool, setScriptsEnabled);
 
     // Certifiable Properties
     READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_ITEM_NAME, QString, setItemName);
@@ -4389,6 +4400,7 @@ void EntityItemProperties::markAllChanged() {
     _scriptChanged = true;
     _scriptTimestampChanged = true;
     _serverScriptsChanged = true;
+    _scriptsEnabledChanged = true;
 
     // Certifiable Properties
     _itemNameChanged = true;
@@ -4871,6 +4883,9 @@ QList<QString> EntityItemProperties::listChangedProperties() {
     }
     if (serverScriptsChanged()) {
         out += "serverScripts";
+    }
+    if (scriptsEnabledChanged()) {
+        out += "scriptsEnabled";
     }
 
     // Certifiable Properties

@@ -16,6 +16,7 @@ QQC2.CheckBox {
     id: check
 
     property real unit: 1
+    readonly property AlertLook look: AlertLook {}
 
     padding: 0
     spacing: 6 * unit
@@ -28,9 +29,9 @@ QQC2.CheckBox {
         width: 12 * check.unit
         height: 12 * check.unit
         radius: 3 * check.unit
-        color: check.checked ? (check.enabled ? "#0b6bd8" : Qt.rgba(1, 1, 1, 0.14)) : Qt.rgba(0, 0, 0, 0.28)
+        color: check.checked ? (check.enabled ? check.look.tint : check.look.button) : check.look.well
         border.width: check.checked ? 0 : 1
-        border.color: Qt.rgba(1, 1, 1, 0.3)
+        border.color: check.look.checkBorder
 
         Rectangle {
             anchors.fill: parent
@@ -38,7 +39,7 @@ QQC2.CheckBox {
             radius: 5 * check.unit
             color: "transparent"
             border.width: 2
-            border.color: Qt.rgba(10 / 255, 132 / 255, 1, 0.59)
+            border.color: check.look.focus
             visible: check.visualFocus
         }
 
@@ -67,7 +68,7 @@ QQC2.CheckBox {
         text: check.text
         textFormat: Text.PlainText
         font: check.font
-        color: check.enabled ? Qt.rgba(1, 1, 1, 0.74) : Qt.rgba(1, 1, 1, 0.35)
+        color: check.enabled ? check.look.text : check.look.dimText
         verticalAlignment: Text.AlignVCenter
     }
 }

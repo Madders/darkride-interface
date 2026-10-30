@@ -553,6 +553,9 @@ Script.include("/~/system/libraries/controllerDispatcherUtils.js");
 
         Controller.enableMapping(MAPPING_NAME);
 
+        // the lasers' ray steadied, so a hand's tremor doesn't shake the far end (Caity 10-28): a One Euro filter on its
+        // direction (Picks' "smoothing"); lower minCutoff is steadier at rest, higher beta lets go sooner as you aim
+        var LASER_SMOOTHING = { minCutoff: 1.0, beta: 1.5 };
         this.leftPointer = this.pointerManager.createPointer(false, PickType.Ray, {
             joint: "_CAMERA_RELATIVE_CONTROLLER_LEFTHAND",
             filter: Picks.PICK_OVERLAYS | Picks.PICK_ENTITIES | Picks.PICK_INCLUDE_NONCOLLIDABLE,
@@ -561,6 +564,7 @@ Script.include("/~/system/libraries/controllerDispatcherUtils.js");
             hover: true,
             scaleWithParent: true,
             distanceScaleEnd: true,
+            smoothing: LASER_SMOOTHING,
             hand: LEFT_HAND
         });
         Keyboard.setLeftHandLaser(this.leftPointer);
@@ -572,6 +576,7 @@ Script.include("/~/system/libraries/controllerDispatcherUtils.js");
             hover: true,
             scaleWithParent: true,
             distanceScaleEnd: true,
+            smoothing: LASER_SMOOTHING,
             hand: RIGHT_HAND
         });
         Keyboard.setRightHandLaser(this.rightPointer);
@@ -584,6 +589,7 @@ Script.include("/~/system/libraries/controllerDispatcherUtils.js");
             hover: true,
             scaleWithParent: true,
             distanceScaleEnd: true,
+            smoothing: LASER_SMOOTHING,
             hand: LEFT_HAND
         });
         this.rightHudPointer = this.pointerManager.createPointer(true, PickType.Ray, {
@@ -595,6 +601,7 @@ Script.include("/~/system/libraries/controllerDispatcherUtils.js");
             hover: true,
             scaleWithParent: true,
             distanceScaleEnd: true,
+            smoothing: LASER_SMOOTHING,
             hand: RIGHT_HAND
         });
 

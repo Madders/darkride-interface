@@ -109,6 +109,9 @@ public:
 
     bool isReady() const;
     bool isEnabled() const { return _enabled; }
+    // this variant's program failed to compile on this GPU: known from the frame after its first prepare (the backend
+    // compiles when it first draws with it, and draws nothing then)
+    bool compilationFailed(const ProceduralProgramKey& key) const;
     void prepare(gpu::Batch& batch,
                  const glm::vec3& position,
                  const glm::vec3& size,
@@ -225,6 +228,7 @@ public:
     bool isProcedural() const override { return true; }
     bool isEnabled() const override { return _procedural.isEnabled(); }
     bool isReady() const override { return _procedural.isReady(); }
+    bool compilationFailed(const ProceduralProgramKey& key) const { return _procedural.compilationFailed(key); }
     QString getProceduralString() const override { return _proceduralString; }
 
     void setProceduralData(const QString& data) {

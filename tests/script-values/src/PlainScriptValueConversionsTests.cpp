@@ -23,7 +23,7 @@
 
 #include "SameVariant.h"
 
-QTEST_MAIN(PlainScriptValueConversionsTests)
+QTEST_GUILESS_MAIN(PlainScriptValueConversionsTests)
 
 namespace {
 

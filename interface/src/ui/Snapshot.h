@@ -135,6 +135,20 @@ public slots:
     Q_INVOKABLE void setSnapshotsLocation(const QString& location);
 
     /**jsdoc
+     * Gets how long an animated snapshot (a GIF) records.
+     * @function Snapshot.getAnimatedSnapshotDuration
+     * @returns {number} Its length in seconds, 1 to 5.
+     */
+    Q_INVOKABLE float getAnimatedSnapshotDuration();
+
+    /**jsdoc
+     * Sets how long an animated snapshot (a GIF) records: the Settings panel's Snapshots section.
+     * @function Snapshot.setAnimatedSnapshotDuration
+     * @param {number} seconds - Its length in seconds, held to 1 to 5.
+     */
+    Q_INVOKABLE void setAnimatedSnapshotDuration(float seconds);
+
+    /**jsdoc
      * Deletes a snapshot from the user's files: one uploaded there by this viewer since it started. Others are left
      * alone. {@link Snapshot.snapshotDeleted|snapshotDeleted} says when it is done.
      * @function Snapshot.deleteFromUserFiles

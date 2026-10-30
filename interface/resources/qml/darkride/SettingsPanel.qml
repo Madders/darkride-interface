@@ -2,10 +2,11 @@
 //  SettingsPanel.qml
 //  qml/darkride
 //
-//  Darkride's Settings panel, in the panels' iOS look (darkride/panel), with four tabs named as Apple's System Settings
-//  names them (Caity, 10-23): General (start-up, privacy, controls, statistics, the cache),
-//  Displays (quality, rendering with Forward+ and MSAA, the view, nametags), Sound (devices, the microphone, volumes)
-//  and Appearance (the panels' theme, built in or loaded from a file). The bar's Settings button opens it in a window
+//  Darkride's Settings panel, in the panels' iOS look (darkride/panel), with five tabs named as Apple's System Settings
+//  names them (Caity, 10-23): General (start-up, privacy, face tracking, snapshots, the cache), Controls (looking
+//  around, VR movement, the input devices and their set-up; Caity, 10-28), Displays (quality, rendering with Forward+
+//  and MSAA, the view, statistics, nametags), Sound (devices, the microphone, volumes) and Appearance (the panels'
+//  theme, built in or loaded from a file). The bar's Settings button opens it in a window
 //  on the desktop and on the tablet in a headset (tivoli-scripts' ButtonManager.addQmlButton). It reads and sets the
 //  engine's own values through its context properties (Render, Performance, LODManager, AudioScriptingInterface,
 //  MyAvatar, Users, AccountServices, MenuInterface, DiskCache) and the theme through PanelTheme; the nametag is the
@@ -31,18 +32,19 @@ Page {
     // the tablet's loader sizes the page; a desktop window parents it to its content area
     anchors.fill: parent
     title: "Settings"
-    tabs: ["General", "Displays", "Sound", "Appearance"]
+    tabs: ["General", "Controls", "Displays", "Sound", "Appearance"]
 
     // (the file is SettingsPanel.qml, not Settings.qml: in a file of that name, "Settings" would be the file's own
     // type rather than the settings object)
     readonly property string tabSetting: "io.darkride.settings.tab"
-    Component.onCompleted: currentTab = Math.max(0, Math.min(3, Settings.getValue(tabSetting, 0)))
+    Component.onCompleted: currentTab = Math.max(0, Math.min(tabs.length - 1, Settings.getValue(tabSetting, 0)))
     onCurrentTabChanged: Settings.setValue(tabSetting, currentTab)
 
     // a desktop window keeps the page between openings: read the values without a change signal again on each
     onVisibleChanged: {
         if (visible) {
             general.refresh();
+            controls.refresh();
             cache.refresh();
         }
     }
@@ -64,6 +66,9 @@ Page {
         property real yawSpeed: 100   // MyAvatar.cpp YAW_SPEED_DEFAULT
         property real pitchSpeed: 75   // PITCH_SPEED_DEFAULT
         property bool collisions: true
+        property string snapshotsFolder: ""
+        property real gifSeconds: 3   // SnapshotAnimated.h SNAPSNOT_ANIMATED_DURATION_SECS
+        property bool choosingFolder: false
 
         function refresh() {
             startAtLastPlace = MenuInterface.isOptionChecked("Last Location");
@@ -73,6 +78,8 @@ Page {
             yawSpeed = MyAvatar.yawSpeed;
             pitchSpeed = MyAvatar.pitchSpeed;
             collisions = MyAvatar.collisionsEnabled;
+            snapshotsFolder = Snapshot.getSnapshotsLocation();
+            gifSeconds = Snapshot.getAnimatedSnapshotDuration();
         }
 
         Component.onCompleted: refresh()
@@ -102,12 +109,15 @@ Page {
 
             PickerRow {
                 visible: AccountServices.loggedIn
-                label: "Who sees you're online"
-                current: AccountServices.findableBy === "connections" ? "friends" : AccountServices.findableBy
-                // the metaverse's availability: everyone, friends or no one ("connections", gone, meant friends)
+                // "No one" also makes you look offline: the same words in chat and on the website (F3, Caity 10-27
+                // "friends as recommended")
+                label: "Who sees you're online, and where"
+                // the metaverse's availability, as the server has it (social's Friends; "" until it answers), so this
+                // and chat never disagree
+                current: Friends.availability
                 model: [{ text: "Everyone", value: "all" }, { text: "Friends", value: "friends" },
                         { text: "No one", value: "none" }]
-                onChosen: AccountServices.findableBy = value
+                onChosen: Friends.setAvailability(value)
             }
             ListRow {
                 label: "Personal space"
@@ -125,78 +135,142 @@ Page {
             }
         }
 
+        // Face tracking (avatars' input plugin "Face Tracking"; Caity's go 10-25 18:33): off unless turned on, the camera
+        // running only while it's on. InputConfiguration has no change signal, so the page asks once a second while it
+        // shows. The section hides where the plugin isn't (no answer from it).
         Section {
-            title: "Controls"
+            id: face
+            title: "Face tracking"
+            footer: "Your camera moves your avatar's face. The picture never leaves this computer; only your expressions "
+                  + "are shared, like your voice is. Off unless you turn it on; the camera runs only while it's on."
+            visible: face.settings.status !== undefined
+
+            property var settings: ({})
+            readonly property bool isOn: !!face.settings.enabled
+            readonly property string privacyPage: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
+
+            function refresh() {
+                face.settings = InputConfiguration.configurationSettings("Face Tracking") || ({});
+            }
+            function change(values) {
+                InputConfiguration.setConfigurationSettings(values, "Face Tracking");
+                refresh();
+            }
+
+            Timer {
+                interval: 1000
+                repeat: true
+                triggeredOnStart: true
+                running: root.visible && root.currentTab === 0
+                onTriggered: face.refresh()
+            }
 
             ListRow {
-                label: "Look sideways"
-                detail: "degrees a second"
+                label: "Face tracking"
+                // what the camera is doing, in the plugin's words; blocked: where to allow it, as a link
+                detail: !face.isOn ? "" : face.settings.status === "blocked"
+                    ? face.settings.statusText + (Qt.platform.os === "osx" ? " <a href=\"privacy\">Open Privacy Settings</a>" : "")
+                    : (face.settings.statusText || "")
+                detailFormat: Text.StyledText
+                onLinkActivated: Qt.openUrlExternally(face.privacyPage)
+                Toggle {
+                    checked: face.isOn
+                    onToggled: face.change({ enabled: checked })
+                }
+            }
+            PickerRow {
+                visible: face.isOn
+                label: "Camera"
+                current: face.settings.camera || ""
+                model: {
+                    var choices = [{ text: "System default", value: "" }];
+                    var cameras = face.settings.cameras || [];
+                    for (var i = 0; i < cameras.length; i++) {
+                        choices.push({ text: cameras[i].name, value: cameras[i].id });
+                    }
+                    return choices;
+                }
+                onChosen: face.change({ camera: value })
+            }
+            ListRow {
+                visible: face.isOn
+                label: "Mouth strength"
+                detail: "small avatar mouths want 2 or 3"
                 fill: true
-                labelWidth: 130 * Theme.unit
+                labelWidth: 120 * Theme.unit
                 scrubbable: true
-                scrubValue: general.yawSpeed
-                scrubFrom: 5
-                scrubTo: 300
-                scrubStep: 1
-                onScrubbed: { MyAvatar.yawSpeed = Math.round(value); general.refresh(); }
+                scrubValue: face.settings.mouthStrength || 1
+                scrubFrom: 0.5
+                scrubTo: 3
+                scrubStep: 0.05
+                onScrubbed: face.change({ mouthStrength: Math.round(value * 10) / 10 })
 
                 ValueSlider {
-                    from: 5; to: 300; stepSize: 1; decimals: 0
-                    value: general.yawSpeed
-                    onMoved: { MyAvatar.yawSpeed = value; general.refresh(); }
+                    from: 0.5; to: 3; stepSize: 0.1; decimals: 1; units: " ×"
+                    value: face.settings.mouthStrength || 1
+                    onMoved: face.change({ mouthStrength: value })
                 }
                 ResetButton {
-                    needed: Math.round(general.yawSpeed) !== 100
-                    onClicked: { MyAvatar.yawSpeed = 100; general.refresh(); }
+                    needed: Math.abs((face.settings.mouthStrength || 1) - 1) > 0.01
+                    onClicked: face.change({ mouthStrength: 1 })
+                }
+            }
+        }
+
+        // from High Fidelity's General Settings window, which Settings > General... opened until 10-28 (Caity 10-28)
+        Section {
+            title: "Snapshots"
+            footer: "Snap saves the snapshots you keep on this computer in this folder; with none chosen, it asks the "
+                + "first time. An animated snapshot records for the length set here."
+
+            ListRow {
+                label: "Folder"
+                fill: true
+                Field {
+                    Layout.fillWidth: true
+                    text: general.snapshotsFolder
+                    placeholderText: "None chosen"
+                    horizontalAlignment: TextInput.AlignLeft
+                    onEditingFinished: {
+                        Snapshot.setSnapshotsLocation(text);
+                        general.refresh();
+                    }
                 }
             }
             ListRow {
-                label: "Look up and down"
-                detail: "degrees a second"
+                action: true
+                label: "Choose Folder…"
+                onClicked: {
+                    general.choosingFolder = true;
+                    Window.browseDirAsync("Choose a folder for snapshots", general.snapshotsFolder);
+                }
+            }
+            ListRow {
+                label: "Animated length"
+                detail: "Seconds"
                 fill: true
                 labelWidth: 130 * Theme.unit
-                scrubbable: true
-                scrubValue: general.pitchSpeed
-                scrubFrom: 5
-                scrubTo: 300
-                scrubStep: 1
-                onScrubbed: { MyAvatar.pitchSpeed = Math.round(value); general.refresh(); }
-
                 ValueSlider {
-                    from: 5; to: 300; stepSize: 1; decimals: 0
-                    value: general.pitchSpeed
-                    onMoved: { MyAvatar.pitchSpeed = value; general.refresh(); }
+                    from: 1; to: 5; stepSize: 1; decimals: 0; units: " s"
+                    value: general.gifSeconds
+                    onMoved: { Snapshot.setAnimatedSnapshotDuration(value); general.refresh(); }
                 }
                 ResetButton {
-                    needed: Math.round(general.pitchSpeed) !== 75
-                    onClicked: { MyAvatar.pitchSpeed = 75; general.refresh(); }
+                    needed: Math.round(general.gifSeconds) !== 3
+                    onClicked: { Snapshot.setAnimatedSnapshotDuration(3); general.refresh(); }
                 }
             }
-            ListRow {
-                // noclip (Caity, 10-25: "should be" in Settings); also the Avatar panel's, and Navigate > Walk Through
-                // Walls with its key
-                label: "Collide with the world"
-                // the menu's Ctrl is the Command key on a Mac
-                detail: "off: walk through walls (noclip). Key: " + (Qt.platform.os === "osx" ? "⌘ Shift N" : "Ctrl+Shift+N")
-                Toggle {
-                    checked: general.collisions
-                    onToggled: { MyAvatar.collisionsEnabled = checked; general.refresh(); }
-                }
-            }
-            ListRow {
-                label: "Snap turning in VR"
-                detail: "turn in steps rather than smoothly"
-                Toggle {
-                    checked: general.snapTurn
-                    onToggled: { MyAvatar.setSnapTurn(checked); general.refresh(); }
-                }
-            }
-            ListRow {
-                label: "Statistics"
-                detail: "frame rate, ping and loading over the world"
-                Toggle {
-                    checked: general.statistics
-                    onToggled: { MenuInterface.setIsOptionChecked("Show Statistics", checked); general.refresh(); }
+            // the folder chooser's answer, when this page asked (Snap asks it too)
+            Connections {
+                target: Window
+                function onBrowseDirChanged(directory) {
+                    if (general.choosingFolder) {
+                        general.choosingFolder = false;
+                        if (directory !== "") {
+                            Snapshot.setSnapshotsLocation(directory);
+                            general.refresh();
+                        }
+                    }
                 }
             }
         }
@@ -289,10 +363,234 @@ Page {
         }
     }
 
-    // ==== Displays ===================================================================================================
+    // ==== Controls ===================================================================================================
+
+    // the input devices as the engine knows them (InputConfiguration's input plugins; none has a change signal) and the
+    // game controller's switch (the SDL2 plugin's preference, there only where the plugin runs): read when the page shows
+    QtObject {
+        id: controls
+
+        property var devices: []                // [{ name, label, detail, setUp }]
+        property var gameController: null       // the SDL2 plugin's "Enabled" preference, or null
+        property bool gameControllerOn: false
+        property bool headsetAvailable: false
+
+        // the devices people know by another name; any other with a set-up page is SteamVR's (OpenVR names itself by
+        // its headset: "HTC Vive", "Valve Index" ...)
+        readonly property var known: ({
+            "Keyboard/Mouse": { label: "Keyboard and mouse", detail: "" },
+            "Touchscreen": { label: "Touchscreen", detail: "" },
+            "OpenXR": { label: "VR headset", detail: "OpenXR: a Quest over Link, and other headsets" },
+            "Oculus": { label: "Oculus Rift", detail: "Its Touch controllers" }
+        })
+        // not shown as a device: the game controller has its own row and face tracking is General's
+        readonly property var notShown: ["SDL2", "Face Tracking", "TouchscreenVirtualPad", "MIDI"]
+
+        // the old Controls page (hifi/tablet/ControllerSettings.qml) reads this as it opens: a device's name opens its
+        // set-up, "" the VR movement settings
+        readonly property string setUpSetting: "io.darkride.controls.setUp"
+
+        function refresh() {
+            var found = [];
+            var plugins = InputConfiguration.inputPlugins();
+            for (var i = 0; i < plugins.length; i++) {
+                var name = plugins[i];
+                if (notShown.indexOf(name) !== -1) {
+                    continue;
+                }
+                var setUp = InputConfiguration.configurationLayout(name) !== "";
+                var knownAs = known[name];
+                if (knownAs) {
+                    found.push({ name: name, label: knownAs.label, detail: knownAs.detail, setUp: setUp });
+                } else if (setUp) {
+                    found.push({ name: name, label: name || "SteamVR headset",
+                                 detail: "SteamVR: its controllers, trackers and calibration", setUp: true });
+                }
+            }
+            devices = found;
+
+            gameController = null;
+            var gamepad = Preferences.preferencesByCategory["Game Controller"] || [];
+            for (var j = 0; j < gamepad.length; j++) {
+                if (gamepad[j].name === "Enabled") {
+                    gameController = gamepad[j];
+                    gameController.load();
+                    gameControllerOn = gameController.value;
+                }
+            }
+            headsetAvailable = HMD.isHMDAvailable();
+        }
+
+        function setGameController(on) {
+            if (gameController) {
+                gameController.value = on;
+                gameController.save();
+            }
+            refresh();
+        }
+
+        // the old Controls page on the tablet (in a headset, in place of this page; on the desktop, the tablet's window)
+        function openOldPage(device) {
+            Settings.setValue(setUpSetting, device);
+            Tablet.getTablet("com.highfidelity.interface.tablet.system").pushOntoStack("hifi/tablet/ControllerSettings.qml");
+            if (!HMD.showTablet) {
+                HMD.openTablet();
+            }
+        }
+
+        Component.onCompleted: refresh()
+    }
+
+    // a small button at a row's end
+    component RowButton: Rectangle {
+        id: rowButton
+        property string text: ""
+        signal pressed()
+        implicitWidth: rowButtonLabel.implicitWidth + 18 * Theme.unit
+        implicitHeight: 26 * Theme.unit
+        radius: 7 * Theme.unit
+        color: Theme.fill
+        Text {
+            id: rowButtonLabel
+            anchors.centerIn: parent
+            text: rowButton.text
+            textFormat: Text.PlainText
+            color: Theme.tint
+            font.pixelSize: Theme.controlTextSize
+        }
+        MouseArea {
+            anchors.fill: parent
+            onClicked: rowButton.pressed()
+        }
+    }
 
     Tab {
         visible: root.currentTab === 1
+
+        Section {
+            title: "Looking and moving"
+
+            ListRow {
+                label: "Look sideways"
+                detail: "Degrees a second"
+                fill: true
+                labelWidth: 130 * Theme.unit
+                scrubbable: true
+                scrubValue: general.yawSpeed
+                scrubFrom: 5
+                scrubTo: 300
+                scrubStep: 1
+                onScrubbed: { MyAvatar.yawSpeed = Math.round(value); general.refresh(); }
+
+                ValueSlider {
+                    from: 5; to: 300; stepSize: 1; decimals: 0
+                    value: general.yawSpeed
+                    onMoved: { MyAvatar.yawSpeed = value; general.refresh(); }
+                }
+                ResetButton {
+                    needed: Math.round(general.yawSpeed) !== 100
+                    onClicked: { MyAvatar.yawSpeed = 100; general.refresh(); }
+                }
+            }
+            ListRow {
+                label: "Look up and down"
+                detail: "Degrees a second"
+                fill: true
+                labelWidth: 130 * Theme.unit
+                scrubbable: true
+                scrubValue: general.pitchSpeed
+                scrubFrom: 5
+                scrubTo: 300
+                scrubStep: 1
+                onScrubbed: { MyAvatar.pitchSpeed = Math.round(value); general.refresh(); }
+
+                ValueSlider {
+                    from: 5; to: 300; stepSize: 1; decimals: 0
+                    value: general.pitchSpeed
+                    onMoved: { MyAvatar.pitchSpeed = value; general.refresh(); }
+                }
+                ResetButton {
+                    needed: Math.round(general.pitchSpeed) !== 75
+                    onClicked: { MyAvatar.pitchSpeed = 75; general.refresh(); }
+                }
+            }
+            ListRow {
+                // noclip (Caity, 10-25: "should be" in Settings); also the Avatar panel's, and Navigate > Walk Through
+                // Walls with its key
+                label: "Collide with the world"
+                // the menu's Ctrl is the Command key on a Mac
+                detail: "Off: walk through walls (noclip). Key: " + (Qt.platform.os === "osx" ? "⌘ Shift N" : "Ctrl+Shift+N")
+                Toggle {
+                    checked: general.collisions
+                    onToggled: { MyAvatar.collisionsEnabled = checked; general.refresh(); }
+                }
+            }
+        }
+
+        // the VR movement settings are still the old Controls page's until Settings has a VR section (after the
+        // beta); the menu's Controls... opens this tab, so this row is the way to them
+        Section {
+            visible: controls.headsetAvailable || root.inHeadset
+            title: "VR"
+
+            ListRow {
+                label: "Snap turning"
+                detail: "Turn in steps rather than smoothly"
+                Toggle {
+                    checked: general.snapTurn
+                    onToggled: { MyAvatar.setSnapTurn(checked); general.refresh(); }
+                }
+            }
+            ListRow {
+                label: "VR movement"
+                detail: "Teleporting, walking, comfort mode and your height"
+                RowButton {
+                    text: "Options…"
+                    onPressed: controls.openOldPage("")
+                }
+            }
+        }
+
+        Section {
+            title: "Devices"
+            footer: controls.devices.some(function (device) { return device.setUp; })
+                ? "Set Up… opens the headset's own page: its controllers, trackers and calibration."
+                : ""
+
+            Repeater {
+                model: controls.devices
+                delegate: ListRow {
+                    label: modelData.label
+                    detail: modelData.detail
+                    RowButton {
+                        visible: modelData.setUp
+                        text: "Set Up…"
+                        onPressed: controls.openOldPage(modelData.name)
+                    }
+                    Text {
+                        visible: !modelData.setUp
+                        text: "Nothing to set up"
+                        color: Theme.secondaryText
+                        font.pixelSize: Theme.bodySize
+                    }
+                }
+            }
+            ListRow {
+                visible: controls.gameController !== null
+                label: "Game controller"
+                detail: "Xbox, PlayStation and other gamepads"
+                Toggle {
+                    checked: controls.gameControllerOn
+                    onToggled: controls.setGameController(checked)
+                }
+            }
+        }
+    }
+
+    // ==== Displays ===================================================================================================
+
+    Tab {
+        visible: root.currentTab === 2
 
         Section {
             title: "Quality"
@@ -311,7 +609,7 @@ Page {
             }
             ListRow {
                 label: "World detail"
-                detail: root.inHeadset ? "in VR" : "on the desktop"
+                detail: root.inHeadset ? "In VR" : "On the desktop"
                 Segmented {
                     model: [{ text: "Low", value: 0 }, { text: "Medium", value: 1 }, { text: "High", value: 2 }]
                     current: LODManager.worldDetail
@@ -320,7 +618,7 @@ Page {
             }
             ListRow {
                 label: "Frame rate"
-                detail: "frames a second"
+                detail: "Frames a second"
                 Segmented {
                     model: [{ text: "Display", value: 3 }, { text: "60", value: 2 }, { text: "30", value: 1 },
                             { text: "20", value: 0 }]
@@ -392,7 +690,7 @@ Page {
             }
             ListRow {
                 label: "Vsync"
-                detail: "wait for the display; off paces frames evenly"
+                detail: "Wait for the display; off paces frames evenly"
                 Toggle { checked: Render.vsyncEnabled; onToggled: Render.vsyncEnabled = checked }
             }
         }
@@ -400,7 +698,9 @@ Page {
         Section {
             title: "View"
             footer: "Drag a label sideways to change its number: Shift for big steps, Alt for small ones. A resolution "
-                + "scale above 1× draws more pixels than the window has: sharper, and slower in proportion."
+                + "scale above 1× draws more pixels than the window has: sharper, and slower in proportion. Below 1× "
+                + "it draws fewer and scales them up, sharpened: faster, and a little softer. The slider stops at the "
+                + "usual steps; click the number beside any slider to type a value."
 
             ListRow {
                 label: "Resolution scale"
@@ -415,6 +715,8 @@ Page {
 
                 ValueSlider {
                     from: 0.1; to: 2; stepSize: 0.05; decimals: 2; units: "×"
+                    // 0.5 to 0.77: FSR 1's Performance, Balanced, Quality and Ultra Quality (1/2, 1/1.7, 1/1.5, 1/1.3)
+                    stops: [0.25, 0.5, 0.59, 0.67, 0.77, 1, 1.25, 1.5, 2]
                     value: Render.viewportResolutionScale
                     onMoved: Render.viewportResolutionScale = value
                 }
@@ -446,7 +748,7 @@ Page {
             }
             ListRow {
                 label: "Draw distance"
-                detail: "metres"
+                detail: "Metres"
                 scrubbable: true
                 scrubValue: Render.farClip
                 scrubFrom: 10
@@ -462,6 +764,18 @@ Page {
                 ResetButton {
                     needed: Math.round(Render.farClip) !== root.defaultFarClip
                     onClicked: Render.farClip = root.defaultFarClip
+                }
+            }
+        }
+
+        Section {
+            title: "Statistics"
+            ListRow {
+                label: "Show statistics"
+                detail: "Frame rate, ping and loading over the world"
+                Toggle {
+                    checked: general.statistics
+                    onToggled: { MenuInterface.setIsOptionChecked("Show Statistics", checked); general.refresh(); }
                 }
             }
         }
@@ -510,6 +824,7 @@ Page {
             onClicked: devicePicker.open = !devicePicker.open
             Text {
                 text: devicePicker.currentName
+                textFormat: Text.PlainText
                 color: Theme.secondaryText
                 font.pixelSize: Theme.bodySize
                 elide: Text.ElideMiddle
@@ -583,11 +898,11 @@ Page {
 
     NearbyPeople {
         id: people
-        active: root.visible && root.currentTab === 2
+        active: root.visible && root.currentTab === 3
     }
 
     Tab {
-        visible: root.currentTab === 2
+        visible: root.currentTab === 3
 
         Section {
             title: "Devices"
@@ -602,6 +917,62 @@ Page {
                 label: "Speakers"
                 devices: AudioScriptingInterface.devices.output
                 isInput: false
+            }
+            // a short clip through the speakers chosen above (Caity 10-28; High Fidelity's audio page had "Test your
+            // sound", gone with the bar's Audio button): the clip is loaded the first time it's played, a moment later
+            // when it isn't ready yet, and stopped when the tab or the panel goes
+            ListRow {
+                id: testSound
+                // Darkride's own test clip, 9.6 s (Caity chose it 10-28)
+                readonly property url source: Qt.resolvedUrl("../../sounds/test-sound.mp3")
+                property var sound: null
+                property var injector: null
+                property int tries: 0
+                label: "Test sound"
+                detail: "A short clip through your speakers"
+                onVisibleChanged: if (!visible) stop()
+
+                function play() {
+                    if (!sound) {
+                        sound = SoundCache.getSound(source);
+                    }
+                    var playing = AudioScriptingInterface.playSystemSound(sound);
+                    if (!playing) {
+                        // not loaded yet: again shortly, for up to five seconds
+                        if (++tries < 25) {
+                            retry.start();
+                        } else {
+                            tries = 0;
+                        }
+                        return;
+                    }
+                    tries = 0;
+                    injector = playing;
+                    playing.finished.connect(function () {
+                        if (injector === playing) {
+                            injector = null;
+                        }
+                    });
+                }
+                function stop() {
+                    retry.stop();
+                    tries = 0;
+                    if (injector) {
+                        var playing = injector;
+                        injector = null;
+                        playing.stop();
+                    }
+                }
+
+                Timer {
+                    id: retry
+                    interval: 200
+                    onTriggered: testSound.play()
+                }
+                RowButton {
+                    text: testSound.injector || retry.running ? "Stop" : "Play"
+                    onPressed: testSound.injector || retry.running ? testSound.stop() : testSound.play()
+                }
             }
         }
 
@@ -667,7 +1038,7 @@ Page {
             }
             ListRow {
                 label: "Push to talk"
-                detail: root.inHeadset ? "in VR" : "on the desktop"
+                detail: root.inHeadset ? "In VR" : "On the desktop"
                 Toggle {
                     checked: AudioScriptingInterface.pushToTalk
                     onToggled: AudioScriptingInterface.pushToTalk = checked
@@ -675,7 +1046,7 @@ Page {
             }
             ListRow {
                 label: "Warn when muted"
-                detail: "when you speak with the microphone off"
+                detail: "When you speak with the microphone off"
                 Toggle {
                     checked: AudioScriptingInterface.warnWhenMuted
                     onToggled: AudioScriptingInterface.warnWhenMuted = checked
@@ -699,7 +1070,7 @@ Page {
             ListRow {
                 objectName: "eachPersonRow"   // a test opens the mixer by it
                 label: "Each person"
-                detail: mixer.open ? "" : "a volume and a mute for everyone here"
+                detail: mixer.open ? "" : "A volume and a mute for everyone here"
                 clickable: true
                 onClicked: mixer.open = !mixer.open
                 Text {
@@ -781,7 +1152,7 @@ Page {
     }
 
     Tab {
-        visible: root.currentTab === 3
+        visible: root.currentTab === 4
 
         // where the bar of app buttons sits (ui/SystemToolbar.h): over the bottom of the view, or on a side of the
         // window with the view beside it (a player's ask, 10-24)

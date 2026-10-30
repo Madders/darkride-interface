@@ -10,8 +10,9 @@
 //    panels' search bar (search, Cards / Tiles / List), as Explore's worlds and the avatars in My Files are;
 //  Profile: someone's profile (the metaverse's /api/user/<name>/profile): picture, names, About, since when, an AI
 //    resident's word and host; signed in, how you two stand (with the matching friend action), the friends you share,
-//    and online and where as they allow, with Join. Yours when no one is chosen. Explore opens it on an author: it
-//    sets io.darkride.peoplePanel.profile and the tab, and the bar opens this panel, which reads them as it shows.
+//    and online and where as they allow, with Join. Yours when no one is chosen. Explore's authors and chat's names
+//    open it (Panels.showProfile): that sets io.darkride.peoplePanel.profile and the tab, which this reads as it
+//    shows, or calls showProfile here when it's in sight.
 //  The friends are the metaverse's (/api/v1/friends and its requests, through MetaverseRequests); joining one is
 //  AddressManager.goToUser. There is no search for people by name: that is a privacy call (Caity's). It replaces
 //  High Fidelity's People app (pal.js and Pal.qml), whose connections the metaverse no longer has.
@@ -144,10 +145,7 @@ Page {
         // a friend as a collection's item, the friend kept for the row's buttons
         function entries(list) {
             return list.map(function (friend) {
-                var where = friend.online
-                    ? (friend.location && friend.location.name ? "in " + friend.location.name : "online")
-                    : "offline";
-                return { key: friend.username, title: friend.username, subtitle: where + (friend.ai ? " · AI resident" : ""),
+                return { key: friend.username, title: friend.username, subtitle: where(friend) + (kindWord(friend) ? " · " + kindWord(friend) : ""),
                          picture: picture(friend), friend: friend };
             }).filter(friendBar.matches);
         }
@@ -169,7 +167,8 @@ Page {
             MetaverseRequests.send("GET", "/api/v1/friends", null, function (error, code, answer) {
                 busy = false;
                 if (error) {
-                    status = "Couldn't read your friends: " + error + ".";
+                    console.log("People: friends failed: " + code + " " + error);
+                    status = "Couldn't read your friends. Try again in a moment.";
                     return;
                 }
                 var list = (answer && answer.data && answer.data.friends) || [];
@@ -186,15 +185,22 @@ Page {
         }
 
         // a request's or a removal's answer: { username, friends, requested }, or a message
-        function act(method, path, body, done) {
+        // failed: the action's own sentence when it doesn't go through. The server's own words ("username should
+        // not be empty,username must be a string") are for the log, never the panel (Caity 10-28: "amateur hour")
+        function act(method, path, body, done, failed) {
             MetaverseRequests.send(method, path, body, function (error, code, answer) {
-                var message = answer && answer.message ? String(answer.message) : "";
                 if (error) {
-                    status = message !== "" ? message : "That didn't go through: " + error + ".";
+                    console.log("People: " + method + " " + path + " failed: " + code + " "
+                        + (answer && answer.message ? answer.message : error));
+                    status = code === 0 ? "Couldn't reach Darkride. Check your connection and try again."
+                        : code === 401 ? "Sign in again, then try once more."
+                        : failed;
                 } else if (done) {
                     status = done(answer && answer.data ? answer.data : {});
                 }
                 load();
+                // the bar's request badge and chat's friends hear it at once, not at their next minute
+                Friends.refresh();
                 if (root.currentTab === 2) {
                     profile.load();
                 }
@@ -211,31 +217,67 @@ Page {
                 addField.text = "";
                 return data.friends ? "You and " + data.username + " are friends now."
                     : "Asked " + (data.username || username) + ". You'll be friends when they accept.";
-            });
+            }, "Couldn't send the request. Check the username and try again.");
         }
         function accept(username) {
             act("POST", "/api/v1/friends/requests/" + encodeURIComponent(username) + "/accept", {}, function (data) {
                 return "You and " + username + " are friends now.";
-            });
+            }, "Couldn't accept " + username + "'s request. Try again in a moment.");
         }
         function decline(username) {
             act("POST", "/api/v1/friends/requests/" + encodeURIComponent(username) + "/decline", {}, function () {
                 return "Declined " + username + "'s request.";
-            });
+            }, "Couldn't decline " + username + "'s request. Try again in a moment.");
         }
         function withdraw(username) {
             act("DELETE", "/api/v1/friends/requests/" + encodeURIComponent(username), null, function () {
                 return "Withdrew your request to " + username + ".";
-            });
+            }, "Couldn't withdraw your request to " + username + ". Try again in a moment.");
         }
         function remove(username) {
             removing = "";
             act("DELETE", "/api/v1/friends/" + encodeURIComponent(username), null, function () {
                 return username + " is no longer a friend.";
-            });
+            }, "Couldn't remove " + username + " from your friends. Try again in a moment.");
         }
         function join(username) {
             AddressManager.goToUser(username);
+        }
+        // where a friend is: "In <world>"; "In a private world" when they're online but the metaverse gives no place,
+        // which it does only where Join will work (F4, Caity 10-27 "friends as recommended"; Darkside's and
+        // self-hosted worlds decide at their own door, as before); "Offline". Sentence case, each part after a " · " too
+        // (Caity 10-28: "Online · Here since October 2026")
+        function where(friend) {
+            if (!friend.online) {
+                return "Offline";
+            }
+            if (!friend.location) {
+                return elsewhere(friend);
+            }
+            return friend.location.name ? "In " + friend.location.name : "Online";
+        }
+        // online with no place: in the other version's copy of the worlds (the metaverse's otherVersion, relative to
+        // this app, with its wording: version-twins, the 1.1 beta), or somewhere you can't get in. No Join either way
+        function elsewhere(person) {
+            return person.otherVersion === "older" ? "On an older version of Darkride"
+                : person.otherVersion === "newer" ? "On the Darkride beta"
+                : "In a private world";
+        }
+        function canJoin(friend) {
+            return !!friend.online && !!friend.location;
+        }
+        // a DM with them, opened in chat in front (F1; social's Friends, which waits while chat is still signing in).
+        // AI residents and bots can't use chat yet
+        function canMessage(person) {
+            return signedIn && Friends.canMessage && !!person && person.kind !== "bot" && !person.ai;
+        }
+        function message(username) {
+            Friends.openDirectMessage(username);
+        }
+        // what kind of account a friend is, for their row's detail: "⚙ Bot" (scripted logic, not AI), "AI resident",
+        // or "" for a person. kind comes first: metaverse also sends a bot ai true, for older clients (Caity, 10-25)
+        function kindWord(friend) {
+            return friend.kind === "bot" ? "\u2699 Bot" : friend.ai ? "AI resident" : "";
         }
         // for the rows drawn by an inline component, which can't reach the page's id
         function showProfile(username) {
@@ -250,6 +292,16 @@ Page {
         repeat: true
         running: root.visible && root.currentTab === 1 && friends.signedIn
         onTriggered: friends.load()
+    }
+    // a request come or gone, as the bar's badge hears it (social's Friends: every 10 s in front, at once on coming to
+    // the front): the list follows at once, not at its own next 30 s (Caity 10-28: "took the same old 25s")
+    Connections {
+        target: Friends
+        function onRequestCountChanged() {
+            if (root.visible && root.currentTab === 1 && friends.signedIn) {
+                friends.load();
+            }
+        }
     }
 
     // a small button inside a row
@@ -282,9 +334,8 @@ Page {
         property var friend: ({})
         label: friend.username || ""
         detail: friend.online
-            ? (friend.location && friend.location.name ? "in " + friend.location.name : "online")
-              + (friend.ai ? " · AI resident" : "")
-            : (friend.ai ? "AI resident · offline" : "offline")
+            ? friends.where(friend) + (friends.kindWord(friend) ? " · " + friends.kindWord(friend) : "")
+            : (friends.kindWord(friend) ? friends.kindWord(friend) + " · Offline" : "Offline")
         icon: friends.picture(friend)
         clickable: true
         onClicked: friends.showProfile(friend.username)
@@ -305,7 +356,12 @@ Page {
             }
         }
         RowButton {
-            visible: friendRow.friend.online && !!friendRow.friend.location
+            visible: friends.canMessage(friendRow.friend)
+            text: "Message"
+            onPressed: friends.message(friendRow.friend.username)
+        }
+        RowButton {
+            visible: friends.canJoin(friendRow.friend)
             text: "Join"
             strong: true
             onPressed: friends.join(friendRow.friend.username)
@@ -317,7 +373,7 @@ Page {
         id: friendTile
         property var friend: ({})
         title: friend.username || ""
-        subtitle: friend.online ? (friend.location && friend.location.name ? "in " + friend.location.name : "online") : "offline"
+        subtitle: friends.where(friend)
         picture: friends.picture(friend)
         pictureRatio: 1
         onClicked: friends.showProfile(friend.username)
@@ -325,7 +381,12 @@ Page {
             Layout.fillWidth: true
         }
         RowButton {
-            visible: friendTile.friend.online && !!friendTile.friend.location
+            visible: friends.canMessage(friendTile.friend)
+            text: "Message"
+            onPressed: friends.message(friendTile.friend.username)
+        }
+        RowButton {
+            visible: friends.canJoin(friendTile.friend)
             text: "Join"
             strong: true
             onPressed: friends.join(friendTile.friend.username)
@@ -348,7 +409,7 @@ Page {
                 model: friends.incoming
                 delegate: ListRow {
                     label: modelData.username
-                    detail: "wants to be friends"
+                    detail: "Wants to be friends"
                     icon: friends.picture(modelData)
                     clickable: true
                     onClicked: root.showProfile(modelData.username)
@@ -360,7 +421,7 @@ Page {
                 model: friends.outgoing
                 delegate: ListRow {
                     label: modelData.username
-                    detail: "you asked"
+                    detail: "You asked"
                     icon: friends.picture(modelData)
                     clickable: true
                     onClicked: root.showProfile(modelData.username)
@@ -381,7 +442,7 @@ Page {
                     id: addField
                     Layout.fillWidth: true
                     horizontalAlignment: TextInput.AlignLeft
-                    placeholderText: "someone"
+                    placeholderText: "Their username"
                     onAccepted: friends.request(text)
                 }
             }
@@ -450,7 +511,9 @@ Page {
                 busy = false;
                 if (error) {
                     data = null;
-                    status = code === 404 ? "There's no one called " + asked + "." : "Couldn't read the profile: " + error + ".";
+                    console.log("People: profile failed: " + code + " " + error);
+                    status = code === 404 ? "There's no one called " + asked + "."
+                        : "Couldn't read the profile. Try again in a moment.";
                     return;
                 }
                 data = answer;
@@ -505,6 +568,7 @@ Page {
                         Text {
                             width: parent.width
                             text: profile.data ? (profile.data.displayName || profile.data.username) : ""
+                            textFormat: Text.PlainText
                             color: Theme.text
                             font.pixelSize: 20 * Theme.unit
                             font.bold: true
@@ -512,16 +576,23 @@ Page {
                         }
                         Text {
                             visible: !!profile.data && !!profile.data.displayName && profile.data.displayName !== profile.data.username
+                            width: parent.width
                             text: profile.data ? profile.data.username : ""
+                            textFormat: Text.PlainText
                             color: Theme.secondaryText
                             font.pixelSize: Theme.bodySize
+                            elide: Text.ElideRight
                         }
+                        // what kind of account: an AI resident, or a bot (scripted logic, not AI; Caity, 10-25: metaverse sends
+                        // kind "bot", and ai true for older clients, so kind comes first); a person gets no line
                         Text {
-                            visible: !!profile.data && profile.data.ai
+                            readonly property bool bot: !!profile.data && profile.data.kind === "bot"
+                            visible: !!profile.data && (profile.data.ai || bot)
                             width: parent.width
-                            text: profile.data ? (profile.data.aiWord || "AI resident")
-                                + (profile.data.host ? " · hosted by " + profile.data.host : "") : ""
-                            color: Theme.tint
+                            text: profile.data ? (bot ? "\u2699 Bot" : (profile.data.aiWord || "AI resident"))
+                                + (profile.data.host ? " · Hosted by " + profile.data.host : "") : ""
+                            textFormat: Text.PlainText
+                            color: bot ? Theme.secondaryText : Theme.tint
                             font.pixelSize: Theme.detailSize
                             elide: Text.ElideRight
                         }
@@ -529,11 +600,14 @@ Page {
                             text: {
                                 if (!profile.data) return "";
                                 var bits = [];
-                                if (profile.data.online !== undefined) bits.push(profile.data.online ? "online" : "offline");
+                                if (profile.data.online !== undefined) bits.push(profile.data.online ? "Online" : "Offline");
                                 var since = profile.since(profile.data.memberSince);
-                                if (since !== "") bits.push("here since " + since);
+                                if (since !== "") bits.push("Here since " + since);
                                 return bits.join(" · ");
                             }
+                            // inside the card at any width: on a narrow panel it wraps, the card's margin kept (Caity 10-28)
+                            width: parent.width
+                            wrapMode: Text.WordWrap
                             color: Theme.secondaryText
                             font.pixelSize: Theme.detailSize
                         }
@@ -555,6 +629,7 @@ Page {
                     width: parent.width - 2 * Theme.cardPadding
                     anchors.verticalCenter: parent.verticalCenter
                     text: profile.data ? profile.data.about || "" : ""
+                    textFormat: Text.PlainText
                     color: Theme.text
                     font.pixelSize: Theme.bodySize
                     wrapMode: Text.WordWrap
@@ -565,15 +640,29 @@ Page {
 
         // where they are, and you two (signed in; the metaverse leaves these out otherwise)
         Section {
-            visible: profile.data !== null && !!profile.data.location
+            visible: profile.data !== null && (!!profile.data.location || whereRow.closed)
             ListRow {
-                label: profile.data && profile.data.location ? "In " + profile.data.location.name : ""
+                id: whereRow
+                // online with no place given: somewhere you can't get in (the metaverse gives one only where Join works)
+                readonly property bool closed: !!profile.data && !profile.mine && profile.data.online === true
+                                               && !profile.data.location
+                label: closed ? friends.elsewhere(profile.data)
+                    : profile.data && profile.data.location ? "In " + profile.data.location.name : ""
                 RowButton {
-                    visible: !profile.mine
+                    visible: !profile.mine && !whereRow.closed
                     text: "Join"
                     strong: true
                     onPressed: friends.join(profile.data.username)
                 }
+            }
+        }
+
+        Section {
+            visible: profile.data !== null && !profile.mine && friends.canMessage(profile.data)
+            ListRow {
+                action: true
+                label: "Message"
+                onClicked: friends.message(profile.data.username)
             }
         }
 

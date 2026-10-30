@@ -39,6 +39,7 @@
 #include <BlendshapeConstants.h>
 
 #include "FBXSerializer.h"
+#include "FSTReader.h"
 
 #define GLTF_GET_INDICIES(accCount)           \
     int index1 = (indices[n + 0] * accCount); \
@@ -1518,7 +1519,7 @@ bool GLTFSerializer::buildGeometry(HFMModel& hfmModel, const hifi::VariantHash& 
 
                 // Build list of blendshapes from FST and model
                 typedef QPair<int, float> WeightedIndex;
-                hifi::VariantHash blendshapeMappings = mapping.value("bs").toHash();
+                hifi::VariantHash blendshapeMappings = FSTReader::getBlendshapeMappings(mapping);
                 QMultiHash<QString, WeightedIndex> blendshapeIndices;
 
                 for (int i = 0;; ++i) {

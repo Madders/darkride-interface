@@ -9,6 +9,8 @@
 
 #include "AnimInverseKinematics.h"
 
+#include <algorithm>
+
 #include <GeometryUtil.h>
 #include <GLMHelpers.h>
 #include <NumericalConstants.h>
@@ -250,10 +252,20 @@ void AnimInverseKinematics::solve(const AnimContext& context, const std::vector<
     float maxError = 0.0f;
     int numLoops = 0;
     const int MAX_IK_LOOPS = 16;
-    while (numLoops < MAX_IK_LOOPS) {
+
+    // With every target off and no chain blending (desktop mode, standing still), a loop solves and accumulates
+    // nothing, so every loop gives the same poses: one is enough.
+    bool anyTargetOn = std::any_of(targets.begin(), targets.end(), [](const IKTarget& target) {
+        return target.getType() != IKTarget::Type::Unknown;
+    });
+    bool anyChainBlending = std::any_of(_prevJointChainInfoVec.begin(), _prevJointChainInfoVec.end(),
+                                        [](const JointChainInfo& info) { return info.timer > 0.0f; });
+    const int numIKLoops = (anyTargetOn || anyChainBlending) ? MAX_IK_LOOPS : 1;
+
+    while (numLoops < numIKLoops) {
         ++numLoops;
 
-        bool debug = context.getEnableDebugDrawIKChains() && numLoops == MAX_IK_LOOPS;
+        bool debug = context.getEnableDebugDrawIKChains() && numLoops == numIKLoops;
 
         // solve all targets
         for (size_t i = 0; i < targets.size(); i++) {
@@ -270,7 +282,7 @@ void AnimInverseKinematics::solve(const AnimContext& context, const std::vector<
         }
         
         // on last iteration, interpolate jointChains, if necessary
-        if (numLoops == MAX_IK_LOOPS) {
+        if (numLoops == numIKLoops) {
             for (size_t i = 0; i < _prevJointChainInfoVec.size(); i++) {
                 targetToChainMap.insert(std::pair<int, int>(_prevJointChainInfoVec[i].target.getIndex(), (int)i));
                 if (_prevJointChainInfoVec[i].timer > 0.0f) {

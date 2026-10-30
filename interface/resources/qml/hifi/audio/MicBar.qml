@@ -8,298 +8,167 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+//  Darkride's microphone pill (look A, Caity 10-28), in the bar's look: the mic alone in a small dark circle while it's
+//  on and you're quiet; a short cyan level beside it while you speak; a red "Muted" pill while muted; "Hold T to talk"
+//  with push to talk. A click mutes or unmutes, as before. At the view's top left (AvatarInputsBar.qml, which drags it)
+//  and on the VR tablet's top line (TabletHome.qml).
+//
 
 import QtQuick 2.5
 import QtGraphicalEffects 1.0
-import stylesUit 1.0
 
 import TabletScriptingInterface 1.0
 
-Rectangle {
+Item {
     id: micBar
-    HifiConstants { id: hifi; }
 
-    property var muted: AudioScriptingInterface.muted;
-    readonly property var level: AudioScriptingInterface.inputLevel;
-    readonly property var clipping: AudioScriptingInterface.clipping;
-    property var pushToTalk: AudioScriptingInterface.pushToTalk;
-    property var pushingToTalk: AudioScriptingInterface.pushingToTalk;
+    property bool muted: AudioScriptingInterface.muted
+    readonly property real level: AudioScriptingInterface.inputLevel
+    readonly property bool clipping: AudioScriptingInterface.clipping
+    property bool pushToTalk: AudioScriptingInterface.pushToTalk
+    property bool pushingToTalk: AudioScriptingInterface.pushingToTalk
+    property bool gated: false
 
-    readonly property var userSpeakingLevel: 0.4;
-    property bool gated: false;
+    // the bar's own properties by its id: unqualified, a write from these handlers (called later, by C++ signals) went
+    // to the global object instead ("Invalid write to global property gated", a flood on Windows as the noise gate
+    // opens and closes; windowz, 10-28)
     Component.onCompleted: {
-        AudioScriptingInterface.noiseGateOpened.connect(function() { gated = false; });
-        AudioScriptingInterface.noiseGateClosed.connect(function() { gated = true; });
-        HMD.displayModeChanged.connect(function() {
-            muted = AudioScriptingInterface.muted;
-            pushToTalk = AudioScriptingInterface.pushToTalk;
-        });
+        AudioScriptingInterface.noiseGateOpened.connect(function() { micBar.gated = false; });
+        AudioScriptingInterface.noiseGateClosed.connect(function() { micBar.gated = true; });
+        // (the tablet's home page is made once before the HMD object is there)
+        if (micBar.hasHMD) {
+            HMD.displayModeChanged.connect(function() {
+                micBar.muted = AudioScriptingInterface.muted;
+                micBar.pushToTalk = AudioScriptingInterface.pushToTalk;
+            });
+        }
         AudioScriptingInterface.mutedChanged.connect(function() {
-            muted = AudioScriptingInterface.muted;
+            micBar.muted = AudioScriptingInterface.muted;
         });
         AudioScriptingInterface.pushToTalkChanged.connect(function() {
-            pushToTalk = AudioScriptingInterface.pushToTalk;
+            micBar.pushToTalk = AudioScriptingInterface.pushToTalk;
         });
         AudioScriptingInterface.pushingToTalkChanged.connect(function() {
-            pushingToTalk = AudioScriptingInterface.pushingToTalk;
+            micBar.pushingToTalk = AudioScriptingInterface.pushingToTalk;
         });
     }
 
-    property bool standalone: false;
-    property var dragTarget: null;
+    readonly property bool hasHMD: typeof HMD !== "undefined" && HMD !== null
+    property bool standalone: false   // the view's own (AvatarInputsBar.qml), not the tablet's
+    property var dragTarget: null
+    property real scale: 1
 
-    property real scale: 1;
-
-    width: 240 * scale;
-    height: 50 * scale;
-
-    radius: 4 * scale;
-
-    color: "#00000000";
-    border {
-        width: mouseArea.containsMouse || mouseArea.containsPress ? 2 : 0;
-        color: colors.border;
+    // what it shows: "waiting" (push to talk, not held), "muted", "speaking" or "quiet"
+    readonly property bool waitingToTalk: pushToTalk && !pushingToTalk
+    readonly property bool voice: !muted && !waitingToTalk && !gated && level > 0.05
+    // the level stays out 1.5 s after the voice stops, so the pill doesn't open and close between words
+    property bool speaking: false
+    onVoiceChanged: {
+        if (voice) {
+            quietTimer.stop();
+            speaking = true;
+        } else {
+            quietTimer.restart();
+        }
     }
+    Timer {
+        id: quietTimer
+        interval: 1500
+        onTriggered: micBar.speaking = false
+    }
+    readonly property string mode: waitingToTalk ? "waiting" : muted ? "muted" : speaking ? "speaking" : "quiet"
 
-    // borders are painted over fill, so reduce the fill to fit inside the border
+    readonly property color iconColor: mode === "muted" ? "#ff5555" : mode === "waiting" ? "#9aa1bd"
+        : mode === "quiet" ? Qt.rgba(244 / 255, 246 / 255, 248 / 255, 0.75) : "#f4f6f8"
+
+    width: pill.width
+    height: pill.height
+
     Rectangle {
-        color: standalone ? colors.fill : "#00000000";
-        height: 46 * micBar.scale;
-        width: 236 * micBar.scale;
+        id: pill
+        height: 30 * micBar.scale
+        width: micBar.mode === "quiet" ? height : content.width + 22 * micBar.scale
+        radius: height / 2
+        clip: true
+        color: micBar.mode === "muted" ? Qt.rgba(60 / 255, 18 / 255, 28 / 255, 0.9) : Qt.rgba(23 / 255, 27 / 255, 45 / 255, 0.88)
+        border.width: 1
+        border.color: micBar.mode === "muted" ? (mouseArea.containsMouse ? "#ff8a8a" : Qt.rgba(1, 85 / 255, 85 / 255, 0.55))
+            : (mouseArea.containsMouse ? "#4a5175" : "#262c47")
+        Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
 
-        radius: micBar.radius;
+        Row {
+            id: content
+            anchors.verticalCenter: parent.verticalCenter
+            x: micBar.mode === "quiet" ? (pill.height - icon.width) / 2 : 11 * micBar.scale
+            spacing: 8 * micBar.scale
 
-        anchors {
-            verticalCenter: parent.verticalCenter;
-            horizontalCenter: parent.horizontalCenter;
+            Item {
+                id: icon
+                anchors.verticalCenter: parent.verticalCenter
+                width: 18 * micBar.scale
+                height: 18 * micBar.scale
+                Image {
+                    id: glyph
+                    anchors.fill: parent
+                    visible: false   // drawn in its colour below
+                    smooth: true
+                    sourceSize.width: 36 * micBar.scale
+                    sourceSize.height: 36 * micBar.scale
+                    source: micBar.mode === "muted" || micBar.mode === "waiting"
+                        ? "../../../icons/bar/audio-muted.svg" : "../../../icons/bar/audio.svg"
+                }
+                ColorOverlay {
+                    anchors.fill: parent
+                    source: glyph
+                    color: micBar.iconColor
+                }
+            }
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: micBar.mode === "muted" || micBar.mode === "waiting"
+                text: micBar.mode === "muted" ? "Muted" : micBar.hasHMD && HMD.active ? "Hold to talk" : "Hold T to talk"
+                color: micBar.mode === "muted" ? "#ff5555" : "#9aa1bd"
+                font.pixelSize: 13 * micBar.scale
+                font.weight: micBar.mode === "muted" ? Font.DemiBold : Font.Normal
+            }
+
+            // the level: seven bars lit up to it, cyan, the loudest two red while the microphone clips
+            Row {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: micBar.mode === "speaking"
+                spacing: 2 * micBar.scale
+                Repeater {
+                    model: [5, 9, 13, 10, 8, 6, 5]
+                    Rectangle {
+                        readonly property bool lit: index < Math.ceil(micBar.level * 7)
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 3 * micBar.scale
+                        height: modelData * micBar.scale
+                        radius: width / 2
+                        color: !lit ? "#3b4262" : micBar.clipping && index >= 5 ? "#ff5555" : "#00afff"
+                    }
+                }
+            }
         }
     }
 
     MouseArea {
-        id: mouseArea;
-
-        anchors {
-            left: icon.left;
-            right: bar.right;
-            top: icon.top;
-            bottom: icon.bottom;
-        }
-
-        hoverEnabled: true;
-        scrollGestureEnabled: false;
+        id: mouseArea
+        anchors.fill: pill
+        hoverEnabled: true
+        scrollGestureEnabled: false
+        drag.target: micBar.dragTarget
         onClicked: {
-            if (pushToTalk) {
+            if (micBar.pushToTalk) {
                 return;
             }
-            AudioScriptingInterface.muted = !muted;
+            AudioScriptingInterface.muted = !micBar.muted;
             Tablet.playSound(TabletEnums.ButtonClick);
         }
-        drag.target: dragTarget;
         onContainsMouseChanged: {
             if (containsMouse) {
                 Tablet.playSound(TabletEnums.ButtonHover);
-            }
-        }
-    }
-
-    QtObject {
-        id: colors;
-
-        readonly property string unmutedColor: "#FFF";
-        readonly property string mutedColor: "#E2334D";
-        readonly property string gutter: "#575757";
-        readonly property string greenStart: "#39A38F";
-        readonly property string greenEnd: "#1FC6A6";
-        readonly property string yellow: "#C0C000";
-        readonly property string red: colors.mutedColor;
-        readonly property string fill: "#55000000";
-        readonly property string border: standalone ? "#80FFFFFF" : "#55FFFFFF";
-        readonly property string icon: muted ? colors.mutedColor : unmutedColor;
-    }
-
-    Item {
-        id: icon;
-
-        anchors {
-            left: parent.left;
-            leftMargin: 5 * micBar.scale;
-            verticalCenter: parent.verticalCenter;
-        }
-
-        width: 40 * micBar.scale;
-        height: 40 * micBar.scale;
-
-        Item {
-            Image {
-                readonly property string unmutedIcon: "../../../icons/tablet-icons/mic-unmute-i.svg";
-                readonly property string mutedIcon: "../../../icons/tablet-icons/mic-mute-i.svg";
-                readonly property string pushToTalkIcon: "../../../icons/tablet-icons/mic-ptt-i.svg";
-                readonly property string clippingIcon: "../../../icons/tablet-icons/mic-clip-i.svg";
-                readonly property string gatedIcon: "../../../icons/tablet-icons/mic-gate-i.svg";
-
-                id: image;
-                source: (
-                    (pushToTalk && !pushingToTalk) ? pushToTalkIcon : 
-                    muted ? mutedIcon :
-                    clipping ? clippingIcon :
-                    gated ? gatedIcon :
-                    unmutedIcon
-                );
-
-                width: 29 * micBar.scale;
-                height: 32 * micBar.scale;
-                // fillMode: Image.PreserveAspectFit
-
-                 // svg antialiasing fix
-                sourceSize.width: 29 * micBar.scale;
-                sourceSize.height: 32 * micBar.scale;
-                smooth: true
-
-                anchors {
-                    left: parent.left;
-                    leftMargin: 5 * micBar.scale;
-                    top: parent.top;
-                    topMargin: 5 * micBar.scale;
-                }
-            }
-
-            ColorOverlay {
-                anchors { fill: image }
-                source: image;
-                color: colors.icon;
-            }
-        }
-    }
-
-    Item {
-        id: status;
-
-        visible: (pushToTalk && !pushingToTalk) || muted;
-
-        anchors {
-            left: parent.left;
-            leftMargin: 50 * micBar.scale;
-            verticalCenter: parent.verticalCenter;
-        }
-
-        width: 170 * micBar.scale;
-        height: 8 * micBar.scale
-
-        Text {
-            anchors {
-                horizontalCenter: parent.horizontalCenter;
-                verticalCenter: parent.verticalCenter;
-            }
-
-            color: colors.icon;
-
-            text: (pushToTalk && !pushingToTalk) ? (HMD.active ? "MUTED PTT" : "MUTED PTT-(T)") : (muted ? "MUTED" : "MUTE");
-            
-            font.pixelSize: 16 * micBar.scale;
-            font.family: "Roboto Bold"
-            font.bold: true
-        }
-
-        Rectangle {
-            anchors {
-                left: parent.left;
-                verticalCenter: parent.verticalCenter;
-            }
-
-            width: (pushToTalk && !pushingToTalk ? (HMD.active ? 27 : 25) : 50) * micBar.scale;
-            height: 4 * micBar.scale;
-            radius: 2 * micBar.scale;
-            color: colors.icon;
-        }
-
-        Rectangle {
-            anchors {
-                right: parent.right;
-                verticalCenter: parent.verticalCenter;
-            }
-
-            width: (pushToTalk && !pushingToTalk ? (HMD.active ? 27 : 25) : 50) * micBar.scale;
-            height: 4 * micBar.scale;
-            radius: 2 * micBar.scale;
-            color: colors.icon;
-        }
-    }
-
-    Item {
-        id: bar;
-
-        visible: !status.visible;
-
-        anchors.fill: status;
-
-        width: status.width;
-
-        Rectangle { // base
-            radius: micBar.radius;
-            anchors { fill: parent }
-            color: colors.gutter;
-        }
-
-        Rectangle { // mask
-            id: mask;
-            width: gated ? 0 : parent.width * level;
-            radius: micBar.radius;
-            anchors {
-                bottom: parent.bottom;
-                bottomMargin: 0;
-                top: parent.top;
-                topMargin: 0;
-                left: parent.left;
-                leftMargin: 0;
-            }
-        }
-
-        LinearGradient {
-            anchors { fill: mask }
-            source: mask
-            start: Qt.point(0, 0);
-            end: Qt.point(bar.width, 0);
-            gradient: Gradient {
-                GradientStop {
-                    position: 0.0;
-                    color: colors.greenStart;
-                }
-                GradientStop {
-                    position: 0.5;
-                    color: colors.greenEnd;
-                }
-                GradientStop {
-                    position: 1.0;
-                    color: colors.yellow;
-                }
-            }
-        }
-
-        Rectangle {
-            id: gatedIndicator;
-            visible: gated && !AudioScriptingInterface.clipping
-
-            radius: micBar.radius;
-            width: 2 * radius;
-            height: 2 * radius;
-            color: "#0080FF";
-            anchors {
-                right: parent.left;
-                verticalCenter: parent.verticalCenter;
-            }
-        }
-
-        Rectangle {
-            id: clippingIndicator;
-            visible: AudioScriptingInterface.clipping
-
-            radius: micBar.radius;
-            width: 2 * radius;
-            height: 2 * radius;
-            color: colors.red;
-            anchors {
-                left: parent.right;
-                verticalCenter: parent.verticalCenter;
             }
         }
     }

@@ -322,7 +322,7 @@ void WebEntityRenderer::doRender(RenderArgs* args) {
 
     batch.setResourceTexture(0, _texture);
 
-    transform.setRotation(EntityItem::getBillboardRotation(transform.getTranslation(), transform.getRotation(), _billboardMode, args->getViewFrustum().getPosition()));
+    applyBillboard(transform, _billboardMode, args);   // turned to the camera; mirrored with the selfie picture
     batch.setModelTransform(transform);
 
     // Turn off jitter for these entities

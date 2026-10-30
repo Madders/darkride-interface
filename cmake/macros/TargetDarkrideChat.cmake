@@ -14,8 +14,9 @@
 #  used, and installed here the first time; without rustup, the cargo on the PATH, if new enough for matrix-rust-sdk
 #  (1.96).
 #
-#  Distributed under the Apache License, Version 2.0.
-#  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+#  Copyright 2026 Darkride.
+#
+#  Distributed under the MIT License.
 #
 macro(TARGET_DARKRIDE_CHAT)
     set(DARKRIDE_CHAT_NATIVE_DIR "${CMAKE_SOURCE_DIR}/libraries/chat/native")

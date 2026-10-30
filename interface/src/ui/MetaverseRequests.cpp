@@ -10,6 +10,7 @@
 #include "MetaverseRequests.h"
 
 #include <QtCore/QJsonDocument>
+#include <QtQml/QJSValue>
 #include <QtNetwork/QNetworkReply>
 #include <QtNetwork/QNetworkRequest>
 
@@ -18,6 +19,7 @@
 #include <NetworkingConstants.h>
 
 #include "InterfaceLogging.h"
+#include "RightsLine.h"
 
 void MetaverseRequests::send(const QString& method, const QString& path, const QVariant& body, QJSValue callback) {
     auto answer = [callback](const QJSValue& error, int status, const QVariant& data) mutable {
@@ -49,7 +51,10 @@ void MetaverseRequests::send(const QString& method, const QString& path, const Q
     }
 
     auto& networkAccessManager = NetworkAccessManager::getInstance();
-    const QByteArray json = QJsonDocument::fromVariant(body).toJson(QJsonDocument::Compact);
+    // a panel's JS object arrives as a QJSValue inside the QVariant, of which QJsonDocument::fromVariant makes nothing:
+    // every request with a body went out empty (Caity's friends test 10-28: "username should not be empty")
+    const QVariant plainBody = body.userType() == qMetaTypeId<QJSValue>() ? body.value<QJSValue>().toVariant() : body;
+    const QByteArray json = QJsonDocument::fromVariant(plainBody).toJson(QJsonDocument::Compact);
     QNetworkReply* reply = method == "POST" ? networkAccessManager.post(request, json)
         : method == "PUT" ? networkAccessManager.put(request, json)
         : method == "DELETE" ? networkAccessManager.deleteResource(request)
@@ -69,4 +74,12 @@ void MetaverseRequests::send(const QString& method, const QString& path, const Q
 
 QString MetaverseRequests::metaverseUrl() const {
     return NetworkingConstants::METAVERSE_SERVER_URL().toString();
+}
+
+QString MetaverseRequests::rightsLine() const {
+    return rights::sentence();
+}
+
+QString MetaverseRequests::termsUrl() const {
+    return rights::termsUrl().toString();
 }

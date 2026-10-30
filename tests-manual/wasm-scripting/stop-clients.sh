@@ -1,20 +1,20 @@
 #!/bin/sh
-# Stops every client of this checkout (a client process started from this checkout's build, by the path
-# run-client.sh starts it with), and nothing else: the clients of other checkouts and other people are left alone.
-# SIGTERM first, SIGKILL after 5 s; then the macOS helper services each one left (release's stop_client_helpers in
-# tests-manual/physics-baseline/harness.sh, bug #29). Run it before and after every test run.
+# Stops every client run-client.sh started (a client process whose log, named by its -DarkrideTestRun argument, lies
+# under this folder's results/), and nothing else: another session's client, even one running this checkout's build
+# (qa's, 2026-10-30), is not ours to stop. SIGTERM first, SIGKILL after 5 s; then the macOS helper services each one
+# left (release's stop_client_helpers in tests-manual/physics-baseline/harness.sh, bug #29). Run it before and after
+# every test run.
 #   tests-manual/wasm-scripting/stop-clients.sh
 D=$(cd "$(dirname "$0")" && pwd)
-CHECKOUT=$(cd "$D/../.." && pwd)
-CLIENT="$CHECKOUT/build/interface/Darkride.app/Contents/MacOS/Darkride"
+RESULTS="$D/results/"
 SESSION=scripting
 . "$D/../physics-baseline/harness.sh"
 my_clients() {
-    ps -ax -o pid=,command= | grep -F "$CLIENT" | grep -v grep | awk '{print $1}'
+    ps -ax -o pid=,command= | grep -F -- "-DarkrideTestRun $RESULTS" | grep -v grep | awk '{print $1}'
 }
 PIDS=$(my_clients)
 if [ -z "$PIDS" ]; then
-    echo "no clients of $CHECKOUT are running"
+    echo "no clients of $RESULTS are running"
     exit 0
 fi
 STARTED=""

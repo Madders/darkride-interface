@@ -1,0 +1,16 @@
+The Lightling, Darkride's default avatar
+
+Made by Darkride (2026) from these CC0 models by the VRoid Project (pixiv Inc.), as published on OpenGameArt.org
+("VRoid Studio CC0 models"):
+
+- Base_Female.vrm and Base_Male.vrm: the body, face, expressions and skeleton. The Lightling is a shape halfway between
+  the two, with the clothes and the original textures removed.
+- HairSample_Male.vrm: the short hairstyle (its upright strand removed).
+- HairSample_Female.vrm: the twin-tails hairstyle.
+
+Each file's own VRM licence metadata says: licence CC0; commercial use, modification and redistribution allowed;
+credit not required (https://hub.vroid.com/license?allowed_to_use_user=everyone&characterization_allowed_user=everyone&corporate_commercial_use=allow&credit=unnecessary&modification=allow&personal_commercial_use=profit&redistribution=allow&sexual_expression=allow&version=1&violent_expression=allow).
+CC0 1.0: https://creativecommons.org/publicdomain/zero/1.0/
+
+Darkride's additions (the glowing line work and its pictures, the shaders lightling.fs and lightling-hair.fs, and the
+material and .fst files) are distributed under the MIT License.

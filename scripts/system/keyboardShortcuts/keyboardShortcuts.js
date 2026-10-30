@@ -13,12 +13,12 @@
 
 (function () { // BEGIN LOCAL_SCOPE 
     var snapActivateSound = SoundCache.getSound(Script.resourcesPath() + "sounds/snapshot/snap.wav");
+    // Ctrl+N: personal space on or off. (High Fidelity's Ctrl+B web browser window is gone: Ctrl+B is Build mode, Caity
+    // 10-29)
     function keyPressEvent(event) {
-        if (event.text.toUpperCase() === "B" && event.isControl && !event.isShifted && !event.isAlt && !event.isCommand) {
-            Window.openWebBrowser();
-        } else if (event.text.toUpperCase() === "N" && event.isControl && !event.isShifted && !event.isAlt && !event.isCommand) {
+        if (event.text.toUpperCase() === "N" && event.isControl && !event.isShifted && !event.isAlt && !event.isCommand) {
             Users.toggleIgnoreRadius();
-        } 
+        }
     }
 
     function scriptEnding() {

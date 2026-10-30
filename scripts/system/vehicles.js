@@ -29,7 +29,8 @@
 (function() {
     Script.include("/~/system/libraries/flightAssist.js");
 
-    var SIT_ANIMATION_URL = "https://s3-us-west-1.amazonaws.com/hifi-content/clement/production/animations/sitting_idle.fbx";
+    // our own copy of High Fidelity's sitting animation, once on its storage (Caity 10-29; physics's OK)
+    var SIT_ANIMATION_URL = Script.resourcesPath() + "avatar/animations/vehicle_sitting_idle.fbx";
     var SIT_ANIMATION_FPS = 30;
     var SIT_ANIMATION_FIRST_FRAME = 1;
     var SIT_ANIMATION_LAST_FRAME = 350;
@@ -50,13 +51,9 @@
     var AIR_CAMERA_RATE = 4.0;   // per second
     var GROUND_RAY_EVERY = 3;    // frames between the aircraft's ground rays
     var THROTTLE_RATE = 0.5;     // per second: how fast W/S move an airship's throttle setting
-    var CAMERA_EASE_OUT = 0.12;  // s: the chase camera goes back out from a wall eased, as the third-person camera does
 
     var seated = null;           // { vehicleID, seat, driver, airship }
     var previousCameraMode = null;
-    var cameraPosition = null;
-    var boomLength = null;       // the chase camera's distance from its pivot, as camera collision allows it
-    var boomHeldIn = false;
     var throttleSetting = 0;     // an airship's
 
     function parseList(text) {
@@ -128,8 +125,10 @@
             seated.aircraft = { assist: FlightAssist.create(vehicle.vehicle.mass), previous: null, frame: 0, aboveGround: 1000, readout: null };
             previousCameraMode = Camera.mode;
             Camera.mode = "independent";
-            cameraPosition = null;
-            boomLength = null;
+            // the chase camera, worked out by the engine every frame: level behind the heading (not the bank, so a turn
+            // does not roll the view), settling at a rate, kept out of walls, looking 6 m ahead of the nose
+            Camera.setChaseTarget(vehicle.id, { back: AIR_CAMERA_BACK, up: AIR_CAMERA_UP, rate: AIR_CAMERA_RATE,
+                                                pivotHeight: 1, lookAhead: 6, lookHeight: 0 });
             seated.aircraft.readout = Overlays.addOverlay("text", {
                 x: 20, y: 80, width: 430, height: 58, font: { size: 16 }, text: "",
                 color: { red: 244, green: 246, blue: 248 }, backgroundColor: { red: 28, green: 33, blue: 54 }, backgroundAlpha: 0.7,
@@ -148,6 +147,7 @@
         var vehicleID = seated.vehicleID;
         if (seated.aircraft) {
             Overlays.deleteOverlay(seated.aircraft.readout);
+            Camera.clearChaseTarget();
             if (previousCameraMode !== null) {
                 Camera.mode = previousCameraMode;
                 previousCameraMode = null;
@@ -192,8 +192,17 @@
         }
         previousCameraMode = Camera.mode;
         Camera.mode = "independent";
-        cameraPosition = null;
-        boomLength = null;
+        // the chase camera, worked out by the engine every frame from the vehicle as drawn (a script's camera moves only
+        // 60 times a second, and at speed the view judders against the car): behind along its forward and above,
+        // settling at a rate so a bump does not swing it, kept out of walls, looking just over it; by the vehicle's
+        // length, the rover's (3.6 m) at CAMERA_BACK and CAMERA_UP, a go-kart's (1.45 m) low, near and quick
+        var length = vehicle.dimensions.z;
+        Camera.setChaseTarget(vehicle.id, {
+            back: Math.max(CAMERA_BACK_MIN, Math.min(CAMERA_BACK, 2.0 * length)),
+            up: Math.max(CAMERA_UP_MIN, Math.min(CAMERA_UP, 0.7 * length)),
+            rate: Math.max(CAMERA_RATE, Math.min(CAMERA_RATE_MAX, CAMERA_RATE * 3.6 / length)),
+            pivotHeight: 1, lookAhead: 0, lookHeight: 1, followPitch: true
+        });
         Script.update.connect(update);
         print("vehicles.js: sitting in " + (seat.name || "a seat") + " of " + vehicle.id + (isDriver ? " as the driver" : " (the driver is " + vehicle.vehicle.driver + ")"));
     }
@@ -235,6 +244,7 @@
         }
         MyAvatar.collisionsEnabled = true;
         MyAvatar.hmdLeanRecenterEnabled = true;
+        Camera.clearChaseTarget();
         if (previousCameraMode !== null) {
             Camera.mode = previousCameraMode;
             previousCameraMode = null;
@@ -248,26 +258,6 @@
         var hit = Entities.findRayIntersection({ origin: properties.position, direction: { x: 0, y: -1, z: 0 } }, true, [], ignore);
         var halfHeight = properties.dimensions ? 0.5 * properties.dimensions.y : 0;
         return hit && hit.intersects ? Math.max(0, hit.distance - halfHeight) : 1000;
-    }
-
-    // camera collision for the chase camera (Camera.collideBoom, the third-person camera's test): the camera stops short
-    // of a wall between it and the pivot, seeing through the vehicle and its parts; in at once, back out eased. The
-    // smoothed cameraPosition stays where the camera wants to be, so the wall never feeds back into the chase.
-    function keptOutOfWalls(pivot, position, dt) {
-        var boom = Vec3.subtract(position, pivot);
-        var length = Vec3.length(boom);
-        if (typeof Camera.collideBoom !== "function" || length < 0.001) {
-            return position;
-        }
-        var allowed = Camera.collideBoom(pivot, position, [seated.vehicleID]);
-        if (boomLength === null || allowed <= boomLength || !boomHeldIn) {
-            boomLength = allowed;
-        } else {
-            boomLength += (allowed - boomLength) * (1 - Math.exp(-dt / CAMERA_EASE_OUT));
-        }
-        boomLength = Math.min(boomLength, length);
-        boomHeldIn = boomLength < length - 0.01;
-        return Vec3.sum(pivot, Vec3.multiply(boomLength / length, boom));
     }
 
     function flyAircraft(properties, dt) {
@@ -294,13 +284,6 @@
                 a.assist.speedTarget.toFixed(0) + ")   height " + Math.max(0, s.aboveGround).toFixed(0) + " m\n" +
                 "W/S speed  A/D " + (a.assist.mode === "hover" ? "turn" : "bank") + "  Up/Down climb  X stop  F leave"
         });
-        // the chase camera: behind along the heading (not the bank, so a turn does not roll the view), settling at a rate
-        var front = Quat.getFront(properties.rotation);
-        var flat = Vec3.normalize({ x: front.x, y: 0, z: front.z });
-        var wanted = Vec3.sum(properties.position, Vec3.sum(Vec3.multiply(-AIR_CAMERA_BACK, flat), { x: 0, y: AIR_CAMERA_UP, z: 0 }));
-        cameraPosition = cameraPosition ? Vec3.mix(cameraPosition, wanted, 1 - Math.exp(-dt * AIR_CAMERA_RATE)) : wanted;
-        Camera.position = keptOutOfWalls(Vec3.sum(properties.position, { x: 0, y: 1, z: 0 }), cameraPosition, dt);
-        Camera.orientation = Quat.lookAtSimple(cameraPosition, Vec3.sum(properties.position, Vec3.multiply(6, flat)));
     }
 
     var HELM_REACH = 20;  // m from the vehicle's centre: farther, the helm is left
@@ -353,21 +336,6 @@
             }
             Entities.setVehicleControls(seated.vehicleID, { throttle: forward, steering: steering, brake: brake, handBrake: handBrake });
         }
-        // the chase camera, behind and above, settling at a rate so a bump does not swing it: by the vehicle's length,
-        // the rover's (3.6 m) at CAMERA_BACK and CAMERA_UP, a go-kart's (1.45 m) low, near and quick
-        var length = properties.dimensions.z;
-        var back = Math.max(CAMERA_BACK_MIN, Math.min(CAMERA_BACK, 2.0 * length));
-        var up = Math.max(CAMERA_UP_MIN, Math.min(CAMERA_UP, 0.7 * length));
-        var rate = Math.max(CAMERA_RATE, Math.min(CAMERA_RATE_MAX, CAMERA_RATE * 3.6 / length));
-        var wanted = Vec3.sum(properties.position, Vec3.sum(Vec3.multiply(-back, front), { x: 0, y: up, z: 0 }));
-        if (!cameraPosition) {
-            cameraPosition = wanted;
-        } else {
-            cameraPosition = Vec3.mix(cameraPosition, wanted, 1 - Math.exp(-dt * rate));
-        }
-        var pivot = Vec3.sum(properties.position, { x: 0, y: 1, z: 0 });
-        Camera.position = keptOutOfWalls(pivot, cameraPosition, dt);
-        Camera.orientation = Quat.lookAtSimple(cameraPosition, pivot);
     }
 
     function onMousePress(entityID, event) {

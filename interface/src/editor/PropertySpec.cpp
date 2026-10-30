@@ -485,6 +485,7 @@ namespace {
         P_BOOL("ignorePickIntersection", IgnorePickIntersection);
         P_STR("script", Script);
         P_STR("serverScripts", ServerScripts);
+        P_BOOL("scriptsEnabled", ScriptsEnabled);
         P_FLOAT("lifetime", Lifetime);
         P_STR("userData", UserData);
 
@@ -1061,14 +1062,19 @@ namespace {
         auto with = [](PropertySpec& s, const char* showWhen) -> PropertySpec& { s.showWhen = showWhen; return s; };
         using K = PropertyKind;
 
-        // base
-        add(spec("name", "Name", K::String, "base"));
+        // base. Its header first, as Unity's: the Visible tick before the name; under them the Hierarchy rows' four
+        // toggles as icons (Caity, 10-27: "Look at how unity presents these toggles"), of which Locked and whether
+        // its scripts run (Caity, 10-26: "disable attached scripts", so a door stops opening) are the entity's own
+        add(spec("visible", "Visible", K::Bool, "base")).header = true;
+        add(spec("name", "Name", K::String, "base")).header = true;
+        add(spec("locked", "Locked", K::Bool, "base")).headerIcon = true;
+        add(spec("scriptsEnabled", "Scripts", K::Bool, "base")).headerIcon = true;
+        // everyone's clicks, which isn't the pointer icon's (that one is this builder's own, in Build mode)
+        add(spec("ignorePickIntersection", "Clicks Pass Through", K::Bool, "base"));
         add(spec("id", "ID", K::String, "base")).readOnly = true;   // to copy: for Parent, for scripts
         add(spec("description", "Description", K::String, "base"));
         add(spec("parentID", "Parent", K::String, "base"));
         add(spec("parentJointIndex", "Parent Joint", K::Int, "base"));
-        add(spec("visible", "Visible", K::Bool, "base"));
-        add(spec("locked", "Locked", K::Bool, "base"));
         en("entityPriority", "Priority", "base", { "automatic:Automatic", "prioritized:Prioritized", "static:Static" });
         en("renderLayer", "Render Layer", "base", { "world:World", "front:Front", "hud:HUD" });
         en("primitiveMode", "Primitive Mode", "base", { "solid:Solid", "lines:Wireframe" });
@@ -1473,7 +1479,6 @@ namespace {
         // its Shadows field, and a zone or a material casts none, so on those the box would only mislead
         with(add(spec("canCastShadow", "Cast Shadows", K::Bool, "behavior")), "type not in Light,Zone,Material");
         add(spec("href", "Link", K::Url, "behavior"));
-        add(spec("ignorePickIntersection", "Ignore Picking", K::Bool, "behavior"));
         add(spec("script", "Script", K::Url, "behavior"));
         add(spec("serverScripts", "Server Script", K::Url, "behavior"));
         stepping(add(spec("lifetime", "Lifetime", K::Float, "behavior")), 1, 0, "s");

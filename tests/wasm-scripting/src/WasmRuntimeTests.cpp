@@ -15,7 +15,7 @@
 
 #include <WasmRuntime.h>
 
-QTEST_MAIN(WasmRuntimeTests)
+QTEST_GUILESS_MAIN(WasmRuntimeTests)
 
 namespace {
 

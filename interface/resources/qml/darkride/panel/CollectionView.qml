@@ -64,6 +64,7 @@ ColumnLayout {
                 Text {
                     visible: !!entry.badge
                     text: entry.badge || ""
+                    textFormat: Text.PlainText
                     color: Theme.secondaryText
                     font.pixelSize: Theme.detailSize
                 }
@@ -103,6 +104,7 @@ ColumnLayout {
             Text {
                 visible: !!entry.badge
                 text: entry.badge || ""
+                textFormat: Text.PlainText
                 color: Theme.secondaryText
                 font.pixelSize: Theme.detailSize
             }
@@ -121,6 +123,7 @@ ColumnLayout {
         Layout.fillWidth: true
         visible: collection.title !== "" && collection.view !== "list"
         text: collection.title.toUpperCase()
+        textFormat: Text.PlainText
         color: Theme.secondaryText
         font.pixelSize: Theme.sectionSize
         font.letterSpacing: 0.3 * Theme.unit
@@ -187,6 +190,7 @@ ColumnLayout {
         Layout.fillWidth: true
         visible: collection.footer !== "" && collection.items.length > 0
         text: collection.footer
+        textFormat: Text.PlainText
         color: Theme.secondaryText
         font.pixelSize: Theme.detailSize
         wrapMode: Text.WordWrap

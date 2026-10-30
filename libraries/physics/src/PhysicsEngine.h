@@ -108,6 +108,11 @@ public:
     // (the intervals between the present that posted it and the one before; 0 = count them from the wall clock):
     // the paced clock then advances by whole periods (stepSimulation)
     void setPresentPeriod(float seconds, int periods = 0) { _presentPeriod = seconds; _presentPeriods = periods; }
+    // the time the world moved on in the last stepSimulation, in seconds (the paced clock's step, less any time the
+    // substep cap dropped; counted while the world idles too), and how many steps there have been: what moves beside
+    // the physics each frame (the avatar's turn) steps by it, to keep to the world's clock (GitHub #15)
+    float getLastSteppedTime() const { return _lastSteppedTime; }
+    uint64_t getStepCount() const { return _stepCount; }
     void harvestPerformanceStats();
     void printPerformanceStatsToFile(const QString& filename);
     void updateContactMap();
@@ -202,6 +207,7 @@ private:
     void stepOnce(float dt);
     void feedFrameTransforms();
     void dropEmptyWorlds();
+    void removeContactsInEveryWorld(ObjectMotionState* motionState);
     void rehomeObjects();
     void registerFrame(ObjectMotionState* frameState);
     void unregisterFrame(const QUuid& frameID);
@@ -232,6 +238,8 @@ private:
     CharacterController* _myAvatarController { nullptr };
     uint64_t _lastStepTime { 0 };
     float _accumulatedTime { 0.0f };
+    float _lastSteppedTime { 0.0f };
+    uint64_t _stepCount { 0 };
     float _timeShiftPending { 0.0f };   // s of simulation still to add (or, negative, to leave out) by time dilation
     float _smoothedFrameDuration { 0.0f }; // the paced clock's frame (see stepSimulation)
     float _pacedClockLead { 0.0f }; // how far the paced clock is ahead of the wall clock

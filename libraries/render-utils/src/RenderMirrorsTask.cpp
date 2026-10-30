@@ -26,7 +26,15 @@ namespace {
 
         void run(const render::RenderContextPointer& renderContext) {
             auto args = renderContext->args;
-            Mirrors::instance().plan(args->getViewFrustum(), args->_viewport);
+            if (args->isStereo() && args->_context) {
+                // a headset (or a stereo monitor): the eyes, so a picture is sized to an eye's pixels
+                Mirrors::Eyes eyes;
+                args->_context->getStereoProjections(eyes.projection);
+                args->_context->getStereoViews(eyes.view);
+                Mirrors::instance().plan(args->getViewFrustum(), args->_viewport, &eyes);
+            } else {
+                Mirrors::instance().plan(args->getViewFrustum(), args->_viewport);
+            }
         }
     };
 

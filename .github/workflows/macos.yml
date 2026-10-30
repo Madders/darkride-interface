@@ -80,6 +80,7 @@ jobs:
       - name: MacPorts and Qt
         run: |
           curl -fsSL --retry 3 -o MacPorts.pkg https://github.com/macports/macports-base/releases/download/v2.12.7/MacPorts-2.12.7-14-Sonoma.pkg
+          echo "6e6e8a96f051035b34bf5e4c48f889370056f6139f05029dbc20bedfd1b65c4a  MacPorts.pkg" | shasum -a 256 -c -
           sudo installer -pkg MacPorts.pkg -target /
           rm MacPorts.pkg
           sudo /opt/local/bin/port -q selfupdate

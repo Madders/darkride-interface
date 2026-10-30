@@ -56,10 +56,11 @@ public:
     glm::vec2 computeExtent(const QString& str) const;
     float getFontSize() const { return _fontSize; }
 
-    // Render string to batch
+    // Render string to batch. `mirrored`: the batch's model transform has a negated X scale (text drawn mirrored for
+    // the selfie picture, EntityRenderer::applyBillboard), so the glyph quads are drawn with front faces culled
     void drawString(gpu::Batch& batch, DrawInfo& drawInfo, const QString& str, const glm::vec4& color,
                     const glm::vec3& effectColor, float effectThickness, TextEffect effect, 
-                    const glm::vec2& origin, const glm::vec2& bound, float scale, bool unlit, bool forward);
+                    const glm::vec2& origin, const glm::vec2& bound, float scale, bool unlit, bool forward, bool mirrored = false);
 
     static Pointer load(const QString& family);
 
@@ -102,7 +103,7 @@ private:
     gpu::TexturePointer _texture;
     gpu::BufferStreamPointer _stream;
 
-    static std::map<std::tuple<bool, bool, bool>, gpu::PipelinePointer> _pipelines;
+    static std::map<std::tuple<bool, bool, bool, bool>, gpu::PipelinePointer> _pipelines;   // transparent, unlit, forward, mirrored
     static gpu::Stream::FormatPointer _format;
 };
 

@@ -66,6 +66,7 @@ Rectangle {
                     id: badgeText
                     anchors.centerIn: parent
                     text: tile.badge
+                    textFormat: Text.PlainText
                     color: "#ffffff"
                     font.pixelSize: Theme.detailSize
                 }
@@ -99,6 +100,7 @@ Rectangle {
             Text {
                 width: parent.width
                 text: tile.title
+                textFormat: Text.PlainText
                 color: Theme.text
                 font.pixelSize: Theme.bodySize
                 font.weight: Font.DemiBold
@@ -135,6 +137,7 @@ Rectangle {
                 width: parent.width
                 topPadding: 4 * Theme.unit
                 text: tile.status
+                textFormat: Text.PlainText
                 color: Theme.secondaryText
                 font.pixelSize: Theme.detailSize
                 wrapMode: Text.WordWrap

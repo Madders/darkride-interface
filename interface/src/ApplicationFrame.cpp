@@ -809,6 +809,13 @@ void Application::update(float deltaTime) {
             qApp->updateMyAvatarLookAtPosition(deltaTime);
             avatarManager->updateMyAvatar(deltaTime);
         }
+
+        {
+            // what the avatars just moved, drawn this frame (EntityTreeRenderer::updateAvatarChildren): after both,
+            // so other people's held things too
+            PROFILE_RANGE(simulation, "AvatarChildren");
+            getEntities()->updateAvatarChildren();
+        }
     }
 
     bool showWarnings = Menu::getInstance()->isOptionChecked(MenuOption::PipelineWarnings);
@@ -951,6 +958,7 @@ void Application::updateRenderArgs(float deltaTime) {
 
         _viewState.updateCamera(appRenderArgs._renderArgs, deltaTime);
         appRenderArgs._eyeToWorld = _viewState.camera().getTransform();
+        getRefreshRateManager().noteCameraTransform(appRenderArgs._eyeToWorld);
         appRenderArgs._isStereo = false;
 
         {

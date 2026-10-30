@@ -207,9 +207,10 @@ int EntityTree::readEntityDataFromBuffer(const unsigned char* data, int bytesLef
                 EntityItemPointer entity = findEntityByEntityItemID(entityItemID);
 
                 if (entity) {
-                    QString entityScriptBefore = entity->getScript();
+                    // the scripts to run, "" while they're off: turning them off or on is a change of script
+                    QString entityScriptBefore = entity->getScriptToRun();
                     QUuid parentIDBefore = entity->getParentID();
-                    QString entityServerScriptsBefore = entity->getServerScripts();
+                    QString entityServerScriptsBefore = entity->getServerScriptsToRun();
                     quint64 entityScriptTimestampBefore = entity->getScriptTimestamp();
 
                     bytesForThisEntity = entity->readEntityDataFromBuffer(dataAt, bytesLeftToRead, args);
@@ -218,8 +219,8 @@ int EntityTree::readEntityDataFromBuffer(const unsigned char* data, int bytesLef
                     }
                     _entityMover.addEntityToMoveList(entity, entity->getQueryAACube());
 
-                    QString entityScriptAfter = entity->getScript();
-                    QString entityServerScriptsAfter = entity->getServerScripts();
+                    QString entityScriptAfter = entity->getScriptToRun();
+                    QString entityServerScriptsAfter = entity->getServerScriptsToRun();
                     quint64 entityScriptTimestampAfter = entity->getScriptTimestamp();
                     bool reload = entityScriptTimestampBefore != entityScriptTimestampAfter;
 
@@ -303,6 +304,41 @@ void EntityTree::postAddEntity(EntityItemPointer entity) {
     emit addingEntityPointer(entity.get());
 }
 
+// Whether a node's rights cover changing or deleting an entity: someone who may only make temporary entities may only
+// change temporary ones. A permanent entity takes the right to make permanent entities, or the right to change locks.
+bool EntityTree::senderMayChange(const SharedNodePointer& senderNode, const EntityItemPointer& entity) {
+    if (senderNode->isAllowedEditor() || senderNode->getCanRez() || senderNode->getCanRezCertified()) {
+        return true;
+    }
+    return (senderNode->getCanRezTmp() || senderNode->getCanRezTmpCertified()) &&
+        entity->getLifetime() != ENTITY_ITEM_IMMORTAL_LIFETIME;
+}
+
+// Whether a delete from a node that can't change locks may go ahead: the entity, and every child the delete takes with
+// it, unlocked and within the node's rights (senderMayChange).
+bool EntityTree::senderMayDelete(const SharedNodePointer& senderNode, const EntityItemPointer& entity) {
+    if (entity->getLocked() || !senderMayChange(senderNode, entity)) {
+        return false;
+    }
+    for (SpatiallyNestablePointer child : entity->getChildren()) {
+        if (child && child->getNestableType() == NestableType::Entity &&
+            !senderMayDelete(senderNode, std::static_pointer_cast<EntityItem>(child))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// A refused edit is taken back on its sender's screen too: the client shows its own edit at once, and takes the server's
+// copy only if it was edited later. So the entity goes out again (all of it, as ever), last edited after the refused
+// edit. Physics updates aren't sent back: they come many times a second, and are refused as before.
+void EntityTree::sendBackRefusedEdit(const EntityItemPointer& entity, const EntityItemProperties& refused) {
+    if (getIsServer()) {
+        entity->setLastEdited(std::max(usecTimestampNow(), refused.getLastEdited() + 1));
+        entity->markAsChangedOnServer();
+    }
+}
+
 bool EntityTree::updateEntity(const EntityItemID& entityID, const EntityItemProperties& properties, const SharedNodePointer& senderNode, bool isPhysics) {
     EntityItemPointer entity;
     {
@@ -342,14 +378,22 @@ bool EntityTree::updateEntity(EntityItemPointer entity, const EntityItemProperti
         allowAnyRez = (
             senderNode->getCanRez() || 
             senderNode->getCanRezCertified() ||
-            senderNode->getCanRezTmp() || 
+            senderNode->getCanRezTmp() ||
             senderNode->getCanRezTmpCertified()
         );
+        // a temporary right alone changes only temporary entities: a permanent one is treated as by someone without rez
+        // rights (below: simulation properties only, and only if it can be grabbed)
+        if (allowAnyRez && getIsServer() && !senderMayChange(senderNode, entity)) {
+            allowAnyRez = false;
+        }
         senderID = senderNode->getUUID();
     }
 
     if (!allowLockChange && (entity->getLocked() != properties.getLocked())) {
         qCDebug(entities) << "Refusing disallowed lock adjustment.";
+        if (!isPhysics) {
+            sendBackRefusedEdit(entity, properties);
+        }
         return false;
     }
 
@@ -513,7 +557,8 @@ bool EntityTree::updateEntity(EntityItemPointer entity, const EntityItemProperti
         }
         // else client accepts what the server says
 
-        QString entityScriptBefore = entity->getScript();
+        QString entityScriptBefore = entity->getScriptToRun();
+        QString entityServerScriptsBefore = entity->getServerScriptsToRun();
         quint64 entityScriptTimestampBefore = entity->getScriptTimestamp();
         uint32_t preFlags = entity->getDirtyFlags();
 
@@ -554,6 +599,9 @@ bool EntityTree::updateEntity(EntityItemPointer entity, const EntityItemProperti
                     emit editingEntityPointer(entity);
                 }
             } else {
+                if (!isPhysics) {
+                    sendBackRefusedEdit(entity, properties);
+                }
                 return false;
             }
         }
@@ -610,11 +658,17 @@ bool EntityTree::updateEntity(EntityItemPointer entity, const EntityItemProperti
             }
         }
 
-        QString entityScriptAfter = entity->getScript();
+        QString entityScriptAfter = entity->getScriptToRun();
         quint64 entityScriptTimestampAfter = entity->getScriptTimestamp();
         bool reload = entityScriptTimestampBefore != entityScriptTimestampAfter;
         if (entityScriptBefore != entityScriptAfter || reload) {
             emitEntityScriptChanging(entity->getEntityItemID(), reload); // the entity script has changed
+        }
+        // an entity script server's own edit, such as a server script turning its entity's scripts off: the entity
+        // server's echo of it changes nothing there any more. Not on a new scriptTimestamp: a server script bumping it
+        // (to have clients reload) would reload itself, every time over if it does so in its preload
+        if (entityServerScriptsBefore != entity->getServerScriptsToRun()) {
+            emitEntityServerScriptChanging(entity->getEntityItemID(), false);
         }
     }
 
@@ -1664,6 +1718,87 @@ int EntityTree::processEditPacketData(ReceivedMessage& message, const unsigned c
                 }
             }
 
+            // a zone's edit filter runs on the entity server: setting or changing it takes the right to change locks (the
+            // domain's owners and editors), as the domain's own filter does
+            if (properties.filterURLChanged() && validEditPacket && !senderNode->isAllowedEditor()) {
+                qCDebug(entities) << "User [" << senderNode->getUUID()
+                    << "] can't change locks, so can't set a zone's edit filter; edit rejected";
+                if (isAdd) {
+                    // tell the client that sent it that the entity was not added
+                    QWriteLocker locker(&_recentlyDeletedEntitiesLock);
+                    _recentlyDeletedEntityItemIDs.insert(usecTimestampNow(), entityItemID);
+                }
+                validEditPacket = false;
+            }
+
+            // What reaches everyone else takes the domain's owners and editors, or the right to make permanent entities. Who
+            // may only make temporary ones (a visitor) keeps the rest of an edit (a vehicle's seat, a colour). A clone's
+            // properties are the original's, copied here.
+            bool suppressScriptsOfVisitor = false;
+            bool suppressParentOfVisitor = false;
+            bool onlyTemporaryRights = !isClone && senderNode && !senderNode->isAllowedEditor() &&
+                !senderNode->getCanRez() && !senderNode->getCanRezCertified();
+
+            // a Web entity shows its page (and runs its script) on everyone's screen, and a zone sets the world around
+            // them: a visitor neither makes nor changes one
+            if (validEditPacket && onlyTemporaryRights) {
+                EntityTypes::EntityType type = isAdd ? properties.getType() : existingEntity->getType();
+                if (type == EntityTypes::Web || type == EntityTypes::Zone) {
+                    qCDebug(entities) << "User [" << senderNode->getUUID() << "] may not make or change a Web entity or a zone;"
+                        << entityItemID << (isAdd ? "not added" : "edit rejected");
+                    if (isAdd) {
+                        // tell the client that sent it that the entity was not added
+                        QWriteLocker locker(&_recentlyDeletedEntitiesLock);
+                        _recentlyDeletedEntityItemIDs.insert(usecTimestampNow(), entityItemID);
+                    } else if (!isPhysics) {
+                        sendBackRefusedEdit(existingEntity, properties);
+                    }
+                    validEditPacket = false;
+                }
+            }
+
+            if (validEditPacket && onlyTemporaryRights) {
+                // an entity's script runs on the client of everyone near it, and its server scripts on the entity script
+                // server: a visitor's edit keeps the entity's own
+                if (properties.scriptChanged() || properties.scriptTimestampChanged() || properties.serverScriptsChanged()) {
+                    qCDebug(entities) << "User [" << senderNode->getUUID() << "] may not change the scripts of" << entityItemID
+                        << (isAdd ? "; added without them" : "; kept them");
+                    if (isAdd) {
+                        properties.setScript(ENTITY_ITEM_DEFAULT_SCRIPT);
+                        properties.setScriptTimestamp(ENTITY_ITEM_DEFAULT_SCRIPT_TIMESTAMP);
+                        properties.setServerScripts(ENTITY_ITEM_DEFAULT_SERVER_SCRIPTS);
+                        bumpTimestamp(properties);
+                    } else {
+                        suppressScriptsOfVisitor = true;
+                    }
+                }
+
+                // a visitor parents only to themselves (their avatar) or to an entity they may change: never to someone
+                // else's avatar or to what isn't theirs to move
+                if (properties.parentIDChanged() && !properties.getParentID().isNull()) {
+                    QUuid parentID = properties.getParentID();
+                    if (parentID == AVATAR_SELF_ID) {
+                        // the client's stand-in for its own avatar (it sends its session id): kept as the sender's id, so
+                        // it means the sender for everyone, not each viewer
+                        properties.setParentID(senderNode->getUUID());
+                        bumpTimestamp(properties);
+                    } else if (parentID != senderNode->getUUID()) {
+                        EntityItemPointer parent = findEntityByID(parentID);
+                        if (!parent || !senderMayChange(senderNode, parent)) {
+                            qCDebug(entities) << "User [" << senderNode->getUUID() << "] may not parent" << entityItemID
+                                << "to" << parentID << (isAdd ? "; added without a parent" : "; kept its parent");
+                            if (isAdd) {
+                                properties.setParentID(UNKNOWN_ENTITY_ID);
+                                properties.setParentJointIndex(INVALID_JOINT_INDEX);
+                                bumpTimestamp(properties);
+                            } else {
+                                suppressParentOfVisitor = true;
+                            }
+                        }
+                    }
+                }
+            }
+
             if (!isClone) {
                 if ((isAdd || properties.lifetimeChanged()) &&
                     ((!senderNode->getCanRez() && senderNode->getCanRezTmp()) ||
@@ -1680,6 +1815,13 @@ int EntityTree::processEditPacketData(ReceivedMessage& message, const unsigned c
                     // if a node can't change locks, don't allow it to create an already-locked entity -- automatically
                     // clear the locked property and allow the unlocked entity to be created.
                     properties.setLocked(false);
+                    bumpTimestamp(properties);
+                }
+
+                if (isAdd && !properties.getCertificateID().isEmpty() && !senderNode->isAllowedEditor()) {
+                    // nobody issues certificates any more, so a new entity's certificate is only a claim: it's dropped, and
+                    // the rights for an uncertified entity apply (a world's editors keep theirs, for content they bring in)
+                    properties.setCertificateID(QString());
                     bumpTimestamp(properties);
                 }
             }
@@ -1728,6 +1870,20 @@ int EntityTree::processEditPacketData(ReceivedMessage& message, const unsigned c
                     if (suppressDisallowedPrivateUserData) {
                         bumpTimestamp(properties);
                         properties.setPrivateUserData(existingEntity->getPrivateUserData());
+                    }
+
+                    if (suppressScriptsOfVisitor) {
+                        // the entity's own, sent back so the sender's client drops what it tried
+                        bumpTimestamp(properties);
+                        properties.setScript(existingEntity->getScript());
+                        properties.setScriptTimestamp(existingEntity->getScriptTimestamp());
+                        properties.setServerScripts(existingEntity->getServerScripts());
+                    }
+
+                    if (suppressParentOfVisitor) {
+                        bumpTimestamp(properties);
+                        properties.setParentID(existingEntity->getParentID());
+                        properties.setParentJointIndex(existingEntity->getParentJointIndex());
                     }
 
                     // if the EntityItem exists, then update it
@@ -2283,6 +2439,18 @@ int EntityTree::processEraseMessageDetails(const QByteArray& dataByteArray, cons
         }
 
         bool force = sourceNode->isAllowedEditor();
+        if (!force) {
+            // someone who can't change locks deletes only what's unlocked and within their rights, children included;
+            // the zone's edit filter still has its say on what is left
+            ids.erase(std::remove_if(ids.begin(), ids.end(), [&](const EntityItemID& entityID) {
+                EntityItemPointer entity = findEntityByEntityItemID(entityID);
+                if (entity && !senderMayDelete(sourceNode, entity)) {
+                    qCDebug(entities) << "User [" << sourceNode->getUUID() << "] may not delete entity" << entityID;
+                    return true;
+                }
+                return false;
+            }), ids.end());
+        }
         bool ignoreWarnings = true;
         deleteEntitiesByID(ids, force, ignoreWarnings);
     }

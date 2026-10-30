@@ -10,7 +10,7 @@
 //  under the panels' search bar, pinned at the top (Caity, 10-24): the search (the metaverse's), Cards / Tiles / List
 //  (a tile's or a row's click opens its card alone), and the order: Relevance (the metaverse's own: people in it,
 //  then the newest), Likes, People, Name; sorted here, over the worlds loaded. An author's name opens their profile
-//  in the People panel (its Profile tab, through the bar).
+//  in the People panel (its Profile tab, Panels.showProfile).
 //
 //  The version check (with the metaverse's version-check, Caity's yes 10-24): the client's protocol signature goes with
 //  a list's request and with an instance's start, so a world or an instance running another version of Darkride is
@@ -43,6 +43,27 @@ Page {
     readonly property var kinds: ["popular", "liked", "private"]
     readonly property string tabSetting: "io.darkride.explorePanel.tab"
     readonly property string protocol: Window.protocolSignature()
+
+    // what a failed metaverse request tells the player: the metaverse's own words where it wrote them for people (its
+    // rule, 10-28: a 409, a 429, or a 400/403/404 whose message is a sentence, not "Forbidden" or "Not Found"; its
+    // validation answers are lists), else ours by the status; its technical words go to the log, never the panel
+    // (Caity 10-28: "amateur hour"). gone: the 404's sentence; serverDown: a 5xx's
+    function plainly(code, data, failed, gone, serverDown) {
+        var message = data && typeof data.message === "string" ? data.message.trim() : "";
+        var forPeople = message !== "" && message !== "Forbidden" && message !== "Not Found";
+        if (forPeople && [400, 403, 404, 409, 429].indexOf(code) >= 0) {
+            return /[.!?]$/.test(message) ? message : message + ".";
+        }
+        if (data && data.message) {
+            console.log("Explore: the metaverse answered " + code + " " + JSON.stringify(data.message));
+        }
+        return code === 0 ? "Couldn't reach Darkride. Check your connection and try again."
+            : code === 401 ? "Sign in again, then try once more."
+            : code === 403 ? "You can't do that here."
+            : code === 404 ? gone
+            : code >= 500 ? serverDown
+            : failed;
+    }
     Component.onCompleted: {
         currentTab = Math.max(0, Math.min(2, Settings.getValue(tabSetting, 0)));
         explore.load(true);
@@ -117,7 +138,8 @@ Page {
             };
             MetaverseRequests.send("GET", path + query(), null, function (error, code, data) {
                 if (error) {
-                    status = "Couldn't list the worlds: " + error + ".";
+                    console.log("Explore: worlds failed: " + code + " " + error);
+                    status = "Couldn't list the worlds. Try again in a moment.";
                 } else {
                     status = "";
                     online = Array.isArray(data) ? data : [];
@@ -145,8 +167,12 @@ Page {
         }
 
         // the online worlds as listed, each replaced by its record with instances when there is one; then the rest of
-        // the instance worlds, those with people in them first
+        // the instance worlds, those with people in them first. Every tab comes through here: an entry that isn't a
+        // world is skipped (the online list gave a private world as null, 10-29, and the throw left Explore empty)
         function merge(online, withInstances) {
+            var isWorld = function (world) { return !!world && typeof world === "object" && !!world.id; };
+            online = online.filter(isWorld);
+            withInstances = withInstances.filter(isWorld);
             var byId = {};
             withInstances.forEach(function (world) { byId[world.id] = world; });
             var merged = online.map(function (world) { return byId[world.id] || world; });
@@ -178,16 +204,16 @@ Page {
             var instances = world.instances || null;
             var list = [];
             if (!!world.online && !(instances && instances.instanceOnly)) {
-                list.push({ name: "Always on", detail: "the world's own server · " + (world.numUsers || 0) + " here",
+                list.push({ name: "Always on", detail: "The world's own server · " + (world.numUsers || 0) + " here",
                             people: world.numUsers || 0, instance: null, compatible: compatible(world.protocol) });
             }
             ((instances && instances.list) || []).forEach(function (instance) {
                 var bits = [(instance.players || 0) + " here"];
-                if (instance.startedBy) bits.push("started by " + instance.startedBy);
-                if (!instance.latest) bits.push("an older version");
-                if (instance.editing) bits.push("being edited");
+                if (instance.startedBy) bits.push("Started by " + instance.startedBy);
+                if (!instance.latest) bits.push("An older version");
+                if (instance.editing) bits.push("Being edited");
                 var ok = compatible(instance.protocol);
-                if (!ok) bits.push("another version of Darkride");
+                if (!ok) bits.push("Another version of Darkride");
                 list.push({ name: instance.visibility.charAt(0).toUpperCase() + instance.visibility.slice(1) + " instance",
                             detail: bits.join(" · "), people: instance.players || 0, instance: instance, compatible: ok });
             });
@@ -231,18 +257,16 @@ Page {
         function byline(world, rest) {
             var parts = [];
             if (world.username) {
-                parts.push("by <a href=\"" + encodeURIComponent(world.username) + "\">" + escaped(world.username) + "</a>");
+                parts.push("By <a href=\"" + encodeURIComponent(world.username) + "\">" + escaped(world.username) + "</a>");
             }
             if (rest) {
                 parts.push(escaped(rest));
             }
             return "<style>a { color: " + Theme.tint + "; text-decoration: none; }</style>" + parts.join(" · ");
         }
-        // someone's profile: the People panel opens on its Profile tab (the bar hears "Darkride-People", buttons.ts)
+        // someone's profile: the People panel opens on it, wherever it is (the card chat's names open too)
         function openProfile(username) {
-            Settings.setValue("io.darkride.peoplePanel.profile", username);
-            Settings.setValue("io.darkride.peoplePanel.tab", 2);
-            Messages.sendLocalMessage("Darkride-People", "profile");
+            Panels.showProfile(username);
         }
 
         function picture(worldId) {
@@ -302,7 +326,9 @@ Page {
                                    { visibility: visibility, protocol: root.protocol }, function (error, code, data) {
                 if (error || !data || !data.address) {
                     hoppingWorld = "";
-                    done(data && data.message ? String(data.message) : "Couldn't start an instance: " + error + ".");
+                    done(root.plainly(code, data, "Couldn't start an instance. Try again in a minute.",
+                                      "That world isn't there any more.",
+                                      "Couldn't start a server right now. Try again in a minute."));
                     return;
                 }
                 done("");
@@ -375,7 +401,10 @@ Page {
                                    function (error, code, data) {
                 busy = false;
                 if (error) {
-                    status = "Couldn't change edit mode: " + ((data && data.message) || error) + ".";
+                    status = root.plainly(code, data,
+                                          on ? "Couldn't turn edit mode on." : "Couldn't turn edit mode off.",
+                                          "That instance is gone.",
+                                          "Couldn't reach the instance's server. Try again in a minute.");
                     return;
                 }
                 current = data;
@@ -388,7 +417,9 @@ Page {
             MetaverseRequests.send("POST", "/api/instances/" + current.instance.id + "/save", null,
                                    function (error, code, data) {
                 busy = false;
-                status = error ? "Couldn't save: " + ((data && data.message) || error) + "."
+                status = error ? root.plainly(code, data, "Couldn't save the world. Try again in a moment.",
+                                              "That instance is gone.",
+                                              "Couldn't reach the instance's server. Try again in a minute.")
                     : "Saved as version " + data.version + ", " + data.entities + " entities.";
                 refresh();
             });
@@ -399,7 +430,9 @@ Page {
             confirmClose = false;
             MetaverseRequests.send("DELETE", "/api/instances/" + current.instance.id, null, function (error, code, data) {
                 busy = false;
-                status = error ? "Couldn't close the instance: " + ((data && data.message) || error) + "." : "";
+                status = error ? root.plainly(code, data, "Couldn't close the instance. Try again in a moment.",
+                                              "That instance is already gone.",
+                                              "Couldn't reach the instance's server. Try again in a minute.") : "";
                 if (!error) {
                     current = null;
                 }
@@ -467,10 +500,11 @@ Page {
                 : ""
             detail: here.current && here.current.instance
                 ? here.current.instance.players + (here.current.instance.players === 1 ? " person" : " people")
-                  + (here.current.instance.latest ? "" : " · an older version")
+                  + (here.current.instance.latest ? "" : " · An older version")
                 : ""
             Text {
                 text: here.current && here.current.instance ? here.current.instance.address : ""
+                textFormat: Text.PlainText
                 color: Theme.tertiaryText
                 font.pixelSize: Theme.detailSize
                 elide: Text.ElideMiddle
@@ -488,7 +522,7 @@ Page {
         ListRow {
             visible: here.current !== null && here.current.world.instances && here.current.world.instances.canEdit
             label: "Edit mode"
-            detail: "build here, then save to update the world"
+            detail: "Build here, then save to update the world"
             Toggle {
                 checked: here.current !== null && here.current.instance && here.current.instance.editing
                 enabled: !here.busy
@@ -638,7 +672,7 @@ Page {
         ListRow {
             visible: card.open && !!(card.instances && card.instances.canStart) && card.compatible
             label: "New instance"
-            detail: "public: anyone · friends: your friends · private: only you"
+            detail: "Public: anyone · Friends: your friends · Private: only you"
             CardButton { text: "Public"; enabled: explore.hoppingWorld === ""; onPressed: explore.start(card.world, "public", card.report) }
             CardButton { text: "Friends"; enabled: explore.hoppingWorld === ""; onPressed: explore.start(card.world, "friends", card.report) }
             CardButton { text: "Private"; enabled: explore.hoppingWorld === ""; onPressed: explore.start(card.world, "private", card.report) }
@@ -666,7 +700,7 @@ Page {
         }
 
         title: world.label || ""
-        subtitle: explore.byline(world, !compatible ? "another version" : people > 0 ? people + " here" : "")
+        subtitle: explore.byline(world, !compatible ? "Another version" : people > 0 ? people + " here" : "")
         picture: world.id ? explore.picture(world.id) : ""
         pictureRatio: 0.6
         dim: !compatible

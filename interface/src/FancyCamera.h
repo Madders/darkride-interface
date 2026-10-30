@@ -11,6 +11,10 @@
 #ifndef hifi_FancyCamera_h
 #define hifi_FancyCamera_h
 
+#include <mutex>
+
+#include <QtCore/QVariantMap>
+
 #include <shared/Camera.h>
 #include <ThreadSafeValueCache.h>
 
@@ -98,8 +102,53 @@ public slots:
      */
     float collideBoom(const glm::vec3& pivot, const glm::vec3& wanted, const QVector<QUuid>& ignore);
 
+    /**jsdoc
+     * Makes the camera a chase camera behind an entity, such as the vehicle you drive, worked out every frame from the
+     * entity as it is drawn. (A script that sets <code>Camera.position</code> itself moves the camera only as often as the
+     * script runs, 60 times a second, so on a faster display the view judders against a fast vehicle.) While the camera is
+     * in independent mode it stands behind the entity along its heading (level, or along its pitch too with
+     * <code>followPitch</code>; never its bank, so a turn does not roll the view) and above it, settles there at a rate,
+     * is kept out of walls as the third-person camera is (the entity and its children are seen through), and looks at a
+     * point on the entity. Call it again to change the settings
+     * (a different entity starts the chase afresh); {@link Camera.clearChaseTarget|clearChaseTarget} ends it.
+     * @function Camera.setChaseTarget
+     * @param {Uuid} entityID - The entity to follow.
+     * @param {object} [options] - <code>back</code> (m behind, 7), <code>up</code> (m above, 2.5), <code>rate</code> (per
+     *     second: how quickly the camera settles where it wants to be, 6), <code>pivotHeight</code> (m above the entity
+     *     where the camera's boom starts, for walls, 1), <code>lookAhead</code> (m ahead of the entity along its heading
+     *     that the camera looks at, 0), <code>lookHeight</code> (m above the entity that it looks at, 1) and
+     *     <code>followPitch</code> (behind along the entity's forward with its pitch, so up a slope the camera stays above
+     *     the ground behind, as a car's does; false: level behind, as an aircraft's does).
+     * @example <caption>Follow the vehicle you sit in.</caption>
+     * Camera.mode = "independent";
+     * Camera.setChaseTarget(vehicleID, { back: 3.2, up: 1.5, rate: 9 });
+     */
+    void setChaseTarget(const QUuid& entityID, const QVariantMap& options = QVariantMap());
+    /**jsdoc
+     * Ends the chase camera that {@link Camera.setChaseTarget|setChaseTarget} started; the camera stays where it is.
+     * @function Camera.clearChaseTarget
+     */
+    void clearChaseTarget();
+
+public:
+    // the chase camera's settings (setChaseTarget), read by ViewState::updateCamera every frame
+    struct ChaseSettings {
+        QUuid entityID;               // none when null
+        float back { 7.0f };
+        float up { 2.5f };
+        float rate { 6.0f };
+        float pivotHeight { 1.0f };
+        float lookAhead { 0.0f };
+        float lookHeight { 1.0f };
+        bool followPitch { false };
+        uint32_t version { 0 };       // a new entity's chase: the camera starts where it wants to be
+    };
+    ChaseSettings getChaseSettings() const;
+
 private:
     SpatiallyNestableWeakPointer _parent;
+    mutable std::mutex _chaseMutex;   // set from a script's thread, read on the main thread
+    ChaseSettings _chase;
 };
 
 #endif // hifi_FancyCamera_h

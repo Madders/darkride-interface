@@ -41,7 +41,7 @@ Item {
             scale: 1.5
             anchors {
                 left: parent.left
-                leftMargin: 0
+                leftMargin: 20
                 verticalCenter: parent.verticalCenter
             }
         }

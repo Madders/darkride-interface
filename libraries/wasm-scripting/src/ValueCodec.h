@@ -96,9 +96,12 @@ public:
     static bool isBuiltinType(int typeId);
 
 private:
-    /// The CBOR of the common types (nothing, null, booleans, numbers, text, uuids, the glm vectors and quaternions)
-    /// appended to `out`, as toCbor(value).toCbor() writes it; false, with nothing appended, for any other type.
+    /// The CBOR of the common types (nothing, null, booleans, numbers, text, uuids, the glm vectors and quaternions,
+    /// and lists and maps of anything) appended to `out`, as toCbor(value).toCbor() writes it; false, with nothing
+    /// appended, for any other type.
     bool encodeDirectly(const QVariant& value, QByteArray& out) const;
+    /// One item of a list or map: directly, else through the tree.
+    void encodeItem(const QVariant& value, QByteArray& out) const;
     QCborValue encodeObject(QObject* object, bool owned = false, std::function<bool(QObject*)> lingers = std::function<bool(QObject*)>()) const;
     bool encodeRegistered(const QVariant& value, QCborValue& out) const;
     bool decodeRegistered(const QCborValue& value, int targetType, QVariant& out, bool& ok) const;

@@ -10,9 +10,12 @@
 #include <QBitArray>
 #include <QObject>
 #include <QUrl>
+#include <QVariantMap>
 #include <QMutex>
 
+#include <atomic>
 #include <unordered_map>
+#include <set>
 #include <unordered_set>
 #include <functional>
 
@@ -99,6 +102,11 @@ public:
     // new Scene/Engine rendering support
     void setVisibleInScene(bool isVisible, const render::ScenePointer& scene = nullptr);
     bool isVisible() const;
+    // Leaves these shapes (hfm::Model::shapes indices) out of every pass, their shadows too, until shown again: an
+    // avatar's menu hides clothes and hair this way, rather than drawing them invisible. Kept for the model's render
+    // items made later.
+    void setShapesHidden(const std::set<unsigned int>& shapeIDs, const render::ScenePointer& scene);
+    bool isShapeHidden(unsigned int shapeID) const { return _hiddenShapes.count(shapeID) > 0; }
 
     render::hifi::Tag getTagMask() const;
     void setTagMask(uint8_t mask, const render::ScenePointer& scene = nullptr);
@@ -259,6 +267,13 @@ public:
     /// Returns the unscaled extents of the model's mesh
     Extents getUnscaledMeshExtents() const;
 
+    /// Any thread: the loaded model's HFMModel::getUnscaledMeshExtents, cached on the main thread as its geometry arrives
+    /// and goes; false while there is none
+    bool getCachedUnscaledMeshExtents(Extents& extents) const;
+    /// Any thread: the loaded model's glTF extras ("objects": by joint name, "materials": by material name), cached on
+    /// the main thread with the extents; false (and extras left as they were) while there is no geometry
+    bool getCachedExtras(QVariantMap& extras) const;
+
     void setTranslation(const glm::vec3& translation);
     void setRotation(const glm::quat& rotation);
     void overrideModelTransformAndOffset(const Transform& transform, const glm::vec3& offset);
@@ -297,6 +312,7 @@ public:
 
     void setLoadingPriority(float priority) { _loadingPriority = priority; }
 
+    // any thread may read these (scripts do, through Entities.getEntityProperties); they are worked out on the main thread
     size_t getRenderInfoVertexCount() const { return _renderInfoVertexCount; }
     size_t getRenderInfoTextureSize();
     int getRenderInfoTextureCount();
@@ -487,6 +503,7 @@ protected:
 
     QVector<std::shared_ptr<ModelMeshPartPayload>> _modelMeshRenderItems;
     render::ItemIDs _modelMeshRenderItemIDs;
+    std::set<unsigned int> _hiddenShapes;   // setShapesHidden
     std::vector<std::string> _modelMeshMaterialNames;
 
     bool _addedToScene { false }; // has been added to scene
@@ -505,12 +522,18 @@ protected:
 
     bool _renderItemsNeedUpdate { false };
 
-    size_t _renderInfoVertexCount { 0 };
-    int _renderInfoTextureCount { 0 };
-    size_t _renderInfoTextureSize { 0 };
-    bool _hasCalculatedTextureInfo { false };
-    int _renderInfoDrawCalls { 0 };
-    int _renderInfoHasTransparent { false };
+    std::atomic<size_t> _renderInfoVertexCount { 0 };
+    std::atomic<int> _renderInfoTextureCount { 0 };
+    std::atomic<size_t> _renderInfoTextureSize { 0 };
+    std::atomic<bool> _hasCalculatedTextureInfo { false };
+    std::atomic<bool> _textureInfoRequested { false };
+    std::atomic<int> _renderInfoDrawCalls { 0 };
+    std::atomic<bool> _renderInfoHasTransparent { false };
+
+    mutable std::mutex _cachedMeshExtentsMutex;   // the extents and the extras
+    Extents _cachedUnscaledMeshExtents;
+    QVariantMap _cachedExtras;
+    bool _hasCachedUnscaledMeshExtents { false };
 
     // This Render ItemKey Global Flags capture the Model wide global set of flags that should be communicated to all the render items representing the Model.
     // The flags concerned are:
@@ -534,6 +557,7 @@ private:
     float _loadingPriority { 0.0f };
 
     void calculateTextureInfo();
+    void requestTextureInfo();
 
     std::set<unsigned int> getMeshIDsFromMaterialID(QString parentMaterialName);
 };

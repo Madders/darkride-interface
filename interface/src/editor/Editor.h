@@ -22,6 +22,7 @@
 #include <QtCore/QObject>
 #include <QtCore/QPoint>
 #include <QtCore/QRectF>
+#include <QtCore/QSet>
 #include <QtCore/QString>
 #include <QtCore/QTimer>
 #include <QtCore/QUuid>
@@ -54,6 +55,7 @@
 
 class EditorEntityList;
 class QAction;
+class QDockWidget;
 class QDropEvent;
 class QKeyEvent;
 class QLabel;
@@ -146,8 +148,14 @@ public:
     QPixmap inspectorPicture() const;
     // a gizmo drag of the selection driven by a scripted test (Test.editorDrag): begin captures the selection as a
     // press on the gizmo would (a move handle, or a rotate ring when rotate), every call applies the delta or the
-    // rotation about the selection's centre as the pointer's motion would, final takes the undo step as the release would
-    void dragSelectionForTest(const glm::vec3& delta, const glm::quat& rotationDelta, bool rotate, bool begin, bool final);
+    // rotation about the selection's centre as the pointer's motion would, final takes the undo step as the release would;
+    // with scaling, a scale handle's drag, by `scale` along the gizmo's axes (Test.editorScaleDrag)
+    void dragSelectionForTest(const glm::vec3& delta, const glm::quat& rotationDelta, bool rotate, bool begin, bool final,
+                              const glm::vec3& scale = glm::vec3(1.0f), bool scaling = false);
+    // files from this computer uploaded into the Assets panel's folder, as its Upload… does, and the status bar's text
+    // (Test.editorUploadFiles, Test.editorStatus)
+    void uploadFilesForTest(const QStringList& localPaths);
+    QString statusForTest() const;
 
 public slots:
     void setActive(bool active);
@@ -171,6 +179,17 @@ public slots:
     void redo();
     // docks the panels back where they started, for a panel that was torn off and lost
     void resetLayout();
+    // My Files (the Assets panel), made the first time it's asked for: Build mode's, and normal play's too
+    // (ui/Panels.h). Where the window's saved layout has it, open or closed as it was
+    QDockWidget* myFilesPanel();
+    // Build mode's toolbar rows, placed by the editor rather than left to a saved layout
+    void placeToolBars();
+    // after a named layout is put back (View > Layouts, one list for both modes): the Hierarchy, the Inspector and
+    // the rows follow the mode, not the layout, which may have been saved in the other one
+    void layoutApplied(bool savedInBuildMode);
+    // Build mode's own panels, once it has been on (null before)
+    QDockWidget* hierarchyPanel() const;
+    QDockWidget* inspectorPanel() const;
     // the panels' style sheet (styles/editor.qss) on the window, its colours the skin's while one is on
     // (PanelTheme::getSkin): called once the panels exist and again whenever the skin changes
     void applyStyle();
@@ -184,9 +203,28 @@ public slots:
     QVariantMap hierarchyCounts() const;
     // what a click on the entity's row in the Hierarchy does (Test.clickHierarchyRow)
     void clickHierarchyRow(const QUuid& id);
+    // what a click on a Hierarchy row's eye ("hide"), hand ("pick"), lock ("lock") or script mark ("scripts") does,
+    // Alt held for onlyThis (Test.hierarchyToggle); false when the row isn't there or nothing could change
+    bool clickHierarchyToggle(const QString& which, const QUuid& id, bool onlyThis);
+    // the row's toggles and what they amount to (Test.hierarchyToggles): hidden here (and whether the entity is
+    // drawn), unpickable, locked, scripts off, the Hierarchy's note and the last scripts-off reminder
+    QVariantMap hierarchyToggles(const QUuid& id) const;
+    // what a click in the viewport at the entity's middle selects, and what a marquee over the whole viewport would
+    // (Test.editorPickAt, Test.editorMarqueeIds)
+    QUuid pickAtEntityForTest(const QUuid& id) const;
+    QList<QUuid> marqueeAllForTest() const;
+    // the Hierarchy note's Show All, as a click on it
+    void showAllHere();
     void goToSelection();           // Shift+F: frame it and take the avatar there
     void bringSelectionHere();      // Option+Shift+F: move it to the avatar
     void create(const QString& key);
+    // the Terrain tool's Random tick set as a click on it does (Test.terrainRandomAngle): { found, angleEnabled }
+    QVariantMap setTerrainRandomAngleForTest(bool on);
+    // a stroke of the Terrain tool straight down onto the entity's middle, pressed and let go (Test.terrainStroke):
+    // the angle it turned the brush's picture by, or -1 when no terrain was there
+    float terrainStrokeForTest(const QUuid& id);
+    // the angle the next stroke will use, which the outline shows (Test.terrainNextAngle)
+    float terrainNextAngleForTest() const { return _terrain.angle(); }
     void createModel();             // asks for a URL
     void createFromMenu();          // the sender's data() is the catalogue key
     void deleteSelection();
@@ -222,8 +260,12 @@ private:
     enum class DragKind { None, Move, Rotate, Scale, TrackPoint };   // TrackPoint: a Track's chosen control point, by the Move gizmo
 
     void createPanels();
-    void placeToolBars();
+    void loadStyle();   // styles/editor.qss, once, for My Files or Build mode's panels, whichever comes first
     void showPanels(bool show);
+    // the docked panels on the window that aren't Build mode's (chat's), shown
+    QList<QDockWidget*> otherDockedPanels() const;
+    // one of Build mode's panels, new to a side where another panel is docked, goes above it with most of the height
+    void placeAbove(QDockWidget* ours, Qt::DockWidgetArea area);
     void focusViewport();
     void takeFocusUnlessTyping();
     void setMenuActionsEnabled(bool enabled);
@@ -242,6 +284,8 @@ private:
 
     // the Inspector: snapshots of the selection, and edits coming back from its fields
     void refreshInspector(bool selectionChanged);
+    // the Inspector header's toggle icons, for the selection (the Hierarchy rows' states)
+    void updateInspectorToggles();
     // the Hierarchy's rows and the Inspector say what failed to load (EntityRenderer::loadFailures), once a second
     void refreshLoadProblems();
     // the selected entities' load failures, one line each (named when several are selected)
@@ -261,8 +305,31 @@ private:
     EntityItemProperties inspectorEdit(const QString& key, const QVariant& value, const glm::vec3& naturalSize,
                                        const EntityItemProperties& before) const;
 
+    // Scaling an entity scales what is under it, as in Unity (Caity's bug batch, 10-29): each child's offset and its
+    // own size grow with it, all the way down. A child as it was when the scaling began; `parent` is the entry it hangs
+    // from, or -1 - i for the i-th entity scaled
+    struct ScaledChild {
+        QUuid id;
+        int parent;
+        glm::vec3 localPosition;
+        glm::vec3 dimensions;      // its own
+        glm::quat localRotation;
+        glm::quat frame;           // the axes its offset is in, in its parent's: a joint's, else the parent's own
+        float lineHeight { 0.0f }; // a Text's, which grows with it
+        float falloff { 0.0f };    // a Light's, which keeps its glow in proportion to its range, as Range does
+    };
+    // the children of the entities, parents first: not those among the entities (scaled in their own right), the
+    // locked ones (they take no edits: they and theirs stay as they were) or an avatar sitting on one
+    QVector<ScaledChild> childrenToScale(const QList<QUuid>& ids) const;
+    // the children's edits for each entity's new size over its old, along its own axes
+    static QVector<EntityItemProperties> childScaleEdits(const QVector<ScaledChild>& children,
+                                                         const QVector<glm::vec3>& ratios);
+    static EntityItemProperties childScaleBefore(const ScaledChild& child);
+    void sendChildScale(const QVector<ScaledChild>& children, const QVector<EntityItemProperties>& edits, bool final);
+
     PickRay pickRay(const QPoint& viewportPos) const;
     QUuid pickEntity(const QPoint& viewportPos) const;
+    QUuid pickEntityOnRay(const PickRay& ray) const;
     // where the cursor points in the world: a surface, or the grid plane; false when off the viewport
     bool cursorWorldPoint(glm::vec3& point) const;
     glm::vec3 selectionAnchor() const;
@@ -338,6 +405,7 @@ private:
     void setGizmosVisible(bool visible);
     // what a click there selects: a light's icon, or else the surface under it
     QUuid pickAt(const QPoint& viewportPos) const;
+    QUuid pickOnRay(const PickRay& ray) const;
     bool pointerOverHierarchy() const;
     void beginLightHandleDrag(const EditorLightHandle& handle, const PickRay& ray);
     void moveLightHandleDrag(const QPoint& viewportPos);
@@ -396,6 +464,7 @@ private:
     glm::vec3 _dragDelta;
     glm::quat _dragRotationDelta;
     glm::vec3 _dragScale { 1.0f };
+    QVector<ScaledChild> _dragChildren;   // under the entities a scale drag scales
     QPoint _lastDragPos;
     QElapsedTimer _editTimer;
 
@@ -459,8 +528,11 @@ private:
     ulong _lastEscapeTime { 0 };        // the key event time of a first Escape, waiting for a second
     // per entity in an Inspector edit of Scale: its own size, to turn scale into dimensions
     QVector<glm::vec3> _inspectorNatural;
+    QVector<ScaledChild> _inspectorChildren;   // under the entities an Inspector edit of Scale or Size scales
 
     bool _panelsCreated { false };
+    // a panel of ours put above another (placeAbove), sized once both show: Qt doesn't size a hidden one
+    QList<QPair<QPointer<QDockWidget>, QPointer<QDockWidget>>> _sharesToSize;
     QString _styleSource;     // styles/editor.qss as shipped (applyStyle)
     bool _syncingSelection { false };
     HierarchyPanel* _hierarchy { nullptr };
@@ -484,8 +556,29 @@ private:
     QTimer _arrivalTimer;
     void onHierarchySelection(const QList<QUuid>& ids);
     void onEntityLoaded(const QUuid& id);
+    // The Hierarchy's eye and hand (Caity, 2026-10-26: "do it like unity"): what this builder has hidden in their own
+    // view and made unpickable by their own clicks, as Unity's scene visibility and pickability are. Kept on this
+    // computer only, by entity id (unique across worlds), never sent to the world; the shared Visible and Ignore
+    // Picking are the Inspector's
+    QSet<QUuid> _hiddenHere;
+    QSet<QUuid> _noPick;
+    bool _localStatesLoaded { false };
+    Setting::Handle<QStringList> _hiddenHereSetting { "editor/hiddenHere", QStringList() };
+    Setting::Handle<QStringList> _noPickSetting { "editor/noPick", QStringList() };
+    QTimer _hiddenHereTimer;   // entities that arrive while build mode is on are hidden again in one pass
+    void loadLocalStates();
+    void saveLocalStates();
+    void onHierarchyToggle(int toggle, const QList<QUuid>& ids, bool on);
+    // what this builder hid, hidden in this view (EntityItem::setLocallyVisible) while build mode is on, and shown
+    // again as it goes off
+    void applyHiddenHere(bool hide);
+    void setLocallyHidden(const QList<QUuid>& ids, bool hidden);
+    bool excludedFromPicks(const QUuid& id) const { return _hiddenHere.contains(id) || _noPick.contains(id); }
+    // as build mode closes: a banner when entities here have their scripts off (shared, unlike the eye and hand);
+    // its text kept for Test.hierarchyToggles
+    void remindOfScriptsOff();
+    QString _scriptsOffReminder;
     void updateListNote();
-    Setting::Handle<QByteArray> _layoutSetting { "editor/layout3", QByteArray() };   // 2: the panels no longer float; 3: the Assets dock
     // build mode narrows the field of view; the user's own is kept here so it survives a crash
     Setting::Handle<float> _fovBeforeBuild { "editor/fovBeforeBuild", 0.0f };
     float _savedFov { 0.0f };

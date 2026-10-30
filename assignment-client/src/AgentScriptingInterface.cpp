@@ -14,4 +14,6 @@
 AgentScriptingInterface::AgentScriptingInterface(Agent* agent) :
     QObject(agent),
     _agent(agent)
-{ }
+{
+    connect(agent, &Agent::avatarSoundFinished, this, &AgentScriptingInterface::avatarSoundFinished);
+}

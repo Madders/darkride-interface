@@ -106,6 +106,8 @@ void EntityTreeModel::fillNode(Node& node, const EntityItemPointer& entity) {
     node.type = entity->getType();
     node.locked = entity->getLocked();
     node.visible = entity->getVisible();
+    bool hasScripts = !entity->getScript().isEmpty() || !entity->getServerScripts().isEmpty();
+    node.scripts = !hasScripts ? NoScripts : entity->getScriptsEnabled() ? ScriptsRun : ScriptsOff;
     node.created = entity->getCreated();
     node.parentID = entity->getParentID();
     node.loaded = true;
@@ -230,11 +232,13 @@ void EntityTreeModel::rescan() {
 void EntityTreeModel::refreshNode(Node* node, const Node& fresh) {
     bool arrived = !node->loaded;
     bool changed = arrived || node->name != fresh.name || node->locked != fresh.locked
-        || node->visible != fresh.visible || node->type != fresh.type || node->created != fresh.created;
+        || node->visible != fresh.visible || node->scripts != fresh.scripts || node->type != fresh.type
+        || node->created != fresh.created;
     if (changed) {
         node->name = fresh.name;
         node->locked = fresh.locked;
         node->visible = fresh.visible;
+        node->scripts = fresh.scripts;
         node->type = fresh.type;
         node->created = fresh.created;
         node->loaded = true;
@@ -371,6 +375,16 @@ int EntityTreeModel::loadedCount() const {
         }
     }
     return loaded;
+}
+
+int EntityTreeModel::scriptsOffCount() const {
+    int off = 0;
+    for (auto node : _nodes) {
+        if (node->loaded && node->scripts == ScriptsOff) {
+            ++off;
+        }
+    }
+    return off;
 }
 
 // --- incremental updates ------------------------------------------------------------------------
@@ -617,6 +631,8 @@ QVariant EntityTreeModel::data(const QModelIndex& index, int role) const {
             return node->locked;
         case VisibleRole:
             return node->visible;
+        case ScriptsRole:
+            return (int)node->scripts;
         case CreatedRole:
             return (qulonglong)node->created;
         default:
@@ -744,5 +760,6 @@ QHash<int, QByteArray> EntityTreeModel::roleNames() const {
     roles[LockedRole] = "locked";
     roles[VisibleRole] = "visible";
     roles[LoadedRole] = "loaded";
+    roles[ScriptsRole] = "scripts";
     return roles;
 }

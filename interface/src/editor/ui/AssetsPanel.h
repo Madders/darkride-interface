@@ -105,11 +105,15 @@ public:
     void setSort(Column column, bool descending);
     // build mode on: the listing is fetched, and again after every change; off: nothing is fetched
     void setActive(bool active);
+    // a note at the foot, in normal play (Build mode has its status bar); empty hides it
+    void setNote(const QString& text);
     // where the editor's own keys go when pressed in the panel (true: taken)
     void setKeyFallback(std::function<bool(QKeyEvent*)> fallback) { _keyFallback = std::move(fallback); }
     UserFiles* files() const { return _files; }
     QString folder() const { return _folder; }
     void setFolder(const QString& folderPath);
+    // Upload… without its file dialog, for a scripted test
+    void uploadFilesForTest(const QStringList& localPaths) { uploadFiles(localPaths, _folder); }
 
 signals:
     // a note for the status bar: a link copied, an upload's progress, why something could not be done
@@ -133,7 +137,8 @@ private:
     void onListed();
     void onDropped(const QMimeData* data, const QString& folderPath);
     void uploadFiles(const QStringList& localPaths, const QString& folderPath);
-    void trackUpload(EditorUpload* upload);
+    // fromComputer: a file from this computer (not a duplicate), whose status carries the rights line
+    void trackUpload(EditorUpload* upload, bool fromComputer);
     void duplicateFiles(const QList<const UserFile*>& files);
     void chooseUploads();
     void showGridMenu(const QPoint& globalPos);
@@ -159,7 +164,9 @@ private:
     QLineEdit* _search { nullptr };
     QComboBox* _kind { nullptr };
     QLabel* _banner { nullptr };
+    QLabel* _rightsLine { nullptr };   // under the files (ui/RightsLine.h)
     QLabel* _quota { nullptr };
+    QLabel* _note { nullptr };
     QLabel* _empty { nullptr };     // a note over an empty grid
     QWidget* _crumbs { nullptr };
     QHBoxLayout* _crumbLayout { nullptr };

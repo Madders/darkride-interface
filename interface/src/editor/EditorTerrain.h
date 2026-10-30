@@ -43,7 +43,7 @@ class RenderableTerrainEntityItem;
 // Paint Voxels lays down (a voxel holds one material, so a pass paints that share of the voxels). The shape is the
 // picture the brush takes its shape from (terrain::BrushMask): a path in the client's resources
 // (":/terrain/brushes/star.png") or a file on disk; empty for the round brush. The angle (degrees) turns the picture
-// about the brush's centre.
+// about the brush's centre; with randomAngle each stroke takes a new one instead.
 struct EditorTerrainBrush {
     terrain::SculptMode mode { terrain::SculptMode::Raise };
     float radius { 3.0f };
@@ -54,6 +54,7 @@ struct EditorTerrainBrush {
                                 // bottom layer's material (the ground's own) instead of the chosen layer's
     QString shape;
     float angle { 0.0f };
+    bool randomAngle { false };
 };
 
 class EditorTerrain : public QObject {
@@ -81,6 +82,9 @@ public:
     // the stroke's end: one undo step, and the collision shape follows; cancelled, the ground goes back as it was
     void endStroke(bool cancel);
     bool isStroking() const { return _stroking; }
+    // the angle (degrees) the shape picture is turned by: the brush's, or with Random the stroke's own, chosen as the
+    // last stroke ended, so the outline shows it before the press
+    float angle() const { return _brush.randomAngle ? _randomAngle : _brush.angle; }
     // the outline goes, and a stroke in progress ends as it is
     void clear();
 
@@ -168,6 +172,7 @@ private:
     bool _erasing { false };        // Paint with Shift (or the Erase mode): back toward the voxels' own material; Paint
                                     // Voxels with Shift (or its Erase box): the bottom layer's material
     uint8_t _strokeMaterial { 0 };  // the material this stroke's Raise, Fill or Paint Voxels writes
+    float _randomAngle { 0.0f };    // degrees: the next stroke's, with Random on
     float _flattenHeight { 0.0f };  // voxel units: where the stroke began
     float _accumulated { 0.0f };    // the brush's effect waiting to be applied as one step
     int _steps { 0 };

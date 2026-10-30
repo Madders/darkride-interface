@@ -80,6 +80,7 @@ private:
     QDoubleSpinBox* _strength { nullptr };
     QDoubleSpinBox* _hardness { nullptr };
     QDoubleSpinBox* _angle { nullptr };
+    QCheckBox* _randomAngle { nullptr };   // a new angle for each stroke; the Angle field greys out while it's on
     QComboBox* _layer { nullptr };
     std::function<QStringList()> _layerNames;
     QDoubleSpinBox* _detail { nullptr };

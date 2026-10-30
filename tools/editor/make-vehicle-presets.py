@@ -10,7 +10,7 @@
 #
 #  Writes the vehicles Build mode makes ready to drive (interface/resources/editor/vehicles/*.json): entity files as an
 #  export writes them, each with its ground at y 0 and its front towards -z. The values are the ones physics tuned for
-#  the test rigs: tests-manual/physics-baseline/landrover.js (the car), aircraft-rig.js and airship-rig.js, and the
+#  the test rigs: tests-manual/physics-baseline/landrover.js (the car), kart-rig.js, aircraft-rig.js and airship-rig.js, and the
 #  monorail's beam and car. Run it again after a retune:
 #      tools/editor/make-vehicle-presets.py [out dir]
 #  A vehicle's type goes on in the file as it is; Build mode makes it in two steps (EditorUndo::createEntities).
@@ -88,6 +88,56 @@ def car():
             "color": {"red": 16, "green": 16, "blue": 22}, "dynamic": False, "collisionless": True,
             "vehicle": {"type": "wheel", "wheel": wheel["name"], "axle": "y"},
         })
+    return entities
+
+
+def kart():
+    # the go-kart of kart-rig.js (Caity, 10-25: "kart works great. fun too"): one seat, low, 1.45 m long, fits a 1.2 m door;
+    # the look (a seat back, a steering wheel, a bumper) is the test track pad's, collisionless, so the kart is its box.
+    # "Kart 2" (physics, kart-tune-1 d41f73a8ae, final 10-26): all four wheels driven, 100 N m through 2.8 to about
+    # 16.8 m/s, 50 degrees of lock, 250 N m brakes, a stiffer 3.5 Hz suspension
+    wheel_radius, wheel_width, wheelbase, track, travel = 0.14, 0.12, 1.0, 0.74, 0.06
+    chassis_above_ground = 0.2
+    wheel_top = (wheel_radius + travel * 0.5) - chassis_above_ground
+    wheels = []
+    for name, side, end in (("FL", -1, -1), ("FR", 1, -1), ("RL", -1, 1), ("RR", 1, 1)):
+        front = end < 0
+        wheels.append({"name": name, "center": [side * track * 0.5, wheel_top, end * wheelbase * 0.5],
+                       "radius": wheel_radius, "width": wheel_width, "mass": 3, "suspensionDistance": travel,
+                       "targetPosition": 0.5, "steer": 1 if front else 0, "brake": 1, "handBrake": 0 if front else 1})
+    chassis = {
+        "id": new_id(), "type": "Box", "shape": "Cube", "name": "Go-kart", "position": vec(0, chassis_above_ground + 0.05, 0),
+        "dimensions": vec(0.7, 0.16, 1.45), "color": {"red": 220, "green": 40, "blue": 40}, "dynamic": True,
+        "collisionless": False, "gravity": vec(0, -9.8, 0), "damping": 0.02, "angularDamping": 0.3, "friction": 0.6,
+        "restitution": 0.0, "grab": {"grabbable": False},
+        "vehicle": {
+            "type": "wheeled", "mass": 150, "centerOfMass": vec(0, -0.12, 0),
+            "wheels": json.dumps(wheels),
+            "seats": json.dumps([{"name": "driver", "position": [0, 0.06, 0.12], "yaw": 0, "driver": True}]),
+            "maxSteerAngle": 50, "maxTorque": 100, "minRPM": 1000, "maxRPM": 3200,
+            "gearRatios": json.dumps([1.0]), "reverseGearRatio": 3.0, "finalDriveRatio": 2.8,
+            "maxBrakeTorque": 250, "maxHandBrakeTorque": 250, "driveType": "all",
+            "suspensionFrequency": 3.5, "suspensionDamping": 0.7,
+        },
+    }
+    dark = {"red": 30, "green": 30, "blue": 36}
+    entities = [chassis]
+    for wheel in wheels:
+        x, y, z = wheel["center"]
+        entities.append({
+            "id": new_id(), "type": "Shape", "shape": "Cylinder", "name": "Go-kart wheel " + wheel["name"],
+            "parentID": chassis["id"], "position": vec(x, y - wheel["suspensionDistance"] * 0.5, z), "rotation": roll(90),
+            "dimensions": vec(2 * wheel["radius"], wheel["width"], 2 * wheel["radius"]),
+            "color": {"red": 16, "green": 16, "blue": 22}, "dynamic": False, "collisionless": True,
+            "vehicle": {"type": "wheel", "wheel": wheel["name"], "axle": "y"},
+        })
+    half = math.radians(60) * 0.5
+    entities += [
+        part(chassis, "Go-kart seat back", vec(0, 0.3, 0.38), vec(0.44, 0.45, 0.08), dark),
+        part(chassis, "Go-kart steering wheel", vec(0, 0.32, -0.32), vec(0.3, 0.03, 0.3), dark, type="Shape",
+             shape="Cylinder", rotation={"x": math.sin(half), "y": 0.0, "z": 0.0, "w": math.cos(half)}),
+        part(chassis, "Go-kart bumper", vec(0, -0.02, -0.78), vec(0.8, 0.1, 0.1), {"red": 240, "green": 200, "blue": 40}),
+    ]
     return entities
 
 
@@ -237,7 +287,7 @@ def main():
     here = os.path.dirname(os.path.abspath(__file__))
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, "..", "..", "interface", "resources", "editor", "vehicles")
     os.makedirs(out, exist_ok=True)
-    for name, make in (("car", car), ("aircraft", aircraft), ("airship", airship), ("rail", rail)):
+    for name, make in (("car", car), ("kart", kart), ("aircraft", aircraft), ("airship", airship), ("rail", rail)):
         path = os.path.join(out, name + ".json")
         entities = make()
         with open(path, "w") as f:

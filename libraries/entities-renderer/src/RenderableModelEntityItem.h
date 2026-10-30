@@ -14,6 +14,8 @@
 
 #include <ModelEntityItem.h>
 
+#include <atomic>
+
 #include <QString>
 #include <QStringList>
 
@@ -140,7 +142,7 @@ private:
     std::vector<int> _jointMap;
     QVariantMap _originalTextures;
     bool _jointMapCompleted { false };
-    bool _originalTexturesRead { false };
+    std::atomic<bool> _originalTexturesRead { false }; // set on the main thread after _originalTextures, read by scripts
     bool _dimensionsInitialized { true };
     bool _needsJointSimulation { false };
 };

@@ -10,6 +10,8 @@
 #ifndef hifi_Controllers_StandardEndpoint_h
 #define hifi_Controllers_StandardEndpoint_h
 
+#include <atomic>
+
 #include "../Endpoint.h"
 
 #include <DependencyManager.h>
@@ -23,6 +25,9 @@ class StandardEndpoint : public VirtualEndpoint {
 public:
     StandardEndpoint(const Input& input) : VirtualEndpoint(input) {}
     virtual bool writeable() const override { return !_written; }
+    // how many times a Standard input has become written (no longer writeable): UserInputMapper::applyRoutes re-tries
+    // the routes waiting on one only after this changes
+    static uint64_t writes() { return _writes.load(std::memory_order_relaxed); }
     virtual bool readable() const override { return !_read; }
     virtual void reset() override {
         apply(AxisValue(), Endpoint::Pointer());
@@ -38,7 +43,7 @@ public:
     virtual void apply(AxisValue value, const Pointer& source) override {
         // For standard endpoints, the first NON-ZERO write counts.
         if (value != AxisValue()) {
-            _written = true;
+            setWritten();
         }
         VirtualEndpoint::apply(value, source);
     }
@@ -56,13 +61,21 @@ public:
 
     virtual void apply(const Pose& value, const Pointer& source) override {
         if (value != Pose() && value.isValid()) {
-            _written = true;
+            setWritten();
         }
         VirtualEndpoint::apply(value, source);
     }
 
 private:
+    void setWritten() {
+        if (!_written) {
+            _writes.fetch_add(1, std::memory_order_relaxed);
+        }
+        _written = true;
+    }
+
     bool _written { false };
+    inline static std::atomic<uint64_t> _writes { 0 };
     bool _read { false };
 };
 

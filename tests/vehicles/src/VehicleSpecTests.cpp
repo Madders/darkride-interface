@@ -8,6 +8,8 @@
 
 #include "VehicleSpecTests.h"
 
+#include <cmath>
+
 #include <VehicleInput.h>
 #include <WheeledVehicleSpec.h>
 
@@ -145,4 +147,52 @@ void VehicleSpecTests::inputPacket() {
     corrupt[16] = (char)200;
     QVERIFY(!VehicleInputPacket::unpack(corrupt, readID, read));
     QVERIFY(read.empty());
+}
+
+// The driver's steering (WheeledVehicleSpec::steeringFor): eased toward the ask, and held under a 1 g turn at speed.
+// Kart 2's numbers: a 1.0 m wheelbase and 50 degrees of lock (tests-manual/physics-baseline/kart-rig.js).
+void VehicleSpecTests::steering() {
+    WheeledVehicleSpec kart;
+    QVERIFY(WheeledVehicleSpec::parseWheels(
+        "[{\"center\":[-0.37,0,-0.5],\"steer\":1},{\"center\":[0.37,0,-0.5],\"steer\":1},"
+        " {\"center\":[-0.37,0,0.5]},{\"center\":[0.37,0,0.5]}]", kart.wheels));
+    kart.maxSteerAngle = 50.0f;
+    QCOMPARE_WITH_ABS_ERROR(kart.wheelbase(), 1.0f, 1.0e-6f);
+    const float DT = 1.0f / 90.0f;
+    auto hold = [&](float from, float wanted, float speed, float seconds) {
+        float steering = from;
+        for (int i = 0; i < (int)roundf(seconds / DT); ++i) {
+            steering = kart.steeringFor(steering, wanted, speed, DT);
+        }
+        return steering;
+    };
+
+    // standing: full lock in 0.2 s, half of it in 0.1, and back to straight in 0.12; the same to the left
+    QCOMPARE_WITH_ABS_ERROR(hold(0.0f, 1.0f, 0.0f, 0.1f), 0.5f, 0.01f);
+    QCOMPARE_WITH_ABS_ERROR(hold(0.0f, 1.0f, 0.0f, 0.2f), 1.0f, 1.0e-5f);
+    QCOMPARE_WITH_ABS_ERROR(hold(0.0f, -1.0f, 0.0f, 0.2f), -1.0f, 1.0e-5f);
+    QCOMPARE_WITH_ABS_ERROR(hold(1.0f, 0.0f, 0.0f, 0.12f), 0.0f, 1.0e-5f);
+    QVERIFY(hold(1.0f, 0.0f, 0.0f, 0.06f) < 0.55f);
+    // full lock to full lock the other way: back to the centre at the quicker rate, then out at the slower
+    QCOMPARE_WITH_ABS_ERROR(hold(1.0f, -1.0f, 0.0f, 0.12f), 0.0f, 0.02f);
+    QCOMPARE_WITH_ABS_ERROR(hold(1.0f, -1.0f, 0.0f, 0.32f), -1.0f, 1.0e-5f);
+    // at walking pace the whole lock: atan(g L / v^2) at 2 m/s is 68 degrees, over the kart's 50
+    QCOMPARE_WITH_ABS_ERROR(hold(0.0f, 1.0f, 2.0f, 0.5f), 1.0f, 1.0e-5f);
+    // at 16 m/s a 1 g turn: atan(9.8 / 256) = 2.19 degrees of the 50
+    float limit = atanf(9.8f / 256.0f) / glm::radians(50.0f);
+    QCOMPARE_WITH_ABS_ERROR(hold(0.0f, 1.0f, 16.0f, 0.5f), limit, 1.0e-4f);
+    QCOMPARE_WITH_ABS_ERROR(hold(0.0f, -1.0f, 16.0f, 0.5f), -limit, 1.0e-4f);
+    // speeding up in a full-lock turn takes the lock down with the speed
+    QCOMPARE_WITH_ABS_ERROR(hold(1.0f, 1.0f, 16.0f, 0.5f), limit, 1.0e-4f);
+    // half the stick asks for half the lock while that is under the limit
+    QCOMPARE_WITH_ABS_ERROR(hold(0.0f, 0.5f, 3.0f, 0.5f), 0.5f, 1.0e-5f);
+    // an ask past the stick's ends is full lock; no time passing changes nothing
+    QCOMPARE_WITH_ABS_ERROR(hold(0.0f, 3.0f, 0.0f, 0.5f), 1.0f, 1.0e-5f);
+    QCOMPARE(kart.steeringFor(0.3f, 1.0f, 0.0f, 0.0f), 0.3f);
+
+    // one axle: no wheelbase, so no limit at speed, but still the rate
+    WheeledVehicleSpec trike;
+    QVERIFY(WheeledVehicleSpec::parseWheels("[{\"center\":[-0.3,0,0],\"steer\":1},{\"center\":[0.3,0,0],\"steer\":1}]", trike.wheels));
+    QCOMPARE(trike.wheelbase(), 0.0f);
+    QCOMPARE_WITH_ABS_ERROR(trike.steeringFor(0.0f, 1.0f, 30.0f, 0.1f), 0.5f, 1.0e-5f);
 }

@@ -77,6 +77,7 @@ Rectangle {
                     id: label
                     anchors.centerIn: parent
                     text: modelData.text
+                    textFormat: Text.PlainText
                     color: Theme.text
                     font.pixelSize: Theme.controlTextSize
                     font.weight: selected ? Font.DemiBold : Font.Normal

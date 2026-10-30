@@ -4,7 +4,6 @@
 	"system/worldLoading.js", // the loading screen: a hop to another world, and a world that loads whole first
 	// "system/progress.js", // progress bar at the bottom, to be rewritten
 	// "system/away.js",
-	"system/audio.js",
 	"system/hmd.js", // enter leave vr button
 	"system/menu.js", // settings menu in vr
 	// "system/bubble.js",

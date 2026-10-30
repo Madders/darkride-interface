@@ -549,6 +549,7 @@ declare namespace Entities {
 		script: string;
 		scriptTimestamp: number;
 		serverScripts: string;
+		scriptsEnabled: boolean;
 		parentID: Uuid;
 		parentJointIndex: number;
 		localPosition: Vec3;

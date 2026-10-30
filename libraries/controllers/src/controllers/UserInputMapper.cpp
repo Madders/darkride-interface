@@ -521,6 +521,10 @@ void UserInputMapper::runMappings() {
 // Encapsulate the logic that routes should not be read before they are written
 void UserInputMapper::applyRoutes(const Route::List& routes) {
     Route::List deferredRoutes;
+    // A route is deferred while its Standard input is unwritten, so the deferred routes can only go through after a
+    // Standard input was written: re-try them then, not before every route (standing still nearly every route waits,
+    // and re-trying them all each time cost routes x routes checks every frame)
+    auto writesAtRetry = StandardEndpoint::writes();
 
     for (const auto& route : routes) {
         if (!route) {
@@ -528,9 +532,12 @@ void UserInputMapper::applyRoutes(const Route::List& routes) {
         }
 
         // Try all the deferred routes
-        deferredRoutes.remove_if([](Route::Pointer route) {
-            return UserInputMapper::applyRoute(route);
-        });
+        if (!deferredRoutes.empty() && StandardEndpoint::writes() != writesAtRetry) {
+            writesAtRetry = StandardEndpoint::writes();
+            deferredRoutes.remove_if([](const Route::Pointer& route) {
+                return UserInputMapper::applyRoute(route);
+            });
+        }
 
         if (!applyRoute(route)) {
             deferredRoutes.push_back(route);

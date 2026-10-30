@@ -33,6 +33,21 @@ Item {
 
         expanded: true
 
+        // The overlay is centred, so a box that narrowed as its numbers changed width would shift everything sideways
+        // (Caity 10-28: it "judders as it updates"). Each box keeps its widest width; showing fewer lines lets them
+        // narrow again, once the columns have laid out.
+        onExpandedChanged: narrowAgain.restart()
+        Timer {
+            id: narrowAgain
+            interval: 100
+            onTriggered: {
+                generalCol.widest = generalCol.width;
+                pingCol.widest = pingCol.width;
+                geoCol.widest = geoCol.width;
+                octreeCol.widest = octreeCol.width;
+            }
+        }
+
         anchors.horizontalCenter: parent.horizontalCenter
         readonly property string bgColor: "#AA111111"
 
@@ -40,7 +55,7 @@ Item {
             id: row
             spacing: 8
             Rectangle {
-                width: generalCol.width + 8;
+                width: generalCol.widest + 8;
                 height: generalCol.height + 8;
                 color: root.bgColor;
 
@@ -52,6 +67,8 @@ Item {
 
                 Column {
                     id: generalCol
+                    property real widest: 0   // see narrowAgain
+                    onWidthChanged: widest = Math.max(widest, width)
                     spacing: 4; x: 4; y: 4;
                     StatText {
                         text: "Servers: " + root.serverCount
@@ -164,7 +181,7 @@ Item {
             }
 
             Rectangle {
-                width: pingCol.width + 8
+                width: pingCol.widest + 8
                 height: pingCol.height + 8
                 color: root.bgColor;
                 visible: root.audioPing != -2
@@ -175,6 +192,8 @@ Item {
                 }
                 Column {
                     id: pingCol
+                    property real widest: 0   // see narrowAgain
+                    onWidthChanged: widest = Math.max(widest, width)
                     spacing: 4; x: 4; y: 4;
                     StatText {
                         text: "Audio ping/loss: " + root.audioPing + "/" + root.audioPacketLoss + "%"
@@ -196,7 +215,7 @@ Item {
             }
 
             Rectangle {
-                width: geoCol.width + 8
+                width: geoCol.widest + 8
                 height: geoCol.height + 8
                 color: root.bgColor;
                 MouseArea {
@@ -206,6 +225,8 @@ Item {
                 }
                 Column {
                     id: geoCol
+                    property real widest: 0   // see narrowAgain
+                    onWidthChanged: widest = Math.max(widest, width)
                     spacing: 4; x: 4; y: 4;
                     StatText {
                         text: "Position: " + root.position.x.toFixed(1) + ", " +
@@ -321,7 +342,7 @@ Item {
                 }
             }
             Rectangle {
-                width: octreeCol.width + 8
+                width: octreeCol.widest + 8
                 height: octreeCol.height + 8
                 color: root.bgColor;
                 MouseArea {
@@ -331,6 +352,8 @@ Item {
                 }
                 Column {
                     id: octreeCol
+                    property real widest: 0   // see narrowAgain
+                    onWidthChanged: widest = Math.max(widest, width)
                     spacing: 4; x: 4; y: 4;
                     StatText {
                         text: "Engine: " + root.engineFrameTime.toFixed(1) + " ms"

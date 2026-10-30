@@ -2,8 +2,9 @@
 //  ChatService.cpp
 //  libraries/chat/src
 //
-//  Distributed under the Apache License, Version 2.0.
-//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//  Copyright 2026 Darkride.
+//
+//  Distributed under the MIT License.
 //
 
 #include "ChatService.h"
@@ -80,6 +81,7 @@ void ChatService::onAccountLoggedOut() {
     _retryTimer.stop();
     _token.clear();
     _expectedUser.clear();
+    _tokenDisplayName.clear();
     settle();
     if (!_chat) {
         setState(State::SignedOut, "Sign in to Darkride to use chat.");
@@ -114,6 +116,7 @@ void ChatService::chatTokenReceived(QNetworkReply* reply) {
     _token = token;
     _tokenAge.start();
     _expectedUser = data.value("user_id").toString();
+    _tokenDisplayName = data.value("display_name").toString().trimmed();
     if (_chat && homeserver != _homeserver) {
         freeLibrary();
     }
@@ -187,6 +190,7 @@ void ChatService::freeLibrary() {
     _libraryUser.clear();
     _syncState.clear();
     _rooms = QJsonArray();
+    countUnread();
     _spaces = QJsonArray();
     _profileName.clear();
     _profileAvatar.clear();
@@ -217,6 +221,7 @@ void ChatService::handleEvent(const QByteArray& json) {
         if (_state == State::Ready) {
             emit roomsChanged(_rooms);
         }
+        countUnread();
     } else if (kind == "timeline") {
         if (_state == State::Ready) {
             emit timelineChanged(event.value("room").toString(), event.value("items").toArray());
@@ -224,10 +229,21 @@ void ChatService::handleEvent(const QByteArray& json) {
     } else if (kind == "profile") {
         _profileName = event.value("name").toString();
         _profileAvatar = event.value("avatar").toString();
+        // a chat account the app made has no name yet (only the web chat named one at its first sign-in): the one
+        // Darkride gives with the token, never over a name that's set; later changes come from the metaverse (F7)
+        // (shown once the homeserver has it: the "done" below)
+        if (_profileName.isEmpty() && !_tokenDisplayName.isEmpty()) {
+            qCDebug(chat_service) << "chat: the account has no name yet; naming it as Darkride does";
+            command({ { "op", "set_display_name" }, { "name", _tokenDisplayName } });
+        }
         emit profileChanged();
     } else if (kind == "media") {
         emit mediaReady(event.value("key").toString(), event.value("path").toString(), event.value("error").toString());
     } else if (kind == "done") {
+        if (event.value("op").toString() == "set_display_name") {
+            _profileName = event.value("name").toString();
+            emit profileChanged();
+        }
         emit commandDone(event);
     } else if (kind == "error") {
         QString op = event.value("op").toString();
@@ -300,6 +316,22 @@ void ChatService::setState(State state, const QString& text) {
     _stateText = text;
     qCDebug(chat_service) << "chat:" << state << text;
     emit stateChanged(state);
+    countUnread();
+}
+
+void ChatService::countUnread() {
+    int count = 0;
+    if (_state == State::Ready) {
+        for (const auto& value : _rooms) {
+            QJsonObject room = value.toObject();
+            int notifications = room.value("notifications").toInt();
+            count += notifications > 0 ? notifications : room.value("dm").toBool() ? room.value("unread").toInt() : 0;
+        }
+    }
+    if (count != _unreadCount) {
+        _unreadCount = count;
+        emit unreadCountChanged(count);
+    }
 }
 
 void ChatService::command(const QJsonObject& command) {

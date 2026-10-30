@@ -25,22 +25,40 @@
 #                                    `open -g -n -W` with Qt's activation switched off: a binary run straight from a
 #                                    shell is brought to the front by macOS at launch and by Qt when it has launched,
 #                                    and takes the keyboard. open passes on only the environment it's given, so the
-#                                    TIVOLI_, HIFI_, DARKRIDE_, QT_, XDG_ and DYLD_ variables are handed over; the
-#                                    client's exit status isn't (read its log). CLIENT_FOREGROUND=1 opens it in front
+#                                    TIVOLI_, HIFI_, DARKRIDE_, QT_, XDG_, DYLD_ and CFFIXED_ variables are handed
+#                                    over; the client's exit status isn't, so once it has gone the system log's
+#                                    record of its end is read instead (client_exit_line).
+#                                    A release build (bundle id com.tivolicloud.interface: 1.0.x, PRODUCTION builds)
+#                                    shares the installed Darkride's "Tivoli Cloud VR" folders, and 1.0.x writes its
+#                                    log, QML cache and web data there whatever XDG_CONFIG_HOME and TIVOLI_APP_DATA_DIR
+#                                    say: such a client gets CFFIXED_USER_HOME=<log>.home (where Foundation, and so Qt,
+#                                    puts ~/Library; HOME doesn't move it) unless the caller set one, and once it has
+#                                    quit, "WALLED OFF" or "NOT WALLED OFF" says whether ~/Library's Tivoli Cloud VR
+#                                    folders changed while it ran. Its caches, the ktx cache too (unless KEEP_KTX=1),
+#                                    are deleted after; its log stays. CLIENT_FOREGROUND=1 opens it in front
 #                                    instead, still through open (a client someone plays, or a timing run that needs
 #                                    the window on top). Elsewhere than macOS it runs the binary straight.
 #                                    The client's pid goes in <log>.pid while it runs; CLIENT_TIMEOUT=<s> stops a
 #                                    client still running after that long (SIGTERM, then SIGKILL after 5 s).
+#                                    CLIENT_OPEN_URL=<url> (macOS) gives the starting client a link the way a browser
+#                                    does (the get-URL Apple Event), to that bundle only; --url takes another path.
 #                                    client_start also passes -NSAutoFillHeuristicsEnabled NO (AppKit's argument domain;
 #                                    the client's own parser lists it as unknown and goes on): AutoFill starts a
 #                                    SafariPlatformSupport.Helper when the app becomes active, and the helper outlives
 #                                    the client; 422 of them used up launchservicesd and brought a Mac down
 #                                    (2026-10-25). The background launch never activates it; this covers a click.
+#                                    It passes --noAudioInput too (no microphone, so no macOS permission prompt over
+#                                    the test); CLIENT_MIC=1 keeps the microphone for a test that needs it.
 #                                    When the client has quit, the macOS helper services it left running are stopped
 #                                    (stop_client_helpers), whichever way it was launched.
 #   stop_client_helpers <pid> <since>
 #                                    stops the VT decoder and encoder services and the Safari helper whose own logs
 #                                    name client <pid> since <since> ("YYYY-mm-dd HH:MM:SS"), and nothing else
+#   client_exit_line <pid> <log> [<since>]
+#                                    one line when client <pid> has gone (macOS): when, how it ended (its exit status,
+#                                    or the signal that ended it, from launchd's record in the system log since <since>,
+#                                    "YYYY-mm-dd HH:MM:SS", or the last 2 minutes) and when its log last wrote; printed,
+#                                    and added to the end of <log>
 #   lock_take [purpose] [minutes] [--quiet]
 #                                    waits for the machine lock and holds it until this runner exits (or lock_give):
 #                                    one test with windows on the GPU at a time. --quiet for timing runs (no builds).
@@ -136,6 +154,54 @@ stop_client_helpers() {
     done
 }
 
+# How a client launched through open ended (performance, qa, 10-28): open's own status says nothing about the client,
+# which isn't the runner's child. launchd reports each app's end to RunningBoard, which logs it as
+# "[app<...>:<pid>] termination reported by launchd (<namespace>, <code>, <wait status>)": namespace 0 is the app's own
+# exit (the status as wait gives it), 2 a signal (code = its number), 15 RunningBoard's own kill. Two clients that
+# vanished with no crash report on 10-28 were SIGSEGV there.
+client_exit_line() {
+    _gone=$(date '+%H:%M:%S')
+    _entry=""; _try=0
+    while [ -z "$_entry" ] && [ "$_try" -lt 5 ]; do
+        [ "$_try" = 0 ] || sleep 1
+        _entry=$(/usr/bin/log show --style compact --start "${3:-$(date -v-2M '+%Y-%m-%d %H:%M:%S')}" --predicate \
+            "process == \"runningboardd\" AND eventMessage CONTAINS \":$1] termination reported by launchd\"" 2>/dev/null |
+            grep -E 'termination reported by launchd \([0-9-]+, [0-9-]+, [0-9-]+\)' | tail -1)
+        _try=$((_try + 1))
+    done
+    # the record's own time (compact style: "YYYY-mm-dd HH:MM:SS.mmm ..."), and its three numbers
+    [ -z "$_entry" ] || _gone=$(printf '%s\n' "$_entry" | cut -c12-23)
+    _record=$(printf '%s\n' "$_entry" | grep -oE 'launchd \([0-9-]+, [0-9-]+, [0-9-]+\)' | grep -oE '[0-9-]+, [0-9-]+, [0-9-]+')
+    if [ -z "$_record" ]; then
+        _how="no record of its end in the system log"
+    else
+        _ns=${_record%%,*}; _rest=${_record#*, }; _code=${_rest%%,*}; _wait=${_rest#*, }
+        _sig=$((_wait & 127))
+        if [ "$_ns" = 2 ]; then
+            _sig=$_code
+        fi
+        if [ "$_ns" = 0 ] && [ "$_sig" = 0 ]; then
+            _how="exited with status $((_wait >> 8))"
+        elif [ "$_ns" = 0 ] || [ "$_ns" = 2 ]; then
+            _how="ended by signal SIG$(kill -l "$_sig" 2>/dev/null || echo "$_sig")"
+            case "$_sig" in
+                4|5|6|7|8|10|11) _how="$_how, a crash" ;;
+            esac
+        elif [ "$_ns" = 15 ]; then
+            _how="stopped by macOS (RunningBoard), wait status $_wait"
+        else
+            _how="ended (launchd's record: $_record)"
+        fi
+    fi
+    _last=$(tail -n 400 "$2" 2>/dev/null | grep -aoE '^\[[0-9/]+ [0-9:]+\]' | tail -1)
+    _line="client_start: client $1 gone at $_gone, $_how; its log's last line at ${_last:-(none)}"
+    echo "$_line" >> "$2"
+    case "$_how" in
+        "exited with status 0") echo "$_line" ;;
+        *) echo "$_line" >&2 ;;
+    esac
+}
+
 client_start() {
     _log=$1; shift
     case "$BIN" in
@@ -153,7 +219,19 @@ client_start() {
         _app=$(cd "$_app" 2>/dev/null && pwd) || { echo "client_start: no app at $BIN" >&2; return 1; }
     fi
     case "$_log" in /*) ;; *) _log="$(pwd)/$_log" ;; esac
+    # --noAudioInput: the client opens no microphone, so a rebuilt (ad-hoc signed) build raises no macOS microphone
+    # prompt in front of the test; CLIENT_MIC=1 for a test that needs the microphone. Older builds list the option as
+    # unknown and go on
+    [ -n "${CLIENT_MIC:-}" ] || set -- --noAudioInput "$@"
     _since=$(date '+%Y-%m-%d %H:%M:%S')
+    # a release build's own home, away from the user's ~/Library (see the header); the user's folders are checked after
+    _wallhome=""
+    if [ -n "$_app" ] && [ -z "${CFFIXED_USER_HOME:-}" ] &&
+       [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$_app/Contents/Info.plist" 2>/dev/null)" = com.tivolicloud.interface ]; then
+        _wallhome="$_log.home"
+        mkdir -p "$_wallhome"
+    fi
+    [ -z "$_wallhome${CFFIXED_USER_HOME:-}" ] || : > "$_log.started"
     if [ -z "$_app" ] || [ "$(uname)" != Darwin ]; then
         "$BIN" "$@" > "$_log" 2>&1 &
         _cpid=$!
@@ -165,11 +243,17 @@ client_start() {
     # -DarkrideTestRun <log> marks this client's command line (an AppKit default nothing reads), so its pid can be
     # found while it runs: open's own pid is $!, and pgrep for the binary alone could find someone else's client
     # --allowMultipleInstances always: without it a client hands its arguments to a Darkride already running and quits
-    set -- -a "$_app" --args -DarkrideTestRun "$_log" -NSAutoFillHeuristicsEnabled NO --allowMultipleInstances "$@"
-    for _var in $(env | grep -E '^(TIVOLI|HIFI|DARKRIDE|QT|XDG|DYLD)_[A-Za-z0-9_]*=' | cut -d= -f1); do
+    set -- --args -DarkrideTestRun "$_log" -NSAutoFillHeuristicsEnabled NO --allowMultipleInstances "$@"
+    # CLIENT_OPEN_URL=<url>: open hands the URL to this bundle as a link clicked in a browser does (the get-URL Apple
+    # Event, a QFileOpenEvent in the client) while it starts, whichever app the scheme's links go to and whether or not
+    # the bundle claims the scheme
+    [ -z "${CLIENT_OPEN_URL:-}" ] || set -- "$CLIENT_OPEN_URL" "$@"
+    set -- -a "$_app" "$@"
+    for _var in $(env | grep -E '^(TIVOLI|HIFI|DARKRIDE|QT|XDG|DYLD|CFFIXED)_[A-Za-z0-9_]*=' | cut -d= -f1); do
         eval "_value=\${$_var}"
         set -- --env "$_var=$_value" "$@"
     done
+    [ -z "$_wallhome" ] || set -- --env "CFFIXED_USER_HOME=$_wallhome" "$@"
     : > "$_log"
     if [ -n "${CLIENT_FOREGROUND:-}" ]; then
         # in front, for a client someone plays: macOS and Qt activate it as a normal launch would
@@ -186,24 +270,47 @@ client_start() {
         _i=$((_i + 1)); sleep 0.5
     done
     # the client's pid beside its log, and CLIENT_TIMEOUT=<s>: SIGTERM after that long, SIGKILL 5 s later (the client
-    # has been seen to ignore SIGTERM); open -W alone would wait for ever (scripting's run-client.sh does the same)
+    # has been seen to ignore SIGTERM); open -W alone would wait for ever (scripting's run-client.sh does the same).
+    # The watcher's sleeps write nowhere and are stopped with it: a sleep left behind holding the runner's stdout
+    # made a runner piped into tail wait up to CLIENT_TIMEOUT after the client quit
     _watch=""
     if [ -n "$_cpid" ]; then
         echo "$_cpid" > "$_log.pid"
         if [ -n "${CLIENT_TIMEOUT:-}" ]; then
-            ( sleep "$CLIENT_TIMEOUT"; kill -0 "$_cpid" 2>/dev/null || exit 0
+            ( _nap=""; trap '[ -z "$_nap" ] || kill "$_nap" 2>/dev/null; exit 0' TERM
+              sleep "$CLIENT_TIMEOUT" >/dev/null 2>&1 & _nap=$!; wait "$_nap"; _nap=""
+              kill -0 "$_cpid" 2>/dev/null || exit 0
               echo "client_start: client $_cpid still running after ${CLIENT_TIMEOUT}s: stopping it" >&2
-              kill -TERM "$_cpid"; sleep 5; kill -0 "$_cpid" 2>/dev/null && kill -KILL "$_cpid" ) &
+              kill -TERM "$_cpid"; sleep 5 >/dev/null 2>&1 & _nap=$!; wait "$_nap"; _nap=""
+              kill -0 "$_cpid" 2>/dev/null && kill -KILL "$_cpid" ) &
             _watch=$!
         fi
     fi
     wait $_opener
     _status=$?
     [ -z "$_watch" ] || kill "$_watch" 2>/dev/null
+    [ -z "$_cpid" ] || client_exit_line "$_cpid" "$_log" "$_since"
     [ -z "$_cpid" ] || stop_client_helpers "$_cpid" "$_since"
     if [ -z "$_cpid" ]; then
         echo "client_start: no client started from $_app (open's status $_status); see above and $_log" >&2
         [ "$_status" != 0 ] || _status=1
+    fi
+    if [ -n "$_wallhome" ] || [ -n "${CFFIXED_USER_HOME:-}" ]; then
+        _touched=$(find "$HOME/Library/Application Support/Tivoli Cloud VR" "$HOME/Library/Caches/Tivoli Cloud VR" \
+                       -newer "$_log.started" -type f 2>/dev/null | wc -l | tr -d ' ')
+        if [ "$_touched" = 0 ]; then
+            echo "client_start: WALLED OFF: nothing in ~/Library's Tivoli Cloud VR folders changed"
+        else
+            echo "client_start: NOT WALLED OFF: $_touched files in ~/Library's Tivoli Cloud VR folders changed while" \
+                 "client ${_cpid:-?} ran (or the user's own Darkride wrote them): find them with -newermt \"$_since\"" >&2
+        fi
+        rm -f "$_log.started"
+        # its caches (QML, web, and the ktx cache, 0.3 to 1.5 GB, which 1.0.x keeps beside its log in Application
+        # Support; KEEP_KTX=1 keeps it): the log stays, in $_wallhome/Library/Application Support
+        if [ -n "$_wallhome" ]; then
+            rm -rf "$_wallhome/Library/Caches"
+            [ -n "${KEEP_KTX:-}" ] || find "$_wallhome" -type d -name ktx_cache -prune -exec rm -rf {} +
+        fi
     fi
     return $_status
 }

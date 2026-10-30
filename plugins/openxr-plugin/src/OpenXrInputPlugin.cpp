@@ -120,8 +120,8 @@ OpenXrInputPlugin::InputDevice::InputDevice(std::shared_ptr<OpenXrRuntime> runti
 }
 
 OpenXrInputPlugin::InputDevice::~InputDevice() {
-    // the action set's actions go with it
-    if (_actionSet != XR_NULL_HANDLE) {
+    // the action set's actions go with it; nothing to do once the instance is gone (the runtime's shutdown at quit)
+    if (_actionSet != XR_NULL_HANDLE && _runtime->getInstance() != XR_NULL_HANDLE) {
         xrDestroyActionSet(_actionSet);
     }
 }
@@ -316,6 +316,15 @@ void OpenXrInputPlugin::InputDevice::update(float deltaTime, const controller::I
 
     if (_runtime->getSession() == XR_NULL_HANDLE) {
         releaseSessionObjects();
+        return;
+    }
+    // out of VR the session is kept, still attached: the headset and controllers just don't drive the avatar. Its
+    // events are still answered here, every frame on the main thread, since nobody else polls them while the display
+    // plugin is inactive: the headset taken off ends the session (STOPPING); put back on, READY begins it again and the
+    // runtime object feeds it empty frames until VR is entered. A STOPPING left unanswered hung Meta's runtime for a
+    // minute at quit and crashed it (Caity's Quest 3, 2026-10-28)
+    if (!_runtime->isDisplayActive()) {
+        _runtime->pollEvents();
         return;
     }
     if (_actionSet == XR_NULL_HANDLE && !createActions()) {

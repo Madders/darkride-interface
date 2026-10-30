@@ -329,7 +329,7 @@ bool Application::canAcceptURL(const QString& urlString) const {
     QUrl url(urlString);
     if (url.query().contains(WEB_VIEW_TAG)) {
         return false;
-    } else if (urlString.startsWith(URL_SCHEME_HIFI)) {
+    } else if (urlString.startsWith(URL_SCHEME_HIFI) || isWorldAddressScheme(url.scheme())) {
         return true;
     }
     QString lowerPath = url.path().toLower();
@@ -344,8 +344,8 @@ bool Application::canAcceptURL(const QString& urlString) const {
 bool Application::acceptURL(const QString& urlString, bool defaultUpload) {
     QUrl url(urlString);
 
-    if (url.scheme() == URL_SCHEME_HIFI) {
-        // this is a hifi URL - have the AddressManager handle it
+    if (isWorldAddressScheme(url.scheme())) {
+        // a world's address (hifi://, or tivoli:// or darkride:// from a link) - have the AddressManager handle it
         QMetaObject::invokeMethod(DependencyManager::get<AddressManager>().data(), "handleLookupString",
                                   Qt::AutoConnection, Q_ARG(const QString&, urlString));
         return true;

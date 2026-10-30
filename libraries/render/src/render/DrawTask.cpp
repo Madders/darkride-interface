@@ -108,6 +108,7 @@ void renderShape(RenderArgs* args, const ShapePlumberPointer& shapeContext, cons
     assert(item.getKey().isShape());
     auto key = item.getShapeKey() | globalKey;
     args->_itemShapeKey = key._flags.to_ulong();
+    args->_shapePlumber = shapeContext.get();
     if (key.isValid() && !key.hasOwnPipeline()) {
         args->_shapePipeline = shapeContext->pickPipeline(args, key);
         if (args->_shapePipeline) {
@@ -122,6 +123,7 @@ void renderShape(RenderArgs* args, const ShapePlumberPointer& shapeContext, cons
                            &repeatedInvalidKeyMessageID);
         HIFI_FCDEBUG_ID(renderlogging(), repeatedInvalidKeyMessageID, "Item could not be rendered with invalid key" << key);
     }
+    args->_shapePlumber = nullptr;
     args->_itemShapeKey = 0;
 }
 
@@ -231,11 +233,13 @@ void render::renderStateSortShapes(const RenderContextPointer& renderContext,
         }
     }
     args->_shapePipeline = nullptr;
+    args->_shapePlumber = shapeContext.get();
     for (auto& itemAndKey : ownPipelineBucket) {
         auto& item = std::get<0>(itemAndKey);
         args->_itemShapeKey = std::get<1>(itemAndKey)._flags.to_ulong();
         item.render(args);
     }
+    args->_shapePlumber = nullptr;
     args->_itemShapeKey = 0;
 }
 

@@ -23,7 +23,7 @@
 
 #include "TestObjects.h"
 
-QTEST_MAIN(JavaScriptGuestTests)
+QTEST_GUILESS_MAIN(JavaScriptGuestTests)
 
 namespace {
 

@@ -147,6 +147,7 @@ Item {
 
     FlickableWebViewCore {
         id: web
+        loadingBackground: "#1c2136"   // Darkride's navy (the website's --dr-bg) until the page has loaded
         width: parent.width
         height: keyboardEnabled && keyboardRaised ? parent.height - keyboard.height - root.headerHeight : parent.height - root.headerHeight
         anchors.top: buttons.bottom

@@ -49,12 +49,12 @@ void TextRenderer3D::draw(gpu::Batch& batch, float x, float y, const glm::vec2& 
 
 void TextRenderer3D::draw(gpu::Batch& batch, float x, float y, const glm::vec2& bounds, float scale,
                           const QString& str, const QString& font, const glm::vec4& color, const glm::vec3& effectColor,
-                          float effectThickness, TextEffect effect, bool unlit, bool forward) {
+                          float effectThickness, TextEffect effect, bool unlit, bool forward, bool mirrored) {
     if (font != _family) {
         _family = font;
         _font = Font::load(_family);
     }
     if (_font) {
-        _font->drawString(batch, _drawInfo, str, color, effectColor, effectThickness, effect, { x, y }, bounds, scale, unlit, forward);
+        _font->drawString(batch, _drawInfo, str, color, effectColor, effectThickness, effect, { x, y }, bounds, scale, unlit, forward, mirrored);
     }
 }

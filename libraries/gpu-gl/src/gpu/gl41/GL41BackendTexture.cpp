@@ -404,9 +404,14 @@ void GL41VariableAllocationTexture::syncSampler() const {
 void copyUncompressedTexGPUMem(const gpu::Texture& texture, GLenum texTarget, GLuint srcId, GLuint destId, uint16_t numMips, uint16_t srcMipOffset, uint16_t destMipOffset, uint16_t populatedMips) {
     // DestID must be bound to the GL41Backend::RESOURCE_TRANSFER_TEX_UNIT
 
+    // The transfer framebuffer is bound for drawing too, though the copy draws nothing: macOS's Metal-backed GL updates
+    // the draw framebuffer on every copy, and the one the last present left bound is the window's. At start-up, as the
+    // window resized, its attachment had no texture resource and the copy crashed (SIGSEGV in getTextureResource).
+    GLint previousDrawFbo { 0 };
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFbo);
     GLuint fbo { 0 };
     glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
     uint16_t mips = numMips;
     // copy pre-existing mips
@@ -422,8 +427,9 @@ void copyUncompressedTexGPUMem(const gpu::Texture& texture, GLenum texTarget, GL
         }
     }
 
-    // destroy the transfer framebuffer
+    // destroy the transfer framebuffer, and give the backend back the draw framebuffer it thinks is bound
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)previousDrawFbo);
     glDeleteFramebuffers(1, &fbo);
 }
 

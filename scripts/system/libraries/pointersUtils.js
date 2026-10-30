@@ -15,63 +15,52 @@
 
 Script.include("/~/system/libraries/controllerDispatcherUtils.js");
 Pointer = function(hudLayer, pickType, pointerData) {
-    this.SEARCH_SPHERE_SIZE = 0.0132;
-    this.dim = {x: this.SEARCH_SPHERE_SIZE, y: this.SEARCH_SPHERE_SIZE, z: this.SEARCH_SPHERE_SIZE};
-    this.halfPath = {
-        type: "line3d",
-        color: COLORS_GRAB_SEARCHING_HALF_SQUEEZE,
-        visible: true,
-        alpha: 1,
-        solid: true,
-        glow: 1.0,
-        ignoreRayIntersection: true, // always ignore this
-        drawInFront: !hudLayer, // Even when burried inside of something, show it.
-        drawHUDLayer: hudLayer,
-    };
-    this.halfEnd = {
-        type: "sphere",
-        dimensions: this.dim,
-        solid: true,
-        color: COLORS_GRAB_SEARCHING_HALF_SQUEEZE,
-        alpha: 0.9,
-        ignoreRayIntersection: true,
-        drawInFront: !hudLayer, // Even when burried inside of something, show it.
-        drawHUDLayer: hudLayer,
-        visible: true
-    };
-    this.fullPath = {
-        type: "line3d",
-        color: COLORS_GRAB_SEARCHING_FULL_SQUEEZE,
-        visible: true,
-        alpha: 1,
-        solid: true,
-        glow: 1.0,
-        ignoreRayIntersection: true, // always ignore this
-        drawInFront: !hudLayer, // Even when burried inside of something, show it.
-        drawHUDLayer: hudLayer,
-    };
-    this.fullEnd = {
-        type: "sphere",
-        dimensions: this.dim,
-        solid: true,
-        color: COLORS_GRAB_SEARCHING_FULL_SQUEEZE,
-        alpha: 0.9,
-        ignoreRayIntersection: true,
-        drawInFront: !hudLayer, // Even when burried inside of something, show it.
-        drawHUDLayer: hudLayer,
-        visible: true
-    };
-    this.holdPath = {
-        type: "line3d",
-        color: COLORS_GRAB_DISTANCE_HOLD,
-        visible: true,
-        alpha: 1,
-        solid: true,
-        glow: 1.0,
-        ignoreRayIntersection: true, // always ignore this
-        drawInFront: !hudLayer, // Even when burried inside of something, show it.
-        drawHUDLayer: hudLayer,
-    };
+    // the look (Caity 10-28, look A): a fine cyan tube, bright at the hand and fading out along its length, with a soft
+    // dot where it hits, a ring while the trigger is squeezed; the same colour searching, squeezing and holding (it was
+    // blue while searching, red while squeezing). The pictures are rendering's (images/lasers: fade.png stretched along the line, dot.png, ring.png),
+    // white, tinted by the colour. The line is a PolyLine: glow gives the tube's soft edge, three widths taper it.
+    var LASER_COLOR = { red: 0, green: 175, blue: 255 };
+    var DOT_COLOR = { red: 150, green: 220, blue: 255 };   // lighter, so its centre reads white-hot
+    var LASER_PICTURES = Script.resourcesPath() + "images/lasers/";
+    this.SEARCH_SPHERE_SIZE = 0.015;   // the dot, a metre away (the end scales with distance)
+    this.SQUEEZE_RING_SIZE = 0.02;
+    function laserPath() {
+        return {
+            type: "line3d",
+            color: LASER_COLOR,
+            visible: true,
+            alpha: 1,
+            solid: true,
+            glow: 1.0,
+            faceCamera: true,
+            isUVModeStretch: true,
+            textures: LASER_PICTURES + "fade.png",
+            strokeWidths: [0.006, 0.0045, 0.003],   // the glow's falloff leaves about 40% of each as the bright core
+            ignoreRayIntersection: true, // always ignore this
+            drawInFront: !hudLayer, // Even when burried inside of something, show it.
+            drawHUDLayer: hudLayer
+        };
+    }
+    function laserEnd(picture, size, color) {
+        return {
+            type: "image3d",
+            url: LASER_PICTURES + picture,
+            dimensions: { x: size, y: size, z: 0.001 },
+            color: color,
+            alpha: 1,
+            emissive: true,
+            billboardMode: "full",
+            ignoreRayIntersection: true,
+            drawInFront: !hudLayer, // Even when burried inside of something, show it.
+            drawHUDLayer: hudLayer,
+            visible: true
+        };
+    }
+    this.halfPath = laserPath();
+    this.halfEnd = laserEnd("dot.png", this.SEARCH_SPHERE_SIZE, DOT_COLOR);
+    this.fullPath = laserPath();
+    this.fullEnd = laserEnd("ring.png", this.SQUEEZE_RING_SIZE, LASER_COLOR);
+    this.holdPath = laserPath();
 
     this.renderStates = [
         {name: "half", path: this.halfPath, end: this.halfEnd},

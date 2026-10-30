@@ -162,7 +162,7 @@ void TextEntityRenderer::doRender(RenderArgs* args) {
         return;
     }
 
-    modelTransform.setRotation(EntityItem::getBillboardRotation(modelTransform.getTranslation(), modelTransform.getRotation(), billboardMode, args->getViewFrustum().getPosition()));
+    applyBillboard(modelTransform, billboardMode, args);   // turned to the camera; mirrored with the selfie picture
     batch.setModelTransform(modelTransform);
 
     auto geometryCache = DependencyManager::get<GeometryCache>();
@@ -354,17 +354,19 @@ void entities::TextPayload::render(RenderArgs* args) {
         return;
     }
 
-    modelTransform.setRotation(EntityItem::getBillboardRotation(modelTransform.getTranslation(), modelTransform.getRotation(), billboardMode, args->getViewFrustum().getPosition()));
+    // mirrored with the selfie picture: the text's corner goes to the top right (the translation below reads the
+    // mirrored scale), the glyphs run leftwards (the X scale stays negative) and the font's front-culling pipeline draws them
+    const bool mirrored = EntityRenderer::applyBillboard(modelTransform, billboardMode, args);
 
     float scale = lineHeight / textRenderer->getFontSize();
     modelTransform.postTranslate(glm::vec3(-0.5, 0.5, 1.0f + EPSILON / dimensions.z));
-    modelTransform.setScale(scale);
+    modelTransform.setScale(glm::vec3(mirrored ? -scale : scale, scale, scale));
     batch.setModelTransform(modelTransform);
 
     glm::vec2 bounds = glm::vec2(dimensions.x - (leftMargin + rightMargin), dimensions.y - (topMargin + bottomMargin));
     textRenderer->draw(batch, leftMargin / scale, -topMargin / scale, bounds / scale, scale,
                        text, font, textColor, effectColor, effectThickness, effect,
-                       textRenderable->_unlit, forward);
+                       textRenderable->_unlit, forward, mirrored);
 }
 
 namespace render {

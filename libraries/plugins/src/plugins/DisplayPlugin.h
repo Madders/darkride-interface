@@ -162,6 +162,11 @@ public:
     /// whether the HMD is being worn
     virtual bool isDisplayVisible() const { return false; }
 
+    /// true only while the headset itself reports that it is off the player's head (a stopped session, a presence
+    /// sensor): the desktop mouse is then the desktop's again, not the headset's pointer. A plugin whose headset can't
+    /// tell (isDisplayVisible reads false without a sensor) leaves it false
+    virtual bool isHeadsetOff() const { return false; }
+
     virtual QString getPreferredAudioInDevice() const { return QString(); }
     virtual QString getPreferredAudioOutDevice() const { return QString(); }
 

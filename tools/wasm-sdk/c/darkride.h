@@ -199,7 +199,9 @@ void dr_logf(int32_t level, const char* format, ...);
    entity_load returns null or an error record, entity_call the method's result or 0, both packed as a host
    function's result is (the host frees them). One instance of the module serves every entity that runs it;
    the entity's id (text, "{...}") is the key of whatever state the module keeps per entity. The host calls
-   preload after load and unload before unload through entity_call, as it calls every method. */
+   preload after load and unload before unload through entity_call, as it calls every method.
+   In this release a module runs as an entity script only where DARKRIDE_WASM_ENTITY_SCRIPTS=1 is set in the
+   client's or server's environment (for development); JavaScript entity scripts are not affected. */
 
 typedef struct {
     char entity[64];      /* the entity's id */

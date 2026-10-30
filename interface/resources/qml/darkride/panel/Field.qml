@@ -2,7 +2,8 @@
 //  Field.qml
 //  qml/darkride/panel
 //
-//  A text field in a row: a rounded fill, the text at the right as iOS keeps a cell's value, blue edge while typing.
+//  A text field in a row: a rounded fill, the text at the left as on the Mac (Caity 10-28: not right-justified as iOS
+//  keeps a cell's value), blue edge while typing.
 //
 //  Copyright 2026 Darkride.
 //
@@ -23,7 +24,7 @@ QQC2.TextField {
     topPadding: 0
     bottomPadding: 0
     verticalAlignment: TextInput.AlignVCenter
-    horizontalAlignment: TextInput.AlignRight
+    horizontalAlignment: TextInput.AlignLeft
     color: Theme.text
     placeholderTextColor: Theme.tertiaryText
     selectionColor: Theme.tint

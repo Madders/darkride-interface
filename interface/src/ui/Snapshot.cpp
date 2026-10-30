@@ -49,6 +49,7 @@
 #include "InterfaceLogging.h"
 #include "MainWindow.h"
 #include "Snapshot.h"
+#include "SnapshotAnimated.h"
 #include "SnapshotUploader.h"
 
 // filename format: snap-%date%_%time%-%random%.jpg
@@ -658,5 +659,19 @@ QString Snapshot::getSnapshotsLocation() {
 }
 
 void Snapshot::setSnapshotsLocation(const QString& location) {
-    _snapshotsLocation.set(location);
+    if (location != _snapshotsLocation.get("")) {
+        _snapshotsLocation.set(location);
+        // Snap shows the folder chosen, wherever it was chosen (the Settings panel too)
+        emit snapshotLocationSet(location);
+    }
+}
+
+float Snapshot::getAnimatedSnapshotDuration() {
+    return SnapshotAnimated::snapshotAnimatedDuration.get();
+}
+
+void Snapshot::setAnimatedSnapshotDuration(float seconds) {
+    const float MIN_SECONDS = 1.0f;
+    const float MAX_SECONDS = 5.0f;
+    SnapshotAnimated::snapshotAnimatedDuration.set(glm::clamp(seconds, MIN_SECONDS, MAX_SECONDS));
 }

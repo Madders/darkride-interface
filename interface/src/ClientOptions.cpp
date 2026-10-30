@@ -70,13 +70,14 @@ void ClientOptions::parse(int argc, const char* argv[]) {
     QCommandLineOption displayOption("display", "preferred display plug-ins, in order", "a,b");
     QCommandLineOption disableDisplaysOption("disable-displays", "display plug-ins to leave out", "a,b");
     QCommandLineOption disableInputsOption("disable-inputs", "input plug-ins to leave out", "a,b");
+    QCommandLineOption noAudioInputOption("noAudioInput", "open no microphone (no permission prompt): silence is sent");
 
     for (const auto& option : { urlOption, allowMultipleInstancesOption, cacheOption, scriptsOption, tokensOption,
                                 displayNameOption, setBookmarkOption, defaultScriptsOverrideOption, clientLabelOption,
                                 traceFileOption, protocolVersionOption, listenPortOption, standaloneOption,
                                 testScriptOption, testResultsLocationOption, disableWatchdogOption,
                                 concurrentDownloadsOption, avatarUrlOption, replaceAvatarUrlOption, systemCursorOption,
-                                displayOption, disableDisplaysOption, disableInputsOption }) {
+                                displayOption, disableDisplaysOption, disableInputsOption, noAudioInputOption }) {
         parser.addOption(option);
     }
 
@@ -128,6 +129,7 @@ void ClientOptions::parse(int argc, const char* argv[]) {
     options.displays = commaSeparated(parser.value(displayOption));
     options.disabledDisplays = commaSeparated(parser.value(disableDisplaysOption));
     options.disabledInputs = commaSeparated(parser.value(disableInputsOption));
+    options.noAudioInput = parser.isSet(noAudioInputOption);
 
     // the two-word forms: the word after the option's value, where it has always stood
     int at = arguments.indexOf("--traceFile");

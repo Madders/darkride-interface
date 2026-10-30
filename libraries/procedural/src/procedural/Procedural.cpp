@@ -263,6 +263,12 @@ bool Procedural::isReady() const {
     return true;
 }
 
+bool Procedural::compilationFailed(const ProceduralProgramKey& key) const {
+    auto pipeline = _proceduralPipelines.find(key);
+    return pipeline != _proceduralPipelines.end() && pipeline->second && pipeline->second->getProgram() &&
+           pipeline->second->getProgram()->compilationHasFailed();
+}
+
 void Procedural::prepare(gpu::Batch& batch,
                          const glm::vec3& position,
                          const glm::vec3& size,
@@ -498,18 +504,27 @@ void Procedural::setupUniforms() {
         _standardInputs.timeSinceFirstCompile = (float)((now - _firstCompile) / USECS_PER_MSEC) / MSECS_PER_SECOND;
         _standardInputs.timeSinceEntityCreation = (float)((now - _entityCreated) / USECS_PER_MSEC) / MSECS_PER_SECOND;
 
-        // Date
+        // Date (iDate), from the same clock as the times above: the calendar part is worked out once a second, shared
+        // by every procedural. QDateTime::currentDateTimeUtc() ran for every procedural draw of every pass (240 times a
+        // frame with 20 Lightlings' shadow cascades: performance's crowd run, 2026-10-28)
         {
-            QDateTime now = QDateTime::currentDateTimeUtc();
-            QDate date = now.date();
-            QTime time = now.time();
-            _standardInputs.date.x = date.year();
-            // Shadertoy month is 0 based
-            _standardInputs.date.y = date.month() - 1;
-            // But not the day... go figure
-            _standardInputs.date.z = date.day();
-            float fractSeconds = (time.msec() / 1000.0f);
-            _standardInputs.date.w = (time.hour() * 3600) + (time.minute() * 60) + time.second() + fractSeconds;
+            static std::mutex dateMutex;
+            static uint64_t dateSecond = 0;
+            static glm::vec3 dateYearMonthDay;
+            const uint64_t second = now / USECS_PER_SECOND;
+            std::lock_guard<std::mutex> dateLock(dateMutex);
+            if (second != dateSecond) {
+                QDate date = QDateTime::fromMSecsSinceEpoch((qint64)(second * MSECS_PER_SECOND), Qt::UTC).date();
+                // Shadertoy's month is 0 based; its day is not
+                dateYearMonthDay = glm::vec3(date.year(), date.month() - 1, date.day());
+                dateSecond = second;
+            }
+            _standardInputs.date.x = dateYearMonthDay.x;
+            _standardInputs.date.y = dateYearMonthDay.y;
+            _standardInputs.date.z = dateYearMonthDay.z;
+            // seconds into the UTC day, with the fraction
+            const uint64_t MSECS_PER_DAY = 24 * 3600 * (uint64_t)MSECS_PER_SECOND;
+            _standardInputs.date.w = (float)((now / USECS_PER_MSEC) % MSECS_PER_DAY) / MSECS_PER_SECOND;
         }
 
         _standardInputs.scale = vec4(_entityDimensions, 1.0f);

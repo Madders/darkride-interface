@@ -21,6 +21,7 @@ private slots:
     void testDescribe();
     void testCall();
     void testCallErrors();
+    void testEnumResults();
     void testProperties();
     void testSignals();
     void testCallbacksAndFailures();

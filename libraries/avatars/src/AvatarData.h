@@ -1563,6 +1563,10 @@ public:
     void setIsNewAvatar(bool isNewAvatar) { _isNewAvatar = isNewAvatar; }
     bool getIsNewAvatar() { return _isNewAvatar; }
     void setIsClientAvatar(bool isClientAvatar) { _isClientAvatar = isClientAvatar; }
+    // the avatar mixer's copy of an avatar: the mixer keeps no entity tree, so it never finds an entity parent (hasParent()
+    // is "the parent found"); it keeps and passes on a parented avatar's local position by the parent ID alone, or others
+    // draw a monorail rider or a vehicle's driver at the parent composed with their old world position (physics, 10-29)
+    void setIsMixerAvatar(bool isMixerAvatar) { _isMixerAvatar = isMixerAvatar; }
     void setSkeletonData(const std::vector<AvatarSkeletonTrait::UnpackedJointData>& skeletonData);
     std::vector<AvatarSkeletonTrait::UnpackedJointData> getSkeletonData() const;
     // every joint's rotation and position in the rig frame, for an avatar with no rig of its own here; false without a skeleton
@@ -1917,6 +1921,9 @@ protected:
     int _replicaIndex { 0 };
     bool _isNewAvatar { true };
     bool _isClientAvatar { false };
+    bool _isMixerAvatar { false };
+    // parented, as far as the local position goes: on the avatar mixer by the parent ID (see setIsMixerAvatar)
+    bool hasParentForLocalPosition() const { return _isMixerAvatar ? !getParentID().isNull() : hasParent(); }
     bool _collideWithOtherAvatars { true };
     bool _hasPriority{ false };
 

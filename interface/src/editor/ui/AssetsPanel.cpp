@@ -44,8 +44,6 @@
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QListView>
 #include <QtWidgets/QMenu>
-#include <QtWidgets/QMessageBox>
-#include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSplitter>
 #include <QtWidgets/QStyle>
@@ -59,8 +57,11 @@
 #include <NetworkAccessManager.h>
 
 #include "../../InterfaceLogging.h"
+#include "../../ui/Popup.h"
+#include "../../ui/RightsLine.h"
 #include "../EditorCreate.h"
 #include "AssetThumbnails.h"
+#include "../../ui/DockTitleBar.h"
 
 const char* AssetItemModel::ASSET_MIME_TYPE = "application/x-darkride-asset";
 
@@ -501,11 +502,11 @@ bool AssetItemModel::dropMimeData(const QMimeData* data, Qt::DropAction action, 
 
 // --- AssetsPanel --------------------------------------------------------------------------------
 
-AssetsPanel::AssetsPanel(QWidget* parent) : QDockWidget("Assets", parent) {
+AssetsPanel::AssetsPanel(QWidget* parent) : QDockWidget("My Files", parent) {
     setObjectName("EditorAssets");
-    setAllowedAreas(Qt::BottomDockWidgetArea);
-    // fixed in place, as the other panels are (see HierarchyPanel): it can be closed and comes back with build mode
-    setFeatures(QDockWidget::DockWidgetClosable);
+
+    setFeatures(DockWidgetClosable | DockWidgetMovable | DockWidgetFloatable);   // anywhere, see HierarchyPanel
+    DockTitleBar::attach(this);
     setMinimumHeight(150);
 
     _files = new UserFiles(this);
@@ -661,6 +662,15 @@ AssetsPanel::AssetsPanel(QWidget* parent) : QDockWidget("Assets", parent) {
     splitter->setStretchFactor(1, 1);
     splitter->setSizes({ 200, 800 });
     layout->addWidget(splitter, 1);
+
+    // under the files, where they're dropped: the rights line, while signed in
+    _note = new QLabel(body);
+    _note->setObjectName("EditorAssetsNote");
+    _note->setTextFormat(Qt::PlainText);
+    _note->setVisible(false);
+    layout->addWidget(_note);
+    _rightsLine = rights::label("EditorRightsLine", QColor("#6fa8dc"), body);
+    layout->addWidget(_rightsLine);
 
     _empty = new QLabel(_grid->viewport());
     _empty->setObjectName("EditorAssetsEmpty");
@@ -840,6 +850,11 @@ void AssetsPanel::setActive(bool active) {
     }
 }
 
+void AssetsPanel::setNote(const QString& text) {
+    _note->setText(text);
+    _note->setVisible(!text.isEmpty());
+}
+
 bool AssetsPanel::searching() const {
     return !_search->text().trimmed().isEmpty();
 }
@@ -848,6 +863,7 @@ void AssetsPanel::updateBanner() {
     bool loggedIn = UserFiles::isLoggedIn();
     _banner->setText("Log in to see your files");
     _banner->setVisible(!loggedIn);
+    _rightsLine->setVisible(loggedIn);
     _tree->setEnabled(loggedIn);
     _grid->setEnabled(loggedIn);
 }
@@ -1363,16 +1379,15 @@ void AssetsPanel::deleteFiles(const QList<const UserFile*>& files) {
             question += QString(" The %1 hold %2 files.").arg(folders == 1 ? "folder" : "folders").arg(inside);
         }
     }
-    // The window as the parent (the dock's style sheet hid the highlight), with the question, the warning and a
-    // Cancel button: a box with Delete alone (1ba7996d09 lost these) made Delete its escape button, so Escape and
-    // closing the box deleted the files. Cancel is the default and the escape button, named outright.
-    QMessageBox box(QMessageBox::Warning, "Delete", question + "\n\nEvery world that uses them will lose them. This cannot be undone.",
-                    QMessageBox::Cancel, window());
-    QPushButton* deleteButton = box.addButton("Delete", QMessageBox::DestructiveRole);
-    box.setDefaultButton(QMessageBox::Cancel);
-    box.setEscapeButton(QMessageBox::Cancel);
-    box.exec();
-    if (box.clickedButton() != deleteButton) {
+    // Darkride's alert over the window (the dock's style sheet hid a box's highlight), with the warning and a Cancel
+    // button: a box with Delete alone (1ba7996d09 lost these) made Delete its escape button, so Escape and closing
+    // the box deleted the files. Delete is red; Return and Escape are Cancel.
+    const bool one = files.size() == 1 && !files.first()->folder;
+    popup::Alert alert(popup::appIcon(), question,
+                       QString("Every world that uses %1 will lose %1. This can't be undone.").arg(one ? "it" : "them"),
+                       QString(), { { "Cancel", popup::Role::Cancel }, { "Delete", popup::Role::Destructive } }, window());
+    alert.exec();
+    if (alert.answer() != 1) {
         return;
     }
     QStringList paths;
@@ -1447,25 +1462,25 @@ void AssetsPanel::uploadFiles(const QStringList& localPaths, const QString& fold
             upload->deleteLater();
             continue;
         }
-        trackUpload(upload);
+        trackUpload(upload, true);
     }
     if (folders > 0) {
         emit status(QString("%1 can't be uploaded whole yet: drop its files instead").arg(folders == 1 ? "A folder" : "Folders"), STATUS_MS * 2);
     }
 }
 
-void AssetsPanel::trackUpload(EditorUpload* upload) {
+void AssetsPanel::trackUpload(EditorUpload* upload, bool fromComputer) {
     ++_uploadsActive;
-    emit status("Uploading " + upload->fileName() + " 0%", 0);
-    connect(upload, &EditorUpload::progress, this, [this, upload](qint64 sent, qint64 total) {
+    emit status(EditorUpload::uploadingStatus(upload->fileName(), 0, QString(), fromComputer), 0);
+    connect(upload, &EditorUpload::progress, this, [this, upload, fromComputer](qint64 sent, qint64 total) {
         if (total <= 0) {
             return;
         }
         QString more = _uploadsActive > 1 ? QString(" (+%1 more)").arg(_uploadsActive - 1) : QString();
         if (sent >= total) {
-            emit status("Processing " + upload->fileName() + "…" + more, 0);
+            emit status(EditorUpload::uploadingStatus(upload->fileName(), 100, more, fromComputer), 0);
         } else {
-            emit status(QString("Uploading %1 %2%%3").arg(upload->fileName()).arg((int)(sent * 100 / total)).arg(more), 0);
+            emit status(EditorUpload::uploadingStatus(upload->fileName(), (int)(sent * 100 / total), more, fromComputer), 0);
         }
     });
     connect(upload, &EditorUpload::failed, this, [this, upload](const QString& error) {
@@ -1532,7 +1547,7 @@ void AssetsPanel::duplicateFiles(const QList<const UserFile*>& files) {
                 upload->deleteLater();
                 return;
             }
-            trackUpload(upload);
+            trackUpload(upload, false);   // a copy of a file already up
         });
     }
     if (folders > 0) {

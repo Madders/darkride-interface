@@ -6,8 +6,8 @@
 //  Avatar: the avatar worn (its picture and name); Favorites; the avatars in My Files as a collection (Caity, 10-24:
 //    she has 100+), under the panels' search bar (search, Cards / Tiles / List, Name / Newest / Folder), each with its
 //    picture when there is one beside it (<name>.preview.jpg or .png, or preview.jpg/.png in its folder: the
-//    picture an .fst's `preview` field names); wearing one by its URL, the default, its scale, its collisions with
-//    the world, and putting it in My Files; for an avatar in your own My Files, a picture: taken of you wearing it
+//    picture an .fst's `preview` field names); wearing one from a link (Wear from Link…: an .fst as it is, a .glb
+//    imported first), the default, its scale, its collisions with the world, and putting it in My Files; for an avatar in your own My Files, a picture: taken of you wearing it
 //    or chosen from this computer (AvatarThumbnails), saved beside its .fst as <name>.preview.jpg, private when the
 //    avatar is (Caity, 10-24); the pictures load through the engine's loader (image://resource/), which asks the files
 //    host again with your login for a private one;
@@ -69,6 +69,9 @@ Page {
     Connections {
         target: MyAvatar
         function onSkeletonModelURLChanged() {
+            if (avatar.linkGiven !== "") {
+                avatar.linkWorn(String(MyAvatar.getFullAvatarURLFromPreferences()));
+            }
             avatar.refresh();
             menu.reload();
         }
@@ -90,6 +93,8 @@ Page {
         property bool collisions: true
         property real scale: 1
         property bool adding: false
+        property bool linking: false         // Wear from Link…'s box is open
+        property string linkGiven: ""        // a link being worn (after its license or the importer's questions)
         property string removing: ""         // the favourite whose Remove waits for a second press
 
         // the Avatar page's own setting, kept so a favourite worn there is still named here
@@ -127,12 +132,21 @@ Page {
         }
 
         function wear(address, modelName) {
+            linkGiven = "";
+            var before = String(MyAvatar.getFullAvatarURLFromPreferences());
             MyAvatar.useFullAvatarURL(address, modelName);
+            var after = String(MyAvatar.getFullAvatarURLFromPreferences());
+            if (after === before && after !== String(address)) {
+                // refused (someone else's private avatar, Caity 10-27): the look you have stays, its scale and name too
+                refresh();
+                return;
+            }
             MyAvatar.scale = 1;
             Settings.setValue(favoriteNameSetting, "");
             refresh();
         }
         function wearDefault() {
+            linkGiven = "";
             MyAvatar.randomizeDefaultAvatar();
             MyAvatar.useFullAvatarURL(MyAvatar.getDefaultFullAvatarURL(), "Default");
             MyAvatar.scale = 1;
@@ -140,9 +154,39 @@ Page {
             refresh();
         }
         function wearFavorite(favorite) {
+            linkGiven = "";
+            var bookmark = (AvatarBookmarks.getBookmarks() || {})[favorite] || {};
+            var before = String(MyAvatar.getFullAvatarURLFromPreferences());
             AvatarBookmarks.loadBookmark(favorite);
+            var after = String(MyAvatar.getFullAvatarURLFromPreferences());
+            if (after === before && after !== String(bookmark.avatarUrl)) {
+                // refused, as wear() can be: it isn't the favorite worn
+                refresh();
+                return;
+            }
             Settings.setValue(favoriteNameSetting, favorite);
             refresh();
+        }
+        // the same asks as a link dropped on the window, but not "Wear it?" (Wear was pressed): an .fst's license, or a
+        // .glb's import (Application::wearAvatarLink); the avatar changes once they're answered (linkWorn)
+        function wearLink(link) {
+            link = link.trim();
+            if (link === "" || link === url) {
+                return;
+            }
+            linking = false;
+            linkGiven = link;
+            ApplicationInterface.wearAvatarLink(link);
+        }
+        // a new avatar from the link given (a .glb's is the imported copy, on this computer) starts at scale 1 and is no
+        // favourite; any other change only forgets the link (its license or import was turned down)
+        function linkWorn(worn) {
+            var fromLink = worn === linkGiven || (/\.glb$/i.test(linkGiven) && /^file:.*\/Avatars\//.test(worn));
+            linkGiven = "";
+            if (fromLink) {
+                MyAvatar.scale = 1;
+                Settings.setValue(favoriteNameSetting, "");
+            }
         }
         function addFavorite(favorite) {
             favorite = favorite.trim();
@@ -206,7 +250,8 @@ Page {
             MetaverseRequests.send("GET", "/api/user/files", null, function (error, code, data) {
                 busy = false;
                 if (error || !data) {
-                    status = "Couldn't list My Files: " + error + ".";
+                    console.log("Avatar: My Files failed: " + code + " " + error);
+                    status = "Couldn't list My Files. Try again in a moment.";
                     return;
                 }
                 var found = [];
@@ -248,6 +293,7 @@ Page {
         id: thumb
 
         property string pending: ""     // a picture taken or chosen, not saved yet (a file:// address here)
+        property bool fromFile: false   // the pending picture was chosen from this computer (not taken)
         property bool busy: false
         property bool choosing: false   // the file dialog is ours (Window answers every browseAsync)
         property string status: ""
@@ -264,6 +310,7 @@ Page {
                     return;
                 }
                 pending = url;
+                fromFile = false;
                 status = "";
             });
         }
@@ -282,6 +329,7 @@ Page {
                     return;
                 }
                 pending = url;
+                fromFile = true;
                 status = "";
             });
         }
@@ -338,7 +386,9 @@ Page {
 
         Section {
             title: "Wearing"
-            footer: thumb.status
+            footer: thumb.status !== "" ? thumb.status
+                : avatar.linking ? "A link to an avatar's .fst or .glb file. A .glb is set up for Darkride first, then you test it or keep it."
+                : ""
             Item {
                 width: parent ? parent.width : 0
                 height: wornRow.implicitHeight + 2 * Theme.rowPadding + 4 * Theme.unit
@@ -364,6 +414,7 @@ Page {
                         Text {
                             width: parent.width
                             text: avatar.favoriteName !== "" ? avatar.favoriteName : (avatar.name !== "" ? avatar.name : "Your avatar")
+                            textFormat: Text.PlainText
                             color: Theme.text
                             font.pixelSize: 16 * Theme.unit
                             font.bold: true
@@ -372,6 +423,7 @@ Page {
                         Text {
                             width: parent.width
                             text: avatar.url
+                            textFormat: Text.PlainText
                             color: Theme.tertiaryText
                             font.pixelSize: Theme.detailSize
                             elide: Text.ElideMiddle
@@ -393,12 +445,59 @@ Page {
                 enabled: !thumb.busy
                 onClicked: thumb.choose()
             }
+            // here, not below My Files, where hundreds of avatars hid it (Caity's bug batch, 10-29)
+            ListRow {
+                action: true
+                label: "Use the Default Avatar"
+                onClicked: avatar.wearDefault()
+            }
+            // here too: a player who wore avatars by their link didn't find the box below My Files (Caity, 10-29)
+            ListRow {
+                visible: !avatar.linking
+                action: true
+                label: "Wear from Link…"
+                onClicked: {
+                    // the link worn, selected: a paste replaces it, and it can be copied
+                    linkField.text = avatar.url;
+                    avatar.linking = true;
+                    linkField.forceActiveFocus();
+                    linkField.selectAll();
+                }
+            }
+            ListRow {
+                visible: avatar.linking
+                label: "Link"
+                fill: true
+                Field {
+                    id: linkField
+                    objectName: "wearLinkField"   // a test fills it
+                    Layout.fillWidth: true
+                    horizontalAlignment: TextInput.AlignLeft
+                    placeholderText: "https://…/avatar.fst"
+                    onAccepted: avatar.wearLink(text)
+                    Keys.onEscapePressed: avatar.linking = false
+                }
+            }
+            ListRow {
+                visible: avatar.linking
+                action: true
+                label: "Cancel"
+                onClicked: avatar.linking = false
+            }
+            ListRow {
+                visible: avatar.linking
+                action: true
+                label: "Wear"
+                enabled: linkField.text.trim() !== "" && linkField.text.trim() !== avatar.url
+                onClicked: avatar.wearLink(linkField.text)
+            }
         }
 
         // a picture taken or chosen, to look at before it is saved
         Section {
             visible: thumb.pending !== ""
             title: "New picture"
+            rightsLine: thumb.fromFile
             Item {
                 width: parent ? parent.width : 0
                 height: width * 0.75
@@ -518,37 +617,9 @@ Page {
         }
 
         Section {
-            title: "Wear by URL"
-
-            ListRow {
-                label: "URL"
-                fill: true
-                Field {
-                    id: urlField
-                    Layout.fillWidth: true
-                    text: avatar.url
-                    horizontalAlignment: TextInput.AlignLeft
-                    placeholderText: "https://…/avatar.fst"
-                    onAccepted: if (text.trim() !== "" && text.trim() !== avatar.url) { avatar.wear(text.trim(), text.trim().split("/").pop()); }
-                }
-            }
-            ListRow {
-                visible: urlField.text.trim() !== "" && urlField.text.trim() !== avatar.url
-                action: true
-                label: "Wear This URL"
-                onClicked: avatar.wear(urlField.text.trim(), urlField.text.trim().split("/").pop())
-            }
-
-            ListRow {
-                action: true
-                label: "Use the Default Avatar"
-                onClicked: avatar.wearDefault()
-            }
-        }
-
-        Section {
             title: "Body"
-            footer: "Put This Avatar in My Files uploads an avatar that is on this computer, so everyone can see it."
+            footer: "Put This Avatar in My Files uploads an avatar that is on this computer, private: people see it on you in Darkride, but it has no public link."
+            rightsLine: true
 
             ListRow {
                 label: "Scale"
@@ -573,7 +644,7 @@ Page {
             }
             ListRow {
                 label: "Collide with the world"
-                detail: "off: walk through walls (noclip)"
+                detail: "Off: walk through walls (noclip)"
                 Toggle {
                     checked: avatar.collisions
                     onToggled: { MyAvatar.collisionsEnabled = checked; avatar.refresh(); }
@@ -697,7 +768,7 @@ Page {
 
                     label: menu.clean(modelData.name)
                     icon: modelData.icon ? menu.folder + encodeURI(modelData.icon) : ""
-                    detail: known ? (type === "button" ? "hold" : "") : type + ", not yet"
+                    detail: known ? (type === "button" ? "Hold" : "") : type.charAt(0).toUpperCase() + type.slice(1) + ", not yet"
                     enabled: known
                     fill: type === "radial"
                     clickable: type === "button" || type === "submenu"
@@ -755,7 +826,8 @@ Page {
             MetaverseRequests.send("GET", "/api/user/nametag-details", null, function (error, code, data) {
                 busy = false;
                 if (error) {
-                    status = "Couldn't read your nametag: " + error + ".";
+                    console.log("Avatar: nametag failed: " + code + " " + error);
+                    status = "Couldn't read your nametag. Try again in a moment.";
                     return;
                 }
                 displayNameField.text = data && data.displayName ? data.displayName : "";
@@ -773,7 +845,8 @@ Page {
                                    function (error, code, data) {
                 busy = false;
                 if (error) {
-                    status = "Not saved: " + error + ".";
+                    console.log("Avatar: nametag save failed: " + code + " " + error);
+                    status = "Couldn't save your nametag. Try again in a moment.";
                     return;
                 }
                 status = "Saved. Others see it after you rejoin the world.";
@@ -810,22 +883,50 @@ Page {
                 ? (nametag.status !== "" ? nametag.status : "Whether nametags show at all is in Settings, Displays.")
                 : "Sign in to set the name and pronoun others see above your head."
 
+            // the saved nametag as the metaverse draws it, in two pictures: the next loads unseen while the one shown
+            // stays, so a Save swaps them without the section shrinking in between (Caity 10-28: "the UI crunches up")
             Item {
-                visible: nametag.signedIn && nametagPicture.status === Image.Ready
+                id: nametagPreview
+                readonly property string wanted: nametag.signedIn && nametag.username !== ""
+                    ? MetaverseRequests.metaverseUrl() + "/api/user/" + nametag.username.toLowerCase()
+                      + "/nametag?" + nametag.pictureStamp
+                    : ""
+                property Item shown: null
+
+                function load() {
+                    (shown === pictureA ? pictureB : pictureA).source = wanted;
+                }
+                function arrived(picture) {
+                    if (picture.status === Image.Ready && String(picture.source) === wanted) {
+                        shown = picture;
+                    }
+                }
+                onWantedChanged: load()
+                Component.onCompleted: load()
+
+                visible: nametag.signedIn && shown !== null
                 width: parent ? parent.width : 0
-                height: visible ? nametagPicture.height + 2 * Theme.cardPadding : 0
+                height: visible ? shown.height + 2 * Theme.cardPadding : 0
 
                 Image {
-                    id: nametagPicture
+                    id: pictureA
+                    visible: nametagPreview.shown === pictureA
                     anchors.centerIn: parent
                     width: Math.min(sourceSize.width, parent.width - 2 * Theme.cardPadding)
                     height: width * sourceSize.height / Math.max(1, sourceSize.width)
                     fillMode: Image.PreserveAspectFit
                     cache: false
-                    source: nametag.signedIn && nametag.username !== ""
-                        ? MetaverseRequests.metaverseUrl() + "/api/user/" + nametag.username.toLowerCase()
-                          + "/nametag?" + nametag.pictureStamp
-                        : ""
+                    onStatusChanged: nametagPreview.arrived(pictureA)
+                }
+                Image {
+                    id: pictureB
+                    visible: nametagPreview.shown === pictureB
+                    anchors.centerIn: parent
+                    width: Math.min(sourceSize.width, parent.width - 2 * Theme.cardPadding)
+                    height: width * sourceSize.height / Math.max(1, sourceSize.width)
+                    fillMode: Image.PreserveAspectFit
+                    cache: false
+                    onStatusChanged: nametagPreview.arrived(pictureB)
                 }
             }
             ListRow {
@@ -837,6 +938,8 @@ Page {
                     Layout.fillWidth: true
                     enabled: !nametag.busy
                     placeholderText: nametag.username
+                    // Return saves, as on the Mac (Caity 10-28)
+                    onAccepted: nametag.save()
                 }
             }
             ListRow {

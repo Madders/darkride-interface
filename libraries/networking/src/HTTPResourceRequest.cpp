@@ -11,6 +11,7 @@
 
 #include "HTTPResourceRequest.h"
 
+#include <QAbstractNetworkCache>
 #include <QFile>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -76,10 +77,13 @@ void HTTPResourceRequest::doSend() {
     DependencyManager::get<StatTracker>()->incrementStat(STAT_HTTP_REQUEST_STARTED);
 
     // a URL whose redirect an earlier request followed is asked where it led (RedirectCache); if that fails, the
-    // original URL is asked once more (onRequestFinished)
+    // original URL is asked once more (onRequestFinished). With the player's login, only the files-host URL that
+    // refused the file is asked: never _url, which may be anyone's and only redirected there
     _requestUrl = _url;
     _viaRedirectCache = false;
-    if (!_triedOriginal && !_withAccessToken) {
+    if (_withAccessToken) {
+        _requestUrl = _accessTokenUrl;
+    } else if (!_triedOriginal) {
         QUrl remembered = RedirectCache::target(_url);
         if (!remembered.isEmpty()) {
             _requestUrl = remembered;
@@ -118,7 +122,7 @@ void HTTPResourceRequest::doSend() {
     networkRequest.setRawHeader("Accept-Encoding", "gzip, br");
 
     // a private file: the player's login, to our own files host only, only after it refused the file without it
-    if (_withAccessToken) {
+    if (_withAccessToken && isMetaverseFilesHost(_requestUrl)) {
         networkRequest.setRawHeader(ACCESS_TOKEN_AUTHORIZATION_HEADER, accessTokenHeaderValue());
     }
 
@@ -287,14 +291,17 @@ void HTTPResourceRequest::onRequestFinished() {
             break;
     }
 
-    // our files host refuses a private file (403) to a request without the player's login: asked once more with it, in
-    // this same request (so the login never goes anywhere else, and only for private files)
-    if (statusCode == 403 && !_withAccessToken && isMetaverseFilesHost(_requestUrl) &&
+    // our files host refuses a private file (403) to a request without the player's login: the URL that refused it
+    // (where the request ended, after a remembered target or Qt's redirects) is asked once more with it, in this same
+    // request, so the login goes only to our files host, and only for private files
+    const QUrl refusedUrl = _reply->url();
+    if (statusCode == 403 && !_withAccessToken && isMetaverseFilesHost(refusedUrl) &&
         !accessTokenHeaderValue().isEmpty()) {
         _reply->disconnect(this);
         _reply->deleteLater();
         _reply = nullptr;
         _withAccessToken = true;
+        _accessTokenUrl = refusedUrl;
         doSend();
         return;
     }
@@ -351,6 +358,13 @@ void HTTPResourceRequest::onDownloadProgress(qint64 bytesReceived, qint64 bytesT
 void HTTPResourceRequest::onTimeout() {
     qCDebug(networking) << "Timeout, no data for 10 s:" << _requestUrl.toString();
     Q_ASSERT(_state == InProgress);
+    // A download that stops short of its size and never finishes can be a cut-short copy in the disk cache: with
+    // PreferNetwork the server's "not modified" sends Qt back to its own copy, which ends at the same byte on every
+    // retry. That copy goes, under the address asked for and the one a redirect led to, so the retry downloads it whole.
+    if (auto cache = NetworkAccessManager::getInstance().cache()) {
+        cache->remove(_requestUrl);
+        cache->remove(_reply->url());
+    }
     _reply->disconnect(this);
     _reply->abort();
     _reply->deleteLater();

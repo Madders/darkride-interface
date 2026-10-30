@@ -275,6 +275,14 @@ public:
     QString getServerScripts() const;
     void setServerScripts(const QString& serverScripts);
 
+    // false: the entity's scripts, client and server, don't run (Build mode's "scripts off"); the URLs stay
+    bool getScriptsEnabled() const;
+    void setScriptsEnabled(bool value);
+    // the script and server scripts to run: the URLs, or "" while the scripts are off. What loads and unloads them
+    // goes by these, so turning the scripts off or on is a change of script like setting a URL
+    QString getScriptToRun() const;
+    QString getServerScriptsToRun() const;
+
     QString getCollisionSoundURL() const;
     void setCollisionSoundURL(const QString& value);
 
@@ -546,7 +554,7 @@ public:
     /// entity to definitively state if the preload signal should be sent.
     ///
     /// We only want to preload if:
-    ///    there is some script, and either the script value or the scriptTimestamp
+    ///    there is some script, the scripts are on, and either the script value or the scriptTimestamp
     ///    value have changed since our last preload
     bool shouldPreloadScript() const;
     void scriptHasPreloaded();
@@ -734,6 +742,10 @@ protected:
     QString _serverScripts;
     /// keep track of time when _serverScripts property was last changed
     quint64 _serverScriptsChangedTimestamp { ENTITY_ITEM_DEFAULT_SCRIPT_TIMESTAMP };
+
+    bool _scriptsEnabled { ENTITY_ITEM_DEFAULT_SCRIPTS_ENABLED };
+    /// when _scriptsEnabled last changed, as for _serverScripts
+    quint64 _scriptsEnabledChangedTimestamp { ENTITY_ITEM_DEFAULT_SCRIPT_TIMESTAMP };
 
     /// the value of _scriptTimestamp when the last preload signal was sent
     // NOTE: on construction we want this to be different from _scriptTimestamp so we intentionally bump it

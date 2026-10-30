@@ -300,6 +300,7 @@ enum class EntityVersion : PacketVersion {
     // ToneMappingMode, // caitlyn
     
     PolyVoxRemoved, // darkride: the PolyVox entity is gone (its type number reserved); a world's PolyVox entities are dropped on load
+    ScriptsEnabled, // darkride: an entity's scripts can be turned off (scriptsEnabled)
 
     // Add new versions above here
     NUM_PACKET_TYPE,

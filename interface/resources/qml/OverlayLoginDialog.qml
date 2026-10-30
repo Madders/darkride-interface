@@ -15,6 +15,7 @@ import controlsUit 1.0 as HifiControlsUit
 import stylesUit 1.0 as HifiStylesUit
 
 import "LoginDialog"
+import "LoginDialog" as LoginParts
 
 FocusScope {
     id: root
@@ -169,6 +170,16 @@ FocusScope {
 
     Component.onDestruction: {
         loginKeyboard.raised = false;
+    }
+
+    // the version and build along the bottom, for bug reports (LoginDialog/BuildLine.qml)
+    LoginParts.BuildLine {
+        z: 5
+        anchors {
+            horizontalCenter: parent.horizontalCenter
+            bottom: parent.bottom
+            bottomMargin: 14
+        }
     }
 
     Component.onCompleted: {

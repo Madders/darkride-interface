@@ -43,10 +43,11 @@ private:
 
     QTimer* _sendTimer { nullptr };
     QNetworkReply* _reply { nullptr };
-    QUrl _requestUrl;                     // _url, or the target RedirectCache remembers for it
+    QUrl _requestUrl;                     // _url, or the target RedirectCache remembers for it, or _accessTokenUrl
     bool _viaRedirectCache { false };
     bool _triedOriginal { false };        // the remembered target failed and the original URL was asked
     bool _withAccessToken { false };      // our files host refused it without the player's login: asked again with it
+    QUrl _accessTokenUrl;                 // the files-host URL that refused it: the only one asked with the login
 };
 
 #endif

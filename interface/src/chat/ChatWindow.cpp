@@ -2,8 +2,9 @@
 //  ChatWindow.cpp
 //  interface/src/chat
 //
-//  Distributed under the Apache License, Version 2.0.
-//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//  Copyright 2026 Darkride.
+//
+//  Distributed under the MIT License.
 //
 
 #include "ChatWindow.h"
@@ -14,8 +15,10 @@
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QLocale>
+#include <QtCore/QMimeDatabase>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QTimer>
@@ -25,17 +28,21 @@
 #include <QtGui/QMovie>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
+#include <QtGui/QResizeEvent>
+#include <QtGui/QScreen>
 #include <QtGui/QClipboard>
 #include <QtGui/QTextCursor>
 #include <QtGui/QTextFrame>
+#include <QtWidgets/QAbstractButton>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QDockWidget>
+#include <QtWidgets/QFileDialog>
 #include <QtWidgets/QGraphicsOpacityEffect>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QListWidget>
 #include <QtWidgets/QMenu>
-#include <QtWidgets/QMessageBox>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollBar>
@@ -55,20 +62,46 @@
 #include <gl/GLHelpers.h>
 
 #include "Application.h"
+#include "ChatTabletPage.h"
 #include "InterfaceLogging.h"
+#include "WorldChat.h"
 #include "MainWindow.h"
+#include "ui/PanelTheme.h"
+#include "ui/Panels.h"
+#include "ui/Popup.h"
 
-// the web chat's colours (darkride_chat client/src/style.css), from the Darkride website's
-static const QColor COLOUR_SIDEBAR("#171b2d");
-static const QColor COLOUR_PAGE("#1c2136");
-static const QColor COLOUR_SURFACE("#242a44");
-static const QColor COLOUR_SELECTION("#333a5a");
-static const QColor COLOUR_TEXT("#f4f6f8");
-static const QColor COLOUR_MUTED("#9aa1bd");
-static const QColor COLOUR_CYAN("#00afff");
-static const QColor COLOUR_RED("#ff5555");
+#if defined(Q_OS_MACOS)
+#include <sys/xattr.h>
+#endif
+
+// the web chat's colours (darkride_chat client/src/style.css), from the Darkride website's; under a skin, the skin's
+// own colours take their places (ChatWindow::applyColours, from COLOURS below)
+static QColor COLOUR_SIDEBAR;
+static QColor COLOUR_PAGE;
+static QColor COLOUR_SURFACE;
+static QColor COLOUR_SELECTION;
+static QColor COLOUR_TEXT;
+static QColor COLOUR_MUTED;
+static QColor COLOUR_CYAN;
+static QColor COLOUR_RED;
+static QColor COLOUR_CHIP;        // a reaction
+static QColor COLOUR_CHIP_MINE;   // a reaction of yours
+static QColor COLOUR_RAIL;        // the darkest: who you are, menus, fields
 static const QColor COLOUR_VIOLET("#a548ff");
 static const QColor COLOUR_GREEN("#50fa7b");
+// each colour's value in Darkride's own look, and the skin colour (PanelTheme::COLOR_KEYS) that replaces it
+static const struct {
+    QColor* colour;
+    const char* own;
+    const char* skin;
+} COLOURS[] = {
+    { &COLOUR_SIDEBAR, "#171b2d", "card" },        { &COLOUR_PAGE, "#1c2136", "background" },
+    { &COLOUR_SURFACE, "#242a44", "fill" },        { &COLOUR_SELECTION, "#333a5a", "cardPressed" },
+    { &COLOUR_TEXT, "#f4f6f8", "text" },           { &COLOUR_MUTED, "#9aa1bd", "secondaryText" },
+    { &COLOUR_CYAN, "#00afff", "tint" },           { &COLOUR_RED, "#ff5555", "destructive" },
+    { &COLOUR_CHIP, "#2b3150", "fill" },           { &COLOUR_CHIP_MINE, "#1d3a5f", "cardPressed" },
+    { &COLOUR_RAIL, "#10142a", "card" },
+};
 // a person's or room's own colour behind its first letter, as the web chat picks it (avatar.ts)
 static const char* AVATAR_COLOURS[] = { "#0090d6", "#8a3bdc", "#2f9e5b", "#d4692b", "#c43f82", "#23a39a" };
 
@@ -76,18 +109,35 @@ static const char* AVATAR_COLOURS[] = { "#0090d6", "#8a3bdc", "#2f9e5b", "#d4692
 static const qint64 GROUP_GAP_MS = 7 * 60 * 1000;
 // a click each in a message's menu, as in the web client (client/src/emoji.ts)
 static const QStringList QUICK_REACTIONS { "\U0001F44D", "\u2764\uFE0F", "\U0001F602", "\U0001F62E", "\U0001F622", "\U0001F389" };
-static const QColor COLOUR_CHIP("#2b3150");
 // the sidebar's first row, the Friends page
 static const QString FRIENDS_ROW = "friends:";
+// the list's "This world" (WorldChat): no Matrix room has an id like it
+static const QString WORLD_ROOM = "world:";
 // a friend's lists again at most this often when the window comes forward
 static const qint64 FRIENDS_FRESH_MS = 15 * 1000;
 static const int FRIENDS_REFRESH_MS = 60 * 1000;
-static const QColor COLOUR_CHIP_MINE("#1d3a5f");
-// a message's picture fits in this, as Discord's do in a narrower column
+// timeline events this close together are drawn once (a busy or flooded room); and the most items a conversation
+// shows, the chat library's own cap (TIMELINE_ITEMS_MAX), so scrolling up stops asking for older ones there
+static const int RENDER_DELAY_MS = 50;
+static const int TIMELINE_ITEMS_MAX = 500;
+// a message's picture fits in this, as Discord's do in a narrower column (narrow: the chat panel docked beside the
+// 3D view, one column at a time)
 static const QSize PICTURE_MAX(400, 300);
+static const QSize PICTURE_MAX_NARROW(220, 220);
 static const QSize PICTURE_UNKNOWN(300, 200);
+// the rooms' column; narrower than this and a readable conversation beside it, the chat shows one at a time
+static const int SIDEBAR_WIDTH = 240;
+static const int NARROW_WIDTH = 720;
+// shorter than this, the message box grows to three lines at most
+static const int SHORT_HEIGHT = 360;
+// the chat panel floating, the first time: as big as the chat window was before it could dock
+static const QSize FLOATING_SIZE(940, 640);
 // a GIF bigger than this shows as its first frame from a thumbnail rather than playing
 static const qint64 GIF_PLAY_MAX_BYTES = 12 * 1024 * 1024;
+// a GIF plays only this big in pixels too (frames are decoded on the main thread); a picture bigger than the second
+// isn't decoded here at all (its grey box still opens it in the system's viewer)
+static const qint64 GIF_PLAY_MAX_PIXELS = 1000 * 1000;
+static const qint64 PICTURE_MAX_PIXELS = 60 * 1000 * 1000;
 static const int AVATAR_FETCH_SIZE = 96;
 
 static Setting::Handle<QByteArray> chatWindowGeometry("chat/windowGeometry");
@@ -95,7 +145,7 @@ static Setting::Handle<QString> chatLastRoom("chat/room");
 
 enum RoomRole {
     RoomIdRole = Qt::UserRole,
-    RoomKindRole,       // header, channel, dm, invite
+    RoomKindRole,       // header, friends, world, channel, dm, group, invite
     RoomUnreadRole,
     RoomNotificationsRole,
     RoomAvatarRole,     // a dm's or group's picture
@@ -137,6 +187,25 @@ static QImage friendsIcon(int size, qreal pixelRatio) {
     };
     person(size * 0.62, 0.8, COLOUR_MUTED);
     person(size * 0.42, 1.0, COLOUR_TEXT);
+    return image;
+}
+
+// This world's picture: a globe
+static QImage worldIcon(int size, qreal pixelRatio) {
+    QImage image(QSize(size, size) * pixelRatio, QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(pixelRatio);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(COLOUR_SURFACE);
+    painter.drawEllipse(QRectF(0, 0, size, size));
+    painter.setPen(QPen(COLOUR_TEXT, std::max(1.0, size / 18.0)));
+    painter.setBrush(Qt::NoBrush);
+    QRectF globe(size * 0.24, size * 0.24, size * 0.52, size * 0.52);
+    painter.drawEllipse(globe);
+    painter.drawEllipse(globe.adjusted(size * 0.14, 0, -size * 0.14, 0));
+    painter.drawLine(QPointF(globe.left(), globe.center().y()), QPointF(globe.right(), globe.center().y()));
     return image;
 }
 
@@ -230,15 +299,45 @@ static QImage boxedImage(const QImage& image, const QSize& box, qreal pixelRatio
     return boxed;
 }
 
-// a picture's size in the conversation: its own, made to fit PICTURE_MAX, never enlarged
-static QSize pictureBox(QSize size) {
+// a picture's size in the conversation: its own, made to fit max, never enlarged (PICTURE_UNKNOWN, made to fit, when
+// its message didn't say)
+static QSize pictureBox(QSize size, const QSize& max) {
     if (size.width() <= 0 || size.height() <= 0) {
-        return PICTURE_UNKNOWN;
+        size = PICTURE_UNKNOWN;
     }
-    if (size.width() > PICTURE_MAX.width() || size.height() > PICTURE_MAX.height()) {
-        size.scale(PICTURE_MAX, Qt::KeepAspectRatio);
+    if (size.width() > max.width() || size.height() > max.height()) {
+        size.scale(max, Qt::KeepAspectRatio);
     }
     return size.expandedTo(QSize(16, 16));
+}
+
+// a name from a message (the sender's) as a file's name: letters, digits, spaces, dashes and underscores only (so no
+// path, no ".." and no leading dot), not one of Windows' device names, at most 80 characters; its extension left off
+static QString safeBaseName(const QString& name) {
+    QString base = QFileInfo(name).completeBaseName();
+    base.replace(QRegularExpression(R"([^\p{L}\p{N} _\-]+)"), "_");
+    base = base.trimmed().left(80);
+    static const QRegularExpression DEVICE("^(con|prn|aux|nul|com[1-9]|lpt[1-9])$", QRegularExpression::CaseInsensitiveOption);
+    if (DEVICE.match(base).hasMatch()) {
+        base = "file-" + base;
+    }
+    return base.isEmpty() ? QString("download") : base;
+}
+
+// a file written from chat, marked as downloaded from the internet as browsers mark theirs, so the system asks before
+// running it (Gatekeeper on macOS, SmartScreen on Windows)
+static void markDownloaded(const QString& path) {
+#if defined(Q_OS_MACOS)
+    QByteArray value = QString("0083;%1;Darkride;").arg(QDateTime::currentSecsSinceEpoch(), 8, 16, QChar('0')).toUtf8();
+    setxattr(QFile::encodeName(path).constData(), "com.apple.quarantine", value.constData(), value.size(), 0, 0);
+#elif defined(Q_OS_WIN)
+    QFile zone(path + ":Zone.Identifier");
+    if (zone.open(QIODevice::WriteOnly)) {
+        zone.write("[ZoneTransfer]\r\nZoneId=3\r\n");
+    }
+#else
+    Q_UNUSED(path);
+#endif
 }
 
 static QString compactJson(const QJsonValue& value) {
@@ -248,9 +347,10 @@ static QString compactJson(const QJsonValue& value) {
     return value.toString();
 }
 
-// plain text as rich text: escaped, web addresses made links, line breaks kept
+// plain text as rich text: escaped, web addresses and Darkride's place links (hifi://, as Explore's Copy Link gives)
+// made links, line breaks kept
 static QString richBody(const QString& body) {
-    static const QRegularExpression url(R"((https?://[^\s<]*[^\s<.,;:!?)\]'"]))");
+    static const QRegularExpression url(R"(((?:https?|hifi)://[^\s<]*[^\s<.,;:!?)\]'"]))");
     QString html = body.toHtmlEscaped();
     html.replace(url, "<a href=\"\\1\">\\1</a>");
     return html;
@@ -377,92 +477,195 @@ public:
 // --- the window ---------------------------------------------------------------------------------------------------
 
 QPointer<ChatWindow> ChatWindow::_instance;
+QPointer<QDockWidget> ChatWindow::_dock;
+
+// The "Chat" dock panel. Its own window coming or going beside the viewer's changes the GL view's surface on macOS, so
+// its float and close buttons, a double-click on its title and the end of a drag that docks it are handled under
+// gl::ViewChangeGuard, as the main window's own layout changes are (Application::notify): opening chat crashed in
+// Apple's GL driver as Build mode's panels had.
+class ChatDock : public QDockWidget {
+public:
+    explicit ChatDock(QWidget* parent) : QDockWidget("Chat", parent) {
+        setObjectName("ChatDock");
+        // the bottom too, where My Files docks, so they tab with it (Caity, 10-27)
+        setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea | Qt::BottomDockWidgetArea);
+        setFeatures(DockWidgetClosable | DockWidgetMovable | DockWidgetFloatable);
+        for (auto button : findChildren<QAbstractButton*>()) {
+            button->installEventFilter(this);
+        }
+    }
+
+protected:
+    bool event(QEvent* event) override {
+        switch (event->type()) {
+            case QEvent::MouseButtonDblClick:
+            case QEvent::MouseButtonRelease:
+            case QEvent::NonClientAreaMouseButtonDblClick:
+            case QEvent::NonClientAreaMouseButtonRelease:
+            case QEvent::Close: {
+                gl::ViewChangeGuard guard(event->type());
+                return QDockWidget::event(event);
+            }
+            default:
+                return QDockWidget::event(event);
+        }
+    }
+
+    // a title button acts on its release: delivered to it here, under the guard
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::MouseButtonRelease && !_releasing) {
+            gl::ViewChangeGuard guard(event->type());
+            _releasing = true;
+            QCoreApplication::sendEvent(watched, event);
+            _releasing = false;
+            return true;
+        }
+        return QDockWidget::eventFilter(watched, event);
+    }
+
+    // where it floats, for the next start (the main window's saved layout, when it has one, places it after)
+    void hideEvent(QHideEvent* event) override {
+        if (isFloating()) {
+            chatWindowGeometry.set(saveGeometry());
+        }
+        QDockWidget::hideEvent(event);
+    }
+
+private:
+    bool _releasing { false };
+};
+
+// the chat panel floating at its first size in the middle of the main window, kept on the main window's screen (a main
+// window near the screen's edge would have it hang off)
+static void placeFloating(QDockWidget* panel, QWidget* window) {
+    QRect screen = window->screen() ? window->screen()->availableGeometry() : QRect();
+    QRect rect(QPoint(), screen.isValid() ? FLOATING_SIZE.boundedTo(screen.size()) : FLOATING_SIZE);
+    rect.moveCenter(window->geometry().center());
+    if (screen.isValid()) {
+        rect.moveLeft(std::max(screen.left(), std::min(rect.left(), screen.right() + 1 - rect.width())));
+        rect.moveTop(std::max(screen.top(), std::min(rect.top(), screen.bottom() + 1 - rect.height())));
+    }
+    panel->resize(rect.size());
+    panel->move(rect.topLeft());
+}
+
+QDockWidget* ChatWindow::dock() {
+    if (!_dock) {
+        gl::ViewChangeGuard guard;
+        MainWindow* window = qApp->getWindow();
+        _dock = new ChatDock(window);
+        // hidden before it joins the main window, so it never shows there by itself; floating, as chat was before
+        _dock->hide();
+        window->addDockWidget(Qt::RightDockWidgetArea, _dock);
+        _dock->setFloating(true);
+        QByteArray geometry = chatWindowGeometry.get();
+        if (geometry.isEmpty() || !_dock->restoreGeometry(geometry)) {
+            placeFloating(_dock, window);
+        }
+        // shown by the main window's saved layout, or a drag: the chat in it, made the first time
+        connect(_dock.data(), &QDockWidget::visibilityChanged, _dock.data(), [](bool visible) {
+            if (visible) {
+                content();
+            }
+        });
+        // for a crash report: whether chat was in the main window or its own when it happened
+        connect(_dock.data(), &QDockWidget::topLevelChanged, _dock.data(), [](bool floating) {
+            qCDebug(interfaceapp) << "chat panel" << (floating ? "floating" : "docked");
+        });
+    }
+    return _dock;
+}
+
+void ChatWindow::resetDock() {
+    gl::ViewChangeGuard guard;
+    QDockWidget* panel = dock();
+    panel->setFloating(true);
+    placeFloating(panel, qApp->getWindow());
+}
+
+ChatWindow* ChatWindow::content() {
+    if (!_instance) {
+        gl::ViewChangeGuard guard;
+        _instance = new ChatWindow(dock());
+        _dock->setWidget(_instance);
+        qCDebug(interfaceapp) << "chat panel made," << (_dock->isFloating() ? "floating" : "docked");
+    }
+    return _instance;
+}
 
 QKeySequence ChatWindow::shortcut() {
     return QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D);
 }
 
-void ChatWindow::toggle() {
-    // a window coming or going beside the viewer's also changes the GL view's surface on macOS: no frame is drawn to
-    // it meanwhile (gl::ViewChangeGuard); opening chat crashed in Apple's GL driver as build mode's panels had
+void ChatWindow::openWorld(bool command) {
     gl::ViewChangeGuard guard;
-    if (!_instance) {
-        _instance = new ChatWindow(qApp->getWindow());
+    QDockWidget* panel = dock();
+    ChatWindow* chat = content();
+    const bool inSight = panel->isVisible() && !panel->visibleRegion().isEmpty();
+    panel->show();
+    panel->raise();
+    if (panel->isFloating()) {
+        panel->activateWindow();
     }
-    if (_instance->isVisible() && _instance->isActiveWindow()) {
-        _instance->hide();
-        return;
-    }
-    _instance->show();
-    _instance->raise();
-    _instance->activateWindow();
-    if (_instance->_composer->isEnabled()) {
-        _instance->_composer->setFocus();
+    chat->_worldByKey = true;
+    chat->_worldHideOnEsc = !inSight;
+    chat->selectRoom(WORLD_ROOM);
+    chat->showRooms(false);
+    chat->_composer->setFocus();
+    if (command && chat->_composer->toPlainText().isEmpty()) {
+        chat->_composer->setPlainText("/");
+        chat->_composer->moveCursor(QTextCursor::End);
     }
 }
 
-ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
+void ChatWindow::backToWorld(bool hide) {
+    _worldByKey = false;
+    // the box lets the keys go too, so a floating chat window keeps none of them
+    _composer->clearFocus();
+    if (hide && _worldHideOnEsc && _dock) {
+        gl::ViewChangeGuard guard;
+        _dock->hide();
+    }
+    _worldHideOnEsc = false;
+    if (auto view = qApp->getPrimaryWidget()) {
+        view->activateWindow();
+        view->setFocus();
+    }
+}
+
+void ChatWindow::toggle() {
+    // a window coming or going beside the viewer's, or a panel in it, changes the GL view: no frame is drawn to it
+    // meanwhile (gl::ViewChangeGuard; see ChatDock)
+    gl::ViewChangeGuard guard;
+    QDockWidget* panel = dock();
+    ChatWindow* chat = content();
+    // tabbed behind another panel, docked chat is still visible to Qt, only moved out of sight (QWidgetAnimator)
+    const bool inSight = panel->isVisible() && !panel->visibleRegion().isEmpty();
+    if (inSight && chat->isActiveWindow()) {
+        panel->hide();
+        return;
+    }
+    panel->show();
+    // in front of the other windows when floating; docked among others as tabs, the tab in front
+    panel->raise();
+    if (panel->isFloating()) {
+        panel->activateWindow();
+    }
+    if (chat->_composer->isEnabled()) {
+        chat->_composer->setFocus();
+    }
+}
+
+ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent) {
     setObjectName("DarkrideChat");
-    setWindowTitle("Darkride Chat");
-    setMinimumSize(640, 420);
-    resize(940, 640);
-    setStyleSheet(QString(R"(
-        #DarkrideChat { background: %1; }
-        #ChatSidebar { background: %2; }
-        #ChatSidebarHead, #ChatRoomHead {
-            color: %3; font-size: 15px; font-weight: 500; padding: 0 16px;
-            border-bottom: 1px solid rgba(0, 0, 0, 0.35);
-        }
-        #ChatRooms { background: %2; border: none; outline: 0; }
-        #ChatMe { background: #10142a; }
-        #ChatMeName { color: %3; font-size: 14px; font-weight: 500; }
-        #ChatMeStatus { color: %4; font-size: 12px; }
-        #ChatState { color: %4; font-size: 15px; }
-        #ChatTimeline { background: %1; border: none; }
-        #ChatComposer {
-            background: %5; color: %3; border: none; border-radius: 8px; padding: 8px 12px; font-size: 15px;
-            selection-background-color: %6;
-        }
-        #ChatComposerNote { color: %4; font-size: 12px; }
-        QPushButton {
-            background: %7; color: #091023; border: none; border-radius: 4px; padding: 7px 16px; font-weight: 500;
-        }
-        QPushButton:hover { background: #33c0ff; }
-        QPushButton#ChatDecline { background: %5; color: %3; }
-        QMenu { background: #10142a; color: %3; border: 1px solid rgba(0, 0, 0, 0.5); padding: 6px; font-size: 14px; }
-        QMenu::item { padding: 6px 28px 6px 10px; border-radius: 3px; }
-        QMenu::item:selected { background: %7; color: #091023; }
-        QMenu::item:disabled { color: %4; }
-        QMenu::separator { height: 1px; background: rgba(255, 255, 255, 0.08); margin: 4px 6px; }
-        #ChatFriends { background: %1; border: none; outline: 0; }
-        #ChatFriendName { color: %3; font-size: 15px; font-weight: 500; }
-        #ChatFriendStatus { color: %4; font-size: 12px; }
-        #ChatFriendsHeading { color: %4; font-size: 12px; font-weight: 600; }
-        #ChatFriendsNote { color: %4; font-size: 13px; }
-        #ChatAddFriendTitle { color: %3; font-size: 16px; font-weight: 600; }
-        QLineEdit#ChatAddFriendName {
-            background: #10142a; color: %3; border: 1px solid rgba(0, 0, 0, 0.5); border-radius: 8px; padding: 10px 12px;
-            font-size: 15px; selection-background-color: %6;
-        }
-        QPushButton#ChatTab { background: transparent; color: %4; padding: 4px 10px; }
-        QPushButton#ChatTab:hover { background: rgba(255, 255, 255, 0.06); color: %3; }
-        QPushButton#ChatTab:checked { background: %6; color: %3; }
-        QPushButton#ChatAddTab { background: #248046; color: white; padding: 4px 10px; }
-        QPushButton#ChatAddTab:checked { background: transparent; color: %8; }
-        QPushButton#ChatRowButton { background: %5; color: %3; padding: 6px 12px; }
-        QPushButton#ChatRowButton:hover { background: %6; }
-        QPushButton#ChatRowAccept { background: #248046; color: white; padding: 6px 12px; }
-        QToolButton#ChatQuickReaction {
-            background: %5; border: none; border-radius: 4px; font-size: 20px; min-width: 34px; min-height: 34px;
-        }
-        QToolButton#ChatQuickReaction:hover { background: %6; }
-        QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
-        QScrollBar::handle:vertical { background: %2; border-radius: 4px; min-height: 30px; }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
-    )")
-                      .arg(COLOUR_PAGE.name(), COLOUR_SIDEBAR.name(), COLOUR_TEXT.name(), COLOUR_MUTED.name(),
-                           COLOUR_SURFACE.name(), COLOUR_SELECTION.name(), COLOUR_CYAN.name(), COLOUR_GREEN.name()));
+    setAttribute(Qt::WA_StyledBackground);
+    // docked under Build mode's Inspector, on a laptop's height: the room's name, a little conversation, the message box
+    setMinimumSize(300, 200);
+    _pictureMax = PICTURE_MAX;
+    applyColours();
+    if (auto theme = DependencyManager::get<PanelTheme>()) {
+        connect(theme.data(), &PanelTheme::changed, this, &ChatWindow::applyColours);
+    }
 
     auto layout = new QHBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -472,7 +675,8 @@ ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
     auto sidebar = new QWidget(this);
     sidebar->setObjectName("ChatSidebar");
     sidebar->setAttribute(Qt::WA_StyledBackground);
-    sidebar->setFixedWidth(240);
+    sidebar->setFixedWidth(SIDEBAR_WIDTH);
+    _sidebar = sidebar;
     auto sidebarLayout = new QVBoxLayout(sidebar);
     sidebarLayout->setContentsMargins(0, 0, 0, 0);
     sidebarLayout->setSpacing(0);
@@ -501,8 +705,10 @@ ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
     auto meText = new QVBoxLayout();
     meText->setSpacing(0);
     _userName = new QLabel(me);
+    _userName->setTextFormat(Qt::PlainText);   // what the network says (names, room names, errors): never styled text
     _userName->setObjectName("ChatMeName");
     _userStatus = new QLabel(me);
+    _userStatus->setTextFormat(Qt::PlainText);
     _userStatus->setObjectName("ChatMeStatus");
     meText->addWidget(_userName);
     meText->addWidget(_userStatus);
@@ -516,14 +722,31 @@ ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
 
     // the right: the room's name, then its conversation and the message box (or why there is none)
     auto main = new QWidget(this);
+    _main = main;
     auto mainLayout = new QVBoxLayout(main);
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
-    _roomTitle = new QLabel(main);
-    _roomTitle->setObjectName("ChatRoomHead");
-    _roomTitle->setFixedHeight(48);
+    auto roomHead = new QWidget(main);
+    roomHead->setObjectName("ChatRoomHead");
+    roomHead->setAttribute(Qt::WA_StyledBackground);
+    roomHead->setFixedHeight(48);
+    auto roomHeadLayout = new QHBoxLayout(roomHead);
+    roomHeadLayout->setContentsMargins(0, 0, 0, 0);
+    roomHeadLayout->setSpacing(0);
+    _roomsButton = new QToolButton(roomHead);
+    _roomsButton->setObjectName("ChatRoomsButton");
+    _roomsButton->setText(QString::fromUtf8("\u2039"));   // ‹
+    _roomsButton->setToolTip("Channels and direct messages");
+    _roomsButton->setCursor(Qt::PointingHandCursor);
+    _roomsButton->hide();
+    roomHeadLayout->addWidget(_roomsButton);
+    _roomTitle = new QLabel(roomHead);
+    _roomTitle->setObjectName("ChatRoomTitle");
     _roomTitle->setTextFormat(Qt::PlainText);
-    mainLayout->addWidget(_roomTitle);
+    _roomTitle->installEventFilter(this);   // a direct message's title shows the person's card
+    roomHeadLayout->addWidget(_roomTitle, 1);
+    mainLayout->addWidget(roomHead);
+    connect(_roomsButton, &QToolButton::clicked, this, [this] { showRooms(true); });
     _pages = new QStackedWidget(main);
     mainLayout->addWidget(_pages, 1);
     layout->addWidget(main, 1);
@@ -533,6 +756,7 @@ ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
     auto stateLayout = new QVBoxLayout(statePage);
     stateLayout->addStretch(1);
     _stateText = new QLabel(statePage);
+    _stateText->setTextFormat(Qt::PlainText);
     _stateText->setObjectName("ChatState");
     _stateText->setAlignment(Qt::AlignCenter);
     _stateText->setWordWrap(true);
@@ -552,6 +776,7 @@ ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
     auto inviteLayout = new QVBoxLayout(invitePage);
     inviteLayout->addStretch(1);
     _inviteText = new QLabel(invitePage);
+    _inviteText->setTextFormat(Qt::PlainText);
     _inviteText->setObjectName("ChatState");
     _inviteText->setAlignment(Qt::AlignCenter);
     _inviteText->setWordWrap(true);
@@ -588,8 +813,6 @@ ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
     _timeline->setOpenLinks(false);
     _timeline->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     _timeline->document()->setDocumentMargin(0);
-    _timeline->document()->setDefaultStyleSheet(
-        QString("a { color: %1; text-decoration: none; } body { color: %2; }").arg(COLOUR_CYAN.name(), COLOUR_TEXT.name()));
     conversationLayout->addWidget(_timeline, 1);
     auto composerArea = new QWidget(conversation);
     auto composerLayout = new QVBoxLayout(composerArea);
@@ -602,6 +825,7 @@ ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
     _composer->installEventFilter(this);
     composerLayout->addWidget(_composer);
     _composerNote = new QLabel(composerArea);
+    _composerNote->setTextFormat(Qt::PlainText);
     _composerNote->setObjectName("ChatComposerNote");
     _composerNote->setFixedHeight(18);
     composerLayout->addWidget(_composerNote);
@@ -631,6 +855,7 @@ ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
     tabs->addStretch(1);
     friendsLayout->addLayout(tabs);
     _addFriendNote = new QLabel(friendsPage);
+    _addFriendNote->setTextFormat(Qt::PlainText);
     _addFriendNote->setObjectName("ChatFriendsNote");
     _addFriendNote->setContentsMargins(16, 0, 16, 0);
     _addFriendNote->setWordWrap(true);
@@ -648,6 +873,7 @@ ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
     _friendsList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     listLayout->addWidget(_friendsList, 1);
     _friendsEmpty = new QLabel(listPage);
+    _friendsEmpty->setTextFormat(Qt::PlainText);
     _friendsEmpty->setObjectName("ChatState");
     _friendsEmpty->setAlignment(Qt::AlignCenter);
     _friendsEmpty->setWordWrap(true);
@@ -677,6 +903,14 @@ ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
     connect(send, &QPushButton::clicked, this, &ChatWindow::sendFriendRequest);
     connect(_addFriendName, &QLineEdit::returnPressed, this, &ChatWindow::sendFriendRequest);
     _friendsTabs.value(_friendsTab)->setChecked(true);
+    // a busy or flooded room sends timeline events faster than the conversation can be drawn: they're drawn together
+    _renderTimer = new QTimer(this);
+    _renderTimer->setSingleShot(true);
+    _renderTimer->setInterval(RENDER_DELAY_MS);
+    connect(_renderTimer, &QTimer::timeout, this, [this] {
+        renderTimeline();
+        markReadIfSeen();
+    });
     _friendsTimer = new QTimer(this);
     _friendsTimer->setInterval(FRIENDS_REFRESH_MS);
     connect(_friendsTimer, &QTimer::timeout, this, [this] { askFriends(true); });
@@ -684,6 +918,11 @@ ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
     connect(_timeline, &QTextBrowser::anchorClicked, this, [this](const QUrl& url) {
         if (url.scheme() == "https" || url.scheme() == "http") {
             QDesktopServices::openUrl(url);
+        } else if (url.scheme() == "chatprofile") {
+            showProfile(url.path());
+        } else if (url.scheme() == URL_SCHEME_HIFI) {
+            // a place: gone to as one typed in Explore's address bar
+            DependencyManager::get<AddressManager>()->handleLookupString(url.toString());
         } else if (url.scheme() == "chatopen") {
             int index = url.path().toInt();
             if (index >= 0 && index < _links.size()) {
@@ -706,7 +945,8 @@ ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
         }
         _stickToBottom = value >= _timeline->verticalScrollBar()->maximum() - 4;
         auto service = DependencyManager::get<ChatService>();
-        if (value == 0 && service && !_room.isEmpty() && !_roomStart && !_loadingOlder && !_items.isEmpty()) {
+        if (value == 0 && service && !_room.isEmpty() && !_roomStart && !_loadingOlder && !_items.isEmpty() &&
+            _items.size() < TIMELINE_ITEMS_MAX) {
             _loadingOlder = true;
             _anchorBottom = true;
             service->loadOlder(_room);
@@ -725,12 +965,19 @@ ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
             selectRoom(item->data(RoomIdRole).toString());
         }
     });
+    connect(_roomList, &QListWidget::itemClicked, this, [this](QListWidgetItem* item) {
+        if (item && item->data(RoomKindRole).toString() != "header") {
+            showRooms(false);
+        }
+    });
 
     // the menu's shortcut hides it again from here too (on Windows the menu's shortcuts work only in the main window)
     auto hideShortcut = new QShortcut(shortcut(), this);
-    connect(hideShortcut, &QShortcut::activated, this, [this] {
+    connect(hideShortcut, &QShortcut::activated, this, [] {
         gl::ViewChangeGuard guard;
-        hide();
+        if (_dock) {
+            _dock->hide();
+        }
     });
 
     if (auto service = DependencyManager::get<ChatService>()) {
@@ -745,6 +992,20 @@ ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
             if (op == "send" || op == "join" || op == "leave" || op == "open" || op == "edit" || op == "delete" ||
                 op == "react") {
                 _composerNote->setText("Couldn't " + op + ": " + message);
+            } else if (op == "create_dm" && !_dmWanted.isEmpty()) {
+                // most often someone who has never used chat, so has no chat account to invite yet
+                qCDebug(interfaceapp) << "chat: no direct message with" << _dmWanted << ":" << message;
+                QString username = _dmWanted.mid(1, _dmWanted.indexOf(':') - 1);
+                _dmWanted.clear();
+                showFriendsPage();
+                _addFriendNote->setText("Couldn't start a conversation with " + username +
+                                        ". They may not have used chat yet.");
+                _addFriendNote->show();
+            }
+            // older messages can be asked for again (a scroll to the top), not stopped for good by one failure
+            if (op == "back") {
+                _loadingOlder = false;
+                _anchorBottom = false;
             }
         });
     }
@@ -771,10 +1032,27 @@ ChatWindow::ChatWindow(QWidget* parent) : QWidget(parent, Qt::Tool) {
         });
     }
 
-    QByteArray geometry = chatWindowGeometry.get();
-    if (!geometry.isEmpty()) {
-        restoreGeometry(geometry);
-    }
+    auto world = WorldChat::instance();
+    connect(world, &WorldChat::itemsChanged, this, [this] {
+        if (_room == WORLD_ROOM && !_friendsShown) {
+            _items = WorldChat::instance()->items();
+            if (!_renderTimer->isActive()) {
+                _renderTimer->start();
+            }
+        }
+    });
+    connect(world, &WorldChat::unreadChanged, this, [this](int unread) {
+        for (int i = 0; i < _roomList->count(); i++) {
+            if (_roomList->item(i)->data(RoomIdRole).toString() == WORLD_ROOM) {
+                _roomList->item(i)->setData(RoomUnreadRole, unread);
+            }
+        }
+        if (unread > 0) {
+            markReadIfSeen();
+        }
+    });
+
+    applyColours();
     fitComposer();
     updateState();
 }
@@ -793,7 +1071,8 @@ void ChatWindow::updateState() {
     updateSync(service ? service->syncState() : QString());
 
     if (!ready) {
-        if (!_room.isEmpty() && service) {
+        bool inWorld = _room == WORLD_ROOM && !_friendsShown;
+        if (!_room.isEmpty() && _room != WORLD_ROOM && service) {
             service->close(_room);
         }
         _room.clear();
@@ -802,6 +1081,23 @@ void ChatWindow::updateState() {
         _rooms = QJsonArray();
         _roomList->clear();
         _roomTitle->clear();
+        // the media folder goes with a sign-out (the library's forget), so nothing fetched before is known any more:
+        // after signing in again, pictures and files are asked for again, and the last account's pictures are gone
+        _mediaFiles.clear();
+        _mediaWanted.clear();
+        _mediaFailed.clear();
+        _opening.clear();
+        _pictureSizes.clear();
+        _avatarImages.clear();
+        qDeleteAll(_movies);
+        _movies.clear();
+        // This world needs no chat account: it stays in the list, and in sight when it was
+        QListWidgetItem* worldRow = nullptr;
+        addWorldRow(worldRow);
+        if (inWorld) {
+            selectRoom(WORLD_ROOM);
+            return;
+        }
         _stateText->setText(service ? service->stateText() : QString("Chat isn't running."));
         _retryButton->setVisible(service && service->state() == ChatService::State::Unavailable);
         _pages->setCurrentIndex(0);
@@ -809,6 +1105,7 @@ void ChatWindow::updateState() {
     }
     updateRooms(service->rooms());
     askFriends();
+    openWantedDm();
 }
 
 void ChatWindow::updateSync(const QString& state) {
@@ -818,7 +1115,7 @@ void ChatWindow::updateSync(const QString& state) {
     } else if (state == "running" || state == "idle") {
         auto friends = DependencyManager::get<FriendsService>();
         QString availability = friends ? friends->availability() : QString();
-        _userStatus->setText(availability == "none"      ? "Invisible"
+        _userStatus->setText(availability == "none"      ? "Online · seen by no one"
                              : availability == "all"     ? "Online · seen by everyone"
                              : availability == "friends" ? "Online · seen by friends"
                                                          : "Online");
@@ -874,6 +1171,7 @@ void ChatWindow::updateRooms(const QJsonArray& rooms) {
             current = item;
         }
     }
+    addWorldRow(current);
     auto addRoom = [&](const QJsonObject& room, const QString& kind) {
         QString id = room.value("id").toString();
         QString name = room.value("name").toString();
@@ -921,7 +1219,7 @@ void ChatWindow::updateRooms(const QJsonArray& rooms) {
     } else if (_room.isEmpty() || !current) {
         // the room shown last time, else the first channel (General)
         QString wanted = chatLastRoom.get();
-        QString chosen;
+        QString chosen = wanted == WORLD_ROOM ? wanted : QString();
         for (const QJsonValue& value : rooms) {
             if (value.toObject().value("id").toString() == wanted) {
                 chosen = wanted;
@@ -948,7 +1246,23 @@ void ChatWindow::updateRooms(const QJsonArray& rooms) {
     }
 }
 
+void ChatWindow::addWorldRow(QListWidgetItem*& current) {
+    auto item = new QListWidgetItem("This world", _roomList);
+    item->setData(RoomIdRole, WORLD_ROOM);
+    item->setData(RoomKindRole, "world");
+    item->setData(RoomAvatarRole, worldIcon(28, devicePixelRatioF()));
+    item->setData(RoomUnreadRole, WorldChat::instance()->unread());
+    item->setToolTip("What the people here type, and what AI residents and bots say");
+    if (_room == WORLD_ROOM && !_friendsShown) {
+        current = item;
+    }
+}
+
 QJsonObject ChatWindow::roomById(const QString& room) const {
+    if (room == WORLD_ROOM) {
+        return { { "id", WORLD_ROOM }, { "name", "This world" }, { "world", true },
+                 { "unread", WorldChat::instance()->unread() } };
+    }
     for (const QJsonValue& value : _rooms) {
         if (value.toObject().value("id").toString() == room) {
             return value.toObject();
@@ -975,7 +1289,7 @@ void ChatWindow::selectRoom(const QString& room) {
     if (!service || room == _room) {
         return;
     }
-    if (!_room.isEmpty()) {
+    if (!_room.isEmpty() && _room != WORLD_ROOM) {
         service->close(_room);
     }
     _room = room;
@@ -999,7 +1313,11 @@ void ChatWindow::selectRoom(const QString& room) {
             _roomList->setCurrentRow(i);
         }
     }
-    if (!roomById(room).value("invited").toBool()) {
+    if (room == WORLD_ROOM) {
+        // this world's lines from the start; nothing older to load
+        _items = WorldChat::instance()->items();
+        _roomStart = true;
+    } else if (!roomById(room).value("invited").toBool()) {
         service->open(room);
     }
     showRoomPage();
@@ -1011,13 +1329,22 @@ void ChatWindow::showRoomPage() {
     bool dm = room.value("dm").toBool();
     QString name = room.value("name").toString();
     QString mark = dm ? "@" : room.value("space").toString().isEmpty() ? "" : "#";
-    _roomTitle->setText(mark.isEmpty() ? name : mark + " " + name);
+    // a direct message's person by their username too, when their display name isn't it (names needn't be unique)
+    QString username = dm ? localpartOf(room.value("dm_user").toString()) : QString();
+    QString title = dm && !username.isEmpty() && name.compare(username, Qt::CaseInsensitive) != 0
+        ? name + " · " + username
+        : name;
+    _roomTitle->setText(mark.isEmpty() ? title : mark + " " + title);
+    // a direct message's title is the person: a click shows their card
+    _roomTitle->setCursor(dm ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    _roomTitle->setToolTip(dm ? "Show " + name + "'s profile" : QString());
     if (room.value("invited").toBool()) {
         _inviteText->setText(dm ? name + " wants to talk with you." : "You're invited to " + name + ".");
         _pages->setCurrentIndex(1);
         return;
     }
-    _composer->setPlaceholderText("Message " + mark + name);
+    _composer->setPlaceholderText(room.value("world").toBool() ? QString("Message everyone in this world")
+                                                               : "Message " + mark + name);
     if (_pages->currentIndex() != 2) {
         _pages->setCurrentIndex(2);
         if (isActiveWindow()) {
@@ -1031,8 +1358,9 @@ void ChatWindow::updateTimeline(const QString& room, const QJsonArray& items) {
         return;
     }
     _items = items;
-    renderTimeline();
-    markReadIfSeen();
+    if (!_renderTimer->isActive()) {
+        _renderTimer->start();
+    }
 }
 
 void ChatWindow::commandDone(const QJsonObject& done) {
@@ -1106,11 +1434,12 @@ QString ChatWindow::mediaHtml(const QJsonObject& item) {
     QJsonValue shownSource;
     int width = 0, height = 0;
     QSize own((int)media.value("width").toDouble(), (int)media.value("height").toDouble());
-    if (kind == "image" && mimetype == "image/gif" && !encrypted && (size == 0 || size <= GIF_PLAY_MAX_BYTES)) {
+    // (a size the message gives: one that gives none gets the server's still, not the whole file)
+    if (kind == "image" && mimetype == "image/gif" && !encrypted && size > 0 && size <= GIF_PLAY_MAX_BYTES) {
         key = "file|" + compactJson(source);   // the whole GIF, to play it
         shownSource = source;
     } else if (kind == "image" || kind == "video") {
-        QSize box = pictureBox(own);
+        QSize box = pictureBox(own, _pictureMax);
         if (!thumbnail.isNull() && !thumbnail.isUndefined() && (encrypted || kind == "video")) {
             // an encrypted picture's server can't make thumbnails of it: the sender's own, decrypted here
             key = "file|" + compactJson(thumbnail);
@@ -1128,7 +1457,7 @@ QString ChatWindow::mediaHtml(const QJsonObject& item) {
 
     QString html;
     if (!key.isEmpty()) {
-        QSize box = pictureBox(_pictureSizes.value(key, own));
+        QSize box = pictureBox(_pictureSizes.value(key, own), _pictureMax);
         QUrl resource("picture:" + QString::number(qHash(key + QString("|%1x%2").arg(box.width()).arg(box.height()))));
         _pictureUses.insert(key, { resource, box, false });
         if (_mediaFiles.contains(key)) {
@@ -1214,19 +1543,7 @@ void ChatWindow::mediaReady(const QString& key, const QString& path, const QStri
     if (opening != _opening.end()) {
         QString name = opening.value();
         _opening.erase(opening);
-        // under its own name, so the system knows what opens it
-        QString folder = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation)).filePath("darkride-chat");
-        QDir().mkpath(folder);
-        QString safe = name;
-        safe.replace(QRegularExpression(R"([/\\:*?"<>|])"), "_");
-        if (safe.trimmed().isEmpty()) {
-            safe = "download";
-        }
-        QString copy = QDir(folder).filePath(safe);
-        QFile::remove(copy);
-        if (QFile::copy(path, copy)) {
-            QDesktopServices::openUrl(QUrl::fromLocalFile(copy));
-        }
+        openDownload(path, name);
     }
     if (_pictureUses.contains(key)) {
         showPicture(key, path);
@@ -1239,13 +1556,21 @@ void ChatWindow::showPicture(const QString& key, const QString& path) {
     if (own.isValid() && !_pictureSizes.contains(key)) {
         // a message that didn't say how big its picture is: laid out again at the picture's own size
         QList<PictureUse> uses = _pictureUses.values(key);
-        if (!uses.isEmpty() && uses.first().box == PICTURE_UNKNOWN && pictureBox(own) != PICTURE_UNKNOWN) {
+        QSize unknown = pictureBox(QSize(), _pictureMax);
+        if (!uses.isEmpty() && uses.first().box == unknown && pictureBox(own, _pictureMax) != unknown) {
             _pictureSizes.insert(key, own);
             QTimer::singleShot(0, this, [this] { renderTimeline(); });
             return;
         }
     }
-    if (reader.supportsAnimation() && reader.imageCount() > 1) {
+    // the file itself decides, not what the message said about it
+    qint64 pixels = own.isValid() ? (qint64)own.width() * own.height() : 0;
+    if (pixels > PICTURE_MAX_PIXELS) {
+        qCDebug(interfaceapp) << "chat: a picture of" << own << "isn't shown here";
+        return;
+    }
+    bool animate = QFileInfo(path).size() <= GIF_PLAY_MAX_BYTES && pixels <= GIF_PLAY_MAX_PIXELS;
+    if (animate && reader.supportsAnimation() && reader.imageCount() > 1) {
         if (_movies.contains(key)) {
             return;
         }
@@ -1265,6 +1590,11 @@ void ChatWindow::showPicture(const QString& key, const QString& path) {
         });
         movie->start();
         return;
+    }
+    // (a GIF too big to play shows its first frame) decoded no bigger than the conversation shows it
+    QSize most = _pictureMax * devicePixelRatioF();
+    if (own.isValid() && (own.width() > most.width() || own.height() > most.height())) {
+        reader.setScaledSize(own.scaled(most, Qt::KeepAspectRatio));
     }
     QImage image = reader.read();
     for (const PictureUse& use : _pictureUses.values(key)) {
@@ -1291,7 +1621,53 @@ void ChatWindow::openMedia(const QJsonObject& media, const QString& name) {
     requestMedia(key, source);
 }
 
+void ChatWindow::openDownload(const QString& path, const QString& name) {
+    // what the file is, from its content (never the name or the type the sender gave): a picture (not SVG, which can
+    // carry scripts), a video, a sound or a PDF opens in the system's viewer
+    QMimeType type = QMimeDatabase().mimeTypeForFile(path, QMimeDatabase::MatchContent);
+    QString kind = type.name();
+    bool viewable = ((kind.startsWith("image/") && !kind.startsWith("image/svg")) || kind.startsWith("video/") ||
+                     kind.startsWith("audio/") || kind == "application/pdf");
+    static const QHash<QString, QString> SUFFIXES { { "image/jpeg", "jpg" },   { "image/tiff", "tiff" },
+                                                    { "video/quicktime", "mov" }, { "audio/mpeg", "mp3" },
+                                                    { "audio/mp4", "m4a" },    { "video/mp4", "mp4" } };
+    QString suffix = SUFFIXES.value(kind, type.preferredSuffix());
+    QString base = safeBaseName(name);
+    if (viewable && !suffix.isEmpty()) {
+        QString folder = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation)).filePath("darkride-chat");
+        QDir().mkpath(folder);
+        QString copy = QDir(folder).filePath(base + "." + suffix);
+        QFile::remove(copy);
+        if (QFile::copy(path, copy)) {
+            markDownloaded(copy);
+            QDesktopServices::openUrl(QUrl::fromLocalFile(copy));
+        }
+        return;
+    }
+    // anything else (a program, a script, an archive, any other document): saved where the person chooses, marked as
+    // downloaded, and not opened
+    qCDebug(interfaceapp) << "chat: a file of type" << kind << "is offered to save, not opened";
+    QString theirs = QFileInfo(name).suffix();
+    static const QRegularExpression SHORT_SUFFIX("^[A-Za-z0-9]{1,8}$");
+    QString suggested = base + (SHORT_SUFFIX.match(theirs).hasMatch() ? "." + theirs : QString());
+    QString downloads = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    QString target = QFileDialog::getSaveFileName(this, "Save File", QDir(downloads).filePath(suggested));
+    if (target.isEmpty()) {
+        return;
+    }
+    QFile::remove(target);   // the dialog has asked about replacing it
+    bool saved = QFile::copy(path, target);
+    if (saved) {
+        markDownloaded(target);
+    }
+    _composerNote->setText(saved ? "Saved " + QFileInfo(target).fileName() + "." : QString("Couldn't save the file there."));
+    QTimer::singleShot(4000, _composerNote, &QLabel::clear);
+}
+
 void ChatWindow::renderTimeline() {
+    if (_renderTimer) {
+        _renderTimer->stop();   // drawn now: a draw waiting for the burst's end isn't needed
+    }
     QScrollBar* scroll = _timeline->verticalScrollBar();
     int fromBottom = scroll->maximum() - scroll->value();
     int fromTop = scroll->value();
@@ -1299,6 +1675,7 @@ void ChatWindow::renderTimeline() {
     QJsonObject room = roomById(_room);
     QString name = room.value("name").toString();
     bool dm = room.value("dm").toBool();
+    bool world = room.value("world").toBool();
     QString muted = COLOUR_MUTED.name();
     // made again below, as the messages are; the GIFs playing carry on
     _pictureUses.clear();
@@ -1318,7 +1695,13 @@ void ChatWindow::renderTimeline() {
     if (_items.isEmpty() && !_roomStart) {
         html += QString("<p style=\"color:%1; margin:24px 16px;\">Loading…</p>").arg(muted);
     }
-    if (_roomStart) {
+    if (_roomStart && world) {
+        html += QString("<p style=\"margin:32px 16px 4px 16px; font-size:28px; font-weight:bold;\">This world</p>"
+                        "<p style=\"color:%1; margin:0 16px 8px 16px;\">What the people here type, and what AI "
+                        "residents and bots say. Everyone in this world sees what you write here. It isn't kept: "
+                        "each world starts empty. Press Enter in the world to talk, / for a command.</p>")
+                    .arg(muted);
+    } else if (_roomStart) {
         // the room's first message is here: a welcome, as Discord starts a channel
         html += QString("<p style=\"margin:32px 16px 4px 16px; font-size:28px; font-weight:bold;\">%1</p>")
                     .arg(dm ? name.toHtmlEscaped() : "Welcome to #" + name.toHtmlEscaped());
@@ -1351,6 +1734,18 @@ void ChatWindow::renderTimeline() {
 
         QString kind = item.value("kind").toString();
         QString body = item.value("body").toString();
+        // in This world, a sender the world hasn't named yet is told apart by their session
+        QString group = sender.isEmpty() ? item.value("session").toString() : sender;
+        if (kind == "notice" && group.isEmpty()) {
+            // a line only you see: a command's answer in This world
+            _tableItems.append(-1);
+            html += QString("<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top:10px;\"><tr>"
+                            "<td width=\"72\"></td><td style=\"color:%1; padding-right:16px;\">"
+                            "<span style=\"white-space:pre-wrap;\">%2</span></td></tr></table>")
+                        .arg(muted, richBody(body));
+            lastSender.clear();
+            continue;
+        }
         if (kind == "member") {
             // "Judas joined.", "Caitlyn invited Judas.": a line of its own, as the web chat draws it
             QString user = item.value("user_name").toString().toHtmlEscaped();
@@ -1405,24 +1800,42 @@ void ChatWindow::renderTimeline() {
         }
         text += reactionsHtml(item, names);
 
-        bool grouped = sender == lastSender && ts - lastTs < GROUP_GAP_MS;
+        bool grouped = group == lastSender && ts - lastTs < GROUP_GAP_MS;
         _tableItems.append(index);
         if (grouped) {
             html += QString("<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top:2px;\"><tr>"
                             "<td width=\"72\"></td><td style=\"padding-right:16px;\">%1</td></tr></table>")
                         .arg(text);
         } else {
+            // the name opens their card; the username beside a display name that isn't it, since display names
+            // needn't be unique (as the nametag shows both)
+            QString username = localpartOf(sender);
+            QString nameHtml = QString("<span style=\"color:%1; font-weight:500;\">%2</span>")
+                                   .arg(COLOUR_CYAN.name(), senderName.toHtmlEscaped());
+            if (!username.isEmpty()) {
+                nameHtml = QString("<a href=\"chatprofile:%1\" title=\"Show profile\">%2</a>")
+                               .arg(username.toHtmlEscaped(), nameHtml);
+            }
+            if (!username.isEmpty() && senderName.compare(username, Qt::CaseInsensitive) != 0) {
+                nameHtml += QString("&nbsp;<span style=\"color:%1; font-size:12px;\">%2</span>")
+                                .arg(muted, username.toHtmlEscaped());
+            }
+            // an AI resident's or a bot's mark in This world, as their nametag shows it (WorldChat)
+            QString mark = item.value("mark").toString();
+            if (!mark.isEmpty()) {
+                nameHtml += QString("&nbsp;<span style=\"color:%1; font-size:12px;\">%2</span>")
+                                .arg(muted, mark.toHtmlEscaped());
+            }
             html += QString("<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top:14px;\"><tr>"
                             "<td width=\"72\" valign=\"top\" style=\"padding-left:16px; padding-top:2px;\">"
                             "<img src=\"%1\" width=\"40\" height=\"40\"></td>"
                             "<td valign=\"top\" style=\"padding-right:16px;\">"
-                            "<span style=\"color:%2; font-weight:500;\">%3</span>&nbsp;&nbsp;"
-                            "<span style=\"color:%4; font-size:12px;\">%5</span><br>%6</td></tr></table>")
-                        .arg(avatarSource(sender, senderName, item.value("avatar").toString()), COLOUR_CYAN.name(),
-                             senderName.toHtmlEscaped(), muted,
+                            "%2&nbsp;&nbsp;"
+                            "<span style=\"color:%3; font-size:12px;\">%4</span><br>%5</td></tr></table>")
+                        .arg(avatarSource(group, senderName, item.value("avatar").toString()), nameHtml, muted,
                              whenText(ts), text);
         }
-        lastSender = sender;
+        lastSender = group;
         lastTs = ts;
     }
     html += "<p style=\"margin:0 0 12px 0;\"></p></body></html>";
@@ -1463,6 +1876,20 @@ void ChatWindow::sendMessage() {
             }
         }
         stopEditing();
+        return;
+    }
+    if (_room == WORLD_ROOM) {
+        // to everyone here (or a /command); opened with Enter in the world, back to it after, as the old in-world
+        // chat did
+        if (!text.trimmed().isEmpty()) {
+            WorldChat::instance()->send(text);
+            _composer->clear();
+            _composerNote->clear();
+            _stickToBottom = true;
+        }
+        if (_worldByKey) {
+            backToWorld(false);
+        }
         return;
     }
     if (!service || _room.isEmpty() || text.trimmed().isEmpty()) {
@@ -1590,14 +2017,12 @@ void ChatWindow::stopEditing() {
 }
 
 void ChatWindow::deleteMessage(const QJsonObject& item) {
-    QMessageBox question(QMessageBox::NoIcon, "Delete Message", "Delete this message? It goes for everyone.",
-                         QMessageBox::NoButton, this);
-    QPushButton* remove = question.addButton("Delete", QMessageBox::DestructiveRole);
-    question.addButton(QMessageBox::Cancel);
-    question.setDefaultButton(QMessageBox::Cancel);
+    // Darkride's alert (ui/Popup.h): Cancel on the left, Delete red on the right; Return and Escape are Cancel
+    popup::Alert question(popup::appIcon(), "Delete this message?", "It goes for everyone.", QString(),
+                          { { "Cancel", popup::Role::Cancel }, { "Delete", popup::Role::Destructive } }, this);
     question.exec();
     auto service = DependencyManager::get<ChatService>();
-    if (question.clickedButton() == remove && service) {
+    if (question.answer() == 1 && service) {
         if (_editingId == item.value("id").toString()) {
             stopEditing();
         }
@@ -1607,11 +2032,16 @@ void ChatWindow::deleteMessage(const QJsonObject& item) {
 
 void ChatWindow::markReadIfSeen() {
     auto service = DependencyManager::get<ChatService>();
-    if (!service || _room.isEmpty() || !isVisible() || !isActiveWindow() || _pages->currentIndex() != 2) {
+    // the conversation in sight: not behind the rooms (narrow), another panel's tab or a window in front
+    if (!service || _room.isEmpty() || !_timeline->isVisible() || !isActiveWindow() || _pages->currentIndex() != 2) {
         return;
     }
     QScrollBar* scroll = _timeline->verticalScrollBar();
     if (scroll->value() < scroll->maximum() - 4) {
+        return;
+    }
+    if (_room == WORLD_ROOM) {
+        WorldChat::instance()->markRead();
         return;
     }
     QJsonObject room = roomById(_room);
@@ -1621,8 +2051,9 @@ void ChatWindow::markReadIfSeen() {
 }
 
 void ChatWindow::fitComposer() {
-    // one line to start, growing with what's typed up to eight
-    int lines = std::min(8, std::max(1, (int)_composer->document()->size().height()));
+    // one line to start, growing with what's typed up to eight (three in a short panel, so the conversation stays)
+    int maxLines = height() < SHORT_HEIGHT ? 3 : 8;
+    int lines = std::min(maxLines, std::max(1, (int)_composer->document()->size().height()));
     int height = lines * _composer->fontMetrics().lineSpacing() + 2 * (int)_composer->document()->documentMargin() + 18;
     _composer->setFixedHeight(height);
 }
@@ -1632,6 +2063,19 @@ bool ChatWindow::eventFilter(QObject* watched, QEvent* event) {
         showAvailabilityMenu();
         return true;
     }
+    if (event->type() == QEvent::MouseButtonRelease) {
+        // a friend's name or picture on the Friends page; a direct message's title
+        QString username = watched->property("profileUser").toString();
+        if (watched == _roomTitle && !_friendsShown) {
+            QJsonObject room = roomById(_room);
+            QString userId = room.value("dm").toBool() ? room.value("dm_user").toString() : QString();
+            username = userId.mid(1, userId.indexOf(':') - 1);
+        }
+        if (!username.isEmpty()) {
+            showProfile(username);
+            return true;
+        }
+    }
     if (watched == _composer && event->type() == QEvent::KeyPress) {
         auto key = static_cast<QKeyEvent*>(event);
         if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) && !(key->modifiers() & Qt::ShiftModifier)) {
@@ -1640,6 +2084,10 @@ bool ChatWindow::eventFilter(QObject* watched, QEvent* event) {
         }
         if (key->key() == Qt::Key_Escape && !_editingId.isEmpty()) {
             stopEditing();
+            return true;
+        }
+        if (key->key() == Qt::Key_Escape && _room == WORLD_ROOM && _worldByKey) {
+            backToWorld(true);
             return true;
         }
         // Up in an empty message box edits your newest message, as in Discord
@@ -1664,17 +2112,46 @@ void ChatWindow::showEvent(QShowEvent* event) {
     _friendsTimer->start();
 }
 
-void ChatWindow::closeEvent(QCloseEvent* event) {
-    // the close button hides it, under the guard (toggle)
-    event->ignore();
-    gl::ViewChangeGuard guard;
-    hide();
-}
-
 void ChatWindow::hideEvent(QHideEvent* event) {
     _friendsTimer->stop();
-    saveGeometrySetting();
     QWidget::hideEvent(event);
+}
+
+void ChatWindow::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    setNarrow(event->size().width() < NARROW_WIDTH);
+    if ((event->size().height() < SHORT_HEIGHT) != (event->oldSize().height() < SHORT_HEIGHT)) {
+        fitComposer();
+    }
+}
+
+void ChatWindow::setNarrow(bool narrow) {
+    if (narrow == _narrow) {
+        return;
+    }
+    _narrow = narrow;
+    if (narrow) {
+        _sidebar->setMinimumWidth(0);
+        _sidebar->setMaximumWidth(QWIDGETSIZE_MAX);
+    } else {
+        _sidebar->setFixedWidth(SIDEBAR_WIDTH);
+    }
+    // the conversation first, or the rooms when there is none to show yet
+    showRooms(_room.isEmpty() && !_friendsShown && _pages->currentIndex() == 2);
+    _pictureMax = narrow ? PICTURE_MAX_NARROW : PICTURE_MAX;
+    if (!_items.isEmpty()) {
+        renderTimeline();
+    }
+}
+
+void ChatWindow::showRooms(bool rooms) {
+    _roomsShown = _narrow && rooms;
+    _sidebar->setVisible(!_narrow || _roomsShown);
+    _main->setVisible(!_roomsShown);
+    _roomsButton->setVisible(_narrow && !_roomsShown);
+    if (!_roomsShown) {
+        markReadIfSeen();
+    }
 }
 
 void ChatWindow::changeEvent(QEvent* event) {
@@ -1712,6 +2189,8 @@ void ChatWindow::showFriendsPage() {
         }
     }
     _roomTitle->setText("Friends");
+    _roomTitle->setCursor(Qt::ArrowCursor);
+    _roomTitle->setToolTip(QString());
     _pages->setCurrentIndex(3);
     updateFriends();
     askFriends(true);
@@ -1758,6 +2237,7 @@ void ChatWindow::updateFriends() {
     };
     auto heading = [this](const QString& text) {
         auto label = new QLabel(text);
+        label->setTextFormat(Qt::PlainText);
         label->setObjectName("ChatFriendsHeading");
         label->setContentsMargins(16, 8, 16, 4);
         auto item = new QListWidgetItem(_friendsList);
@@ -1781,7 +2261,14 @@ void ChatWindow::updateFriends() {
             bool online = person.value("online").toBool();
             QJsonObject location = person.value("location").toObject();
             QString world = location.value("name").toString();
-            QString status = !online ? "Offline" : world.isEmpty() ? "Online" : "In " + world;
+            // the metaverse gives where they are only when you could join them there (F4), as People says it; a
+            // friend in the other version's copy of the worlds (the 1.1 beta beside 1.0) is said to be there instead
+            QString otherVersion = person.value("otherVersion").toString();
+            QString status = !online                  ? "Offline"
+                             : !location.isEmpty()     ? "In " + world
+                             : otherVersion == "older" ? "On an older version of Darkride"
+                             : otherVersion == "newer" ? "On the Darkride beta"
+                                                       : "In a private world";
             QList<QPushButton*> buttons;
             auto message = button("Message");
             connect(message, &QPushButton::clicked, this, [this, username] { messageFriend(username); });
@@ -1799,14 +2286,12 @@ void ChatWindow::updateFriends() {
                 QMenu* menu = new QMenu(this);
                 menu->setAttribute(Qt::WA_DeleteOnClose);
                 connect(menu->addAction("Remove Friend"), &QAction::triggered, this, [this, username] {
-                    QMessageBox question(QMessageBox::NoIcon, "Remove Friend",
-                                         QString("Remove %1 as a friend?").arg(username), QMessageBox::NoButton, this);
-                    QPushButton* remove = question.addButton("Remove Friend", QMessageBox::DestructiveRole);
-                    question.addButton(QMessageBox::Cancel);
-                    question.setDefaultButton(QMessageBox::Cancel);
+                    popup::Alert question(popup::appIcon(), QString("Remove %1 as a friend?").arg(username), QString(),
+                                          QString(), { { "Cancel", popup::Role::Cancel },
+                                                       { "Remove Friend", popup::Role::Destructive } }, this);
                     question.exec();
                     auto friends = DependencyManager::get<FriendsService>();
-                    if (question.clickedButton() == remove && friends) {
+                    if (question.answer() == 1 && friends) {
                         friends->remove(username);
                     }
                 });
@@ -1886,6 +2371,13 @@ void ChatWindow::addFriendRow(const QString& username, const QString& status, co
     auto name = new QLabel(username, row);
     name->setObjectName("ChatFriendName");
     name->setTextFormat(Qt::PlainText);
+    // the name and the picture show their card
+    for (QLabel* label : { picture, name }) {
+        label->setProperty("profileUser", username);
+        label->setCursor(Qt::PointingHandCursor);
+        label->setToolTip("Show " + username + "'s profile");
+        label->installEventFilter(this);
+    }
     auto line = new QLabel(status, row);
     line->setObjectName("ChatFriendStatus");
     line->setTextFormat(Qt::PlainText);
@@ -1921,6 +2413,39 @@ void ChatWindow::messageFriend(const QString& username) {
     service->createDm(userId);
 }
 
+void ChatWindow::openDirectMessage(const QString& username) {
+    // in VR, on the tablet: a headset draws no panels
+    if (qApp->isHMDMode() && ChatTabletPage::get()) {
+        ChatTabletPage::get()->openDirectMessage(username);
+        return;
+    }
+    DependencyManager::get<Panels>()->open("Chat");
+    ChatWindow* chat = content();
+    auto service = DependencyManager::get<ChatService>();
+    auto state = service ? service->state() : ChatService::State::SignedOut;
+    // signed out, or turned away: chat says why, and nothing waits to open later
+    chat->_dmWantedUser = state == ChatService::State::Ready || state == ChatService::State::SigningIn ? username
+                                                                                                       : QString();
+    chat->openWantedDm();
+}
+
+void ChatWindow::openWantedDm() {
+    auto service = DependencyManager::get<ChatService>();
+    if (_dmWantedUser.isEmpty() || !service || service->state() != ChatService::State::Ready) {
+        return;
+    }
+    QString username = _dmWantedUser;
+    _dmWantedUser.clear();
+    messageFriend(username);
+}
+
+void ChatWindow::showProfile(const QString& username) {
+    // by name, as scripts call it, so chat builds with or without the People side (editor-ui's friends-ui)
+    if (!QMetaObject::invokeMethod(DependencyManager::get<Panels>().data(), "showProfile", Q_ARG(QString, username))) {
+        qCWarning(interfaceapp) << "chat: People can't show profiles in this build";
+    }
+}
+
 void ChatWindow::sendFriendRequest() {
     QString username = _addFriendName->text().trimmed();
     if (username.startsWith('@')) {
@@ -1942,9 +2467,10 @@ void ChatWindow::showAvailabilityMenu() {
     }
     QMenu* menu = new QMenu(this);
     menu->setAttribute(Qt::WA_DeleteOnClose);
-    menu->addAction("Who sees where I am")->setEnabled(false);
+    // the same words as Settings' (Friends.availability, F3)
+    menu->addAction("Who sees you're online, and where")->setEnabled(false);
     static const QList<QPair<QString, QString>> CHOICES { { "all", "Everyone" }, { "friends", "Friends" },
-                                                          { "none", "Nobody" } };
+                                                          { "none", "No one" } };
     for (const auto& choice : CHOICES) {
         QAction* action = menu->addAction(choice.second);
         action->setCheckable(true);
@@ -1957,6 +2483,94 @@ void ChatWindow::showAvailabilityMenu() {
     menu->popup(_me->mapToGlobal(QPoint(8, -menu->sizeHint().height())));
 }
 
-void ChatWindow::saveGeometrySetting() {
-    chatWindowGeometry.set(saveGeometry());
+void ChatWindow::applyColours() {
+    // the skin on (PanelTheme carries it; empty when none is) puts its colours in the chat's places, where it has them
+    auto theme = DependencyManager::get<PanelTheme>();
+    QVariantMap skin = theme ? theme->getSkin() : QVariantMap();
+    QVariantMap skinColours = skin.value("colors").toMap();
+    for (const auto& colour : COLOURS) {
+        QColor skinColour(skinColours.value(colour.skin).toString());
+        *colour.colour = skinColour.isValid() ? skinColour : QColor(colour.own);
+    }
+
+    // the chat's own areas, in either look
+    QString sheet = QString(R"(
+        #DarkrideChat { background: %1; }
+        #ChatSidebar { background: %2; }
+        #ChatSidebarHead, #ChatRoomHead { border-bottom: 1px solid rgba(0, 0, 0, 0.35); }
+        #ChatSidebarHead, #ChatRoomTitle { color: %3; font-size: 15px; font-weight: 500; padding: 0 16px; }
+        QToolButton#ChatRoomsButton {
+            background: transparent; color: %3; border: none; font-size: 26px; padding: 0 0 4px 12px;
+        }
+        QToolButton#ChatRoomsButton:hover { color: %7; }
+        #ChatRooms { background: %2; border: none; outline: 0; }
+        #ChatMe { background: %8; }
+        #ChatMeName { color: %3; font-size: 14px; font-weight: 500; }
+        #ChatMeStatus { color: %4; font-size: 12px; }
+        #ChatState { color: %4; font-size: 15px; }
+        #ChatTimeline { background: %1; border: none; }
+        #ChatComposer {
+            background: %5; color: %3; border: none; border-radius: 8px; padding: 8px 12px; font-size: 15px;
+            selection-background-color: %6;
+        }
+        #ChatComposerNote { color: %4; font-size: 12px; }
+        #ChatFriends { background: %1; border: none; outline: 0; }
+        #ChatFriendName { color: %3; font-size: 15px; font-weight: 500; }
+        #ChatFriendStatus { color: %4; font-size: 12px; }
+        #ChatFriendsHeading { color: %4; font-size: 12px; font-weight: 600; }
+        #ChatFriendsNote { color: %4; font-size: 13px; }
+        #ChatAddFriendTitle { color: %3; font-size: 16px; font-weight: 600; }
+        QPushButton#ChatTab { background: transparent; color: %4; padding: 4px 10px; }
+        QPushButton#ChatTab:hover { background: rgba(255, 255, 255, 0.06); color: %3; }
+        QPushButton#ChatTab:checked { background: %6; color: %3; }
+        QPushButton#ChatRowButton { background: %5; color: %3; padding: 6px 12px; }
+        QPushButton#ChatRowButton:hover { background: %6; }
+        QToolButton#ChatQuickReaction {
+            background: %5; border: none; border-radius: 4px; font-size: 20px; min-width: 34px; min-height: 34px;
+        }
+        QToolButton#ChatQuickReaction:hover { background: %6; }
+    )")
+                        .arg(COLOUR_PAGE.name(), COLOUR_SIDEBAR.name(), COLOUR_TEXT.name(), COLOUR_MUTED.name(),
+                             COLOUR_SURFACE.name(), COLOUR_SELECTION.name(), COLOUR_CYAN.name(), COLOUR_RAIL.name());
+    // Darkride's own buttons, menus, fields and scroll bars; under a skin, its frames draw them (Skins' style sheet)
+    if (skin.isEmpty()) {
+        sheet += QString(R"(
+        QPushButton {
+            background: %5; color: #091023; border: none; border-radius: 4px; padding: 7px 16px; font-weight: 500;
+        }
+        QPushButton:hover { background: #33c0ff; }
+        QPushButton#ChatDecline { background: %4; color: %2; }
+        QPushButton#ChatAddTab { background: #248046; color: white; padding: 4px 10px; }
+        QPushButton#ChatAddTab:checked { background: transparent; color: %6; }
+        QPushButton#ChatRowAccept { background: #248046; color: white; padding: 6px 12px; }
+        QMenu { background: %1; color: %2; border: 1px solid rgba(0, 0, 0, 0.5); padding: 6px; font-size: 14px; }
+        QMenu::item { padding: 6px 28px 6px 10px; border-radius: 3px; }
+        QMenu::item:selected { background: %5; color: #091023; }
+        QMenu::item:disabled { color: %3; }
+        QMenu::separator { height: 1px; background: rgba(255, 255, 255, 0.08); margin: 4px 6px; }
+        QLineEdit#ChatAddFriendName {
+            background: %1; color: %2; border: 1px solid rgba(0, 0, 0, 0.5); border-radius: 8px; padding: 10px 12px;
+            font-size: 15px; selection-background-color: %7;
+        }
+        QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
+        QScrollBar::handle:vertical { background: %8; border-radius: 4px; min-height: 30px; }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+    )")
+                     .arg(COLOUR_RAIL.name(), COLOUR_TEXT.name(), COLOUR_MUTED.name(), COLOUR_SURFACE.name(),
+                          COLOUR_CYAN.name(), COLOUR_GREEN.name(), COLOUR_SELECTION.name(), COLOUR_SIDEBAR.name());
+    }
+    setStyleSheet(sheet);
+
+    // the conversation and the rooms are drawn with the colours themselves
+    if (_timeline) {
+        _timeline->document()->setDefaultStyleSheet(QString("a { color: %1; text-decoration: none; } body { color: %2; }")
+                                                         .arg(COLOUR_CYAN.name(), COLOUR_TEXT.name()));
+        if (!_items.isEmpty()) {
+            renderTimeline();
+        }
+    }
+    if (_roomList) {
+        _roomList->viewport()->update();
+    }
 }

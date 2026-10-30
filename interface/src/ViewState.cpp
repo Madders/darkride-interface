@@ -48,6 +48,48 @@ static std::shared_ptr<MyAvatar> getMyAvatar() {
     return DependencyManager::get<AvatarManager>()->getMyAvatar();
 }
 
+// TIVOLI_CAMERA_TRACE=<file>, a test switch (off unless set): while the avatar sits in a vehicle, one line per frame for
+// the chase camera's judder at speed (physics, 2026-10-26): the time, the frame's dt, the camera as this frame shows it,
+// the vehicle as drawn this frame, the substeps simulated so far, the leftover time past the last one and the correction
+// still being blended in. Written at the end of updateCamera, so camera and vehicle are the frame's own pair.
+static void traceVehicleCamera(const Camera& camera, float deltaTime) {
+    static FILE* file = nullptr;
+    static bool opened = false;
+    if (!opened) {
+        opened = true;
+        QByteArray path = qgetenv("TIVOLI_CAMERA_TRACE");
+        if (!path.isEmpty() && (file = fopen(path.constData(), "w"))) {
+            fprintf(file, "# t_us dt mode cam_x cam_y cam_z cam_qw cam_qx cam_qy cam_qz "
+                "veh_x veh_y veh_z veh_qw veh_qx veh_qy veh_qz substeps leftover correction\n");
+        }
+    }
+    if (!file) {
+        return;
+    }
+    QUuid parentID = getMyAvatar()->getParentID();
+    EntityTreePointer tree = qApp->getEntities()->getTree();
+    EntityItemPointer vehicle = (tree && !parentID.isNull()) ? tree->findEntityByID(parentID) : nullptr;
+    while (vehicle && !vehicle->isVehicle()) {   // a seat that is a child of the vehicle
+        vehicle = tree->findEntityByID(vehicle->getParentID());
+    }
+    if (!vehicle) {
+        return;
+    }
+    glm::vec3 cameraPosition = camera.getPosition();
+    glm::quat cameraRotation = camera.getOrientation();
+    glm::vec3 position = vehicle->getWorldPosition();
+    glm::quat rotation = vehicle->getWorldOrientation();
+    auto motionState = static_cast<EntityMotionState*>(vehicle->getPhysicsInfo());
+    PhysicsEnginePointer physicsEngine = qApp->getPhysicsEngine();
+    fprintf(file, "%llu %.6f %d %.4f %.4f %.4f %.6f %.6f %.6f %.6f %.4f %.4f %.4f %.6f %.6f %.6f %.6f %u %.6f %.4f\n",
+        (unsigned long long)usecTimestampNow(), deltaTime, (int)camera.getMode(),
+        cameraPosition.x, cameraPosition.y, cameraPosition.z, cameraRotation.w, cameraRotation.x, cameraRotation.y, cameraRotation.z,
+        position.x, position.y, position.z, rotation.w, rotation.x, rotation.y, rotation.z,
+        physicsEngine ? physicsEngine->getNumSubsteps() : 0u, ObjectMotionState::getLeftoverTime(),
+        motionState ? motionState->getCorrectionDistance() : 0.0f);
+    fflush(file);
+}
+
 void ViewState::copyViewFrustum(ViewFrustum& viewOut) const {
     QMutexLocker viewLocker(&_mutex);
     viewOut = _viewFrustum;
@@ -65,7 +107,7 @@ PickRay ViewState::computePickRay(float x, float y) const {
         qApp->getApplicationCompositor().computeHmdPickRay(pickPoint, result.origin, result.direction);
     } else {
         pickPoint /= qApp->getCanvasSize();
-        if (_camera.getMode() == CameraMode::CAMERA_MODE_MIRROR) {
+        if (_mirrored) {   // the picture is flipped left to right (the selfie view, the mirror camera): so is the point
             pickPoint.x = 1.0f - pickPoint.x;
         }
         QMutexLocker viewLocker(&_mutex);
@@ -232,10 +274,12 @@ void ViewState::updateCamera(RenderArgs& renderArgs, float deltaTime) {
     renderArgs._renderMode = RenderArgs::DEFAULT_RENDER_MODE;
 
     // build mode drives the camera itself, on CAMERA_MODE_INDEPENDENT
+    bool editing = false;
     {
         auto editor = DependencyManager::get<Editor>();
         if (editor && editor->isActive()) {
             editor->update(deltaTime);
+            editing = true;
         }
     }
 
@@ -288,6 +332,10 @@ void ViewState::updateCamera(RenderArgs& renderArgs, float deltaTime) {
                 glm::quat lookAtRotation = myAvatar->getLookAtRotation();
                 if (mode == CAMERA_MODE_SELFIE) {
                     lookAtRotation = lookAtRotation * glm::angleAxis(PI, myAvatar->getWorldOrientation() * Vectors::UP);
+                    // the picture as a mirror shows you (Caity, 2026-10-28: like FaceTime's own picture): your left on
+                    // the picture's left, writing backwards. On a flat screen only: a stereo picture (two eyes side by
+                    // side) is never flipped
+                    renderArgs._mirrored = !qApp->getActiveDisplayPlugin()->isStereo();
                 }
                 glm::vec3 pivot = myAvatar->getLookAtPivotPoint();
                 glm::vec3 wanted = pivot + lookAtRotation * boomOffset;
@@ -335,6 +383,7 @@ void ViewState::updateCamera(RenderArgs& renderArgs, float deltaTime) {
                 glm::vec3(0.0f, 0.0f, -1.0f) * myAvatar->getBoomLength() * _scaleMirror);
         }
         renderArgs._renderMode = RenderArgs::MIRROR_RENDER_MODE;
+        renderArgs._mirrored = true;
     } else if (mode == CAMERA_MODE_ENTITY) {
         _thirdPersonHMDCameraBoomValid= false;
         if (auto cameraEntity = _camera.getParentPointer()) {
@@ -355,6 +404,9 @@ void ViewState::updateCamera(RenderArgs& renderArgs, float deltaTime) {
             }
         }
     }
+    if (mode != CAMERA_MODE_INDEPENDENT || editing || !updateChaseCamera(deltaTime)) {
+        _chaseValid = false;   // the next chase starts where it wants to be, not eased from an old place
+    }
     if (!boomPlaced) {
         _boomLength = -1.0f;   // the next third-person boom starts where it wants to be, not eased from an old length
         _boomHeldIn = false;
@@ -363,8 +415,10 @@ void ViewState::updateCamera(RenderArgs& renderArgs, float deltaTime) {
     if (!qApp->isHMDMode()) {
         _camera.update();
     }
+    traceVehicleCamera(_camera, deltaTime);
 
     renderArgs._cameraMode = (int8_t)_camera.getMode();
+    _mirrored = renderArgs._mirrored;
 }
 
 // What stops the camera: what would stop you (the casts are made as your avatar's body: other avatars, collisionless
@@ -481,6 +535,78 @@ glm::vec3 ViewState::collideCameraBoom(const glm::vec3& pivot, const glm::vec3& 
     const float SETTLED = 0.01f;   // m
     _boomHeldIn = _boomLength < wantedLength - SETTLED;
     return start + (boom / wantedLength) * _boomLength;
+}
+
+// The chase camera behind an entity (Camera.setChaseTarget; vehicles.js's for the vehicle you drive), worked out every
+// frame from the entity as this frame draws it. vehicles.js placed it from its own update, on the script's thread at 60
+// a second, so on a 144 Hz display the camera stood still for two frames in three and then jumped: steps of 0, 23 and
+// 34 cm against kart 2's even 12 cm at 17 m/s, the whole view lurching against the kart (physics, 2026-10-26,
+// tests-manual/physics-baseline/judder.js). The same chase: behind along the heading (level, or with the entity's pitch
+// as the car's was) and above, settling at a rate by the frame's time (the same feel at 30 frames a second as at 144),
+// kept out of walls with the entity and its children seen through (moving in at once, back out eased), looking at a
+// point on the entity from where it has settled.
+bool ViewState::updateChaseCamera(float deltaTime) {
+    FancyCamera::ChaseSettings chase = _camera.getChaseSettings();
+    if (chase.entityID.isNull()) {
+        return false;
+    }
+    EntityTreePointer tree = qApp->getEntities()->getTree();
+    EntityItemPointer entity = tree ? tree->findEntityByID(chase.entityID) : nullptr;
+    if (!entity) {
+        return false;
+    }
+    bool fresh = !_chaseValid || chase.version != _chaseVersion;
+    glm::vec3 position = entity->getWorldPosition();
+    glm::vec3 front = entity->getWorldOrientation() * IDENTITY_FORWARD;
+    glm::vec3 flat(front.x, 0.0f, front.z);
+    const float LEVEL_ENOUGH = 1.0e-4f;   // the heading's horizontal part, squared: under it the entity points up or down
+    if (glm::length2(flat) > LEVEL_ENOUGH) {
+        _chaseFlat = glm::normalize(flat);
+    } else if (fresh) {
+        _chaseFlat = IDENTITY_FORWARD;
+    }
+    glm::vec3 behind = chase.followPitch ? front : _chaseFlat;
+    glm::vec3 wanted = position - chase.back * behind + glm::vec3(0.0f, chase.up, 0.0f);
+    if (fresh) {
+        _chasePosition = wanted;
+        _chaseBoom = -1.0f;
+        _chaseHeldIn = false;
+        _chaseVersion = chase.version;
+        _chaseValid = true;
+    } else {
+        _chasePosition = glm::mix(_chasePosition, wanted, 1.0f - glm::exp(-deltaTime * chase.rate));
+    }
+
+    // camera collision, as Camera.collideBoom's callers do it: in at once, back out with the boom's time constant
+    const float EASE_OUT_TIME = 0.12f;   // s
+    glm::vec3 pivot = position + glm::vec3(0.0f, chase.pivotHeight, 0.0f);
+    glm::vec3 boom = _chasePosition - pivot;
+    float length = glm::length(boom);
+    glm::vec3 shown = _chasePosition;
+    if (length > EPSILON) {
+        float allowed = allowedBoomLength(pivot, _chasePosition, QVector<QUuid>{ chase.entityID });
+        if (_chaseBoom < 0.0f || allowed <= _chaseBoom || !_chaseHeldIn) {
+            _chaseBoom = allowed;   // in at once, and the chase's own movement followed as it is
+        } else {
+            _chaseBoom += (allowed - _chaseBoom) * (1.0f - glm::exp(-deltaTime / EASE_OUT_TIME));
+        }
+        _chaseBoom = std::min(_chaseBoom, length);
+        const float SETTLED = 0.01f;   // m
+        _chaseHeldIn = _chaseBoom < length - SETTLED;
+        shown = pivot + boom * (_chaseBoom / length);
+    }
+    _camera.setPosition(shown);
+
+    // looking at the point from where the camera has settled (Quat.lookAtSimple), so a wall that holds it in moves it
+    // along the line of sight and does not swing the view
+    glm::vec3 target = position + chase.lookAhead * _chaseFlat + glm::vec3(0.0f, chase.lookHeight, 0.0f);
+    glm::vec3 direction = target - _chasePosition;
+    if (glm::length2(direction) > EPSILON) {
+        const float MAX_ABS_Y_COMPONENT = 0.9999991f;   // straight up or down: x for up, as Quat.lookAtSimple does
+        glm::vec3 up = fabsf(glm::normalize(direction).y) > MAX_ABS_Y_COMPONENT ? Vectors::UNIT_X : Vectors::UNIT_Y;
+        _camera.setOrientation(glm::inverse(glm::quat_cast(glm::lookAt(_chasePosition, target, up))));
+    }
+    return true;
 }
 
 // the camera's mode and the View menu, kept in step

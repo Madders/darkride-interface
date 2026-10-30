@@ -17,6 +17,7 @@
 #include <functional>
 
 #include <QTimer>
+#include <glm/glm.hpp>
 #include <QScreen>
 
 #include <SettingHandle.h>
@@ -115,6 +116,12 @@ public:
     void resetInactiveTimer();
     void toggleInactive();
 
+    // The resting rate (Display-based's FocusInactive, RESTING_RATE): after INACTIVE_TIMER_LIMIT with no input and this
+    // view held still, half the display's rate, back to full on the next input or move. Application::update gives the
+    // camera each frame: a camera that moves without input (a ride, a vehicle) counts as activity.
+    void noteCameraTransform(const glm::mat4& eyeToWorld);
+    static const int RESTING_RATE = 998;
+
     static std::string refreshRateProfileToString(RefreshRateProfile refreshRateProfile);
     static RefreshRateProfile refreshRateProfileFromString(std::string refreshRateProfile);
     static std::string uxModeToString(UXMode uxMode);
@@ -133,6 +140,11 @@ private:
     int _screenCap { 0 };
 
     std::shared_ptr<QTimer> _inactiveTimer { std::make_shared<QTimer>() };
+
+    // the camera's pose at the last activity
+    bool _restPoseValid { false };
+    glm::vec3 _restPosition;
+    glm::vec3 _restForward;
 };
 
 #endif

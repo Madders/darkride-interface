@@ -253,8 +253,13 @@ void ShapeEntityRenderer::doRenderUpdateAsynchronousTyped(const TypedEntityPoint
             // a mirror: the entry "picture" (or true, or "true", as the editor wrote it at first) or "screen"
             QJsonValue mirrorEntry = userDataObject.value("mirror");
             QString mirrorText = mirrorEntry.toBool() ? QStringLiteral("picture") : mirrorEntry.toString().toLower();
-            bool mirrorScreen = mirrorText == "screen";
-            bool mirror = mirrorScreen || mirrorText == "picture" || mirrorText == "true";
+            bool mirror = mirrorText == "screen" || mirrorText == "picture" || mirrorText == "true";
+            // in a headset a Screen mirror is drawn as a Picture one: the Screen method reads its picture by its place
+            // in the flat screen's view, which a stereo picture (two eyes side by side) has none of, and its view is the
+            // whole stereo buffer re-rendered each frame (Caity's Quest 3, qa-town, 2026-10-28: streaks). doRender asks
+            // for this update again when the display changes
+            _mirrorScreenWanted = mirrorText == "screen";
+            bool mirrorScreen = _mirrorScreenWanted && !AbstractViewStateInterface::instance()->isHMDMode();
             if (mirror != _mirror || mirrorScreen != _mirrorScreen) {
                 if (_mirror) {
                     // out of the old mode: the material its own again
@@ -479,6 +484,12 @@ void ShapeEntityRenderer::doRender(RenderArgs* args) {
         // asked for from here, where the mirror is drawn every frame it is seen)
         emit requestRenderUpdate();
     }
+    if (_mirror && _mirrorScreenWanted && args->_renderMode == RenderArgs::DEFAULT_RENDER_MODE &&
+        _mirrorScreen == (args->_displayMode == RenderArgs::STEREO_HMD)) {
+        // the display changed under a Screen mirror (a headset put on, or the desktop again): the update sets the
+        // method the display can draw (see the userData reading); the main view's own frames only
+        emit requestRenderUpdate();
+    }
     // Shapes just aren't playing well with zone culling.  Since it's a marginal performance
     // win anyway, being so low-poly, we'll not
     // const bool hasChanged = evaluateEntityZoneCullState(_entity);
@@ -495,6 +506,15 @@ void ShapeEntityRenderer::doRender(RenderArgs* args) {
     RenderLayer renderLayer;
     glm::vec4 outColor;
     Pipeline pipelineType;
+    {
+        // Material entities add and remove their layers on the main thread under _materialsLock; [] here inserted
+        // into the map under this renderer's lock instead, on the render thread (two writers at once)
+        std::lock_guard<std::mutex> lock(_materialsLock);
+        auto found = _materials.find("0");
+        if (found != _materials.end()) {
+            materials = found->second;
+        }
+    }
     withReadLock([&] {
         geometryShape = geometryCache->getShapeForEntityShape(_shape);
         primitiveMode = _primitiveMode;
@@ -513,7 +533,6 @@ void ShapeEntityRenderer::doRender(RenderArgs* args) {
             _renderTransform.setRotation(rotation);
         }
         batch.setModelTransform(_renderTransform);  // use a transform with scale, rotation, registration point and translation
-        materials = _materials["0"];
         pipelineType = getPipelineType(materials);
         auto& schema = materials.getSchemaBuffer().get<graphics::MultiMaterial::Schema>();
         outColor = glm::vec4(ColorUtils::tosRGBVec3(schema._albedo), schema._opacity);

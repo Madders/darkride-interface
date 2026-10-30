@@ -71,7 +71,6 @@ namespace MenuOption {
     const QString CalibrateCamera = "Calibrate Camera";
     const QString CameraCollision = "Camera Collision";
     const QString CenterPlayerInView = "Center Player In View";
-    const QString Chat = "Chat...";
     const QString ClearDiskCaches = "Clear Disk Caches (requires restart)";
     const QString Collisions = "Collisions";
     const QString Connexion = "Activate 3D Connexion Devices";
@@ -165,7 +164,8 @@ namespace MenuOption {
     const QString Pair = "Pair";
     const QString PhysicsShowOwned = "Highlight Simulation Ownership";
     const QString VerboseLogging = "Verbose Logging";
-    const QString RunJavaScriptOnWebAssembly = "Run JavaScript on WebAssembly";
+    const QString RunJavaScriptOnQtScript = "Run JavaScript on QtScript (the old engine)";
+    const QString RunJavaScriptOnQtScriptNoRuntime = "Run JavaScript on QtScript (no WebAssembly runtime file)";
     const QString PhysicsShowBulletWireframe = "Show Bullet Collision";
     const QString PhysicsShowBulletAABBs = "Show Bullet Bounding Boxes";
     const QString PhysicsShowBulletContactPoints = "Show Bullet Contact Points";
@@ -249,6 +249,7 @@ namespace MenuOption {
     const QString ShowImpostorsAndLods = "Show Impostors and LODs";
     const QString ShowModelsStillLoading = "Show Models Still Loading";
     const QString ShowNaNPixels = "Show NaN Pixels";
+    const QString UpscaleFSRInVR = "Upscaling (FSR) in VR";
     const QString AmbientOcclusion = "Ambient Occlusion";
     const QString NotificationSounds = "play_notification_sounds";
     const QString NotificationSoundsSnapshot = "play_notification_sounds_snapshot";

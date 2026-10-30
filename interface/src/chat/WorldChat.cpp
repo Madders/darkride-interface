@@ -1,0 +1,321 @@
+//
+//  WorldChat.cpp
+//  interface/src/chat
+//
+//  Copyright 2026 Darkride.
+//
+//  Distributed under the MIT License.
+//
+
+#include "WorldChat.h"
+
+#include <QtCore/QDateTime>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
+#include <QtCore/QPointer>
+#include <QtNetwork/QNetworkReply>
+
+#include <AccountManager.h>
+#include <AddressManager.h>
+#include <AudioInjectorManager.h>
+#include <DependencyManager.h>
+#include <NetworkAccessManager.h>
+#include <NetworkingConstants.h>
+#include <NodeList.h>
+#include <PathUtils.h>
+
+#include "avatar/AvatarManager.h"
+#include "avatar/MyAvatar.h"
+#include "scripting/ChatScriptingInterface.h"
+
+namespace {
+    // as many lines as the old in-world chat kept in sight, and more
+    const int ITEMS_MAX = 200;
+    // after arriving in a world, the people already there come in over a few seconds: no "joined" for them
+    const int SETTLE_MS = 3000;
+    // a newcomer's account not known by then: no line for them
+    const qint64 JOIN_NAME_WAIT_MS = 5000;
+    const qint64 PROFILE_MAX_AGE_MS = 10 * 60 * 1000;
+    // as quiet as the old in-world chat's, alternating
+    const float SOUND_VOLUME = 0.05f;
+
+    QPointer<WorldChat> theWorldChat;
+
+    // the line under a resident's name, as the nametag draws it: "✦ language model · hosted by caitlyn", or for a
+    // bot "⚙ bot · hosted by madders" (U+2699 alone: with U+FE0F it is drawn as a colour emoji)
+    QString markLine(const QJsonObject& profile) {
+        QString host = profile.value("host").toString();
+        QString hosted = host.isEmpty() ? QString() : " · hosted by " + host;
+        QString kind = profile.value("kind").toString();
+        if (kind == "bot") {
+            return QString::fromUtf8("⚙ bot") + hosted;
+        }
+        if (kind == "ai" || (kind.isEmpty() && profile.value("ai").toBool())) {
+            QString word = profile.value("aiWord").toString();
+            return QString::fromUtf8("✦ ") + (word.isEmpty() ? QString("AI resident") : word) + hosted;
+        }
+        return QString();
+    }
+}
+
+WorldChat* WorldChat::instance() {
+    if (!theWorldChat) {
+        theWorldChat = new WorldChat();
+    }
+    return theWorldChat;
+}
+
+WorldChat::WorldChat() {
+    auto chat = DependencyManager::get<ChatScriptingInterface>();
+    connect(chat.data(), &ChatScriptingInterface::messageReceived, this, &WorldChat::messageReceived);
+    auto nodeList = DependencyManager::get<NodeList>();
+    connect(nodeList.data(), &NodeList::usernameFromIDReply, this,
+            [this](const QString& session, const QString& username, const QString&, bool) {
+                usernameReceived(session, username);
+            });
+    connect(nodeList.data(), &NodeList::uuidChanged, this, &WorldChat::moving);
+    connect(DependencyManager::get<AddressManager>().data(), &AddressManager::hostChanged, this, &WorldChat::moving);
+    auto avatars = DependencyManager::get<AvatarManager>();
+    connect(avatars.data(), &AvatarManager::avatarAddedEvent, this, &WorldChat::avatarAdded);
+    connect(avatars.data(), &AvatarManager::avatarRemovedEvent, this, &WorldChat::avatarRemoved);
+    _settle.setSingleShot(true);
+    _settle.setInterval(SETTLE_MS);
+    connect(&_settle, &QTimer::timeout, this, [this] { _moving = false; });
+
+    auto sounds = DependencyManager::get<SoundCache>();
+    _sounds[0] = sounds->getSound(PathUtils::resourcesUrl() + "sounds/chat1.wav");
+    _sounds[1] = sounds->getSound(PathUtils::resourcesUrl() + "sounds/chat2.wav");
+
+    // the two commands the old in-world chat had (/help, /me, /tts are the scripting API's own)
+    auto clearCommand = qvariant_cast<ChatCommand*>(chat->addCommand("clear", "clears this world's chat for yourself"));
+    connect(clearCommand, &ChatCommand::running, this, [this] {
+        clear();
+        DependencyManager::get<ChatScriptingInterface>()->showMessage("You cleared this world's chat for yourself.");
+    });
+    auto tpCommand = qvariant_cast<ChatCommand*>(chat->addCommand("tp", "goes to someone in this world"));
+    connect(tpCommand, &ChatCommand::running, this, &WorldChat::teleportTo);
+}
+
+void WorldChat::markRead() {
+    if (_unread != 0) {
+        _unread = 0;
+        emit unreadChanged(0);
+    }
+}
+
+void WorldChat::send(const QString& text) {
+    QString line = text.trimmed();
+    if (line.isEmpty()) {
+        return;
+    }
+    auto chat = DependencyManager::get<ChatScriptingInterface>();
+    if (line.startsWith('/')) {
+        QString name = line.mid(1).section(' ', 0, 0).toLower();
+        QString params = line.section(' ', 1).trimmed();
+        auto command = qvariant_cast<ChatCommand*>(chat->getCommand(name));
+        if (command) {
+            command->run(params);
+        } else {
+            chat->showMessage("There's no /" + name + " command. /help lists them.");
+        }
+        return;
+    }
+    chat->sendMessage(line);
+    emit chat->messageSent(line);   // for scripts listening, as the old in-world chat told them
+}
+
+void WorldChat::messageReceived(const QVariantMap& data, const QUuid& sender) {
+    QString body = data.value("message").toString();
+    if (body.isEmpty()) {
+        return;
+    }
+    QJsonObject item { { "body", body } };
+    if (data.value("local").toBool()) {
+        // a line only you see (a command's answer)
+        item.insert("body", body.trimmed());
+        item.insert("kind", "notice");
+        add(item);
+        return;
+    }
+    item.insert("kind", data.value("me").toBool() ? "emote" : "text");
+    item.insert("session", sender.toString());
+    bool own = sender == DependencyManager::get<NodeList>()->getSessionUUID();
+    item.insert("own", own);
+    add(item);
+    if (!own) {
+        _unread++;
+        emit unreadChanged(_unread);
+        playSound();
+    }
+}
+
+void WorldChat::add(QJsonObject item) {
+    item.insert("id", QString("world:%1").arg(++_nextId));
+    item.insert("ts", (double)QDateTime::currentMSecsSinceEpoch());
+    _items.append(item);
+    while (_items.size() > ITEMS_MAX) {
+        _items.removeFirst();
+    }
+    wearNames();
+}
+
+QString WorldChat::usernameOf(const QUuid& session) {
+    if (session.isNull()) {
+        return QString();
+    }
+    if (session == DependencyManager::get<NodeList>()->getSessionUUID()) {
+        return DependencyManager::get<AccountManager>()->getAccountInfo().getUsername();
+    }
+    if (!_usernames.contains(session) && !_asked.contains(session)) {
+        _asked.insert(session);
+        DependencyManager::get<NodeList>()->requestUsernameFromSessionID(session);
+    }
+    return _usernames.value(session);
+}
+
+void WorldChat::usernameReceived(const QString& session, const QString& username) {
+    QUuid id(session);
+    _usernames.insert(id, username);
+    if (!username.isEmpty()) {
+        fetchProfile(username);
+    }
+    if (_joining.contains(id)) {
+        bool inTime = QDateTime::currentMSecsSinceEpoch() - _joining.take(id) < JOIN_NAME_WAIT_MS;
+        if (inTime && !username.isEmpty()) {
+            add({ { "kind", "member" }, { "change", "joined" }, { "user_name", username } });
+            return;
+        }
+    }
+    wearNames();
+}
+
+QString WorldChat::shownNameOf(const QUuid& session) {
+    QString username = usernameOf(session);
+    if (!username.isEmpty()) {
+        return username;
+    }
+    // until the world says (or for a visitor without an account): the name the avatar shows the world, unique in it
+    auto avatar = DependencyManager::get<AvatarManager>()->getAvatarBySessionID(session);
+    if (!avatar) {
+        return QString();
+    }
+    return avatar->getSessionDisplayName().isEmpty() ? avatar->getDisplayName() : avatar->getSessionDisplayName();
+}
+
+// each line's name and mark, from what is known of its session so far
+void WorldChat::wearNames() {
+    for (int i = 0; i < _items.size(); i++) {
+        QJsonObject item = _items[i].toObject();
+        QString session = item.value("session").toString();
+        if (session.isEmpty()) {
+            continue;
+        }
+        QString username = usernameOf(QUuid(session));
+        QString name = shownNameOf(QUuid(session));
+        item.insert("sender", username.isEmpty() ? QString() : "@" + username + ":");
+        item.insert("name", name.isEmpty() ? QString("Someone") : name);
+        QString mark = _marks.value(username);
+        if (mark.isEmpty()) {
+            item.remove("mark");
+        } else {
+            item.insert("mark", mark);
+        }
+        _items[i] = item;
+    }
+    emit itemsChanged();
+}
+
+void WorldChat::fetchProfile(const QString& username) {
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (_profileAt.contains(username) && now - _profileAt.value(username) < PROFILE_MAX_AGE_MS) {
+        return;
+    }
+    _profileAt.insert(username, now);
+    QUrl url = NetworkingConstants::METAVERSE_SERVER_URL();
+    url.setPath("/api/user/" + username + "/profile");
+    QNetworkReply* reply = NetworkAccessManager::getInstance().get(QNetworkRequest(url));
+    connect(reply, &QNetworkReply::finished, this, [this, reply, username] {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            _profileAt.remove(username);   // asked again with the next line
+            return;
+        }
+        QJsonObject profile = QJsonDocument::fromJson(reply->readAll()).object();
+        _marks.insert(username, markLine(profile));
+        wearNames();
+    });
+}
+
+void WorldChat::avatarAdded(const QUuid& session) {
+    if (_moving) {
+        usernameOf(session);   // its name ready for its first line
+        return;
+    }
+    _joining.insert(session, QDateTime::currentMSecsSinceEpoch());
+    if (_usernames.contains(session)) {
+        usernameReceived(session.toString(), _usernames.value(session));
+    } else {
+        usernameOf(session);
+    }
+}
+
+void WorldChat::avatarRemoved(const QUuid& session) {
+    _joining.remove(session);
+    QString username = _usernames.value(session);
+    if (!_moving && !username.isEmpty()) {
+        add({ { "kind", "member" }, { "change", "left" }, { "user_name", username } });
+    }
+}
+
+void WorldChat::moving() {
+    // a new world (or a new session in this one): its chat starts empty, as the old in-world chat did
+    _moving = true;
+    _settle.start();
+    clear();
+    _usernames.clear();
+    _asked.clear();
+    _joining.clear();
+}
+
+void WorldChat::clear() {
+    _items = QJsonArray();
+    emit itemsChanged();
+    markRead();
+}
+
+void WorldChat::playSound() {
+    SharedSoundPointer sound = _sounds[_nextSound];
+    _nextSound = 1 - _nextSound;
+    if (!sound || !sound->isReady()) {
+        return;
+    }
+    AudioInjectorOptions options;
+    options.localOnly = true;
+    options.position = DependencyManager::get<AvatarManager>()->getMyAvatar()->getWorldPosition();
+    options.volume = SOUND_VOLUME;
+    DependencyManager::get<AudioInjectorManager>()->playSound(sound, options, true);
+}
+
+void WorldChat::teleportTo(const QString& params) {
+    auto chat = DependencyManager::get<ChatScriptingInterface>();
+    QString wanted = params.section(' ', 0, 0).trimmed().toLower();
+    if (wanted.isEmpty()) {
+        chat->showMessage("Whom to? /tp and the start of their name.");
+        return;
+    }
+    auto avatars = DependencyManager::get<AvatarManager>();
+    for (const QUuid& session : avatars->getAvatarIdentifiers()) {
+        auto avatar = avatars->getAvatarBySessionID(session);
+        if (!avatar) {
+            continue;
+        }
+        // by the name their lines show
+        QString name = shownNameOf(session);
+        if (!name.isEmpty() && name.toLower().contains(wanted)) {
+            chat->showMessage("Going to " + name + ".");
+            avatars->getMyAvatar()->goToLocation(avatar->getWorldPosition(), true, avatar->getWorldOrientation(), true);
+            return;
+        }
+    }
+    chat->showMessage("Nobody here is called " + wanted + ".");
+}

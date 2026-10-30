@@ -17,7 +17,7 @@ $(document).ready(function(){
     modal_body += '<b>Only administrators</b>: nobody else. Just you and the people you made administrators.</br></br>';
     modal_body += '<b>My friends</b>: your friends on Darkride.</br></br>';
     modal_body += '<b>Anyone signed in to Darkride</b>: anyone with a Darkride account.</br></br>';
-    modal_body += '<b>Everyone</b>: anyone at all, signed in or not.';
+    modal_body += '<b>Everyone</b>: anyone who comes.';
     modal_body += '</div>';
 
     dialog = bootbox.dialog({

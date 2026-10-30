@@ -2,12 +2,15 @@
 //  ChatWindow.h
 //  interface/src/chat
 //
-//  Darkride chat's window (View > Chat): the channels and direct messages down the left, the conversation and the
-//  message box on the right, as the web chat at chat.darkride.ai lays them out. A window of its own beside the
-//  viewer's, so opening it never resizes the 3D view. ChatService (libraries/chat) does the talking.
+//  Darkride chat (View > Chat): the channels and direct messages down the left, the conversation and the message box
+//  on the right, as the web chat at chat.darkride.ai lays them out. It lives in a dock panel, "Chat" (Caity's "GO CHAT
+//  DOCKING", 2026-10-25): floating in its own window as before, so opening it never resizes the 3D view, until the
+//  player drags it into the main window beside Build mode's panels. Narrower than the two columns need, it shows one
+//  at a time. Under a skin it takes the skin's colours. ChatService (libraries/chat) does the talking.
 //
-//  Distributed under the Apache License, Version 2.0.
-//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//  Copyright 2026 Darkride.
+//
+//  Distributed under the MIT License.
 //
 
 #ifndef hifi_ChatWindow_h
@@ -23,6 +26,7 @@
 #include <QtGui/QKeySequence>
 #include <QtWidgets/QWidget>
 
+class QDockWidget;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -33,26 +37,46 @@ class QPushButton;
 class QStackedWidget;
 class QTextBrowser;
 class QTimer;
+class QToolButton;
 
 class ChatWindow : public QWidget {
     Q_OBJECT
 public:
-    // View > Chat: shows the window (made the first time), or hides it when it is already in front
+    // View > Chat: shows the chat panel (its content made the first time), or hides it when it is already in front
     static void toggle();
+    // the "Chat" dock panel (object name "ChatDock", for the main window's saved layout), made hidden and floating the
+    // first time; cheap, so the layout's restore can place it before chat is ever opened
+    static QDockWidget* dock();
+    // the chat panel back to where it starts (Build > Reset Panels): floating, at its first size in the middle of the
+    // main window; shown or hidden as it was
+    static void resetDock();
     static QKeySequence shortcut();
+    // chat in front on your direct message with a Darkride user, made if there is none yet (Friends.openDirectMessage,
+    // People's Message); while chat is signing in, once it's ready. In VR, on the tablet (ChatTabletPage)
+    static void openDirectMessage(const QString& username);
+    // Enter or "/" in the 3D view: chat in front on This world (WorldChat), the message box ready, with "/" in it for
+    // a command; the line sent (or Esc), back to the world
+    static void openWorld(bool command);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
-    void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     explicit ChatWindow(QWidget* parent);
+    // the chat in the dock panel, made the first time it shows
+    static ChatWindow* content();
 
     void updateState();
     void updateRooms(const QJsonArray& rooms);
+    // This world's row, under Friends
+    void addWorldRow(QListWidgetItem*& current);
+    // after a line in This world opened by a key: the 3D view has the keys again; hide: the panel goes too if the
+    // key brought it
+    void backToWorld(bool hide);
     void updateTimeline(const QString& room, const QJsonArray& items);
     void commandDone(const QJsonObject& done);
     void updateSync(const QString& state);
@@ -81,6 +105,10 @@ private:
                       bool dimmed = false);
     // a friend's direct message, made when there is none yet
     void messageFriend(const QString& username);
+    // the direct message openDirectMessage asked for, once chat is ready
+    void openWantedDm();
+    // someone's card: People's profile, in front (editor-ui's Panels.showProfile), from a name or picture here
+    void showProfile(const QString& username);
     void sendFriendRequest();
     // "who sees where I am" (the metaverse's availability), from your name at the foot of the sidebar
     void showAvailabilityMenu();
@@ -90,7 +118,12 @@ private:
     void askFriends(bool now = false);
     void markReadIfSeen();
     void fitComposer();
-    void saveGeometrySetting();
+    // the colours of Darkride's own look, or the skin's over them, into the style sheet, the room list and the
+    // conversation; again when the skin changes
+    void applyColours();
+    // narrower than both columns: one at a time, the rooms or the conversation (with a way back to the rooms)
+    void setNarrow(bool narrow);
+    void showRooms(bool rooms);
 
     // a person's or room's round picture: theirs once fetched (mxc), until then the first letter of the name on a
     // colour of their own; avatarSource names it in the conversation's document, at 40 px
@@ -104,9 +137,20 @@ private:
     void showPicture(const QString& key, const QString& path);
     // the whole file, opened by the system's own app (Preview, Photos, a player)
     void openMedia(const QJsonObject& media, const QString& name);
+    // a file from a message, downloaded: opened by the system only when its content is a picture, a video, a sound or
+    // a PDF, under a name of ours with that type's own extension; anything else offered to save. Never handed to the
+    // system under the sender's name, which could make it run (a ".exe", a ".command")
+    void openDownload(const QString& path, const QString& name);
 
     static QPointer<ChatWindow> _instance;
+    static QPointer<QDockWidget> _dock;
 
+    QWidget* _sidebar { nullptr };
+    QWidget* _main { nullptr };
+    QToolButton* _roomsButton { nullptr };      // narrow: back to the rooms
+    bool _narrow { false };
+    bool _roomsShown { false };                 // narrow: the rooms are up, not the conversation
+    QSize _pictureMax;                          // a message's picture fits in this (narrower when narrow)
     QLabel* _spaceTitle { nullptr };
     QListWidget* _roomList { nullptr };
     QLabel* _userAvatar { nullptr };
@@ -129,8 +173,12 @@ private:
     QHash<QString, QPushButton*> _friendsTabs;
     QString _friendsTab { "online" };
     bool _friendsShown { false };               // the Friends page is up (the last room stays _room)
+    bool _worldByKey { false };                 // This world opened by Enter or "/" in the 3D view
+    bool _worldHideOnEsc { false };             // ... and the panel wasn't in sight before
     QString _dmWanted;                           // a friend's chat account whose new DM is being made, to open
+    QString _dmWantedUser;                       // a username whose DM is to open once chat is ready
     QTimer* _friendsTimer { nullptr };          // asks for the lists again every minute while the window is up
+    QTimer* _renderTimer { nullptr };           // the conversation drawn once for a burst of timeline events
     qint64 _friendsAskedAt { 0 };
 
     QJsonArray _rooms;

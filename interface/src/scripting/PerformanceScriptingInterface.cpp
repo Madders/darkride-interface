@@ -34,10 +34,12 @@ PerformanceScriptingInterface::~PerformanceScriptingInterface() {
 }
 
 void PerformanceScriptingInterface::announceChange() {
-    // each object's signal is emitted on its own thread (a script engine's, or the main thread for a QML surface)
+    // each object's signal is emitted on its own thread (a script engine's, or the main thread for a QML surface), and
+    // always later, from its event loop: never under the lock, where a handler that sets a setting would take it again
+    // (qa's 1.1 review #13). The lock keeps each object alive while its event is posted; a deleted one's is dropped.
     std::lock_guard<std::mutex> lock(instancesMutex);
     for (auto instance : instances) {
-        QMetaObject::invokeMethod(instance, "settingsChanged");
+        QMetaObject::invokeMethod(instance, "settingsChanged", Qt::QueuedConnection);
     }
 }
 
@@ -73,10 +75,10 @@ int PerformanceScriptingInterface::getActiveRefreshRate() const {
     return qApp->getRefreshRateManager().getActiveRefreshRate();
 }
 
-RefreshRateManager::UXMode PerformanceScriptingInterface::getUXMode() const {
-    return qApp->getRefreshRateManager().getUXMode();
+PerformanceScriptingInterface::UXMode PerformanceScriptingInterface::getUXMode() const {
+    return (PerformanceScriptingInterface::UXMode)qApp->getRefreshRateManager().getUXMode();
 }
 
-RefreshRateManager::RefreshRateRegime PerformanceScriptingInterface::getRefreshRateRegime() const {
-    return qApp->getRefreshRateManager().getRefreshRateRegime();
+PerformanceScriptingInterface::RefreshRateRegime PerformanceScriptingInterface::getRefreshRateRegime() const {
+    return (PerformanceScriptingInterface::RefreshRateRegime)qApp->getRefreshRateManager().getRefreshRateRegime();
 }

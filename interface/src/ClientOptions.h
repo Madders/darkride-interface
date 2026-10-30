@@ -54,6 +54,7 @@ public:
     QStringList displays;                  // --display a,b: preferred display plug-ins, in order
     QStringList disabledDisplays;          // --disable-displays a,b
     QStringList disabledInputs;            // --disable-inputs a,b
+    bool noAudioInput { false };           // --noAudioInput: no microphone is opened, so macOS asks no permission (test clients)
 };
 
 #endif // hifi_ClientOptions_h

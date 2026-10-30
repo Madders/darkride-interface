@@ -68,6 +68,7 @@ Rectangle {
         Text {
             visible: page.title !== ""
             text: page.title
+            textFormat: Text.PlainText
             color: Theme.text
             font.pixelSize: Theme.largeTitleSize
             font.bold: true
@@ -137,5 +138,11 @@ Rectangle {
                 spacing: 0
             }
         }
+    }
+
+    // a skin's flowers, grass or badges on the panel, over everything and never taking a click
+    SkinDecorations {
+        anchors.fill: parent
+        z: 2
     }
 }

@@ -14,6 +14,7 @@
 
 #include <QFutureWatcher>
 #include <QObject>
+#include <QPointer>
 #include <QSharedPointer>
 #include <QCompleter>
 #include <QtCore/QJsonArray>
@@ -22,7 +23,6 @@
 #include "ScriptEngine.h"
 
 const QString CONSOLE_TITLE = "Scripting Console";
-const float CONSOLE_WINDOW_OPACITY = 0.95f;
 const int CONSOLE_WIDTH = 800;
 const int CONSOLE_HEIGHT = 200;
 
@@ -34,6 +34,12 @@ public:
 
     void setScriptEngine(const ScriptEnginePointer& scriptEngine = ScriptEnginePointer());
     void clear();
+    // Closing the console panel stops what was typed into it, as closing a terminal window ends what runs there: its
+    // timers and connections. Scripts it started with Script.load run on in their own engines. Called by the panel on
+    // a close that went through (StandAloneJSConsole's dock), not on a hide: floating or docking the panel hides it
+    // for a moment, and tabbed behind another panel it's only moved out of sight. A console with an engine of its own
+    // (TestingDialog's) is never stopped.
+    void stopTyped();
 
 public slots:
     void executeCommand(const QString& command);
@@ -58,6 +64,7 @@ private slots:
     void highlightedCompletion(const QModelIndex& completion);
 
 private:
+    void applyLook();   // the skin's colours, or Darkride's own
     void appendMessage(const QString& gutter, const QString& message);
     void setToNextCommandInHistory();
     void setToPreviousCommandInHistory();
@@ -74,10 +81,19 @@ private:
     QList<QString> _commandHistory;
     QString _rootCommand;
     ScriptEnginePointer _scriptEngine;
+    bool _ownsScriptEngine { false };  // made by the console for what is typed into it, not given to it
+    bool _typedSinceStop { false };
+    bool _stoppedOnClose { false };
     static const QString _consoleFileName;
     QJsonArray _apiDocs;
     QCompleter* _completer;
     QString _completerModule {""};
+
+    // the newest line, which counts the same message again instead of adding a line
+    QString _lastGutter;
+    QString _lastMessage;
+    int _lastRepeats { 0 };
+    QPointer<QLabel> _lastRepeatsLabel;
 };
 
 

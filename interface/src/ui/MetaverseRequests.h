@@ -36,6 +36,11 @@ public:
     /// the metaverse's address, for links a panel shows or opens (a user's settings page, a nametag picture)
     Q_INVOKABLE QString metaverseUrl() const;
 
+    /// the rights line (ui/RightsLine.h), shown under a panel's buttons that put something where others see it, and
+    /// the Terms paragraph its "Terms" link opens
+    Q_INVOKABLE QString rightsLine() const;
+    Q_INVOKABLE QString termsUrl() const;
+
 private:
     MetaverseRequests() = default;
 };

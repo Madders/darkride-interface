@@ -283,6 +283,45 @@ public slots:
     Q_INVOKABLE void frameEditorSelection();
 
     /**jsdoc
+     * What the Inspector's Script or Server Script row says the script is doing now (its status line), for the
+     * entities selected in the editor.
+     * @function Test.editorScriptStatus
+     * @param {string} key - <code>"script"</code> or <code>"serverScripts"</code>.
+     * @returns {string} The status line, <code>""</code> when the row shows none.
+     */
+    Q_INVOKABLE QString editorScriptStatus(const QString& key);
+
+    /**jsdoc
+     * Presses Reload on the Inspector's Script or Server Script row, as a click would.
+     * @function Test.reloadEditorScript
+     * @param {string} key - <code>"script"</code> or <code>"serverScripts"</code>.
+     * @returns {boolean} Whether the row and its button were there to press.
+     */
+    Q_INVOKABLE bool reloadEditorScript(const QString& key);
+
+    /**jsdoc
+     * An Inspector field of the editor's selection, as the panel shows it.
+     * @function Test.inspectorField
+     * @param {string} key - The Inspector's key for the property (e.g. "locked").
+     * @returns {object} <code>{ found, shown, enabled, inHeader, value, mixed, tip, lockNote }</code>: whether the
+     *     field is there and shown, whether it can be changed, whether it's in the header (Unity's: Visible, the name,
+     *     Locked, Ignore Picking), its value, whether the selection's values differ, its tooltip, and the note the
+     *     header shows while everything selected is locked (<code>""</code> when none).
+     */
+    Q_INVOKABLE QVariantMap inspectorField(const QString& key);
+
+    /**jsdoc
+     * One of the Inspector header's toggle icons for the editor's selection (the Hierarchy rows' four), as the panel
+     * shows it, and a click on it as the mouse's.
+     * @function Test.inspectorToggle
+     * @param {string} name - "Hide", "NoPick", "Lock" or "Scripts".
+     * @param {boolean} [click=false] - Whether to click it.
+     * @returns {object} <code>{ found, shown, look, usable, tip }</code>: whether it's there and shown, "on", "off" or
+     *     "mixed" (before the click's effect), whether a click would change something, and its tooltip.
+     */
+    Q_INVOKABLE QVariantMap inspectorToggle(const QString& name, bool click = false);
+
+    /**jsdoc
      * Saves a picture of the Inspector's whole content, whatever is scrolled into view, as the panel draws it.
      * @function Test.saveInspectorPicture
      * @param {string} path - Where to save it (PNG).
@@ -298,6 +337,134 @@ public slots:
      * @returns {boolean} Whether it was saved.
      */
     Q_INVOKABLE bool saveWindowPicture(const QString& path);
+
+    /**jsdoc
+     * Where the window's dock panels are (ui/WindowLayout.h): chat's ("chat") and Build mode's ("hierarchy",
+     * "inspector", "assets"), each <code>{ open, floating, area, x, y, width, height }</code> (area "left", "right",
+     * "top", "bottom" or "none"; x and y on the screen), the side of the bar of app buttons ("bar"), and the width of
+     * the edges between the panels and the 3D view ("separator", px).
+     * @function Test.windowLayout
+     * @returns {object} The panels, by name; a panel not made yet is missing.
+     */
+    Q_INVOKABLE QVariantMap windowLayout();
+
+    /**jsdoc
+     * Does what a dock panel's title bar button does (ui/DockTitleBar.h): "dock", "float" or "close"; or
+     * "tab:<object name>", tabbed behind that docked panel, as a drag onto its title does; or "drag:<x>,<y>", a drag
+     * by its title that many points, in Qt's events only (the real mouse untouched).
+     * @function Test.dockAction
+     * @param {string} objectName - The panel's object name, such as "ChatDock".
+     * @param {string} action - "dock", "float", "close", "tab:<object name>" or "drag:<x>,<y>".
+     * @returns {boolean} Whether the panel has such a title bar.
+     */
+    Q_INVOKABLE bool dockAction(const QString& objectName, const QString& action);
+
+    /**jsdoc
+     * Runs a line in the scripting console's panel as if it were typed there (ui/StandAloneJSConsole.h).
+     * @function Test.consoleRun
+     * @param {string} command - The line.
+     * @returns {boolean} Whether the console's panel exists.
+     */
+    Q_INVOKABLE bool consoleRun(const QString& command);
+
+    /**jsdoc
+     * Does what View > Layouts does (ui/WindowLayout.h), without its popups: "save" (under the name), "apply", "forget",
+     * "reset" (Reset to Default), or "names".
+     * @function Test.windowLayoutAction
+     * @param {string} action - "save", "apply", "forget", "reset" or "names".
+     * @param {string} [name=""] - The layout's name.
+     * @returns {string[]} The current mode's saved layouts' names, after the action.
+     */
+    Q_INVOKABLE QStringList windowLayoutAction(const QString& action, const QString& name = QString());
+
+    /**jsdoc
+     * Finds a button on the docked bar (ui/SystemToolbar.h) by its text, and clicks it as the mouse would.
+     * @function Test.barButton
+     * @param {string} text - The button's text, such as "People".
+     * @param {boolean} [click=false] - Whether to click it.
+     * @returns {object} <code>{ active, badge, x, y, width, height, barWidth, barHeight }</code>: whether it shows
+     *     active (before the click's effect), the count on its red badge (0 for none), its cell in the bar and the bar's
+     *     size; empty when there's no such button.
+     */
+    Q_INVOKABLE QVariantMap barButton(const QString& text, bool click = false);
+
+    /**jsdoc
+     * The words one of Darkride's QML panels shows now (ui/QmlDock.h): every text in it that's shown, in order.
+     * @function Test.panelTexts
+     * @param {string} name - The panel, such as "People".
+     * @returns {string[]} The texts; empty when the panel hasn't been made or is closed.
+     */
+    Q_INVOKABLE QStringList panelTexts(const QString& name);
+
+    /**jsdoc
+     * Saves a picture of one dock panel as its widgets draw it, floating or docked, its title bar too.
+     * @function Test.saveDockPicture
+     * @param {string} objectName - The panel's object name, such as "ChatDock".
+     * @param {string} path - Where to save it (PNG).
+     * @returns {boolean} Whether it was saved.
+     */
+    Q_INVOKABLE bool saveDockPicture(const QString& objectName, const QString& path);
+
+    /**jsdoc
+     * Shows a count on the bar's Chat button's badge (ui/ChatButton.h), as chat's unread count would, until chat's
+     * next count.
+     * @function Test.setChatBadge
+     * @param {number} count - 0 shows none.
+     * @returns {boolean} Whether the bar has a Chat button.
+     */
+    Q_INVOKABLE bool setChatBadge(int count);
+
+    /**jsdoc
+     * This world in chat (chat/WorldChat.h): its lines and unseen count, whether the chat panel is open, and the
+     * widget that has the keyboard (its object name, and its text when it is chat's message box).
+     * @function Test.worldChat
+     * @returns {object} <code>{items, unread, chatOpen, focus, focusText}</code>
+     */
+    Q_INVOKABLE QVariantMap worldChat();
+
+    /**jsdoc
+     * Keys, as if typed: to the 3D view (as Enter or "/" pressed there), or to the widget that has the keyboard (chat's
+     * message box). "\n" is Return, "\u001b" Escape.
+     * @function Test.typeKeys
+     * @param {string} text - The keys.
+     * @param {boolean} [toView=false] - To the 3D view.
+     */
+    Q_INVOKABLE void typeKeys(const QString& text, bool toView = false);
+
+    /**jsdoc
+     * Answers the next of Darkride's alerts (ui/Popup.h) to open within 15 s, as a click would: after it has drawn,
+     * saves its picture, types into its field, and presses the named button. Call it before what opens the alert
+     * (an alert waits for its answer, so a call that opens one returns only once it is answered).
+     * @function Test.answerNextAlert
+     * @param {string} button - The label of the button to press.
+     * @param {string} [fieldText=""] - What to type into the alert's field first, if it has one.
+     * @param {string} [picturePath=""] - Where to save the alert's picture (PNG), if anywhere.
+     */
+    Q_INVOKABLE void answerNextAlert(const QString& button, const QString& fieldText = QString(),
+                                     const QString& picturePath = QString());
+
+    /**jsdoc
+     * Answers the next text prompt (Window.prompt's) with the given text, as its OK button would, once it is open: for
+     * a script that then asks, and waits.
+     * @function Test.answerNextPrompt
+     * @param {string} text - The answer.
+     */
+    Q_INVOKABLE void answerNextPrompt(const QString& text);
+
+    /**jsdoc
+     * Shows one of Darkride's alerts (ui/Popup.h) with Darkride's logo, and waits for its answer: a look at the alert's
+     * design without the action that asks it. Answer it with Test.answerNextAlert, called first.
+     * @function Test.showAlert
+     * @param {string} title - The bold line.
+     * @param {string} text - The short line under it.
+     * @param {string} details - What the Details fold-out holds ("" for none).
+     * @param {object[]} buttons - Each <code>{ label, role }</code>, role "default", "cancel", "plain" or
+     *     "destructive".
+     * @param {string} [fieldPlaceholder] - Given, the alert has a field with this placeholder.
+     * @returns {number} The pressed button's place in the list, -1 for none.
+     */
+    Q_INVOKABLE int showAlert(const QString& title, const QString& text, const QString& details,
+                              const QVariantList& buttons, const QString& fieldPlaceholder = QString());
 
     /**jsdoc
      * Chooses a control point of the Track selected on its own in the editor (-1 for none), as a click on its diamond
@@ -411,6 +578,53 @@ public slots:
     Q_INVOKABLE void editorCreate(const QString& key);
 
     /**jsdoc
+     * Sets the Terrain tool's Random tick (a new angle for each stroke) as a click on it does. Build mode must be on.
+     * @function Test.terrainRandomAngle
+     * @param {boolean} on - Ticked or not.
+     * @returns {object} <code>{ found, angleEnabled }</code>: whether the tick and the Angle field are there, and
+     *     whether the Angle field can be changed after.
+     */
+    Q_INVOKABLE QVariantMap terrainRandomAngle(bool on);
+
+    /**jsdoc
+     * A stroke of the Terrain tool straight down onto the entity's middle, pressed and let go at once.
+     * @function Test.terrainStroke
+     * @param {Uuid} id - The terrain.
+     * @returns {number} The angle (degrees) the stroke turned the brush's picture by, -1 when no terrain was there.
+     */
+    Q_INVOKABLE float terrainStroke(const QUuid& id);
+
+    /**jsdoc
+     * The angle (degrees) the Terrain tool's next stroke will turn the brush's picture by, which its outline shows.
+     * @function Test.terrainNextAngle
+     * @returns {number} The angle.
+     */
+    Q_INVOKABLE float terrainNextAngle();
+
+    /**jsdoc
+     * Uploads files from this computer into the Assets panel's folder, as its Upload… button does after its file
+     * dialog. Build mode must be on.
+     * @function Test.editorUploadFiles
+     * @param {string[]} paths - The files' paths on this computer.
+     */
+    Q_INVOKABLE void editorUploadFiles(const QStringList& paths);
+
+    /**jsdoc
+     * What Build mode's status bar says now ("" for nothing).
+     * @function Test.editorStatus
+     * @returns {string} The status bar's text.
+     */
+    Q_INVOKABLE QString editorStatus();
+
+    /**jsdoc
+     * Imports an avatar file as File > Import Avatar… does after its file dialog. An .fst goes straight to the question
+     * whether to wear and keep it, which waits for its answer: call Test.answerNextAlert first.
+     * @function Test.importAvatar
+     * @param {string} path - The file's path on this computer.
+     */
+    Q_INVOKABLE void importAvatar(const QString& path);
+
+    /**jsdoc
      * Turns build mode on or off, as Build > Build Mode does.
      * @function Test.setBuildMode
      * @param {boolean} on - Whether build mode is on.
@@ -433,6 +647,51 @@ public slots:
      * @param {Uuid} id - The entity.
      */
     Q_INVOKABLE void clickHierarchyRow(const QUuid& id);
+
+    /**jsdoc
+     * Does what a click on a build-mode Hierarchy row's eye, hand, lock or script mark does: hides it in this
+     * builder's view only, makes it unpickable by their clicks in the 3D view, locks it for everyone, or turns its
+     * scripts off for everyone (or the reverse), with everything under it, or alone as an Alt-click does.
+     * @function Test.hierarchyToggle
+     * @param {Uuid} id - The row's entity.
+     * @param {string} which - <code>"hide"</code>, <code>"pick"</code>, <code>"lock"</code> or
+     *     <code>"scripts"</code>.
+     * @param {boolean} [onlyThis=false] - As an Alt-click: the row alone.
+     * @returns {boolean} Whether the row was there and the toggle could change.
+     */
+    Q_INVOKABLE bool hierarchyToggle(const QUuid& id, const QString& which, bool onlyThis = false);
+
+    /**jsdoc
+     * A build-mode Hierarchy row's toggles and what they amount to.
+     * @function Test.hierarchyToggles
+     * @param {Uuid} id - The row's entity.
+     * @returns {object} <code>{ hidden, noPick, locked, scriptsOff, drawn, hiddenCount, note, scriptsOffReminder
+     *     }</code>: hidden in this view, unpickable, locked, its scripts off, whether the entity is drawn here, how
+     *     many of this world's rows are hidden here, the note under the Hierarchy, and the reminder shown when build
+     *     mode last closed with scripts off ("" for none).
+     */
+    Q_INVOKABLE QVariantMap hierarchyToggles(const QUuid& id);
+
+    /**jsdoc
+     * Does what a click on the Hierarchy note's Show All does.
+     * @function Test.hierarchyShowAll
+     */
+    Q_INVOKABLE void hierarchyShowAll();
+
+    /**jsdoc
+     * What a click in build mode's viewport at the entity's middle would select.
+     * @function Test.editorPickAt
+     * @param {Uuid} id - The entity.
+     * @returns {Uuid} The entity picked there, null for none.
+     */
+    Q_INVOKABLE QUuid editorPickAt(const QUuid& id);
+
+    /**jsdoc
+     * What a marquee over build mode's whole viewport would select.
+     * @function Test.editorMarqueeIds
+     * @returns {Uuid[]} The entities.
+     */
+    Q_INVOKABLE QVariantList editorMarqueeIds();
 
     /**jsdoc
      * Edits a property of the editor's selection as its Inspector field does when a list's + button or a field commits:
@@ -549,6 +808,16 @@ public slots:
      * @param {boolean} final - The last call of a drag.
      */
     Q_INVOKABLE void editorDrag(const glm::vec3& delta, float yawDegrees, float rollDegrees, bool begin, bool final);
+
+    /**jsdoc
+     * Scales the editor's selection as a drag on the gizmo's scale handles would, from a script: as
+     * {@link Test.editorDrag}, begin captures the selection and final takes the undo step.
+     * @function Test.editorScaleDrag
+     * @param {Vec3} scale - The scale so far, along the gizmo's axes (1 is the size the drag began at).
+     * @param {boolean} begin - The first call of a drag.
+     * @param {boolean} final - The last call of a drag.
+     */
+    Q_INVOKABLE void editorScaleDrag(const glm::vec3& scale, bool begin, bool final);
 
 private:
     bool waitForCondition(qint64 maxWaitMs, std::function<bool()> condition);

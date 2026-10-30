@@ -125,6 +125,10 @@ public:
     void shutdown();
     void preUpdate();
     void update(bool simulate);
+    // after the avatars' update: the entities they just moved (a held tablet's screen, held things, avatar entities)
+    // updated in the scene now, so they're drawn this frame with their parents; only Model entities redraw as they're
+    // moved, the rest waited for the next frame's update and trailed (Caity's Quest test, 10-28)
+    void updateAvatarChildren();
 
     EntityTreePointer getTree() { return std::static_pointer_cast<EntityTree>(_tree); }
 

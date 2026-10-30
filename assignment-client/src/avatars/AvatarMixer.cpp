@@ -953,6 +953,8 @@ void AvatarMixer::sendStatsPacket() {
 }
 
 void AvatarMixer::run() {
+    // a mark a deploy can find in the binary and the log: this mixer passes on parented avatars' local positions
+    qCInfo(avatars) << "Avatar mixer passes on parented avatars' local positions (MixerAvatar, 10-29)";
     qCDebug(avatars) << "Waiting for connection to domain to request settings from domain-server.";
 
     // wait until we have the domain-server settings, otherwise we bail

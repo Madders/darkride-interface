@@ -82,7 +82,7 @@ void Application::checkSkeleton() const {
             });
         }
 
-        getMyAvatar()->useFullAvatarURL(AvatarData::defaultFullAvatarModelUrl(), DEFAULT_FULL_AVATAR_MODEL_NAME);
+        getMyAvatar()->useFullAvatarURL(MyAvatar::defaultAvatarURL(), DEFAULT_FULL_AVATAR_MODEL_NAME);
     } else {
         _physicsEngine->setCharacterController(getMyAvatar()->getCharacterController());
     }

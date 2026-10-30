@@ -19,11 +19,12 @@ export class AppComponent implements OnInit {
 			this.scriptService.metaverseUrl = params.metaverseUrl;
 		});
 
-		// chat and the overview float over the world; every other panel fills its window
+		// the overview floats over the world; every other panel fills its window (Tivoli's inline chat is gone: the
+		// world's chat is the integrated chat's This world, Caity's bug batch 10-29)
 		this.router.events
 			.pipe(filter(e => e instanceof NavigationEnd))
 			.subscribe((e: NavigationEnd) => {
-				const overlay = /^\/(chat|overview)\b/.test(e.urlAfterRedirects);
+				const overlay = /^\/overview\b/.test(e.urlAfterRedirects);
 				document.documentElement.classList.toggle("dr-page", !overlay);
 			});
 	}

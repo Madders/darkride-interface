@@ -1100,22 +1100,12 @@ void ViveControllerManager::InputDevice::handleTrackedObject(uint32_t deviceInde
     }
 }
 
-void ViveControllerManager::InputDevice::sendUserActivityData(QString activity) {
-    // the user activity logger is gone: nothing is reported
-}
-
 void ViveControllerManager::InputDevice::calibrateOrUncalibrate(const controller::InputCalibrationData& inputCalibration) {
     if (!_calibrated) {
         calibrate(inputCalibration);
-        if (_calibrated) {
-            sendUserActivityData("mocap_button_success");
-        } else {
-            sendUserActivityData("mocap_button_fail");
-        }
         emitCalibrationStatus();
     } else {
         uncalibrate();
-        sendUserActivityData("mocap_button_uncalibrate");
     }
 }
 

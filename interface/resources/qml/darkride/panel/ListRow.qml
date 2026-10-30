@@ -165,6 +165,7 @@ Item {
                 Text {
                     id: labelText
                     text: row.label
+                    textFormat: Text.PlainText
                     color: row.action ? (row.destructive ? Theme.destructive : Theme.tint) : Theme.text
                     opacity: row.enabled ? 1 : 0.4
                     font.pixelSize: Theme.bodySize

@@ -14,8 +14,13 @@
 #include <chrono>
 #include <thread>
 
+#include <atomic>
+#include <memory>
+
 #include <QtCore/QCoreApplication>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QEventLoop>
+#include <QtCore/QDir>
 #include <QtCore/QFileInfo>
 #include <QtCore/QTimer>
 #include <QtCore/QThread>
@@ -72,6 +77,7 @@
 #include "ArrayBufferViewClass.h"
 #include "AssetScriptingInterface.h"
 #include "BatchLoader.h"
+#include <ScriptNetworkPolicy.h>
 #include "BaseScriptEngine.h"
 #include "DataViewClass.h"
 #include "EventTypes.h"
@@ -542,7 +548,7 @@ void ScriptEngine::waitTillDoneRunning() {
                 }
             }
 
-            // NOTE: This will be called on the main application thread (among other threads) from stopAllScripts.
+            // NOTE: This will be called on the main application thread (among other threads) from shutdownScripting.
             //       The thread will need to continue to process events, because
             //       the scripts will likely need to marshall messages across to the main thread, e.g.
             //       if they access Settings or Menu in any of their shutdown code. So:
@@ -606,6 +612,26 @@ void ScriptEngine::loadURL(const QUrl& scriptURL, bool reload) {
         }
         emit scriptLoaded(url);
     }, reload, maxRetries);
+}
+
+QUrl ScriptEngine::currentScriptOrigin() const {
+    if (!currentSandboxURL.isEmpty()) {
+        const QString scheme = currentSandboxURL.scheme().toLower();
+        if (scheme == "javascript") {
+            return QUrl("about:EmbeddedEntityScript");   // the code itself, as a javascript: URL
+        }
+        if (!scheme.isEmpty()) {
+            return currentSandboxURL;
+        }
+        // an entity script given as code in the script property keeps that code as its sandbox (entityScriptContentAvailable)
+        const QString text = currentSandboxURL.toString();
+        return text.startsWith('/') ? QUrl::fromLocalFile(text) : QUrl("about:EmbeddedEntityScript");
+    }
+    QUrl url(_fileNameString);
+    if (url.scheme().isEmpty() && !_fileNameString.isEmpty()) {
+        url = QUrl::fromLocalFile(_fileNameString);
+    }
+    return url;
 }
 
 void ScriptEngine::scriptErrorMessage(const QString& message) {
@@ -979,9 +1005,7 @@ void ScriptEngine::registerGlobalObject(const QString& name, QObject* object) {
 #ifdef THREAD_DEBUGGING
         qCDebug(scriptengine) << "*** WARNING *** ScriptEngine::registerGlobalObject() called on wrong thread [" << QThread::currentThread() << "], invoking on correct thread [" << thread() << "]  name:" << name;
 #endif
-        QMetaObject::invokeMethod(this, "registerGlobalObject",
-                                  Q_ARG(const QString&, name),
-                                  Q_ARG(QObject*, object));
+        QMetaObject::invokeMethod(this, [this, name, object] { registerGlobalObject(name, object); });
         return;
     }
 #ifdef THREAD_DEBUGGING
@@ -1764,13 +1788,25 @@ bool ScriptEngine::dumpApi(const QString& path) {
         globals[it.name()] = entry;
     }
     root["globals"] = globals;
-    QFile file(path);
+    const QString fileName = dumpApiFile(path, _testApiOn);
+    QFile file(fileName);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        scriptWarningMessage("Script.dumpApi: cannot write " + path);
+        scriptWarningMessage("Script.dumpApi: cannot write " + fileName);
         return false;
     }
     file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    scriptInfoMessage("Script.dumpApi wrote " + fileName);
     return true;
+}
+
+QString ScriptEngine::dumpApiFile(const QString& requested, bool anyPath) const {
+    if (anyPath) {
+        return requested;
+    }
+    QDir folder(QDir(PathUtils::getAppDataPath()).filePath("api-dumps"));
+    folder.mkpath(".");
+    const QString name = QFileInfo(requested).fileName();
+    return folder.filePath(name.isEmpty() ? QStringLiteral("api.json") : name);
 }
 
 void ScriptEngine::print(const QString& message) {
@@ -1954,6 +1990,18 @@ QVariantMap ScriptEngine::fetchModuleSource(const QString& modulePath, const boo
     using UrlMap = QMap<QUrl, QString>;
     auto scriptCache = DependencyManager::get<ScriptCache>();
     QVariantMap req;
+    if (isClientSide()) {
+        // the network rule for a script's own requests: a module's download is a request too (a JSON module comes
+        // back to the script as data)
+        QString reason;
+        if (!ScriptNetworkPolicy::decideBlocking(QUrl(modulePath), currentScriptOrigin(), reason)) {
+            scriptWarningMessage(ScriptNetworkPolicy::refusalLine(currentScriptOrigin(), QUrl(modulePath), reason));
+            req["url"] = modulePath;
+            req["status"] = "Refused";
+            req["success"] = false;
+            return req;
+        }
+    }
     qCDebug(scriptengine_module) << "require.fetchModuleSource: " << QUrl(modulePath).fileName() << QThread::currentThread();
 
     auto onload = [=, &req](const UrlMap& data, const UrlMap& _status) {
@@ -2171,6 +2219,12 @@ void ScriptEngine::include(const QStringList& includeFiles, QScriptValue callbac
             scriptWarningMessage("Script.include() ignoring file path" + thisURL.toString()
                                 + "outside of original entity script" + currentSandboxURL.toString());
         } else {
+            QString reason;
+            if (isClientSide() && !ScriptNetworkPolicy::decideBlocking(thisURL, currentScriptOrigin(), reason)) {
+                // the network rule for a script's own requests: an include's download is a request too
+                scriptWarningMessage(ScriptNetworkPolicy::refusalLine(currentScriptOrigin(), thisURL, reason));
+                continue;
+            }
             // We could also check here for CORS, but we don't yet.
             // It turns out that QUrl.resolve will not change hosts and copy authority, so we don't need to check that here.
             urls.append(thisURL);
@@ -2459,7 +2513,7 @@ void ScriptEngine::loadEntityScript(const EntityItemID& entityID, const QString&
     if (WasmScriptEngine::isWasmScript(entityScript)) {
         // a module runs on the WebAssembly engine; this engine cannot host it
         newDetails.status = EntityScriptStatus::ERROR_LOADING_SCRIPT;
-        newDetails.errorInfo = "a WebAssembly entity script needs the entities engine on WebAssembly (Developer > Scripting > Run JavaScript on WebAssembly)";
+        newDetails.errorInfo = "a WebAssembly entity script needs the entities engine on WebAssembly (untick Developer > Scripting > Run JavaScript on QtScript)";
         setEntityScriptDetails(entityID, newDetails);
         scriptWarningMessage(QString("entity script %1 (%2): %3").arg(entityScript, entityID.toString(), newDetails.errorInfo));
         return;
@@ -2549,6 +2603,7 @@ void ScriptEngine::entityScriptContentAvailable(const EntityItemID& entityID, co
 
 #ifdef THREAD_DEBUGGING
     qCDebug(scriptengine) << "ScriptEngine::entityScriptContentAvailable() thread [" << QThread::currentThread() << "] expected thread [" << thread() << "]";
+#endif
 
     // the script arrived after its entity left (its world left while it downloaded): it doesn't run
     if (entityIsGone(_context, entityID)) {
@@ -2561,7 +2616,6 @@ void ScriptEngine::entityScriptContentAvailable(const EntityItemID& entityID, co
         emit entityScriptDetailsUpdated();
         return;
     }
-#endif
 
     auto scriptCache = DependencyManager::get<ScriptCache>();
     bool isFileUrl = isURL && scriptOrURL.startsWith("file://");
@@ -2801,14 +2855,49 @@ QList<EntityItemID> ScriptEngine::getListOfEntityScriptIDs() {
     return _entityScripts.keys();
 }
 
+const int MAX_ENTITY_UNLOAD_WAIT_MS = 3000; // for a world's unload handlers, at quit or a world change
+const int SERVING_POLL_MS = 5;
+
+bool ScriptEngine::waitServingCalls(const std::function<bool()>& finished, int milliseconds) {
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (!finished()) {
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        if (elapsed.elapsed() >= milliseconds) {
+            return false;
+        }
+        QThread::msleep(SERVING_POLL_MS);
+    }
+    return true;
+}
+
+void ScriptEngine::waitForEntityScriptsToUnload() {
+    QThread* engineThread = thread();
+    if (!engineThread || !engineThread->isRunning()) {
+        return; // nothing runs there, so no unload handler will
+    }
+    auto done = std::make_shared<std::atomic<bool>>(false);
+    QMetaObject::invokeMethod(this, [this, done] {
+        unloadAllEntityScripts(false);
+        done->store(true);
+    }, Qt::QueuedConnection);
+    if (!waitServingCalls([done] { return done->load(); }, MAX_ENTITY_UNLOAD_WAIT_MS)) {
+        qCWarning(scriptengine) << "The entity scripts of" << getFilename() << "did not unload within"
+                                << MAX_ENTITY_UNLOAD_WAIT_MS << "ms; going on without waiting for them";
+    }
+}
+
 void ScriptEngine::unloadAllEntityScripts(bool blockingCall) {
     if (QThread::currentThread() != thread()) {
 #ifdef THREAD_DEBUGGING
         qCDebug(scriptengine) << "*** WARNING *** ScriptEngine::unloadAllEntityScripts() called on wrong thread [" << QThread::currentThread() << "], invoking on correct thread [" << thread() << "]";
 #endif
 
-        QMetaObject::invokeMethod(this, "unloadAllEntityScripts",
-            blockingCall ? Qt::BlockingQueuedConnection : Qt::QueuedConnection);
+        if (blockingCall) {
+            waitForEntityScriptsToUnload();
+        } else {
+            QMetaObject::invokeMethod(this, "unloadAllEntityScripts", Qt::QueuedConnection);
+        }
         return;
     }
 #ifdef THREAD_DEBUGGING

@@ -17,11 +17,6 @@ const routes: Routes = [
 			import("./things/things.module").then(m => m.ThingsModule),
 	},
 	{
-		path: "chat",
-		loadChildren: () =>
-			import("./chat/chat.module").then(m => m.ChatModule),
-	},
-	{
 		path: "overview",
 		loadChildren: () =>
 			import("./overview/overview.module").then(m => m.OverviewModule),

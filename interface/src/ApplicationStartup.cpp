@@ -42,6 +42,7 @@
 #include <StartupProfiler.h>
 #include <AccountManager.h>
 #include <ChatService.h>
+#include <FriendsService.h>
 #include <AddressManager.h>
 #include <BuildInfo.h>
 #include <DebugDraw.h>
@@ -398,6 +399,11 @@ Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bo
 {
     setProperty(hifi::properties::CRASHED, _previousSessionCrashed);
 
+    // High Fidelity's Developer > UI > Desktop/HMD Tablet Becomes Toolbar are gone (Caity 10-29): a value saved unticked
+    // would leave the bar broken with no way back, so both stay at their defaults
+    _desktopTabletBecomesToolbarSetting.set(DEFAULT_DESKTOP_TABLET_BECOMES_TOOLBAR);
+    _hmdTabletBecomesToolbarSetting.set(DEFAULT_HMD_TABLET_BECOMES_TOOLBAR);
+
     // The client comes up in ten stages, in this order; each is a function below and a group of rows in the start-up
     // profile (the phase marks inside it). A stage reads what it needs from the DependencyManager rather than from a
     // local of an earlier stage, so each one says what it depends on.
@@ -599,6 +605,7 @@ void Application::startServices() {
                 recorder->recordFrame(AUDIO_FRAME_TYPE, audio);
             }
         });
+        audioIO->setNoAudioInput(ClientOptions::get().noAudioInput);
         audioIO->startThread();
     }
 
@@ -949,8 +956,17 @@ void Application::setupInterface() {
 #endif
 
     StartupProfiler::phase("constructor: chat started");
-    // Darkride chat (libraries/chat) follows the account from here: signed in to chat while it is signed in
+    // Darkride chat (libraries/chat) follows the account from here: signed in to chat while it is signed in; and the
+    // friends, for the requests waiting (the bar's People badge)
     DependencyManager::get<ChatService>()->start();
+    DependencyManager::get<FriendsService>()->start();
+    // the requests asked more often while the app is in front
+    DependencyManager::get<FriendsService>()->setInFront(applicationState() == Qt::ApplicationActive);
+    connect(this, &Application::applicationStateChanged, this, [](Qt::ApplicationState state) {
+        if (auto friends = DependencyManager::get<FriendsService>()) {
+            friends->setInFront(state == Qt::ApplicationActive);
+        }
+    });
 
     StartupProfiler::phase("constructor: initializeUi");
     // Initialize the user interface and menu system
@@ -1275,10 +1291,19 @@ void Application::setupSettings() {
 
 
     Menu::getInstance()->setIsOptionChecked(MenuOption::ActionMotorControl, true);
-    Menu::getInstance()->setIsOptionChecked(
-        MenuOption::MaterialProceduralShaders,
-        MeshPartPayload::DEFAULT_ENABLE_MATERIAL_PROCEDURAL_SHADERS
-    );
+    // Macs upgrading from 1.0 and Tivoli have Custom Shaders on Models saved off, which no player chose; with the saved
+    // value honoured (below) they'd lose the Lightling's outline and worlds' custom-shader surfaces (Caity's bug 9,
+    // 10-29). So settings from before 1.1 have it switched on once; a player who turns it off afterwards keeps it off
+    Setting::Handle<bool> customShadersReset { "customShadersOnModelsReset1_1", false };
+    if (!customShadersReset.get()) {
+        Menu::getInstance()->setIsOptionChecked(MenuOption::MaterialProceduralShaders, true);
+        customShadersReset.set(true);
+    }
+    // Settings > Custom Shaders on Models as the player saved it (loadSettings, above) reaches the renderer. Until 10-28
+    // it was ticked back on here at every start (without telling the renderer), so a player who turned it off found it
+    // on again (qa, windowz's run)
+    MeshPartPayload::enableMaterialProceduralShaders =
+        Menu::getInstance()->isOptionChecked(MenuOption::MaterialProceduralShaders);
 }
 
 // The callbacks the entity, render and pick libraries make into the application.

@@ -146,6 +146,7 @@ EntityPropertyFlags EntityItem::getEntityProperties(EncodeBitstreamParams& param
     requestedProperties += PROP_SCRIPT;
     requestedProperties += PROP_SCRIPT_TIMESTAMP;
     requestedProperties += PROP_SERVER_SCRIPTS;
+    requestedProperties += PROP_SCRIPTS_ENABLED;
 
     // Certifiable properties
     requestedProperties += PROP_ITEM_NAME;
@@ -354,6 +355,7 @@ OctreeElement::AppendState EntityItem::appendEntityData(
         APPEND_ENTITY_PROPERTY(PROP_SCRIPT, getScript());
         APPEND_ENTITY_PROPERTY(PROP_SCRIPT_TIMESTAMP, getScriptTimestamp());
         APPEND_ENTITY_PROPERTY(PROP_SERVER_SCRIPTS, getServerScripts());
+        APPEND_ENTITY_PROPERTY(PROP_SCRIPTS_ENABLED, getScriptsEnabled());
 
         // Certifiable Properties
         APPEND_ENTITY_PROPERTY(PROP_ITEM_NAME, getItemName());
@@ -1040,6 +1042,14 @@ int EntityItem::readEntityDataFromBuffer(const unsigned char* data, int bytesLef
         READ_ENTITY_PROPERTY(PROP_SERVER_SCRIPTS, QString, setServerScripts);
         overwriteLocalData = oldOverwrite;
     }
+    {
+        // The same for turning the scripts off or on: it has to reach the node whose script keeps editing the entity,
+        // the one running it.
+        bool oldOverwrite = overwriteLocalData;
+        overwriteLocalData = !ignoreServerPacket || (lastEditedFromBufferAdjusted > _scriptsEnabledChangedTimestamp);
+        READ_ENTITY_PROPERTY(PROP_SCRIPTS_ENABLED, bool, setScriptsEnabled);
+        overwriteLocalData = oldOverwrite;
+    }
 
     // Certifiable props
     READ_ENTITY_PROPERTY(PROP_ITEM_NAME, QString, setItemName);
@@ -1492,6 +1502,7 @@ EntityItemProperties EntityItem::getProperties(const EntityPropertyFlags& desire
     COPY_ENTITY_PROPERTY_TO_PROPERTIES(script, getScript);
     COPY_ENTITY_PROPERTY_TO_PROPERTIES(scriptTimestamp, getScriptTimestamp);
     COPY_ENTITY_PROPERTY_TO_PROPERTIES(serverScripts, getServerScripts);
+    COPY_ENTITY_PROPERTY_TO_PROPERTIES(scriptsEnabled, getScriptsEnabled);
 
     // Certifiable Properties
     COPY_ENTITY_PROPERTY_TO_PROPERTIES(itemName, getItemName);
@@ -1653,6 +1664,7 @@ bool EntityItem::setProperties(const EntityItemProperties& properties) {
     SET_ENTITY_PROPERTY_FROM_PROPERTIES(script, setScript);
     SET_ENTITY_PROPERTY_FROM_PROPERTIES(scriptTimestamp, setScriptTimestamp);
     SET_ENTITY_PROPERTY_FROM_PROPERTIES(serverScripts, setServerScripts);
+    SET_ENTITY_PROPERTY_FROM_PROPERTIES(scriptsEnabled, setScriptsEnabled);
 
     // Certifiable Properties
     SET_ENTITY_PROPERTY_FROM_PROPERTIES(itemName, setItemName);
@@ -3002,6 +3014,27 @@ void EntityItem::setServerScripts(const QString& serverScripts) {
     });
 }
 
+bool EntityItem::getScriptsEnabled() const {
+    return resultWithReadLock<bool>([&] { return _scriptsEnabled; });
+}
+
+void EntityItem::setScriptsEnabled(bool value) {
+    withWriteLock([&] {
+        if (_scriptsEnabled != value) {
+            _scriptsEnabled = value;
+            _scriptsEnabledChangedTimestamp = usecTimestampNow();
+        }
+    });
+}
+
+QString EntityItem::getScriptToRun() const {
+    return resultWithReadLock<QString>([&] { return _scriptsEnabled ? _script : QString(); });
+}
+
+QString EntityItem::getServerScriptsToRun() const {
+    return resultWithReadLock<QString>([&] { return _scriptsEnabled ? _serverScripts : QString(); });
+}
+
 QString EntityItem::getCollisionSoundURL() const {
     QString result;
     withReadLock([&] { result = _collisionSoundURL; });
@@ -3627,7 +3660,7 @@ void EntityItem::setCloneIDs(const QVector<QUuid>& cloneIDs) {
 }
 
 bool EntityItem::shouldPreloadScript() const {
-    return !_script.isEmpty() && ((_loadedScript != _script) || (_loadedScriptTimestamp != _scriptTimestamp));
+    return _scriptsEnabled && !_script.isEmpty() && ((_loadedScript != _script) || (_loadedScriptTimestamp != _scriptTimestamp));
 }
 
 bool EntityItem::shouldBePhysical() const {
