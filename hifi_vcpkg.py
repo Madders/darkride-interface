@@ -136,6 +136,9 @@ endif()
             # self.vcpkgUrl = 'https://cdn.tivolicloud.com/dependencies/vcpkg/vcpkg-linux-client.tar'
             # self.vcpkgHash = '6a1ce47ef6621e699a4627e8821ad32528c82fce62a6939d35b205da2d299aaa405b5f392df4a9e5343dd6a296516e341105fbb2dd8b48864781d129d7fba10d'
             self.hostTriplet = 'x64-linux'
+            # The 2021 vcpkg tool uses std::uint64_t without including <cstdint>, which GCC 13
+            # (Ubuntu 24.04) no longer pulls in through other headers.
+            self.bootstrapEnv["CXXFLAGS"] = (self.bootstrapEnv.get("CXXFLAGS", "") + " -include cstdint").strip()
 
             if platform.machine() == "aarch64":
                 self.bootstrapCmds.append("-useSystemBinaries")
@@ -530,6 +533,11 @@ endif()
 
         with open(tripletForBuildTypePath, "a") as tripletForBuildTypeFile:
             tripletForBuildTypeFile.write("set(VCPKG_BUILD_TYPE " + self.vcpkgBuildType + ")\n")
+            if platform.system() == "Linux":
+                # The ports' 2021 sources use std::uint32_t and friends without including <cstdint>,
+                # which GCC 13 (Ubuntu 24.04) no longer pulls in through other headers.
+                tripletForBuildTypeFile.write("set(VCPKG_C_FLAGS \"\")\n")
+                tripletForBuildTypeFile.write("set(VCPKG_CXX_FLAGS \"-include cstdint\")\n")
             if platform.system() == "Darwin":
                 # CMake searches MacPorts' /opt/local by default on macOS. With MacPorts' Qt installed (as GitHub's
                 # Mac build has), its other libraries, such as minizip, are found instead of the ports' own.

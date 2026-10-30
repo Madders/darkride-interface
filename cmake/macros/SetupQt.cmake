@@ -16,14 +16,14 @@ function(get_sub_directories result curdir)
   set(${result} ${dirlist} PARENT_SCOPE)
 endfunction()
 
-function(calculate_qt5_version result _QT_DIR)
+function(calculate_qt5_version result _QT_DIR _QT_INCLUDE_DIR)
   # All Qt5 packages have little "private" include directories named with the actual Qt version such as:
   #   .../include/QtCore/5.12.3/QtCore/private
   # Sometimes we need to include these private headers for debug hackery.
   # Hence we find one of these directories and pick apart its path to determine the actual QT_VERSION.
   # A Qt built as plain dylibs (e.g. the Conan build) keeps its headers under include/QtCore even on
   # macOS; only a framework build puts them inside QtCore.framework.
-  set(_QT_CORE_DIR "${_QT_DIR}/include/QtCore")
+  set(_QT_CORE_DIR "${_QT_INCLUDE_DIR}/QtCore")
   if (APPLE AND NOT EXISTS "${_QT_CORE_DIR}")
     set(_QT_CORE_DIR "${_QT_DIR}/lib/QtCore.framework/Versions/5/Headers")
   endif()
@@ -62,8 +62,16 @@ macro(setup_qt)
 
     # figure out where the qt dir is
     get_filename_component(QT_DIR "${QT_CMAKE_PREFIX_PATH}/../../" ABSOLUTE)
+    set(QT_INCLUDE_DIR "${QT_DIR}/include")
+    if (UNIX AND NOT APPLE AND NOT EXISTS "${QT_INCLUDE_DIR}/QtCore")
+      # A distribution's Qt (Ubuntu's qtbase5-dev, QT_CMAKE_PREFIX_PATH=/usr/lib/x86_64-linux-gnu/cmake)
+      # keeps its headers apart from its libraries, in /usr/include/<arch>/qt5; Qt5Core knows where.
+      find_package(Qt5Core REQUIRED PATHS "${QT_CMAKE_PREFIX_PATH}" NO_DEFAULT_PATH)
+      list(GET Qt5Core_INCLUDE_DIRS 0 QT_INCLUDE_DIR)
+      get_filename_component(QT_INCLUDE_DIR "${QT_INCLUDE_DIR}" ABSOLUTE)
+    endif()
     set(QT_VERSION "unknown")
-    calculate_qt5_version(QT_VERSION "${QT_DIR}")
+    calculate_qt5_version(QT_VERSION "${QT_DIR}" "${QT_INCLUDE_DIR}")
     if (QT_VERSION STREQUAL "unknown")
       message(FATAL_ERROR "Could not determine QT_VERSION")
     endif()

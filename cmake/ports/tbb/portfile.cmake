@@ -11,6 +11,12 @@ vcpkg_from_github(
         terminate-when-buildtool-notfound.patch
 )
 
+# GCC 13 rejects task_prefix declaring a task() member after using the name for class tbb::task
+# ("changes meaning of 'task'"); qualify the earlier uses, as oneTBB later did.
+vcpkg_replace_string(${SOURCE_PATH}/include/tbb/task.h "friend void make_critical( task& );" "friend void make_critical( tbb::task& );")
+vcpkg_replace_string(${SOURCE_PATH}/include/tbb/task.h "friend bool is_critical( task& );" "friend bool is_critical( tbb::task& );")
+vcpkg_replace_string(${SOURCE_PATH}/include/tbb/task.h "        task* next_offloaded;" "        tbb::task* next_offloaded;")
+
 file(COPY ${CMAKE_CURRENT_LIST_DIR}/CMakeLists.txt DESTINATION ${SOURCE_PATH})
 
 if (NOT VCPKG_TARGET_IS_WINDOWS)
