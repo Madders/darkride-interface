@@ -299,6 +299,8 @@ private:
     /// Ends the request as refused by the network rule for a script's own requests (ScriptNetworkPolicy): a failed
     /// request, with the reason in the script's log.
     void refuse(const QString& reason);
+    /// Whether this script may use the URL's scheme: any for the user's own scripts, else http, https and atp.
+    bool isSchemeAllowed() const;
     void doSend();
     void connectToReply(QNetworkReply* reply);
     void disconnectFromReply(QNetworkReply* reply);

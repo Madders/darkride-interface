@@ -164,7 +164,18 @@ void XMLHttpRequestClass::send(const QScriptValue& data) {
             _sendData = data.toString().toUtf8();
         }
     }
-    if (!_ruled) {
+    if (!isSchemeAllowed()) {
+        // refused: ends as a failed request does, after send() has returned
+        _deciding = true;
+        const int generation = ++_generation;
+        const QString reason = "not a web or asset address (" + _url.scheme().toLower() + ")";
+        QMetaObject::invokeMethod(this, [this, generation, reason] {
+            if (generation == _generation) {
+                _deciding = false;
+                refuse(reason);
+            }
+        }, Qt::QueuedConnection);
+    } else if (!_ruled) {
         doSend();
     } else {
         // the network rule for a script's own requests: judged at once, or after a name lookup
@@ -194,6 +205,18 @@ void XMLHttpRequestClass::send(const QScriptValue& data) {
         connect(this, SIGNAL(requestComplete()), &loop, SLOT(quit()));
         loop.exec();
     }
+}
+
+// The user's own scripts may request anything. Other scripts (a world's scripts on the visitor's computer, the
+// servers' scripts, agents) use the web and the world's assets: http, https and atp. Where they may go on the web is
+// the network rule's (ScriptNetworkPolicy).
+bool XMLHttpRequestClass::isSchemeAllowed() const {
+    auto scriptEngine = qobject_cast<ScriptEngine*>(_engine);
+    if (scriptEngine && scriptEngine->isClientScript()) {
+        return true;
+    }
+    const QString scheme = _url.scheme().toLower();
+    return scheme == "http" || scheme == "https" || scheme == "atp";
 }
 
 void XMLHttpRequestClass::refuse(const QString& reason) {
@@ -274,8 +297,12 @@ void XMLHttpRequestClass::requestFinished() {
         _rawResponseData.append(_reply->readAll());
 
         if (_responseType == "json") {
-            _responseData = _engine->evaluate("(" + QString(_rawResponseData.data()) + ")");
-            if (_responseData.isError()) {
+            // parsed as JSON by the engine's JSON.parse, never run as code
+            QScriptValue parse = _engine->globalObject().property("JSON").property("parse");
+            _responseData = parse.isFunction()
+                ? parse.call(QScriptValue(), QScriptValueList() << QScriptValue(QString::fromUtf8(_rawResponseData)))
+                : QScriptValue::NullValue;
+            if (_engine->hasUncaughtException() || _responseData.isError()) {
                 _engine->clearExceptions();
                 _responseData = QScriptValue::NullValue;
             }

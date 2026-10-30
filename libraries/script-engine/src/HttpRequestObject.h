@@ -65,6 +65,8 @@ public:
     /// Where the script that makes this request came from, and whether the network rule for a script's own requests
     /// (ScriptNetworkPolicy) holds here (a person's client); set by the factory.
     void setOrigin(const QUrl& origin, bool ruled) { _origin = origin; _ruled = ruled; }
+    /// Whether the request may use any scheme (the user's own scripts), or only http, https and atp; set by the factory.
+    void setAnyScheme(bool anyScheme) { _anyScheme = anyScheme; }
     /// Where a refusal is logged (the script's own log).
     void setLogger(std::function<void(const QString&)> logger) { _logger = std::move(logger); }
     int unsent() const { return UNSENT; }
@@ -119,6 +121,7 @@ private:
     QTimer _timer;
     QUrl _origin;
     bool _ruled { false };
+    bool _anyScheme { true };
     bool _deciding { false };    // the network rule is still judging (a name lookup)
     int _generation { 0 };       // abort() moves it on, so a judgement that comes late is dropped
     std::function<void(const QString&)> _logger;

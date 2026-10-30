@@ -69,7 +69,20 @@ void HttpRequestObject::send(const QVariant& data) {
     if (data.isValid() && !data.isNull()) {
         _sendData = data.type() == QVariant::ByteArray ? data.toByteArray() : data.toString().toUtf8();
     }
-    if (!_ruled) {
+    const QString scheme = _url.scheme().toLower();
+    if (!_anyScheme && scheme != "http" && scheme != "https" && scheme != "atp") {
+        // scripts other than the user's own (a world's scripts on the visitor's computer, the servers' scripts,
+        // agents) use the web and the world's assets; refused as below, after send() has returned
+        _deciding = true;
+        const int generation = ++_generation;
+        const QString reason = "not a web or asset address (" + scheme + ")";
+        QMetaObject::invokeMethod(this, [this, generation, reason] {
+            if (generation == _generation) {
+                _deciding = false;
+                refuse(reason);
+            }
+        }, Qt::QueuedConnection);
+    } else if (!_ruled) {
         doSend();
     } else {
         // the network rule for a script's own requests: judged at once, or after a name lookup
@@ -258,6 +271,7 @@ HttpRequestObject* HttpRequestFactory::createRequest(const QString& origin) {
     auto request = new HttpRequestObject(this);
     if (_engine) {
         request->setOrigin(_engine->verifiedScriptOrigin(origin), _engine->isClientSide());
+        request->setAnyScheme(_engine->isClientScript());
         QPointer<ScriptEngine> engine(_engine);
         request->setLogger([engine](const QString& line) {
             if (engine) {
