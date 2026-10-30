@@ -18,6 +18,7 @@
 #ifndef hifi_CPUIdent_h
 #define hifi_CPUIdent_h
 
+#include <cstdint>
 #include <vector>
 #include <bitset>
 #include <array>
