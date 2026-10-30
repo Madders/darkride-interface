@@ -431,6 +431,19 @@ jobs:
           # registry names must be lower case
           echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/darkride-server" >> "$GITHUB_ENV"
 
+      # The servers' JavaScript guest (darkride-js.wasm, see CopyJavaScriptGuest.cmake) isn't in the repository:
+      # take the one in Caitlyn's 1.1.1 beta Linux server, checked against the SHA-256 in its release notes, to
+      # where the build looks for a local one.
+      - name: JavaScript guest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v1.1.1-beta -R caitlynmeeks/darkride-interface -p 'darkride-server-linux-x64-1.1.1-beta.tar.gz' -D "$RUNNER_TEMP"
+          echo "847729a0f586d57d835a36214d6b917c4206f09d7abe1da381cb84642c8e5a2c  $RUNNER_TEMP/darkride-server-linux-x64-1.1.1-beta.tar.gz" | sha256sum -c -
+          mkdir -p tools/wasm-js/build
+          tar -xzf "$RUNNER_TEMP/darkride-server-linux-x64-1.1.1-beta.tar.gz" -O server.AppDir/usr/bin/resources/wasm/darkride-js.wasm > tools/wasm-js/build/darkride-js.wasm
+          ls -l tools/wasm-js/build/darkride-js.wasm
+
       - uses: docker/setup-buildx-action@v3
 
       # The image's layers are cached between runs. vcpkg and the build folder are BuildKit cache mounts, which
