@@ -26,7 +26,7 @@ const mkdirp = dir => {
 
 const domainServerPort = process.env.HIFI_DOMAIN_SERVER_PORT || 40102;
 const domainServerConfigPath =
-	"/root/.local/share/Tivoli Cloud VR/domain-server/config.json";
+	"/root/.local/share/Darkride/domain-server/config.json";
 
 mkdirp(path.dirname(domainServerConfigPath));
 

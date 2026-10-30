@@ -1,49 +1,72 @@
-# FROM archlinux:latest
-FROM debian:bullseye-slim
+# syntax=docker/dockerfile:1.7
+#
+# Builds the Darkride server stack (domain-server, assignment-client, ice-server) on Ubuntu 24.04
+# and packs it into a slim runtime image. Run from the repository root:
+#
+#   docker build -f docker/server/Dockerfile -t darkride-server .
+#
+# vcpkg (its tree and its binary cache) and the CMake build directory live in BuildKit cache
+# mounts, so a rebuild after a source change only recompiles what changed.
+#
+# The checkout must have LF line endings (on Windows: git clone -c core.autocrlf=input).
 
-ENV \
-HIFI_DOMAIN_SERVER_HTTP_PORT=40100 \
-HIFI_DOMAIN_SERVER_HTTPS_PORT=40101 \
-HIFI_DOMAIN_SERVER_PORT=40102 \
-HIFI_DOMAIN_SERVER_DTLS_PORT=40103 \
-\
-HIFI_ASSIGNMENT_CLIENT_AUDIO_MIXER_PORT=48000 \
-HIFI_ASSIGNMENT_CLIENT_AVATAR_MIXER_PORT=48001 \
-HIFI_ASSIGNMENT_CLIENT_ASSET_SERVER_PORT=48003 \
-HIFI_ASSIGNMENT_CLIENT_MESSAGES_MIXER_PORT=48004 \
-HIFI_ASSIGNMENT_CLIENT_ENTITY_SCRIPT_SERVER_PORT=48005 \
-HIFI_ASSIGNMENT_CLIENT_ENTITIES_SERVER_PORT=48006 \
-\
-DEBIAN_FRONTEND=noninteractive
+ARG UBUNTU_VERSION=24.04
 
-WORKDIR /root
+FROM ubuntu:${UBUNTU_VERSION} AS toolchain
 
-COPY dist/. /root
+ENV DEBIAN_FRONTEND=noninteractive
 
-# RUN \
-# pacman -Syu --noconfirm curl glib2 mesa harfbuzz nodejs npm && \
-# npm i -g pm2 && \
-# rm -rf /var/cache/pacman
+# Ubuntu's own Qt 5.15 is used: the prebuilt Qt that hifi_qt.py downloads came from cdn.tivolicloud.com,
+# which is gone. Node.js is only needed at configure time (tivoli-scripts).
+RUN apt-get update -y && apt-get install -y --no-install-recommends \
+        build-essential ninja-build cmake git curl ca-certificates zip unzip tar pkg-config \
+        autoconf automake libtool python3 nodejs patchelf \
+        qtbase5-dev qtbase5-private-dev qtdeclarative5-dev qtscript5-dev qtmultimedia5-dev \
+        libqt5websockets5-dev libqt5webchannel5-dev libqt5xmlpatterns5-dev libqt5svg5-dev \
+        libssl-dev zlib1g-dev libminizip-dev libgl1-mesa-dev libxxf86vm-dev libxi-dev libxrandr-dev \
+        libasound2-dev libpulse-dev libudev-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN \
-apt-get update -y && \
-apt-get install -y wget libopengl0 libglib2.0-0 libgl1-mesa-glx libharfbuzz0b && \
-# install nodejs and npm
-if [ $(uname -m) = "x86_64" ]; then \
-    wget https://nodejs.org/dist/v14.15.1/node-v14.15.1-linux-x64.tar.gz && \
-	tar -C /usr/local --strip-components 1 -xzf node-v14.15.1-linux-x64.tar.gz && \
-	rm -f node-v14.15.1-linux-x64.tar.gz; \
-else \
-	wget https://nodejs.org/dist/v14.15.1/node-v14.15.1-linux-arm64.tar.gz && \
-	tar -C /usr/local --strip-components 1 -xzf node-v14.15.1-linux-arm64.tar.gz && \
-	rm -f node-v14.15.1-linux-arm64.tar.gz; \
-fi; \
-npm install -g pm2 && \
-# cleanup rest
-apt-get remove -y wget && \
-apt-get autoremove -y && \
-apt-get clean -y && \
-npm remove -g npm && \
-rm -rf /var/lib/apt/* /var/lib/cache/* /var/lib/dpkg/* /var/cache/* ~/.npm
+FROM toolchain AS build
 
-CMD pm2-runtime start /root/ecosystem.config.js
+ENV TIVOLI_VCPKG_BASE=/vcpkg \
+    RELEASE_TYPE=PRODUCTION
+
+COPY . /src
+
+RUN --mount=type=cache,id=darkride-vcpkg,target=/vcpkg \
+    --mount=type=cache,id=darkride-vcpkg-archives,target=/root/.cache/vcpkg \
+    --mount=type=cache,id=darkride-server-build,target=/build \
+    set -e; \
+    QT_CMAKE_PREFIX_PATH="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/cmake"; \
+    cmake -S /src -B /build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DQT_CMAKE_PREFIX_PATH="$QT_CMAKE_PREFIX_PATH" \
+        -DSERVER_ONLY=ON -DBUILD_SERVER=ON -DBUILD_CLIENT=OFF \
+        -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF -DBUILD_INSTALLER=OFF; \
+    cmake --build /build --target domain-server assignment-client ice-server; \
+    sh /src/docker/server/install-server.sh /build /opt/darkride
+
+# The runtime image: Ubuntu's Qt libraries and the installed server, nothing else.
+FROM ubuntu:${UBUNTU_VERSION} AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -y && apt-get install -y --no-install-recommends \
+        ca-certificates libqt5core5t64 libqt5gui5t64 libqt5network5t64 libqt5widgets5t64 libqt5qml5 \
+        libqt5script5 libqt5scripttools5 libqt5websockets5 libminizip1t64 libssl3t64 libgl1 \
+        libopengl0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /opt/darkride /opt/darkride
+COPY docker/server/run-server.sh /opt/darkride/run-server.sh
+
+# Settings, the world, assets and backups are kept here; mount a volume on it.
+ENV TIVOLI_APP_DATA_DIR=/data \
+    QT_QPA_PLATFORM=offscreen
+VOLUME /data
+
+# domain server web interface (TCP), domain server (UDP), assignment clients (UDP)
+EXPOSE 40100/tcp 40101/tcp 40102/udp 48000-48006/udp
+
+CMD ["bash", "/opt/darkride/run-server.sh"]

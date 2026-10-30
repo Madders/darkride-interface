@@ -1,0 +1,553 @@
+# Builds Darkride for Windows (an installer and a zip), macOS (a disk image for Apple silicon) and the Linux world
+# server (a Docker image), and publishes them: the Windows and Mac files as a GitHub release, the image as
+# ghcr.io/<owner>/darkride-server.
+#
+#   git tag v2026.10.1 && git push origin v2026.10.1    builds both, makes the release "Darkride 2026.10.1", and
+#                                                        pushes the image as :2026.10.1 and :latest
+#   a tag with a dash, such as v2026.10.1-beta1          the same, marked as a pre-release, and without :latest
+#   a push to the darkride-builds branch                 builds both, to catch breakage; the Windows files are kept
+#                                                        as a workflow artifact for two weeks, and the image is
+#                                                        pushed as :darkride-builds
+#   Actions > Release > Run workflow                      the same for any branch (once this file is on the
+#                                                        repository's default branch, which GitHub requires)
+#
+# The Windows steps follow BUILD_WINDOWS.md. A first run takes a few hours: vcpkg builds every dependency. vcpkg's
+# packages and Qt are cached, so later runs only compile Darkride. The server is docker/server/Dockerfile, started
+# here once to check that its web interface answers before the image is pushed.
+#
+# The jobs are independent: the release is made when the Windows build succeeds, and mentions the server image
+# only when that succeeded too.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [darkride-builds]
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version for the file names (default 0.0.0-<commit>)
+        required: false
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    # VS 2022. windows-2025 has VS 2026, which also works (BUILD_WINDOWS_VISUAL_STUDIO.md) with -T v143
+    runs-on: windows-2022
+    timeout-minutes: 360
+    env:
+      # short paths: vcpkg's folders go deep, and long paths aren't enabled on the runner
+      TIVOLI_VCPKG_BASE: C:\dv
+      VCPKG_DEFAULT_BINARY_CACHE: C:\dvcache
+      QT_DIR_BASE: C:\Qt
+      QT_CMAKE_PREFIX_PATH: C:/Qt/5.15.2/msvc2019_64/lib/cmake
+      BUILD_DIR: C:\b
+      # a production build: the data folder is "Darkride", and the stable metaverse (vr.darkride.ai) is used
+      RELEASE_TYPE: PRODUCTION
+      STABLE_BUILD: 1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") { $v = "${{ github.ref_name }}" -replace '^v', '' }
+          elseif ("${{ inputs.version }}") { $v = "${{ inputs.version }}" }
+          else { $v = "0.0.0-" + "${{ github.sha }}".Substring(0, 8) }
+          "Version $v"
+          "VERSION=$v" >> $env:GITHUB_ENV
+          "RELEASE_NUMBER=$v" >> $env:GITHUB_ENV
+          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          Get-PSDrive C, D | Format-Table Name, @{n="Free GB"; e={[int]($_.Free / 1GB)}}
+
+      # VS 2022's own compiler (14.4x) builds everything, vcpkg's dependencies included (hifi_vcpkg.py)
+      - name: Compilers
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Get-ChildItem "$vs\VC\Tools\MSVC" | ForEach-Object Name
+
+      - name: Restore Qt
+        id: qt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: C:\Qt
+          key: qt-5.15.2-msvc2019_64-webengine-script-webgl
+
+      - name: Install Qt
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          python -m pip install aqtinstall
+          python -m aqt install-qt windows desktop 5.15.2 win64_msvc2019_64 -m qtwebengine qtscript qtwebglplugin -O $env:QT_DIR_BASE
+
+      # saved now rather than when the job ends, so a build that fails still keeps it
+      - name: Save Qt
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: C:\Qt
+          key: qt-5.15.2-msvc2019_64-webengine-script-webgl
+
+      - name: Restore vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: C:\dvcache
+          key: vcpkg-windows-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+          restore-keys: vcpkg-windows-
+
+      # vcpkg builds (or restores) the dependencies here, as part of configuring
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B $env:BUILD_DIR -G "Visual Studio 17 2022" -A x64 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+
+      - name: Save vcpkg packages
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: C:\dvcache
+          key: vcpkg-windows-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+
+      # On its own, and briefly, because twice it stalled silently inside the build until the six-hour limit.
+      # Unbuffered, with every thread's stack printed every five minutes, so a stall shows where it is.
+      - name: Generate shaders
+        shell: pwsh
+        timeout-minutes: 30
+        env:
+          PYTHONUNBUFFERED: 1
+          SHADERGEN_STACK_DUMP: 300
+        run: cmake --build $env:BUILD_DIR --config Release --target shadergen -- /v:minimal /nologo
+
+      # /m:2: each project already compiles 4 files at once (/MP), and the runner has 16 GB
+      - name: Build
+        shell: pwsh
+        timeout-minutes: 300
+        run: cmake --build $env:BUILD_DIR --config Release --target interface domain-server assignment-client -- /m:2 /v:minimal /nologo
+
+      - name: Package
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          ./tools/installer/package-windows.ps1 -BuildDir $env:BUILD_DIR -Version $env:VERSION -OutDir dist
+
+      - name: Keep the files
+        uses: actions/upload-artifact@v4
+        with:
+          name: Darkride-${{ env.VERSION }}-windows-x64
+          path: |
+            dist/*.exe
+            dist/*.zip
+          retention-days: 14
+          compression-level: 0
+
+      - name: Keep vcpkg's logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcpkg-logs-windows
+          path: C:\dv\*\buildtrees\**\*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # A newcomer's build, as BUILD_WINDOWS.md describes it: Visual Studio 2026 with the C++ workload's default
+  # components, Qt where aqtinstall puts it, no environment variables, and the vs2026 preset. Only interface is built,
+  # to check that it compiles; nothing is published. Not run for tags.
+  windows-vs2026:
+    if: github.ref_type != 'tag'
+    runs-on: windows-2025
+    timeout-minutes: 360
+    env:
+      TIVOLI_VCPKG_BASE: C:\dv
+      VCPKG_DEFAULT_BINARY_CACHE: C:\dvcache
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The C++ workload installs the v143 build tools (14.44) by default (Microsoft lists them as recommended).
+      # Added here only if the runner image left them out.
+      - name: Compilers
+        shell: pwsh
+        run: |
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
+          $vs = & "$installer\vswhere.exe" -latest -property installationPath
+          "Visual Studio: $vs"
+          Get-ChildItem "$vs\VC\Tools\MSVC" | ForEach-Object Name
+          if (-not (Test-Path "$vs\VC\Tools\MSVC\14.4*")) {
+            "::warning::The image has no v143 (14.4x) build tools; adding them as the C++ workload's default does"
+            Start-Process -Wait -FilePath "$installer\setup.exe" -ArgumentList @(
+              "modify", "--installPath", "`"$vs`"", "--add", "Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64",
+              "--quiet", "--norestart", "--nocache")
+            Get-ChildItem "$vs\VC\Tools\MSVC" | ForEach-Object Name
+          }
+          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+
+      - name: Restore Qt
+        id: qt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: C:\Qt
+          key: qt-5.15.2-msvc2019_64-webengine-script-webgl
+
+      - name: Install Qt
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          python -m pip install aqtinstall
+          python -m aqt install-qt windows desktop 5.15.2 win64_msvc2019_64 -m qtwebengine qtscript qtwebglplugin -O C:\Qt
+
+      - name: Restore vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: C:\dvcache
+          key: vcpkg-windows-vs2026-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+          restore-keys: vcpkg-windows-vs2026-
+
+      # the preset's build folder is "build" in the checkout, on D:; -B keeps it short, on C:
+      - name: Configure
+        shell: pwsh
+        run: cmake --preset vs2026 -B C:\b
+
+      - name: Save vcpkg packages
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: C:\dvcache
+          key: vcpkg-windows-vs2026-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+
+      - name: Generate shaders
+        shell: pwsh
+        timeout-minutes: 30
+        env:
+          PYTHONUNBUFFERED: 1
+          SHADERGEN_STACK_DUMP: 300
+        run: cmake --build C:\b --config RelWithDebInfo --target shadergen -- /v:minimal /nologo
+
+      - name: Build
+        shell: pwsh
+        timeout-minutes: 300
+        run: cmake --build C:\b --config RelWithDebInfo --target interface -- /m:2 /v:minimal /nologo
+
+      - name: Keep vcpkg's logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcpkg-logs-windows-vs2026
+          path: C:\dv\*\buildtrees\**\*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Apple Silicon. Qt 5.15 with WebEngine comes prebuilt from MacPorts (Qt's own 5.15.2 is Intel only, and Homebrew's
+  # qt@5 has no WebEngine). MacPorts builds for the macOS it runs on, so the app needs macOS 14 Sonoma or later.
+  # interface only: the servers ship as the Linux image. The app isn't signed with an Apple Developer ID.
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 360
+    env:
+      RELEASE_TYPE: PRODUCTION
+      STABLE_BUILD: 1
+      # CMake 4 refuses the 2021 ports' cmake_minimum_required(); vcpkg runs ports in this environment on macOS
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      QT_PORTS: >-
+        qt5-qtbase qt5-qtdeclarative qt5-qtquickcontrols qt5-qtquickcontrols2 qt5-qtgraphicaleffects qt5-qtsvg
+        qt5-qtscript qt5-qtmultimedia qt5-qtwebsockets qt5-qtwebchannel qt5-qtwebengine qt5-qtxmlpatterns
+        qt5-qtimageformats qt5-qtmacextras qt5-qtlocation qt5-qttools
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        run: |
+          if [ "${{ github.ref_type }}" = tag ]; then v="${GITHUB_REF_NAME#v}"
+          elif [ -n "${{ inputs.version }}" ]; then v="${{ inputs.version }}"
+          else v="0.0.0-${GITHUB_SHA:0:8}"; fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "RELEASE_NUMBER=$v" >> "$GITHUB_ENV"
+          echo "TIVOLI_VCPKG_BASE=$HOME/dv" >> "$GITHUB_ENV"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$HOME/dvcache" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/dvcache"
+          sw_vers; uname -m
+
+      # -b: MacPorts' prebuilt archives only, never a build from source (WebEngine would take many hours)
+      - name: Install MacPorts and Qt
+        run: |
+          curl -fsSL -o MacPorts.pkg https://github.com/macports/macports-base/releases/download/v2.12.7/MacPorts-2.12.7-14-Sonoma.pkg
+          sudo installer -pkg MacPorts.pkg -target /
+          export PATH="/opt/local/bin:/opt/local/sbin:$PATH"
+          sudo port -q selfupdate
+          sudo port -N -b install $QT_PORTS
+          ls /opt/local/libexec/qt5/lib/cmake
+          ls /opt/local/libexec/qt5/bin/macdeployqt
+
+      - name: Build tools
+        run: brew install ninja
+
+      # vcpkg builds the ports with the first CMake on PATH, and the runner's is CMake 4, which refuses a
+      # CMakeLists.txt without cmake_minimum_required() at all (tbb's), whatever CMAKE_POLICY_VERSION_MINIMUM says
+      - name: CMake 3.31
+        uses: jwlawson/actions-setup-cmake@v2.2.0
+        with:
+          cmake-version: "3.31.6"
+
+      - name: Which CMake
+        run: which cmake && cmake --version | head -1
+
+      - name: Restore vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/dvcache
+          key: vcpkg-macos-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+          restore-keys: vcpkg-macos-
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DQT_CMAKE_PREFIX_PATH=/opt/local/libexec/qt5/lib/cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_IGNORE_PREFIX_PATH=/opt/local
+
+      - name: Save vcpkg packages
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/dvcache
+          key: vcpkg-macos-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+
+      - name: Generate shaders
+        timeout-minutes: 30
+        env:
+          PYTHONUNBUFFERED: 1
+          SHADERGEN_STACK_DUMP: 300
+        run: cmake --build build --target shadergen
+
+      # a production build runs macdeployqt after linking, which copies Qt and MacPorts' libraries into the bundle
+      - name: Build
+        timeout-minutes: 300
+        run: cmake --build build --target interface
+
+      # The bundle is Darkride.app (INTERFACE_BUNDLE_NAME), as in the disk image. macdeployqt changed the
+      # binaries, so they're signed again ad hoc (Apple Silicon runs nothing unsigned).
+      - name: Package
+        run: |
+          app=$(find build/interface -maxdepth 2 -name '*.app' -type d | head -1)
+          echo "Bundle: $app"
+          mkdir -p dist/dmg
+          ditto "$app" dist/dmg/Darkride.app
+          # macdeployqt leaves helpers such as QtWebEngineProcess pointing at MacPorts' Qt
+          python3 tools/installer/macos/fix-bundle.py dist/dmg/Darkride.app /opt/local/
+          # nothing may still point at MacPorts: the app would only start where MacPorts is installed
+          if find dist/dmg/Darkride.app -type f \( -perm -u+x -o -name '*.dylib' \) -exec otool -L {} \; 2>/dev/null | grep -q "/opt/local/"; then
+            find dist/dmg/Darkride.app -type f \( -perm -u+x -o -name '*.dylib' \) -exec otool -L {} \; 2>/dev/null | grep -B3 "/opt/local/" | head -40
+            echo "::error::The bundle still links to /opt/local"; exit 1
+          fi
+          codesign --force --deep --sign - dist/dmg/Darkride.app
+          codesign --verify --deep --strict dist/dmg/Darkride.app
+          ln -s /Applications dist/dmg/Applications
+          cp "tools/installer/macos/Read me first.txt" dist/dmg/
+          # hdiutil sometimes fails with "Resource busy" on GitHub's Mac runners while something else holds the
+          # files for a moment, so it gets a few tries
+          for attempt in 1 2 3 4 5; do
+            if hdiutil create -volname "Darkride $VERSION" -srcfolder dist/dmg -ov -format UDZO "dist/Darkride-$VERSION-macos-arm64.dmg"; then
+              break
+            fi
+            if [ "$attempt" = 5 ]; then
+              echo "::error::hdiutil couldn't create the disk image after 5 tries"; exit 1
+            fi
+            echo "hdiutil failed (try $attempt of 5); trying again in 15 s"
+            sleep 15
+          done
+          ls -la dist
+
+      - name: Keep the files
+        uses: actions/upload-artifact@v4
+        with:
+          name: Darkride-${{ env.VERSION }}-macos-arm64
+          path: dist/*.dmg
+          retention-days: 14
+          compression-level: 0
+
+      # Nobody building this has a Mac, so the packaged app is started here: a library macOS can't load stops it
+      # at once (the job fails, and a release leaves the Mac build out). The runner is a virtual machine, so a
+      # graphics problem only warns.
+      - name: Start the app
+        run: |
+          app=dist/dmg/Darkride.app
+          helper="$app/Contents/Frameworks/QtWebEngineCore.framework/Versions/5/Helpers/QtWebEngineProcess.app/Contents/MacOS/QtWebEngineProcess"
+          # start, wait, stop; the output goes to $2. How it ends doesn't fail the step: only a library it can't load
+          # does. (QtWebEngineProcess aborts on purpose when it's started without Chromium's arguments.)
+          start() {
+            "$1" > "$2" 2>&1 &
+            pid=$!
+            sleep "$3"
+            if kill -0 $pid 2>/dev/null; then
+              echo "$1: still running after $3 s"; kill $pid; sleep 3; kill -9 $pid 2>/dev/null || true
+            else
+              status=0; wait $pid || status=$?
+              echo "$1: exited after less than $3 s, with status $status"
+            fi
+          }
+          start "$helper" helper.log 5
+          start "$app/Contents/MacOS/Darkride" interface.log 45
+          echo "--- interface"; tail -n 80 interface.log || true
+          echo "--- QtWebEngineProcess"; tail -n 20 helper.log || true
+          if grep -h -E "Library not loaded|Symbol not found|image not found|dyld\[" interface.log helper.log; then
+            echo "::error::The app can't load one of its libraries"; exit 1
+          fi
+          grep -q -i -E "OpenGL|GL version|renderer" interface.log || echo "::warning::interface printed nothing about OpenGL"
+
+      - name: Keep vcpkg's logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcpkg-logs-macos
+          path: ${{ env.TIVOLI_VCPKG_BASE }}/*/buildtrees/**/*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  linux-server:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version and image name
+        run: |
+          if [ "${{ github.ref_type }}" = tag ]; then v="${GITHUB_REF_NAME#v}"
+          elif [ -n "${{ inputs.version }}" ]; then v="${{ inputs.version }}"
+          else v="0.0.0-${GITHUB_SHA:0:8}"; fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          # registry names must be lower case
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/darkride-server" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      # The image's layers are cached between runs. vcpkg and the build folder are BuildKit cache mounts, which
+      # aren't, so each run compiles the server; with Ubuntu's Qt that's well under an hour.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/server/Dockerfile
+          load: true
+          tags: darkride-server:test
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=darkride-server
+          cache-to: type=gha,scope=darkride-server,mode=max
+
+      # A world starts: the domain server's web interface answers, and nothing has exited a while later
+      - name: Test
+        run: |
+          mkdir -p "$RUNNER_TEMP/world"
+          docker run -d --name world --network host -v "$RUNNER_TEMP/world:/data" \
+            -e HIFI_METAVERSE_URL=https://vr.darkride.ai darkride-server:test
+          for i in $(seq 60); do curl -fsS -o /dev/null http://localhost:40100 && break; sleep 2; done
+          status=0
+          curl -fsS -o /dev/null http://localhost:40100 || { echo "::error::The domain server's web interface didn't answer"; status=1; }
+          sleep 20
+          [ "$(docker inspect -f '{{.State.Running}}' world)" = true ] || { echo "::error::The server container exited"; status=1; }
+          docker logs world 2>&1 | tail -n 60
+          docker rm -f world > /dev/null
+          exit $status
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Push
+        run: |
+          if [ "${{ github.ref_type }}" = tag ]; then
+            tags="$VERSION"
+            case "$VERSION" in *-*) ;; *) tags="$tags latest" ;; esac
+          else
+            tags="${GITHUB_REF_NAME//\//-}"
+          fi
+          for t in $tags; do
+            docker tag darkride-server:test "$IMAGE:$t"
+            docker push "$IMAGE:$t"
+            echo "Pushed $IMAGE:$t" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  release:
+    needs: [windows, macos, linux-server]
+    # Windows alone is enough for a release; the Mac disk image and the server image are included when they built
+    if: always() && github.ref_type == 'tag' && needs.windows.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/installer/macos
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Darkride-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVER: ${{ needs.linux-server.result }}
+          MAC: ${{ needs.macos.result }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          v="${tag#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/darkride-server"
+          pre=""
+          case "$v" in *-*) pre="--prerelease" ;; esac
+          {
+            # every release says what these builds are, first
+            echo "> [!WARNING]"
+            echo "> **Unofficial build.** These are my own builds of Darkride, not official releases of the Darkride project."
+            echo "> They can include experimental features and changes that aren't in Darkride yet, so expect rough edges."
+            echo "> For official Darkride, see [caitlynmeeks/darkride-interface](https://github.com/caitlynmeeks/darkride-interface)."
+            echo
+            echo "## Windows"
+            echo
+            echo "- **Darkride-$v-windows-x64-setup.exe** installs Darkride for you (or for everyone on the PC), with Start menu and optional desktop shortcuts."
+            echo "- **Darkride-$v-windows-x64.zip** is the same files; unzip and run \`Darkride.exe\`."
+            echo
+            echo "The installer isn't code-signed yet, so Windows SmartScreen may warn: choose *More info* then *Run anyway*."
+            echo
+            if [ "$MAC" = success ]; then
+              sed "s/@VERSION@/$v/g" tools/installer/macos/release-notes.md
+            else
+              echo "## macOS"
+              echo
+              echo "The Mac build didn't succeed for this release."
+            fi
+            echo
+            echo "## Linux world server"
+            echo
+            if [ "$SERVER" = success ]; then
+              echo "A Docker image with the domain server and assignment clients (Ubuntu 24.04, x64):"
+              echo
+              echo '```'
+              echo "docker pull $image:$v"
+              echo '```'
+              echo
+              echo "See \`docker/server/docker-compose.yml\` for running it."
+            else
+              echo "The server image didn't build for this release."
+            fi
+          } > notes.md
+          shopt -s nullglob
+          files=(dist/*.exe dist/*.zip dist/*.dmg)
+          gh release create "$tag" "${files[@]}" --repo "$GITHUB_REPOSITORY" --title "Darkride $v" \
+            --notes-file notes.md --verify-tag $pre
