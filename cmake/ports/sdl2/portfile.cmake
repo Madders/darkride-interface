@@ -1,6 +1,8 @@
 set(SDL2_VERSION 2.0.12)
 vcpkg_download_distfile(ARCHIVE
-    URLS "https://www.libsdl.org/release/SDL2-2.0.12.tar.gz"
+    # GitHub first: libsdl.org is often unreachable from CI runners (same file, same SHA512)
+    URLS "https://github.com/libsdl-org/SDL/releases/download/release-2.0.12/SDL2-2.0.12.tar.gz"
+         "https://www.libsdl.org/release/SDL2-2.0.12.tar.gz"
     FILENAME "SDL2-${SDL2_VERSION}.tar.gz"
     SHA512 3f1f04af0f3d9dda9c84a2e9274ae8d83ea0da3fc367970a820036cc4dc1dbf990cfc37e4975ae05f0b45a4ffa739c6c19e470c00bf3f2bce9b8b63717b8b317
 )
