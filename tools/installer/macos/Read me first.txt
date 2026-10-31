@@ -28,4 +28,4 @@ paste this line, press Return, then open Darkride again:
   xattr -dr com.apple.quarantine /Applications/Darkride.app
 
 WHAT YOU NEED
-A Mac with an Apple chip (M1 or later) and macOS 14 Sonoma or later.
+A Mac with an Apple chip (M1 or later) and macOS 15 Sequoia or later.

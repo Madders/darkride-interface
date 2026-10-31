@@ -279,17 +279,17 @@ jobs:
           if-no-files-found: ignore
 
   # Apple Silicon. Qt 5.15 with WebEngine comes prebuilt from MacPorts (Qt's own 5.15.2 is Intel only, and Homebrew's
-  # qt@5 has no WebEngine). MacPorts builds for the macOS it runs on, so the app needs macOS 14 Sonoma or later.
+  # qt@5 has no WebEngine). MacPorts builds for the macOS it runs on, so the app needs macOS 15 Sequoia or later.
   # interface only: the servers ship as the Linux image. The app isn't signed with an Apple Developer ID.
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 360
     env:
       RELEASE_TYPE: PRODUCTION
       STABLE_BUILD: 1
       # CMake 4 refuses the 2021 ports' cmake_minimum_required(); vcpkg runs ports in this environment on macOS
       CMAKE_POLICY_VERSION_MINIMUM: "3.5"
-      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
       QT_PORTS: >-
         qt5-qtbase qt5-qtdeclarative qt5-qtquickcontrols qt5-qtquickcontrols2 qt5-qtgraphicaleffects qt5-qtsvg
         qt5-qtscript qt5-qtmultimedia qt5-qtwebsockets qt5-qtwebchannel qt5-qtwebengine qt5-qtxmlpatterns
@@ -328,7 +328,7 @@ jobs:
       # -b: MacPorts' prebuilt archives only, never a build from source (WebEngine would take many hours)
       - name: Install MacPorts and Qt
         run: |
-          curl -fsSL -o MacPorts.pkg https://github.com/macports/macports-base/releases/download/v2.12.7/MacPorts-2.12.7-14-Sonoma.pkg
+          curl -fsSL -o MacPorts.pkg https://github.com/macports/macports-base/releases/download/v2.12.7/MacPorts-2.12.7-15-Sequoia.pkg
           sudo installer -pkg MacPorts.pkg -target /
           export PATH="/opt/local/bin:/opt/local/sbin:$PATH"
           sudo port -q selfupdate
@@ -359,7 +359,7 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DQT_CMAKE_PREFIX_PATH=/opt/local/libexec/qt5/lib/cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_IGNORE_PREFIX_PATH=/opt/local
 

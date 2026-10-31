@@ -6,7 +6,7 @@
 
 It needs:
 - a Mac with an **Apple chip**: M1, M2, M3, M4 or later;
-- **macOS 14 Sonoma or later**.
+- **macOS 15 Sequoia or later**.
 
 To check, click the **Apple logo** in the top-left corner of the screen and choose **About This Mac**:
 - **Chip** should say *Apple M…*. If you see **Processor** with *Intel* instead, this version won't run on your Mac.
