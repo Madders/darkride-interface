@@ -1292,7 +1292,7 @@ Section "-Core installation"
       WriteRegStr HKCR '@HIGH_FIDELITY_PROTOCOL@' '' 'URL:Darkride Protocol'
       WriteRegStr HKCR '@HIGH_FIDELITY_PROTOCOL@' 'URL Protocol' ''
       WriteRegStr HKCR '@HIGH_FIDELITY_PROTOCOL@\DefaultIcon' '' '$INSTDIR\@INTERFACE_WIN_EXEC_NAME@,1'
-      WriteRegStr HKCR '@HIGH_FIDELITY_PROTOCOL@\shell\open\command' '' '$INSTDIR\@INTERFACE_WIN_EXEC_NAME@ --url "%1"'
+      WriteRegStr HKCR '@HIGH_FIDELITY_PROTOCOL@\shell\open\command' '' '$INSTDIR\@INTERFACE_WIN_EXEC_NAME@ --protocol-url "%1"'
     ${EndIf}
 
   ${EndIf}

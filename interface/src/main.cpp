@@ -24,6 +24,7 @@
 #include <SharedUtil.h>
 #include <StartupProfiler.h>
 #include <NetworkAccessManager.h>
+#include <NetworkingConstants.h>
 #include <gl/GLHelpers.h>
 
 #include "AddressManager.h"
@@ -53,7 +54,7 @@ int main(int argc, const char* argv[]) {
             protocolArgv = { argv[0] };
             if (i + 1 < argc) {
                 protocolUrl = argv[i + 1];
-                bool isAddress = protocolUrl.rfind("hifi:", 0) == 0 &&
+                bool isAddress = isWorldAddressScheme(QUrl(QString::fromStdString(protocolUrl)).scheme()) &&
                     protocolUrl.find_first_of(" \t\r\n\"") == std::string::npos;
                 if (isAddress) {
                     protocolArgv.push_back("--url");
