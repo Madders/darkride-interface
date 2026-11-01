@@ -14,6 +14,8 @@
 var actionbar;
 var backButton;
 var settingsButton;
+var panelsButton;
+var panelChooser;
 
 var logEnabled = true;
 
@@ -63,6 +65,19 @@ function init() {
     settingsButton.entered.connect(onBackPressed);
     settingsButton.clicked.connect(onSettingsClicked);
 
+    // Darkride's panels (World settings, Avatar, People, Explore, Radio, Chat), chosen from a card over the world
+    panelsButton = actionbar.addButton({
+        text: "",
+        bgOpacity: 0.0,
+        hoverBgOpacity: 0.0,
+        activeBgOpacity: 0.0
+    });
+    panelsButton.entered.connect(onBackPressed);
+    panelsButton.clicked.connect(onPanelsClicked);
+    panelChooser = new QmlFragment({
+        qml: "hifi/PanelChooser.qml"
+    });
+
     applyTheme();
     themeTimer = Script.setInterval(checkTheme, THEME_CHECK_MSECS);
 }
@@ -87,7 +102,8 @@ function applyTheme() {
     appliedTheme = currentTheme();
     actionbar.sendToQml({ buttons: [
         themedButton("back", "icons/+android_interface/backward.svg"),
-        themedButton("settings", "icons/+android_interface/settings.svg")
+        themedButton("settings", "icons/+android_interface/settings.svg"),
+        themedButton("panels", "icons/+android_interface/panels.svg")
     ] });
 }
 
@@ -99,6 +115,10 @@ function checkTheme() {
 
 function onSettingsClicked() {
    Window.openAndroidActivity("Settings", true);
+}
+
+function onPanelsClicked() {
+    panelChooser.sendToQml({ show: true, iconColor: Settings.getValue("Android/themeIconColor", "") });
 }
 
 function onBackPressed() {
@@ -121,6 +141,10 @@ Script.scriptEnding.connect(function() {
     if (settingsButton) {
         settingsButton.entered.disconnect(onBackPressed);
         settingsButton.clicked.disconnect(onSettingsClicked);
+    }
+    if (panelsButton) {
+        panelsButton.entered.disconnect(onBackPressed);
+        panelsButton.clicked.disconnect(onPanelsClicked);
     }
 });
 

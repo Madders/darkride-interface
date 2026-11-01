@@ -12,8 +12,9 @@ Item {
     id: actionBar
     x:0
     y:0
-    width: 300
-    // tall enough for the back and settings buttons, one above the other
+    // the back and settings buttons one above the other, and the Panels button beside the back one (under the
+    // settings one is the joystick's)
+    width: 610
     height: 640
     z: -1
 
@@ -43,7 +44,7 @@ Item {
         // put on bottom
         x = 7;
         y = 7;
-        width = 300;
+        width = 610;
         height = 640;
     }
     
