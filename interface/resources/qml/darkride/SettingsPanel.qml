@@ -31,7 +31,9 @@ Page {
 
     // the tablet's loader sizes the page; a desktop window parents it to its content area
     anchors.fill: parent
-    title: "Settings"
+    // on the phone, beside the app's own Settings: this one is the world's (the view, sound, people, the panels' look)
+    readonly property bool onPhone: Qt.platform.os === "android"
+    title: onPhone ? "World settings" : "Settings"
     tabs: ["General", "Controls", "Displays", "Sound", "Appearance"]
 
     // (the file is SettingsPanel.qml, not Settings.qml: in a file of that name, "Settings" would be the file's own
@@ -88,7 +90,9 @@ Page {
     Tab {
         visible: root.currentTab === 0
 
+        // (the phone's app starts in Places)
         Section {
+            visible: !root.onPhone
             title: "Start-up"
             ListRow {
                 label: "Start in"
@@ -219,6 +223,7 @@ Page {
 
         // from High Fidelity's General Settings window, which Settings > General... opened until 10-28 (Caity 10-28)
         Section {
+            visible: !root.onPhone
             title: "Snapshots"
             footer: "Snap saves the snapshots you keep on this computer in this folder; with none chosen, it asks the "
                 + "first time. An animated snapshot records for the length set here."
@@ -530,7 +535,7 @@ Page {
         // the VR movement settings are still the old Controls page's until Settings has a VR section (after the
         // beta); the menu's Controls... opens this tab, so this row is the way to them
         Section {
-            visible: controls.headsetAvailable || root.inHeadset
+            visible: !root.onPhone && (controls.headsetAvailable || root.inHeadset)
             title: "VR"
 
             ListRow {
@@ -552,6 +557,7 @@ Page {
         }
 
         Section {
+            visible: !root.onPhone
             title: "Devices"
             footer: controls.devices.some(function (device) { return device.setUp; })
                 ? "Set Up… opens the headset's own page: its controllers, trackers and calibration."
@@ -1157,6 +1163,7 @@ Page {
         // where the bar of app buttons sits (ui/SystemToolbar.h): over the bottom of the view, or on a side of the
         // window with the view beside it (a player's ask, 10-24)
         Section {
+            visible: !root.onPhone
             title: "Layout"
             footer: SystemToolbar.docked ? "On a side, the view sits beside the bar. Drag the bar by its handle to move it."
                 : "Floating, the bar sits over the bottom of the view."
@@ -1190,7 +1197,9 @@ Page {
                     appearance.skinStatus = trouble === "" ? "" : "Couldn't put it on: " + trouble + ".";
                 }
             }
+            // (files are the desktop's: the phone has no file dialog here)
             ListRow {
+                visible: !root.onPhone
                 action: true
                 label: "Load Skin…"
                 onClicked: {
@@ -1236,6 +1245,7 @@ Page {
                 }
             }
             ListRow {
+                visible: !root.onPhone
                 action: true
                 label: "Load Theme…"
                 onClicked: {
@@ -1246,6 +1256,7 @@ Page {
         }
 
         Section {
+            visible: !root.onPhone
             title: "Theme files"
             footer: "A theme is a JSON file: a name, the built-in scheme it starts from, and any of the colours "
                 + "background, card, cardPressed, separator, text, secondaryText, tertiaryText, tint, on, destructive, "

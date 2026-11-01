@@ -27,6 +27,9 @@
 
 class QDockWidget;
 class QWidget;
+#if defined(Q_OS_ANDROID)
+class PhonePanels;
+#endif
 
 /**jsdoc
  * The window's panels, by name: Darkride's QML panels and chat. On the desktop each can float, dock beside the 3D view
@@ -126,6 +129,11 @@ private:
     void watch(const QString& name, QDockWidget* dock);
     void setOpen(const QString& name, bool open);
     void styleTabs();   // the tabs of panels docked together, in the skin's colours
+#if defined(Q_OS_ANDROID)
+    // the phone has no docks: one panel at a time, over the world (android/PhonePanels.h)
+    void changeOnPhone(const QString& name, Change how);
+    PhonePanels* _phone { nullptr };
+#endif
 
     bool _restored { false };   // none opens before the layout's restore (after sign-in)
     QHash<QString, QPointer<QDockWidget>> _docks;

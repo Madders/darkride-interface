@@ -25,6 +25,9 @@
 #include "WindowLayout.h"
 #include "chat/ChatWindow.h"
 #include "editor/Editor.h"
+#if defined(Q_OS_ANDROID)
+#include "android/PhonePanels.h"
+#endif
 
 namespace {
     const QString CHAT = "Chat";
@@ -157,8 +160,12 @@ void Panels::showProfile(const QString& username) {
         Setting::Handle<QVariant>(PEOPLE_PROFILE).set(username);
         Setting::Handle<QVariant>(PEOPLE_TAB).set(PROFILE_TAB);
         // in sight already, it hears it at once; else it reads them as it shows
+#if defined(Q_OS_ANDROID)
+        QQuickItem* page = _phone ? _phone->page(PEOPLE) : nullptr;
+#else
         auto people = qobject_cast<QmlDock*>(_restored ? dock(PEOPLE) : nullptr);
         QQuickItem* page = people ? people->panel() : nullptr;
+#endif
         if (page && page->isVisible()) {
             QMetaObject::invokeMethod(page, "showProfile", Q_ARG(QVariant, username));
         }
@@ -253,6 +260,11 @@ void Panels::resetDocks() {
 }
 
 void Panels::releaseQml() {
+#if defined(Q_OS_ANDROID)
+    if (_phone) {
+        _phone->release();
+    }
+#endif
     for (const auto& made : _docks) {
         if (auto qmlDock = qobject_cast<QmlDock*>(made.data())) {
             qmlDock->releaseContent();
@@ -261,6 +273,9 @@ void Panels::releaseQml() {
 }
 
 void Panels::change(const QString& name, Change how) {
+#if defined(Q_OS_ANDROID)
+    changeOnPhone(name, how);
+#else
     // a page made before start-up is done finds the avatar and the rest not ready (a crash, 10-26)
     if (!_restored) {
         qCDebug(interfaceapp) << "Panels: not yet, before sign-in:" << name;
@@ -297,7 +312,28 @@ void Panels::change(const QString& name, Change how) {
     if (panel->isFloating()) {
         panel->activateWindow();
     }
+#endif
 }
+
+#if defined(Q_OS_ANDROID)
+void Panels::changeOnPhone(const QString& name, Change how) {
+    if (!_phone) {
+        _phone = new PhonePanels(this);
+        connect(_phone, &PhonePanels::openChanged, this, &Panels::setOpen);
+    }
+    if (how == Change::Close || (how == Change::Toggle && _phone->isOpen(name))) {
+        _phone->close(name);
+        return;
+    }
+    for (const auto& panel : QML_PANELS) {
+        if (panel.name == name) {
+            _phone->openQml(name, QUrl(panel.source));
+            return;
+        }
+    }
+    qCWarning(interfaceapp) << "There is no panel called" << name << "on the phone";
+}
+#endif
 
 void Panels::watch(const QString& name, QDockWidget* dock) {
     if (!dock || dock->property("panelsWatched").toBool()) {

@@ -92,6 +92,8 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
     private native long nativeOnExitVr();
     private native void nativeInitAfterAppLoaded();
     private native void nativeReloadTheme();
+    // closes the Darkride panel over the world (Settings, People...), if one is showing, and says whether one was
+    private native boolean nativeClosePanel();
     // the app theme the world has (ThemeManager's published version)
     private int mThemeVersion = -1;
 
@@ -557,6 +559,9 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
     public void onBackPressed() {
         if (mSettingsPanel != null) {
             hideSettingsPanel();
+            return;
+        }
+        if (!isLoading && nativeClosePanel()) {
             return;
         }
         openAndroidActivity("Home", false);
