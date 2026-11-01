@@ -44,7 +44,7 @@ mkdir -p "$SSL_DIR"
     -Wl,--whole-archive "$VCPKG_ROOT/lib/libssl.a" -Wl,--no-whole-archive -L"$SSL_DIR" -lcrypto_1_1
 EXTRA_LIBS="$EXTRA_LIBS,$SSL_DIR/libcrypto_1_1.so,$SSL_DIR/libssl_1_1.so"
 # the OpenXR loader, for standalone headsets (build-native.sh fetches it)
-OPENXR_LOADER=$(ls /work/openxr-*/lib/libopenxr_loader.so 2>/dev/null | sort | tail -1)
+OPENXR_LOADER=$(ls /work/openxr-*/lib/libopenxr_loader.so 2>/dev/null | sort | tail -1 || true)
 if [ -n "$OPENXR_LOADER" ]; then
     EXTRA_LIBS="$EXTRA_LIBS,$OPENXR_LOADER"
 fi
