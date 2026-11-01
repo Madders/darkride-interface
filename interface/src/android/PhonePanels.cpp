@@ -33,6 +33,10 @@ namespace {
     // Android's dp: the screen's pixels per 1/160 inch
     const qreal DP_PER_INCH = 160.0;
     const QString CHAT = "Chat";
+    const QString RADIO = "Radio";
+    // in the app's assets' html folder (its build.gradle puts the radio's page there)
+    const QString RADIO_PAGE = "radio/radio.html";
+    const char* WEB_PANEL_CLASS = "io/highfidelity/hifiinterface/web/WebPanel";
 
     QPointer<PhonePanels> thePanels;
     // whether a QML panel shows, for the phone's back, which asks on Android's UI thread
@@ -67,6 +71,14 @@ void PhonePanels::openQml(const QString& name, const QUrl& source) {
 void PhonePanels::openChat(const QString& link) {
     AndroidChatPage::instance()->open(link);
     setWebShowing(CHAT);
+}
+
+void PhonePanels::openRadio() {
+    QAndroidJniObject::callStaticMethod<void>(WEB_PANEL_CLASS, "openAppPage",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+        QAndroidJniObject::fromString(RADIO).object<jstring>(), QAndroidJniObject::fromString(RADIO).object<jstring>(),
+        QAndroidJniObject::fromString(RADIO_PAGE).object<jstring>());
+    setWebShowing(RADIO);
 }
 
 void PhonePanels::makeHost() {
@@ -110,9 +122,14 @@ void PhonePanels::showWanted() {
 }
 
 void PhonePanels::close(const QString& name) {
-    if (name == CHAT && _webShowing == CHAT) {
+    if (!name.isEmpty() && name == _webShowing) {
         // closed once the app says so (webPanelClosed)
-        AndroidChatPage::instance()->close();
+        if (name == CHAT) {
+            AndroidChatPage::instance()->close();
+        } else {
+            QAndroidJniObject::callStaticMethod<void>(WEB_PANEL_CLASS, "close", "(Ljava/lang/String;)V",
+                QAndroidJniObject::fromString(name).object<jstring>());
+        }
         return;
     }
     if (name == _wanted) {

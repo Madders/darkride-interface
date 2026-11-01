@@ -34,6 +34,9 @@ namespace {
     const QString MY_FILES = "My Files";
     const QString CONSOLE = "Console";
     const QString PEOPLE = "People";
+#if defined(Q_OS_ANDROID)
+    const QString RADIO = "Radio";   // on the phone, its page in Android's WebView (android/PhonePanels.h)
+#endif
     // People's saved person and tab (PeoplePanel.qml), and its Profile tab
     const QString PEOPLE_PROFILE = "io.darkride.peoplePanel.profile";
     const QString PEOPLE_TAB = "io.darkride.peoplePanel.tab";
@@ -331,6 +334,10 @@ void Panels::changeOnPhone(const QString& name, Change how) {
     }
     if (name == CHAT) {
         phone()->openChat();
+        return;
+    }
+    if (name == RADIO) {
+        phone()->openRadio();
         return;
     }
     for (const auto& panel : QML_PANELS) {

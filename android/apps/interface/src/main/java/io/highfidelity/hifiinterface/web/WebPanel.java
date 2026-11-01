@@ -16,6 +16,7 @@ import android.view.WindowManager;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -30,6 +31,7 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.webkit.JavaScriptReplyProxy;
+import androidx.webkit.WebViewAssetLoader;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 
@@ -44,7 +46,7 @@ import io.highfidelity.hifiinterface.theme.ThemeManager;
 import io.highfidelity.hifiinterface.theme.ThemeStyler;
 
 /**
- * A web page full-screen over the world, with a close box: Darkride chat's web client. It's a
+ * A web page full-screen over the world, with a close box: Darkride chat's web client, and the radio's page. It's a
  * dialog of its own, so the world keeps running under it and the keyboard pushes the page up (the world's window takes
  * no part in the keyboard). One at a time; the engine opens and closes them (interface/src/android/PhonePanels.cpp).
  *
@@ -100,6 +102,11 @@ public class WebPanel {
             "  };" +
             "})();";
 
+    // the app's own pages (the radio's), served from its assets' html folder, and nothing else of them, at an https
+    // address of their own
+    private static final String APP_PAGES_ORIGIN = "https://" + WebViewAssetLoader.DEFAULT_DOMAIN;
+    private static final String APP_PAGES_PATH = "/html/";
+
     // the one showing (UI thread)
     private static WebPanel sShowing;
 
@@ -107,6 +114,7 @@ public class WebPanel {
     private final String mName;
     private final Uri mOrigin;               // where the page may go; the rest opens in the phone's browser
     private final boolean mChat;
+    private final WebViewAssetLoader mAssets;
     private Dialog mDialog;
     private WebView mWebView;
     private JavaScriptReplyProxy mReply;     // the chat page's main frame, once it has said something
@@ -130,6 +138,17 @@ public class WebPanel {
             }
             show(new WebPanel(activity, CHAT, Uri.parse(origin), true), title, url);
         });
+    }
+
+    /** From the engine: one of the app's own pages, by its path in the assets' html folder (the radio's). */
+    public static void openAppPage(String name, String title, String path) {
+        Activity activity = QtNative.activity();
+        if (activity == null) {
+            nativeClosed(name);
+            return;
+        }
+        activity.runOnUiThread(() -> show(new WebPanel(activity, name, Uri.parse(APP_PAGES_ORIGIN), false), title,
+                APP_PAGES_ORIGIN + APP_PAGES_PATH + path));
     }
 
     /** From the engine: closes the panel if it's the one showing. */
@@ -174,6 +193,14 @@ public class WebPanel {
         mName = name;
         mOrigin = origin;
         mChat = chat;
+        if (chat) {
+            mAssets = null;
+        } else {
+            WebViewAssetLoader.AssetsPathHandler assets = new WebViewAssetLoader.AssetsPathHandler(activity);
+            mAssets = new WebViewAssetLoader.Builder()
+                    .addPathHandler(APP_PAGES_PATH, path -> assets.handle("html/" + path))
+                    .build();
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -215,6 +242,10 @@ public class WebPanel {
         settings.setAllowContentAccess(false);
         // a new window (a link's target) is a navigation here, which the client sends to the browser
         settings.setSupportMultipleWindows(false);
+        if (!mChat) {
+            // the radio plays http:// streams too, from its https page
+            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+        }
         mWebView.setBackgroundColor(theme.surface);
         mWebView.setWebViewClient(new PanelClient());
         mWebView.setWebChromeClient(new WebChromeClient());
@@ -334,6 +365,11 @@ public class WebPanel {
                 }
             }
             return true;
+        }
+
+        @Override
+        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+            return mAssets != null ? mAssets.shouldInterceptRequest(request.getUrl()) : null;
         }
 
         @Override

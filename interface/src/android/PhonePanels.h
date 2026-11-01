@@ -8,8 +8,10 @@
 //  made in the desktop's context, so it finds Settings, MetaverseRequests, MyAvatar, Panels and the rest by the same
 //  names as in a dock, and is hidden with the frame, so it reads its values again on each showing, as in a dock.
 //  The virtual pad is hidden while one shows. The phone's back closes it (InterfaceActivity).
-//  Chat is a web page, in Android's WebView over the world (AndroidChatPage.h, and the app's WebPanel); it can open
-//  over a QML panel (People's Message), which shows again when it closes.
+//  Chat and the radio are web pages, in Android's WebView over the world (the app's WebPanel; chat's sign-in is
+//  AndroidChatPage.h). The radio's page is the desktop panel's player alone (html/radio, which QtWebEngine shows there
+//  and Android doesn't have), and its music stops when it's closed. Chat can open over a QML panel (People's Message),
+//  which shows again when it closes.
 //
 //  Copyright 2026 Darkride.
 //
@@ -40,6 +42,7 @@ public:
     void openQml(const QString& name, const QUrl& source);
     // chat, at a link inside it ("/dm/<username>") when there is one
     void openChat(const QString& link = QString());
+    void openRadio();
     void close(const QString& name);
     // a QML panel's page, while it's the one made
     QQuickItem* page(const QString& name) const;

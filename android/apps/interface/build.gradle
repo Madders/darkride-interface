@@ -114,6 +114,12 @@ android {
                 }
             }
 
+            // the radio's page, which the phone shows in Android's WebView (WebPanel) straight from the assets
+            copy {
+                from new File(repoRoot, 'interface/resources/html/radio')
+                into new File(outputDir, 'html/radio')
+            }
+
             new File(outputDir, 'cache_assets.txt').withWriter { out ->
                 out.println(Long.toString(youngestLastModified))
                 assetList.each { file -> out.println(file) }
