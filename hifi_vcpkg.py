@@ -1,5 +1,4 @@
 import hifi_utils
-import hifi_android
 import hashlib
 import os
 import platform
@@ -628,28 +627,6 @@ endif()
             else:
                 os.remove(filePath)
 
-    def setupAndroidDependencies(self):
-        # vcpkg prebuilt
-        if not os.path.isdir(os.path.join(self.path, 'installed', 'arm64-android')):
-            dest = os.path.join(self.path, 'installed')
-            url = "https://cdn.tivolicloud.com/dependencies/vcpkg/vcpkg-arm64-android.tar.gz"
-            # FIXME I don't know why the hash check frequently fails here.  If you examine the file later it has the right hash
-            #hash = "832f82a4d090046bdec25d313e20f56ead45b54dd06eee3798c5c8cbdd64cce4067692b1c3f26a89afe6ff9917c10e4b601c118bea06d23f8adbfe5c0ec12bc3"
-            #hifi_utils.downloadAndExtract(url, dest, hash)
-            hifi_utils.downloadAndExtract(url, dest)
-
-        print("Installing additional android archives")
-        androidPackages = hifi_android.getPlatformPackages()
-        for packageName in androidPackages:
-            package = androidPackages[packageName]
-            dest = os.path.join(self.androidPackagePath, packageName)
-            if os.path.isdir(dest):
-                continue
-            url = hifi_android.getPackageUrl(package)
-            zipFile = package['file'].endswith('.zip')
-            print("Android archive {}".format(package['file']))
-            hifi_utils.downloadAndExtract(url, dest, isZip=zipFile, hash=package['checksum'], hasher=hashlib.md5())
-
     def writeTag(self):
         if self.noClean:
             return
@@ -688,8 +665,6 @@ endif()
         # Write out the configuration for use by CMake
         cmakeScript = os.path.join(self.path, 'scripts/buildsystems/vcpkg.cmake')
         installPath = os.path.join(self.path, 'installed', self.getTripletWithBuildType(self.triplet))
-        if self.args.android:
-            installPath = os.path.join(self.path, 'installed', self.triplet)
         toolsPath = os.path.join(self.path, 'installed', self.getTripletWithBuildType(self.hostTriplet), 'tools')
 
         cmakeTemplate = VcpkgRepo.CMAKE_TEMPLATE
