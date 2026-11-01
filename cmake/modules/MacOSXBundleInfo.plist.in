@@ -34,26 +34,7 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>${MACOSX_BUNDLE_COPYRIGHT}</string>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleURLName</key>
-			<string>${MACOSX_BUNDLE_BUNDLE_NAME} URL</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>tivoli</string>
-			</array>
-		</dict>
-		<dict>
-			<key>CFBundleURLName</key>
-			<string>${MACOSX_BUNDLE_BUNDLE_NAME} APP URL</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>tivoliapp</string>
-			</array>
-		</dict>
-	</array>
-	<key>LSEnvironment</key>
+${MACOSX_BUNDLE_URL_TYPES}	<key>LSEnvironment</key>
 	<dict>
 		<!-- Launches from Finder/Dock use the production metaverse; a terminal launch can still override it. -->
 		<key>HIFI_METAVERSE_URL</key>
@@ -63,6 +44,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Darkride uses your microphone so the people near you in a world can hear you.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Darkride uses your camera, only when you turn on face tracking, to move your avatar's face. The picture never leaves your computer.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
 	<string>Darkride opens your Downloads folder when you import an avatar or a model.</string>
 	<key>NSDocumentsFolderUsageDescription</key>

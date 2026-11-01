@@ -10,7 +10,7 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
-/* global Script, Users, Overlays, AvatarList, Controller, Camera, getControllerWorldLocation, UserActivityLogger */
+/* global Script, Users, Overlays, AvatarList, Controller, Camera, getControllerWorldLocation */
 
 (function () { // BEGIN LOCAL_SCOPE
     var button;
@@ -90,7 +90,6 @@
     // Called from the C++ scripting interface to show the bubble overlay
     function enteredIgnoreRadius() {
         createOverlays();
-        UserActivityLogger.privacyShieldActivated();
     }
 
     // Used to set the state of the bubble HUD button
@@ -155,13 +154,8 @@
     }
 
     // When the space bubble is toggled...
-    // NOTE: the c++ calls this with just the first param -- we added a second
-    // just for not logging the initial state of the bubble when we startup.
-    function onBubbleToggled(enabled, doNotLog) {
+    function onBubbleToggled(enabled) {
         writeButtonProperties(enabled);
-        if (doNotLog !== true) {
-            UserActivityLogger.privacyShieldToggled(enabled);
-        }
         if (enabled) {
             createOverlays();
         } else {
@@ -183,7 +177,7 @@
         sortOrder: 4
     });
 
-    onBubbleToggled(Users.getIgnoreRadiusEnabled(), true); // pass in true so we don't log this initial one in the UserActivity table
+    onBubbleToggled(Users.getIgnoreRadiusEnabled());
 
     button.clicked.connect(Users.toggleIgnoreRadius);
     Users.ignoreRadiusEnabledChanged.connect(onBubbleToggled);

@@ -14,7 +14,8 @@
 //  QtScript); and, in an entities engine (the client's and the entity script server's), the entity scripts:
 //  JavaScript ones inside the guest, .wasm ones each as an instance of its module, one per URL however many
 //  entities run it, every instance in this engine's thread and object table. Which engine a .js file or an
-//  entities engine loads on is the setting runJavaScriptOnWebAssembly (Developer > Scripting in the client);
+//  entities engine loads on is runJavaScriptOnWebAssembly(): this one, unless the setting says QtScript (Developer >
+//  Scripting in the client);
 //  .wasm files always load here.
 //
 //  Lifecycle, as the QtScript engine's: loadURL fetches the script; scriptLoaded makes ScriptEngines run the
@@ -82,8 +83,9 @@ public:
     /// The runtime every module of this process is compiled by.
     static std::shared_ptr<WasmRuntime> runtime();
 
-    /// The setting: JavaScript client scripts and the entities engines load on this engine instead of the
-    /// QtScript one.
+    /// Whether JavaScript client scripts, agents' scripts and the entities engines load on this engine: yes, unless
+    /// the setting (Developer > Scripting > Run JavaScript on QtScript) or DARKRIDE_RUN_JS_ON_QTSCRIPT=1 says QtScript;
+    /// DARKRIDE_RUN_JS_ON_WASM=1 or 0 chooses for one process. Without the guest module, JavaScript runs on QtScript.
     static bool runJavaScriptOnWebAssembly();
     static void setRunJavaScriptOnWebAssembly(bool on);
     /// The engine chosen for one JavaScript client script (in the Running Scripts window), over the setting until
@@ -97,6 +99,8 @@ public:
     /// Whether the JavaScript guest module is there (a build can be made without one). Without it JavaScript stays
     /// on the QtScript engine whatever the setting says, with one warning in the log.
     static bool hasJavaScriptGuest();
+    /// The JavaScript guest module, compiled once per process (the edit-filter engine instantiates it too).
+    static std::shared_ptr<WasmModule> javascriptGuestModule(QString& error);
 
     bool runsJavaScript() const { return _runsJavaScript; }
 
@@ -152,17 +156,25 @@ public:
     // and an entity script's sandbox URL bounds what a local file may include.
     /// The script itself: {"fileName", "source"}.
     Q_INVOKABLE QVariantMap scriptSource() const;
-    /// The plain-value objects the hosts put on the global object (DriveKeys, PickType): name to map.
+    /// The plain values the hosts register (registerGlobalValue: TREE_SCALE, DriveKeys, PickType): name to value.
     Q_INVOKABLE QVariantMap scriptGlobalValues() const;
     /// Script.resolvePath with the parent given.
     Q_INVOKABLE QString resolvePathFrom(const QString& path, const QString& parentUrl) const;
     /// Script.include's rules: {"url"} or {"reason"} when the file is not to be included.
-    Q_INVOKABLE QVariantMap resolveInclude(const QString& file, const QString& parentUrl, const QString& sandboxUrl = QString()) const;
+    Q_INVOKABLE QVariantMap resolveInclude(const QString& file, const QString& parentUrl, const QString& sandboxUrl = QString());
     /// Script.require.resolve's rules: {"url"} or {"error", "type"}.
     Q_INVOKABLE QVariantMap resolveModule(const QString& moduleId, const QString& relativeTo, const QString& parentUrl,
-                                          const QString& sandboxUrl = QString()) const;
-    /// A script's text through the script cache, synchronously: {"url", "status", "success", "contents"}.
-    Q_INVOKABLE QVariantMap fetchScript(const QString& url, bool forceDownload);
+                                          const QString& sandboxUrl = QString());
+    /// A script's text through the script cache, synchronously: {"url", "status", "success", "contents"}, for
+    /// Script.include and Script.require; sandboxUrl is the guest's claim of the entity script running (verified).
+    /// A file of this machine is served by Script.include's rule (the app's own scripts, a local script's files, a
+    /// file under the entity script's own folder); the rest by the network rule for a script's own requests.
+    Q_INVOKABLE QVariantMap fetchScript(const QString& url, bool forceDownload, const QString& sandboxUrl = QString());
+    QUrl verifiedScriptOrigin(const QString& claimed) const override;
+    /// The guest's claim of the entity script running, checked against the entity scripts this engine loaded: a
+    /// claim it did not load counts as the entities engine itself (about:Entities, never local). Empty for a client
+    /// script or an agent, which have no entity scripts and whose code is the engine's own.
+    QUrl verifiedSandbox(const QString& claimed) const;
     /// Script.dumpApi for this engine: the globals record the guest composed, written under the usual root.
     Q_INVOKABLE bool dumpApi(const QString& path, const QVariantMap& globals);
     using ScriptEngine::dumpApi;
@@ -177,7 +189,6 @@ public:
     void postCallback(const ModuleInstancePointer& instance, int32_t callback, const QVariantList& arguments);
 
 private:
-    void adoptScriptGlobals();
     bool fetchModuleBytes();
     ModuleInstancePointer makeInstance(const QString& name, const std::shared_ptr<WasmModule>& module,
                                        const WasmInstance::Limits& limits, QString& error);
@@ -186,11 +197,16 @@ private:
     void stopAll();
     void loop();
     void onModuleFailure(const ModuleInstancePointer& instance, const QString& entry, const QString& error);
-    void installSerializer(ValueCodec& codec);
+    /// A call into the JavaScript guest ended at the time limit (HostInterface::TimeLimitHandler): the entity script
+    /// that was running is stopped and the others run on; when the script itself was running, it is stopped as a
+    /// failure stops it.
+    void onCallTimeLimit(const ModuleInstancePointer& instance, const QString& entry, const QString& entity, const QString& reason);
+    /// Stops an entity script that misbehaved: its status an error with the reason, its object, timers, signal
+    /// handlers and callbacks dropped (entity_unload, queued), its unload method not called.
+    void stopEntityScript(const EntityItemID& entityID, const QString& errorInfo);
     int addTimer(const ScriptCallback& callback, int intervalMS, bool singleShot);
     void removeTimer(int id);
     void stopTimers();
-    static std::shared_ptr<WasmModule> javascriptGuestModule(QString& error);
 
     // entity scripts
     void entityScriptReady(const EntityItemID& entityID, const QString& url, const QVariant& sourceOrBytes, bool success,
@@ -217,6 +233,10 @@ private:
     ModuleInstancePointer _main;
     QHash<QString, ModuleInstancePointer> _entityModules;              // .wasm entity scripts by URL
     QHash<EntityItemID, std::weak_ptr<ModuleInstance>> _entityHosts;  // which instance runs each entity's script
+    // the entity scripts the time limit stopped, with the script each ran: not started again for the same script
+    // unless a reload is forced (the entities engines load a script again whenever its entity changes and the script
+    // is not running, which would start a runaway again and again)
+    QHash<EntityItemID, QString> _stoppedByTimeLimit;
     std::atomic<int> _callDepth { 0 };
 
     struct Timer {

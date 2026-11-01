@@ -40,7 +40,11 @@ MainWindow::MainWindow(QWidget* parent) :
 {
     setAttribute(Qt::WA_NoSystemBackground);
     setAcceptDrops(true);
-    setStyleSheet("QMainWindow::separator {width: 1px; border: none;} ");
+    // the edges between the 3D view and the docked panels (chat's, Build mode's): wide enough to grab and drag. At 1 px
+    // (as High Fidelity drew them) docked chat couldn't be widened (Caity's test, 10-26); blue under the pointer, as
+    // Build mode's editor.qss has them
+    setStyleSheet("QMainWindow::separator { width: 4px; height: 4px; border: none; background: #232323; }\n"
+                  "QMainWindow::separator:hover { background: #2c5d87; }\n");
     // setStyleSheet("background-color: #252525;  color : white;");
 
 }

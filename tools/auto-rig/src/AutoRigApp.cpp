@@ -31,8 +31,10 @@
 #include <FBX.h>
 #include <FBXSerializer.h>
 #include <GLMHelpers.h>
-#include <GLTFSerializer.h>
 #include <OBJSerializer.h>
+#include <ResourceManager.h>
+#include <ResourceRequestObserver.h>
+#include <StatTracker.h>
 
 #include <AutoRig.h>
 #include <AvatarWriter.h>
@@ -54,12 +56,10 @@ static HFMModel::Pointer readModel(const QString& path) {
     if (suffix == "fbx") {
         return FBXSerializer().read(data, mapping, url);
     }
-    if (suffix == "gltf" || suffix == "glb") {
-        return GLTFSerializer().read(data, mapping, url);
-    }
     if (suffix == "obj") {
         return OBJSerializer().read(data, mapping, url);
     }
+    // glTF too, as the model cache reads it (GLTFSerializer ignores interleaved vertex buffers, as Meshy's are)
     return AssimpSerializer().read(data, mapping, url);
 }
 
@@ -283,6 +283,12 @@ static void drawUVSheets(const HFMModel& model, const QString& modelPath, const 
 }
 
 AutoRigApp::AutoRigApp(int argc, char* argv[]) : QCoreApplication(argc, argv) {
+    // the model readers fetch a model and the files it names through the resource manager, as in the client (Assimp
+    // reads glTF there too)
+    DependencyManager::set<StatTracker>();
+    DependencyManager::set<ResourceRequestObserver>();
+    DependencyManager::set<ResourceManager>(false);
+
     QCommandLineParser parser;
     parser.setApplicationDescription("Darkride auto-rigger: places the standard skeleton in a character");
     const QCommandLineOption helpOption = parser.addHelpOption();
@@ -572,4 +578,10 @@ AutoRigApp::AutoRigApp(int argc, char* argv[]) : QCoreApplication(argc, argv) {
             out.write(QJsonDocument(QJsonObject { { "joints", jsonJoints } }).toJson());
         }
     }
+}
+
+AutoRigApp::~AutoRigApp() {
+    DependencyManager::destroy<ResourceManager>();
+    DependencyManager::destroy<ResourceRequestObserver>();
+    DependencyManager::destroy<StatTracker>();
 }

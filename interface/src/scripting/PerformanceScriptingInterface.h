@@ -107,8 +107,25 @@ public:
     };
     Q_ENUM(RefreshRateProfile)
 
+    // Must match RefreshRateManager enums too: an enum Qt doesn't know (RefreshRateManager is not a QObject) can't be
+    // returned to a script, on either engine. The numbers are the RefreshRateRegime and UXMode documented there.
+    enum RefreshRateRegime {
+        FOCUS_ACTIVE = RefreshRateManager::RefreshRateRegime::FOCUS_ACTIVE,
+        FOCUS_INACTIVE = RefreshRateManager::RefreshRateRegime::FOCUS_INACTIVE,
+        UNFOCUS = RefreshRateManager::RefreshRateRegime::UNFOCUS,
+        MINIMIZED = RefreshRateManager::RefreshRateRegime::MINIMIZED,
+        STARTUP = RefreshRateManager::RefreshRateRegime::STARTUP,
+        SHUTDOWN = RefreshRateManager::RefreshRateRegime::SHUTDOWN,
+    };
+    Q_ENUM(RefreshRateRegime)
+    enum UXMode {
+        DESKTOP = RefreshRateManager::UXMode::DESKTOP,
+        VR = RefreshRateManager::UXMode::VR,
+    };
+    Q_ENUM(UXMode)
+
     PerformanceScriptingInterface();
-    ~PerformanceScriptingInterface() = default;
+    ~PerformanceScriptingInterface();
 
 public slots:
 
@@ -171,14 +188,14 @@ public slots:
      * @function Performance.getUXMode
      * @returns {UXMode} The current user experience mode.
      */
-    RefreshRateManager::UXMode getUXMode() const;
+    UXMode getUXMode() const;
 
     /**jsdoc
      * Gets the current refresh rate regime that's in effect.
      * @function Performance.getRefreshRateRegime
      * @returns {RefreshRateRegime} The current refresh rate regime.
      */
-    RefreshRateManager::RefreshRateRegime getRefreshRateRegime() const;
+    RefreshRateRegime getRefreshRateRegime() const;
 
 signals:
 
@@ -191,6 +208,9 @@ signals:
 
 private:
     static std::once_flag registry_flag;
+
+    // each script engine and QML surface has its own Performance object: a change made through one is announced by all
+    void announceChange();
 };
 
 #endif // header guard

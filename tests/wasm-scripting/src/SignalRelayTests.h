@@ -24,6 +24,9 @@ private slots:
     void testQueuedAcrossThreads();
     void testSenderDeleted();
     void testRelayDeleted();
+    void testSlotsAreReused();
+    void testLateQueuedEmissionDropped();
+    void testTooManyAtOnce();
 };
 
 #endif // hifi_SignalRelayTests_h

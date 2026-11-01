@@ -787,7 +787,7 @@ ModalWindow {
                 var selection = helper.saveHelper(currentSelection.text, root.dir, selectionType.currentFilter);
 
                 if (!selection) {
-                    desktop.messageBox({ icon: OriginalDialogs.StandardIcon.Warning, text: "Unable to parse selection" })
+                    desktop.messageBox({ title: "Can't save with this name", text: "Choose another name." })
                     return;
                 }
 
@@ -800,17 +800,20 @@ ModalWindow {
                 // Check if the file is a valid target
                 if (!helper.urlIsWritable(selection)) {
                     desktop.messageBox({
-                                           icon: OriginalDialogs.StandardIcon.Warning,
-                                           text: "Unable to write to location " + selection
+                                           title: "Can't save in this folder",
+                                           text: "Darkride isn't allowed to write there. Choose another folder."
                                        })
                     return;
                 }
 
                 if (helper.urlExists(selection)) {
                     var messageBox = desktop.messageBox({
-                                                            icon: OriginalDialogs.StandardIcon.Question,
-                                                            buttons: OriginalDialogs.StandardButton.Yes | OriginalDialogs.StandardButton.No,
-                                                            text: "Do you wish to overwrite " + selection + "?",
+                                                            buttons: OriginalDialogs.StandardButton.Yes | OriginalDialogs.StandardButton.Cancel,
+                                                            defaultButton: OriginalDialogs.StandardButton.Cancel,
+                                                            destructiveButton: OriginalDialogs.StandardButton.Yes,
+                                                            buttonTexts: { yes: "Replace" },
+                                                            title: "Replace \u201C" + decodeURIComponent(String(selection).split("/").pop()) + "\u201D?",
+                                                            text: "A file with this name is already there."
                                                         });
                     var result = messageBox.exec();
                     if (OriginalDialogs.StandardButton.Yes !== result) {

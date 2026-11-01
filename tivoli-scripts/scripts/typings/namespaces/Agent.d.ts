@@ -7,6 +7,6 @@ declare namespace Agent {
 	const sessionUUID: Uuid;
 
 	//function isAvatar(): boolean;
-	function playAvatarSound(avatarSound: SoundObject): void;
+	function playAvatarSound(avatarSound: SoundObject, volume?: number): void;
 	function setIsAvatar(isAvatar: boolean): void;
 }

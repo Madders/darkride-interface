@@ -13,10 +13,15 @@
 
 #include <QMetaType>
 #include <QRunnable>
+#include <QCoreApplication>
+#include <QThread>
 #include <QThreadPool>
+
+#include <unordered_map>
 
 #include <glm/gtx/transform.hpp>
 #include <glm/gtx/norm.hpp>
+#include <glm/gtx/hash.hpp>
 
 #include <shared/QtHelpers.h>
 #include <GeometryUtil.h>
@@ -82,6 +87,19 @@ Model::~Model() {
 }
 
 AbstractViewStateInterface* Model::_viewState = NULL;
+
+QStringList Model::loadFailures() const {
+    QStringList failures;
+    if (_visualGeometryRequestFailed) {
+        QString reason = _renderWatcher.getFailureReason();
+        failures << "model " + _url.fileName() + ": " + (reason.isEmpty() ? QString("could not be loaded") : reason);
+    } else if (_renderGeometry) {
+        for (const auto& texture : _renderGeometry->failedTextures()) {
+            failures << "texture " + texture;
+        }
+    }
+    return failures;
+}
 
 bool Model::needsFixupInScene() const {
     return (_needsFixupInScene || !_addedToScene) && !_needsReload && isLoaded();
@@ -153,7 +171,10 @@ void Model::setOffset(const glm::vec3& offset) {
     _snappedToRegistrationPoint = false;
 }
 
+// main thread only: it walks the materials, which the main thread changes (a script's textures edit, the opacity check
+// in areTexturesLoaded). Called from a script thread it raced those changes and could corrupt a material's texture map.
 void Model::calculateTextureInfo() {
+    _textureInfoRequested = false;
     if (!_hasCalculatedTextureInfo && isLoaded() && getNetworkModel()->areTexturesLoaded() && !_modelMeshRenderItems.isEmpty()) {
         size_t textureSize = 0;
         int textureCount = 0;
@@ -170,13 +191,31 @@ void Model::calculateTextureInfo() {
     }
 }
 
+// off the main thread: the last values, and one queued request to work them out again if they aren't final
+void Model::requestTextureInfo() {
+    if (_hasCalculatedTextureInfo) {
+        return;
+    }
+    if (QThread::currentThread() == thread()) {
+        calculateTextureInfo();
+    } else if (!_textureInfoRequested.exchange(true)) {
+        // a weak pointer, not this: the caller's ModelPointer may be the last one, so the Model can go on the caller's
+        // thread while the main thread runs the request; locked there, the main thread holds it while it works
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [weakModel = weak_from_this()] {
+            if (auto model = weakModel.lock()) {
+                model->calculateTextureInfo();
+            }
+        }, Qt::QueuedConnection);
+    }
+}
+
 size_t Model::getRenderInfoTextureSize() {
-    calculateTextureInfo();
+    requestTextureInfo();
     return _renderInfoTextureSize;
 }
 
 int Model::getRenderInfoTextureCount() {
-    calculateTextureInfo();
+    requestTextureInfo();
     return _renderInfoTextureCount;
 }
 
@@ -243,7 +282,7 @@ void Model::updateRenderItems() {
                 const auto& meshState = self->getMeshState(skinDeformerIndex);
                 bool useDualQuaternionSkinning = self->getUseDualQuaternionSkinning();
 
-                transaction.updateItem<ModelMeshPartPayload>(itemID, [modelTransform, shapeState, meshState, useDualQuaternionSkinning,
+                transaction.updateItem<ModelMeshPartPayload>(itemID, [modelTransform, meshState, useDualQuaternionSkinning,
                                                                       invalidatePayloadShapeKey, primitiveMode, renderItemKeyGlobalFlags, cauterized](ModelMeshPartPayload& data) {
                     if (useDualQuaternionSkinning) {
                         data.updateClusterBuffer(meshState.clusterDualQuaternions);
@@ -253,7 +292,11 @@ void Model::updateRenderItems() {
 
                     Transform renderTransform = modelTransform;
                     data.updateTransform(renderTransform);
-                    data.updateTransformAndBound(modelTransform.worldTransform(shapeState._rootFromJointTransform));
+                    if (useDualQuaternionSkinning) {
+                        data.updateSkinnedBound(modelTransform, meshState.clusterDualQuaternions);
+                    } else {
+                        data.updateSkinnedBound(modelTransform, meshState.clusterMatrices);
+                    }
 
                     data.setCauterized(cauterized);
                     data.updateKey(renderItemKeyGlobalFlags);
@@ -350,6 +393,19 @@ void Model::initJointStates() {
     _rig.initJointStates(hfmModel, modelOffset);
 }
 
+// whether a shape's material is drawn on both sides (a cull mode of none), so its faces can be picked from either side
+static bool shapeIsDoubleSided(const HFMModel& hfmModel, int shapeID) {
+    if (shapeID < 0 || shapeID >= (int)hfmModel.shapes.size()) {
+        return false;
+    }
+    const uint32_t materialIndex = hfmModel.shapes[shapeID].material;
+    if (materialIndex >= hfmModel.materials.size()) {
+        return false;
+    }
+    const auto& material = hfmModel.materials[materialIndex]._material;
+    return material && material->getCullFaceMode() == graphics::MaterialKey::CULL_NONE;
+}
+
 bool Model::findRayIntersectionAgainstSubMeshes(const glm::vec3& origin, const glm::vec3& direction, float& distance,
                                                 BoxFace& face, glm::vec3& surfaceNormal, QVariantMap& extraInfo,
                                                 bool pickAgainstTriangles, bool allowBackface) {
@@ -444,8 +500,11 @@ bool Model::findRayIntersectionAgainstSubMeshes(const glm::vec3& origin, const g
             float triangleSetDistance = FLT_MAX;
             BoxFace triangleSetFace;
             Triangle triangleSetTriangle;
+            // a part drawn on both sides (a double-sided material: glTF's doubleSided, a cull mode of none) is picked
+            // on both sides too; a face the visitor sees is a face they can click
+            const bool bothSides = allowBackface || shapeIsDoubleSided(hfmModel, sortedTriangleSet.shapeID);
             if (sortedTriangleSet.triangleSet->findRayIntersection(meshFrameOrigin, meshFrameDirection, meshFrameInvDirection, triangleSetDistance, triangleSetFace,
-                                                                   triangleSetTriangle, pickAgainstTriangles, allowBackface)) {
+                                                                   triangleSetTriangle, pickAgainstTriangles, bothSides)) {
                 if (triangleSetDistance < bestDistance) {
                     bestDistance = triangleSetDistance;
                     intersectedSomething = true;
@@ -476,6 +535,62 @@ bool Model::findRayIntersectionAgainstSubMeshes(const glm::vec3& origin, const g
          * @property {Vec3} subMeshNormal - The normal of the intersected mesh part triangle in model coordinates.
          * @property {Triangle} subMeshTriangle - The vertices of the intersected mesh part triangle in model coordinates.
          */
+        // TIVOLI_PICK_DIAG in the environment: a precise pick that passes the model's box but no triangle logs what it
+        // saw (the sets' bounds in the mesh frame, the ray there, and whether the other side of the faces would have
+        // been hit), to tell a misplaced set from reversed winding (the unclickable models of 2026-10-30)
+        static const bool PICK_DIAG = qEnvironmentVariableIsSet("TIVOLI_PICK_DIAG");
+        if (PICK_DIAG && pickAgainstTriangles && !intersectedSomething) {
+            qDebug() << "PICKDIAG miss" << _url.toString() << "modelExtents" << modelExtents.minimum << modelExtents.maximum
+                     << "meshFrameOrigin" << meshFrameOrigin << "dir" << meshFrameDirection << "sets" << sortedTriangleSets.size()
+                     << "of" << _modelSpaceMeshTriangleSets.size() << "meshes";
+            for (const auto& set : sortedTriangleSets) {
+                float backDistance = FLT_MAX;
+                BoxFace backFace;
+                Triangle backTriangle;
+                bool backHit = set.triangleSet->findRayIntersection(meshFrameOrigin, meshFrameDirection, meshFrameInvDirection,
+                                                                     backDistance, backFace, backTriangle, true, true);
+                // brute force over the set's triangles, past the tree: how many a ray through them would hit (either
+                // side), how many are degenerate, and how close the ray line passes to any vertex
+                int bruteHits = 0, degenerate = 0;
+                float nearestVertex = FLT_MAX, bruteDistance = FLT_MAX;
+                const glm::vec3 unitDir = glm::normalize(meshFrameDirection);
+                for (const auto& tri : set.triangleSet->getTriangles()) {
+                    if (glm::length(glm::cross(tri.v1 - tri.v0, tri.v2 - tri.v0)) < 1.0e-12f) {
+                        degenerate++;
+                    }
+                    float d;
+                    if (findRayTriangleIntersection(meshFrameOrigin, meshFrameDirection, tri, d, true)) {
+                        bruteHits++;
+                        bruteDistance = std::min(bruteDistance, d);
+                    }
+                    for (const glm::vec3& v : { tri.v0, tri.v1, tri.v2 }) {
+                        glm::vec3 toV = v - meshFrameOrigin;
+                        nearestVertex = std::min(nearestVertex, glm::length(toV - unitDir * glm::dot(toV, unitDir)));
+                    }
+                }
+                // an aimed ray, straight down at the first triangle's centre through the tree: proves the set itself is
+                // pickable where it has a surface (a hollow shape's bounds are mostly empty space)
+                bool aimedHit = false;
+                float aimedDistance = FLT_MAX;
+                if (!set.triangleSet->getTriangles().empty()) {
+                    const Triangle& first = set.triangleSet->getTriangles().front();
+                    const glm::vec3 centre = (first.v0 + first.v1 + first.v2) / 3.0f;
+                    const float above = set.triangleSet->getBounds().getDimensions().y + 1.0f;
+                    const glm::vec3 aimedOrigin = centre + glm::vec3(0.0f, above, 0.0f);
+                    const glm::vec3 aimedDir(0.0f, -1.0f, 0.0f);
+                    BoxFace aimedFace;
+                    Triangle aimedTriangle;
+                    aimedHit = set.triangleSet->findRayIntersection(aimedOrigin, aimedDir, 1.0f / aimedDir, aimedDistance, aimedFace, aimedTriangle, true, true);
+                }
+                qDebug() << "PICKDIAG   set shape" << set.shapeID << "aimedRayAtFirstTriangle" << aimedHit << (aimedHit ? aimedDistance : -1.0f)
+                         << "bounds" << set.triangleSet->getBounds().getCorner()
+                         << set.triangleSet->getBounds().getDimensions() << "triangles" << set.triangleSet->size()
+                         << "boundsDistance" << set.distance << "treeHitWithBackfaces" << backHit << (backHit ? backDistance : -1.0f)
+                         << "bruteHits" << bruteHits << bruteDistance << "degenerate" << degenerate << "nearestVertexToRayLine" << nearestVertex
+                         << "doubleSided" << shapeIsDoubleSided(hfmModel, set.shapeID);
+            }
+        }
+
         if (intersectedSomething) {
             distance = bestDistance;
             face = bestFace;
@@ -811,6 +926,79 @@ scriptable::ScriptableModelBase Model::getScriptableModel() {
     return result;
 }
 
+// A skinned mesh's points where its clusters put them at the bind pose, as it's drawn at rest: each vertex's weighted
+// joint global transforms times inverse bind matrices. Its node doesn't place a skinned mesh: under a glTF armature at
+// 1/100 scale the node put the picking triangles at a hundredth of the body, and a click on it found nothing. When the
+// file's rest pose is its bind pose (the usual case) every cluster's matrix is the same, the mesh's bind placement,
+// and that one matrix places every point. Otherwise each point takes its own weights; the triangle list's points are
+// the mesh's own with duplicates merged, so they find their weights by position, and a point without weights stays by
+// the node.
+static bool sameMatrix(const glm::mat4& a, const glm::mat4& b) {
+    const float EPSILON = 1.0e-4f;
+    for (int column = 0; column < 4; column++) {
+        for (int row = 0; row < 4; row++) {
+            const float x = a[column][row];
+            const float y = b[column][row];
+            if (fabsf(x - y) > EPSILON * std::max(1.0f, std::max(fabsf(x), fabsf(y)))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static std::vector<glm::vec3> skinnedBindPosePoints(const HFMModel& hfmModel, const hfm::Mesh& mesh,
+                                                    const hfm::SkinDeformer& skin, const glm::mat4& nodeTransform,
+                                                    const std::vector<glm::vec3>& points) {
+    std::vector<glm::mat4> clusterBindMatrices(skin.clusters.size());
+    bool allSame = true;
+    for (size_t i = 0; i < skin.clusters.size(); i++) {
+        const hfm::Cluster& cluster = skin.clusters[i];
+        clusterBindMatrices[i] = cluster.jointIndex < hfmModel.joints.size()
+            ? hfmModel.joints[cluster.jointIndex].globalTransform * cluster.inverseBindMatrix : nodeTransform;
+        allSame = allSame && sameMatrix(clusterBindMatrices[i], clusterBindMatrices[0]);
+    }
+    if (allSame && !clusterBindMatrices.empty()) {
+        std::vector<glm::vec3> bindPosePoints;
+        bindPosePoints.reserve(points.size());
+        for (const auto& point : points) {
+            bindPosePoints.push_back(glm::vec3(clusterBindMatrices[0] * glm::vec4(point, 1.0f)));
+        }
+        return bindPosePoints;
+    }
+    const size_t perVertex = mesh.clusterWeightsPerVertex;
+    std::unordered_map<glm::vec3, glm::vec3> bindPoseByPoint;
+    bindPoseByPoint.reserve(mesh.vertices.size());
+    for (int vertexIndex = 0; vertexIndex < mesh.vertices.size(); vertexIndex++) {
+        const glm::vec3& point = mesh.vertices[vertexIndex];
+        if (bindPoseByPoint.count(point)) {
+            continue;
+        }
+        glm::vec3 bindPosition(0.0f);
+        float totalWeight = 0.0f;
+        for (size_t k = 0; k < perVertex; k++) {
+            const size_t at = (size_t)vertexIndex * perVertex + k;
+            if (at >= mesh.clusterWeights.size() || at >= mesh.clusterIndices.size()) {
+                break;
+            }
+            const float weight = (float)mesh.clusterWeights[at] / 65535.0f;
+            const uint16_t clusterIndex = mesh.clusterIndices[at];
+            if (weight > 0.0f && clusterIndex < clusterBindMatrices.size()) {
+                bindPosition += weight * glm::vec3(clusterBindMatrices[clusterIndex] * glm::vec4(point, 1.0f));
+                totalWeight += weight;
+            }
+        }
+        bindPoseByPoint[point] = totalWeight > 0.0f ? bindPosition / totalWeight : glm::vec3(nodeTransform * glm::vec4(point, 1.0f));
+    }
+    std::vector<glm::vec3> bindPosePoints;
+    bindPosePoints.reserve(points.size());
+    for (const auto& point : points) {
+        auto found = bindPoseByPoint.find(point);
+        bindPosePoints.push_back(found != bindPoseByPoint.end() ? found->second : glm::vec3(nodeTransform * glm::vec4(point, 1.0f)));
+    }
+    return bindPosePoints;
+}
+
 void Model::calculateTriangleSets(const HFMModel& hfmModel) {
     PROFILE_RANGE(render, __FUNCTION__);
 
@@ -850,10 +1038,17 @@ void Model::calculateTriangleSets(const HFMModel& hfmModel) {
             _modelSpaceMeshTriangleSets.emplace_back();
             _modelSpaceMeshTriangleSets.back().reserve(mesh.parts.size());
 
-            transformedPoints = triangleListMesh.vertices;
-            if (worldFromMeshTransform != glm::mat4()) {
-                for (auto& point : transformedPoints) {
-                    point = glm::vec3(worldFromMeshTransform * glm::vec4(point, 1.0f));
+            const bool skinned = shape.skinDeformer < hfmModel.skinDeformers.size() && mesh.clusterWeightsPerVertex > 0 &&
+                                 !mesh.clusterIndices.empty();
+            if (skinned) {
+                transformedPoints = skinnedBindPosePoints(hfmModel, mesh, hfmModel.skinDeformers[shape.skinDeformer],
+                                                          worldFromMeshTransform, triangleListMesh.vertices);
+            } else {
+                transformedPoints = triangleListMesh.vertices;
+                if (worldFromMeshTransform != glm::mat4()) {
+                    for (auto& point : transformedPoints) {
+                        point = glm::vec3(worldFromMeshTransform * glm::vec4(point, 1.0f));
+                    }
                 }
             }
         }
@@ -906,6 +1101,26 @@ void Model::setVisibleInScene(bool visible, const render::ScenePointer& scene) {
 
 bool Model::isVisible() const {
     return _renderItemKeyGlobalFlags.isVisible();
+}
+
+void Model::setShapesHidden(const std::set<unsigned int>& shapeIDs, const render::ScenePointer& scene) {
+    if (shapeIDs == _hiddenShapes) {
+        return;
+    }
+    _hiddenShapes = shapeIDs;
+    if (!scene) {
+        return;   // the render items take it when they're made (createRenderItemSet)
+    }
+    auto renderItemsKey = _renderItemKeyGlobalFlags;
+    render::Transaction transaction;
+    for (unsigned int shapeID = 0; shapeID < _modelMeshRenderItemIDs.size(); shapeID++) {
+        const bool hidden = isShapeHidden(shapeID);
+        transaction.updateItem<ModelMeshPartPayload>(_modelMeshRenderItemIDs[shapeID], [hidden, renderItemsKey](ModelMeshPartPayload& data) {
+            data.setHidden(hidden);
+            data.updateKey(renderItemsKey);
+        });
+    }
+    scene->enqueueTransaction(transaction);
 }
 
 void Model::setCanCastShadow(bool castShadow, const render::ScenePointer& scene) {
@@ -1090,6 +1305,8 @@ void Model::removeFromScene(const render::ScenePointer& scene, render::Transacti
     _renderInfoVertexCount = 0;
     _renderInfoDrawCalls = 0;
     _renderInfoTextureSize = 0;
+    _renderInfoTextureCount = 0;
+    _hasCalculatedTextureInfo = false;
     _renderInfoHasTransparent = false;
 }
 
@@ -1273,10 +1490,53 @@ void Model::setURL(const QUrl& url) {
 void Model::loadURLFinished(bool success) {
     if (!success) {
         _visualGeometryRequestFailed = true;
-    } else if (!_pendingTextures.empty()) {
-        setTextures(_pendingTextures);
+    } else {
+        if (!_pendingTextures.empty()) {
+            setTextures(_pendingTextures);
+        }
+        // its textures load as soon as it would have (on arrival, the nearest first), not after every model in the queue
+        if (_renderGeometry) {
+            _renderGeometry->setTextureLoadPriority(this, _loadingPriority);
+        }
+        if (isLoaded()) {
+            const HFMModel& hfmModel = getHFMModel();
+            QVariantMap objects;
+            for (const auto& joint : hfmModel.joints) {
+                if (!joint.extras.isEmpty()) {
+                    objects[joint.name] = joint.extras;
+                }
+            }
+            QVariantMap materials;
+            for (const auto& material : hfmModel.materials) {
+                if (!material.extras.isEmpty()) {
+                    materials[material.name] = material.extras;
+                }
+            }
+            std::lock_guard<std::mutex> lock(_cachedMeshExtentsMutex);
+            _cachedUnscaledMeshExtents = hfmModel.getUnscaledMeshExtents();
+            _cachedExtras.clear();
+            _cachedExtras["objects"] = objects;
+            _cachedExtras["materials"] = materials;
+            _hasCachedUnscaledMeshExtents = true;
+        }
     }
     emit setURLFinished(success);
+}
+
+bool Model::getCachedUnscaledMeshExtents(Extents& extents) const {
+    std::lock_guard<std::mutex> lock(_cachedMeshExtentsMutex);
+    if (_hasCachedUnscaledMeshExtents) {
+        extents = _cachedUnscaledMeshExtents;
+    }
+    return _hasCachedUnscaledMeshExtents;
+}
+
+bool Model::getCachedExtras(QVariantMap& extras) const {
+    std::lock_guard<std::mutex> lock(_cachedMeshExtentsMutex);
+    if (_hasCachedUnscaledMeshExtents) {
+        extras = _cachedExtras;
+    }
+    return _hasCachedUnscaledMeshExtents;
 }
 
 bool Model::getJointPositionInWorldFrame(int jointIndex, glm::vec3& position) const {
@@ -1490,7 +1750,8 @@ void Model::updateClusterMatrices() {
 void Model::updateBlendshapes() {
     // post the blender if we're not currently waiting for one to finish
     auto modelBlender = DependencyManager::get<ModelBlender>();
-    if (modelBlender->shouldComputeBlendshapes() && getHFMModel().hasBlendedMeshes() && _blendshapeCoefficients != _blendedBlendshapeCoefficients) {
+    // the cheap test first: the coefficients change on a blink, a word or an expression; hasBlendedMeshes walks the meshes
+    if (modelBlender->shouldComputeBlendshapes() && _blendshapeCoefficients != _blendedBlendshapeCoefficients && getHFMModel().hasBlendedMeshes()) {
         _blendedBlendshapeCoefficients = _blendshapeCoefficients;
         modelBlender->noteRequiresBlend(getThisPointer());
     }
@@ -1498,10 +1759,16 @@ void Model::updateBlendshapes() {
 
 void Model::deleteGeometry() {
     _deleteGeometryCounter++;
+    _hiddenShapes.clear();   // its shapes' numbers belong to the geometry
     _shapeStates.clear();
     _meshStates.clear();
     _rig.destroyAnimGraph();
     _blendedBlendshapeCoefficients.clear();
+    {
+        std::lock_guard<std::mutex> lock(_cachedMeshExtentsMutex);
+        _hasCachedUnscaledMeshExtents = false;
+        _cachedExtras.clear();
+    }
     _renderGeometry.reset();
 }
 
@@ -1553,6 +1820,7 @@ void Model::createRenderItemSet() {
         const auto& shape = shapes[shapeID];
 
         _modelMeshRenderItems << std::make_shared<ModelMeshPartPayload>(shared_from_this(), shape.mesh, shape.meshPart, shapeID, transform, offset, _created);
+        _modelMeshRenderItems.back()->setHidden(isShapeHidden(shapeID));
 
         auto material = getNetworkModel()->getShapeMaterial(shapeID);
         _modelMeshMaterialNames.push_back(material ? material->getName() : "");
@@ -1806,6 +2074,18 @@ static void packBlendshapeOffsets(BlendshapeOffsetUnpacked* unpacked, Blendshape
 static auto& packBlendshapeOffsets = packBlendshapeOffsets_ref;
 #endif
 
+// the packing of a zero offset, made once with the packer itself (it is not all-zero bits: the length packs as 1.0f)
+static const BlendshapeOffsetPacked& packedZeroBlendshapeOffset() {
+    static const BlendshapeOffsetPacked zero = [] {
+        BlendshapeOffsetUnpacked unpacked;
+        memset(&unpacked, 0, sizeof(unpacked));
+        BlendshapeOffsetPacked packed;
+        packBlendshapeOffsets(&unpacked, &packed, 1);
+        return packed;
+    }();
+    return zero;
+}
+
 class Blender : public QRunnable {
 public:
 
@@ -1860,15 +2140,33 @@ void Blender::run() {
         }
         int numVertsInMesh = meshIter->vertices.size();
         blendedMeshSizes.push_back(numVertsInMesh);
+        auto packed = packedBlendshapeOffsets.data() + offset;
+
+        // a mesh none of whose shapes is in use this blend (a hidden hairstyle, a face at rest) takes the packed zero
+        // offset for every vertex: no clearing, no accumulation, no packing. The Lightling's hidden twin tails (10.1k
+        // vertices, one shape at 0) were cleared and re-packed at every blink of every Lightling in view (avatars and
+        // performance, 2026-10-28)
+        const float EPSILON = 0.0001f;
+        const int numShapes = qMin(_blendshapeCoefficients.size(), meshIter->blendshapes.size());
+        // per slot: a mesh's blendshapes are indexed by the model's slots, with empty entries for the shapes it lacks,
+        // so a blink (slot 0) must not count for a mesh whose only shape sits at slot 88 (avatars' catch)
+        bool anyShapeInUse = false;
+        for (int i = 0; i < numShapes && !anyShapeInUse; i++) {
+            anyShapeInUse = _blendshapeCoefficients.at(i) >= EPSILON && !meshIter->blendshapes.at(i).indices.isEmpty();
+        }
+        if (!anyShapeInUse) {
+            std::fill(packed, packed + numVertsInMesh, packedZeroBlendshapeOffset());
+            offset += numVertsInMesh;
+            continue;
+        }
 
         // initialize offsets to zero
         memset(unpackedBlendshapeOffsets.data(), 0, numVertsInMesh * sizeof(BlendshapeOffsetUnpacked));
 
         // for each blendshape in this mesh, accumulate the offsets into unpackedBlendshapeOffsets.
         const float NORMAL_COEFFICIENT_SCALE = 0.01f;
-        for (int i = 0, n = qMin(_blendshapeCoefficients.size(), meshIter->blendshapes.size()); i < n; i++) {
+        for (int i = 0; i < numShapes; i++) {
             float vertexCoefficient = _blendshapeCoefficients.at(i);
-            const float EPSILON = 0.0001f;
             if (vertexCoefficient < EPSILON) {
                 continue;
             }
@@ -1889,7 +2187,6 @@ void Blender::run() {
 
         // convert unpackedBlendshapeOffsets into packedBlendshapeOffsets for the gpu.
         auto unpacked = unpackedBlendshapeOffsets.data();
-        auto packed = packedBlendshapeOffsets.data() + offset;
         packBlendshapeOffsets(unpacked, packed, numVertsInMesh);
 
         offset += numVertsInMesh;

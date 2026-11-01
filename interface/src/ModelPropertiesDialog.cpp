@@ -132,7 +132,8 @@ void ModelPropertiesDialog::chooseTextureDirectory() {
         return;
     }
     if (!directory.startsWith(_basePath)) {
-        OffscreenUi::asyncWarning(NULL, "Invalid texture directory", "Texture directory must be child of base path.");
+        OffscreenUi::asyncWarning(NULL, "Choose a folder inside the model's folder",
+                                  "Textures have to sit inside " + QFileInfo(_basePath).fileName() + ".");
         return;
     }
     _textureDirectory->setText(directory.length() == _basePath.length() ? "." : directory.mid(_basePath.length() + 1));
@@ -145,7 +146,8 @@ void ModelPropertiesDialog::chooseScriptDirectory() {
         return;
     }
     if (!directory.startsWith(_basePath)) {
-        OffscreenUi::asyncWarning(NULL, "Invalid script directory", "Script directory must be child of base path.");
+        OffscreenUi::asyncWarning(NULL, "Choose a folder inside the model's folder",
+                                  "Scripts have to sit inside " + QFileInfo(_basePath).fileName() + ".");
         return;
     }
     _scriptDirectory->setText(directory.length() == _basePath.length() ? "." : directory.mid(_basePath.length() + 1));

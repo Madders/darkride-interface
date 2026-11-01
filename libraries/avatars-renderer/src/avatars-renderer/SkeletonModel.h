@@ -12,6 +12,8 @@
 #ifndef hifi_SkeletonModel_h
 #define hifi_SkeletonModel_h
 
+#include <atomic>
+
 #include "CauterizedModel.h"
 
 class Avatar;
@@ -37,6 +39,12 @@ public:
     void initJointStates() override;
 
     void simulate(float deltaTime, bool fullUpdate = true) override;
+
+    /// The model and its textures have loaded, as of the last simulate (a new URL or textures clear it at once). Safe to
+    /// read from any thread, unlike isLoaded() and getNetworkModel(): the main thread replaces the geometry and fills in
+    /// its materials while they arrive.
+    bool isLoadedWithTextures() const { return _texturesLoaded; }
+
     glm::vec3 avoidCrossedEyes(const glm::vec3& lookAt);
     void updateRig(float deltaTime, glm::mat4 parentTransform) override;
     void updateAttitude(const glm::quat& orientation);
@@ -117,8 +125,14 @@ protected:
     float _headClipDistance;  // Near clip distance to use if no separate head model
 
 private:
-    bool _texturesLoaded { false };
+    void updateFaceTrackingOnlyBlendshapes();
+
+    std::atomic<bool> _texturesLoaded { false };   // set and cleared on the model's own thread, read from any
     QHash<int, float> _ownBlendshapeOverrides;
+    // the engine's face shapes that only face tracking or a script moves on this model (the .fst's faceTrackingBs
+    // lines), and the model they were read from
+    QVector<int> _faceTrackingOnlyBlendshapes;
+    std::weak_ptr<const void> _faceTrackingOnlyBlendshapesModel;
 };
 
 #endif // hifi_SkeletonModel_h

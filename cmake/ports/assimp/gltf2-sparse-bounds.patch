@@ -1,0 +1,92 @@
+glTF sparse accessors: the indices and values are read, and each value written, only inside their buffers, so a
+malformed file fails to load instead of reading or writing past the end of one.
+
+diff --git a/code/AssetLib/glTF2/glTF2Asset.inl b/code/AssetLib/glTF2/glTF2Asset.inl
+index b234fd0..d525060 100644
+--- a/code/AssetLib/glTF2/glTF2Asset.inl
++++ b/code/AssetLib/glTF2/glTF2Asset.inl
+@@ -749,12 +749,33 @@ inline void Accessor::Sparse::PopulateData(size_t numBytes, uint8_t *bytes) {
+     }
+ }
+ 
++// Darkride: whether a buffer view holds count elements of size bytes from offset, without overflowing
++inline bool SparseViewHolds(const BufferView &view, size_t offset, size_t count, size_t size) {
++    if (size == 0 || count > view.byteLength / size) {
++        return false;
++    }
++    return offset <= view.byteLength - count * size;
++}
++
+ inline void Accessor::Sparse::PatchData(unsigned int elementSize) {
+-    uint8_t *pIndices = indices->GetPointer(indicesByteOffset);
++    // Darkride: the indices and values are read, and each value written, only inside their buffers, so a malformed
++    // file fails to load instead of reading or writing past the end of one
++    if (!indices || !values) {
++        throw DeadlyImportError("GLTF: Sparse accessor without indices or values.");
++    }
+     const unsigned int indexSize = int(ComponentTypeSize(indicesType));
++    if (elementSize == 0 || !SparseViewHolds(*indices, indicesByteOffset, count, indexSize) ||
++            !SparseViewHolds(*values, valuesByteOffset, count, elementSize)) {
++        throw DeadlyImportError("GLTF: Sparse accessor's indices or values are out of range.");
++    }
++    uint8_t *pIndices = indices->GetPointer(indicesByteOffset);
++    uint8_t *pValues = values->GetPointer(valuesByteOffset);
++    if (!pIndices || !pValues) {
++        throw DeadlyImportError("GLTF: Sparse accessor's indices or values have no data.");
++    }
+     uint8_t *indicesEnd = pIndices + count * indexSize;
++    const size_t elementCount = data.size() / elementSize;
+ 
+-    uint8_t *pValues = values->GetPointer(valuesByteOffset);
+     while (pIndices != indicesEnd) {
+         size_t offset;
+         switch (indicesType) {
+@@ -772,6 +793,9 @@ inline void Accessor::Sparse::PatchData(unsigned int elementSize) {
+             throw DeadlyImportError("Unsupported component type in index.");
+         }
+ 
++        if (offset >= elementCount) {
++            throw DeadlyImportError("GLTF: Sparse accessor index ", offset, " is out of range (", elementCount, " elements).");
++        }
+         offset *= elementSize;
+         std::memcpy(data.data() + offset, pValues, elementSize);
+ 
+@@ -810,12 +834,15 @@ inline void Accessor::Read(Value &obj, Asset &r) {
+     if (Value *sparseValue = FindObject(obj, "sparse")) {
+         sparse.reset(new Sparse);
+         // count
+-        ReadMember(*sparseValue, "count", sparse->count);
++        sparse->count = MemberOrDefault(*sparseValue, "count", size_t(0));
+ 
+         // indices
+         if (Value *indicesValue = FindObject(*sparseValue, "indices")) {
+             //indices bufferView
+             Value *indiceViewID = FindUInt(*indicesValue, "bufferView");
++            if (!indiceViewID) {
++                throw DeadlyImportError("GLTF: Sparse accessor's indices without a bufferView.");
++            }
+             sparse->indices = r.bufferViews.Retrieve(indiceViewID->GetUint());
+             //indices byteOffset
+             sparse->indicesByteOffset = MemberOrDefault(*indicesValue, "byteOffset", size_t(0));
+@@ -828,6 +855,9 @@ inline void Accessor::Read(Value &obj, Asset &r) {
+         if (Value *valuesValue = FindObject(*sparseValue, "values")) {
+             //value bufferView
+             Value *valueViewID = FindUInt(*valuesValue, "bufferView");
++            if (!valueViewID) {
++                throw DeadlyImportError("GLTF: Sparse accessor's values without a bufferView.");
++            }
+             sparse->values = r.bufferViews.Retrieve(valueViewID->GetUint());
+             //value byteOffset
+             sparse->valuesByteOffset = MemberOrDefault(*valuesValue, "byteOffset", size_t(0));
+@@ -838,6 +868,11 @@ inline void Accessor::Read(Value &obj, Asset &r) {
+         sparse->indicesType = MemberOrDefault(*sparseValue, "componentType", ComponentType_UNSIGNED_SHORT);
+ 
+         const unsigned int elementSize = GetElementSize();
++        // Darkride: the base values are copied whole, so the view has to hold all of them (the check above counts
++        // components, not elements)
++        if (bufferView && !SparseViewHolds(*bufferView, byteOffset, count, elementSize)) {
++            throw DeadlyImportError("GLTF: Sparse accessor with offset/count (", byteOffset, "/", count, ") is out of range.");
++        }
+         const size_t dataSize = count * elementSize;
+         sparse->PopulateData(dataSize, bufferView ? bufferView->GetPointer(byteOffset) : 0);
+         sparse->PatchData(elementSize);

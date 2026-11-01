@@ -12,6 +12,8 @@
 #ifndef hifi_ScriptableAvatar_h
 #define hifi_ScriptableAvatar_h
 
+#include <mutex>
+
 #include <AnimationCache.h>
 #include <AnimSkeleton.h>
 #include <AvatarData.h>
@@ -150,6 +152,53 @@ public:
     void setAnimationFadeSeconds(float seconds) { _animationFadeSeconds = glm::clamp(seconds, 0.0f, 5.0f); }
 
     /**jsdoc
+     * Turns the avatar's head toward a point, as far as a head turns (70 degrees left or right, 40 up or down, from
+     * where the body faces), easing there; the neck takes part of the turn, the body keeps its facing, and the eyes look
+     * at the point. Once this method is called, the script has control of the head for two seconds: call it again to
+     * keep it, or every frame to follow something that moves. Then the head eases back to looking ahead.
+     * <p>With no animation playing, the turn starts from the pose the avatar has; a joint the script sets while the
+     * head turns (with {@link Avatar.setJointRotation}) is overridden until the head is back.</p>
+     * @function Avatar.setHeadLookAt
+     * @param {Vec3} lookAtTarget - The target point in world coordinates.
+     */
+    Q_INVOKABLE void setHeadLookAt(const glm::vec3& lookAtTarget);
+
+    /**jsdoc
+     * Gets the point the head was last told to look at.
+     * @function Avatar.getHeadLookAt
+     * @returns {Vec3} The head's look-at target in world coordinates.
+     */
+    Q_INVOKABLE glm::vec3 getHeadLookAt() const;
+
+    /**jsdoc
+     * Gives the head back: it eases back to looking ahead.
+     * @function Avatar.releaseHeadLookAtControl
+     */
+    Q_INVOKABLE void releaseHeadLookAtControl();
+
+    /**jsdoc
+     * Makes the avatar's eyes look at a point, for everyone to see, without turning the head. Once this method is
+     * called, the script has control of the eyes for two seconds: call it again to keep it. Then the eyes look where
+     * the head looks. Other scripts read where an avatar looks in its <code>lookAtPosition</code>.
+     * @function Avatar.setEyesLookAt
+     * @param {Vec3} lookAtTarget - The target point in world coordinates.
+     */
+    Q_INVOKABLE void setEyesLookAt(const glm::vec3& lookAtTarget);
+
+    /**jsdoc
+     * Gets the point the eyes were last told to look at.
+     * @function Avatar.getEyesLookAt
+     * @returns {Vec3} The eyes' look-at target in world coordinates.
+     */
+    Q_INVOKABLE glm::vec3 getEyesLookAt() const;
+
+    /**jsdoc
+     * Gives the eyes back: they look where the head looks.
+     * @function Avatar.releaseEyesLookAtControl
+     */
+    Q_INVOKABLE void releaseEyesLookAtControl();
+
+    /**jsdoc
      * Gets the details of the current avatar animation that is being or was recently played.
      * @function Avatar.getAnimationDetails
      * @returns {Avatar.AnimationDetails} The current or recent avatar animation.
@@ -169,6 +218,15 @@ public:
      */
     /// Returns the index of the joint with the specified name, or -1 if not found/unknown.
     Q_INVOKABLE virtual int getJointIndex(const QString& name) const override;
+
+    // the getters by name take _jointDataLock once: AvatarData's hold it for reading while the index getter takes it
+    // again, and a read inside a read hangs when update(), on another thread, asks to write in between
+    using AvatarData::getJointRotation;
+    using AvatarData::getJointTranslation;
+    using AvatarData::isJointDataValid;
+    virtual glm::quat getJointRotation(const QString& name) const override;
+    virtual glm::vec3 getJointTranslation(const QString& name) const override;
+    virtual bool isJointDataValid(const QString& name) const override;
 
     /**jsdoc
      * @comment Uses the base class's JSDoc.
@@ -230,6 +288,10 @@ private:
     QStringList _maskedJoints;
     AnimationPointer _bind; // a sleazy way to get the skeleton, given the various library/cmake dependencies
     std::shared_ptr<AnimSkeleton> _animSkeleton;
+    // the joint names have their own lock, not _jointDataLock: AvatarData's by-name joint calls hold _jointDataLock
+    // while they call getJointIndex, and taking it again there hung the script (a set by name). Taken after
+    // _jointDataLock, never before it.
+    mutable QReadWriteLock _fstJointLock;
     QHash<QString, int> _fstJointIndices; ///< 1-based, since zero is returned for missing keys
     QStringList _fstJointNames; ///< in order of depth-first traversal
     QUrl _skeletonFBXURL;
@@ -245,8 +307,34 @@ private:
     AnimationDetails _fadeFromDetails;
     AnimPoseVec _fadeFromPoses;
     AnimPoseVec _lastPoses;
-    mutable QScriptEngine _scriptEngine;
     std::map<QUuid, EntityItemPointer> _entities;
+
+    // look-at, MyAvatar's calls: a script's target holds for two seconds after each call (set on the script's thread,
+    // read in update)
+    struct LookAt {
+        bool headControlled { false };
+        bool eyesControlled { false };
+        glm::vec3 headTarget;
+        glm::vec3 eyesTarget;
+    };
+    LookAt advanceLookAt(float deltaTime);
+    void applyLookAt(AnimPoseVec& absPoses, const LookAt& lookAt, float deltaTime);
+    void aimEyes(const LookAt& lookAt, const glm::vec3& headPosition);
+    bool headTurned() const;
+    AnimPoseVec posesFromJointData() const;
+    bool _wroteJoints { false };    // whether the last update wrote the joints (else they are as a script left them)
+    static constexpr float LOOK_AT_CONTROL_SECONDS { 2.0f };
+    mutable std::mutex _lookAtMutex;
+    glm::vec3 _headLookAtTarget;
+    glm::vec3 _eyesLookAtTarget;
+    float _headLookAtAge { LOOK_AT_CONTROL_SECONDS };  // seconds since the last setHeadLookAt
+    float _eyesLookAtAge { LOOK_AT_CONTROL_SECONDS };
+    glm::quat _headTurn;             // the turn the head has now (rig frame), eased toward the target's
+    glm::vec3 _lastLookAtPosition;
+    std::vector<int> _neckJoints;    // the neck and every joint under it
+    std::vector<int> _headJoints;    // the head and every joint under it
+    bool _loggedHeadHeight { false };
+    glm::vec3 _headAboveHips { 0.0f, 0.6f, 0.0f };  // rig frame, at scale 1: measured once there is a skeleton
 
     /// Loads the joint indices, names from the FST file (if any)
     void updateJointMappings();

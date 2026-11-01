@@ -13,6 +13,7 @@
 #define hifi_FSTReader_h
 
 #include <QBuffer>
+#include <QStringList>
 #include <QVariantHash>
 
 static const unsigned int FST_VERSION = 1;
@@ -31,6 +32,8 @@ static const QString TRANSLATION_Y_FIELD = "ty";
 static const QString TRANSLATION_Z_FIELD = "tz";
 static const QString JOINT_FIELD = "joint";
 static const QString BLENDSHAPE_FIELD = "bs";
+// lines like bs's for the face shapes only face tracking (or a script) moves: the procedural face leaves them alone
+static const QString FACE_TRACKING_BLENDSHAPE_FIELD = "faceTrackingBs";
 static const QString SCRIPT_FIELD = "script";
 static const QString JOINT_NAME_MAPPING_FIELD = "jointMap";
 static const QString MATERIAL_MAPPING_FIELD = "materialMap";
@@ -61,6 +64,13 @@ public:
     static QString getNameFromType(ModelType modelType);
     static FSTReader::ModelType getTypeFromName(const QString& name);
     static QVariantHash downloadMapping(const QString& url);
+
+    /// The engine's face shapes to the model's own, as the serializers read them: the bs lines and the faceTrackingBs
+    /// lines together, keyed by the engine's name, each value [model's shape, weight].
+    static QVariantHash getBlendshapeMappings(const QVariantHash& mapping);
+
+    /// The engine's names that only faceTrackingBs lines map (no bs line names them).
+    static QStringList getFaceTrackingOnlyBlendshapes(const QVariantHash& mapping);
 
 private:
     static void writeVariant(QBuffer& buffer, QVariantHash::const_iterator& it);

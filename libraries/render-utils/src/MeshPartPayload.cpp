@@ -11,6 +11,8 @@
 
 #include "MeshPartPayload.h"
 
+#include "RenderUtilsLogging.h"
+
 #include "ImpostorSwitch.h"
 
 #include <QProcess>
@@ -26,13 +28,11 @@
 #include "RenderPipelines.h"
 #include "MeshPartPayload.h"
 
-#ifdef Q_OS_MACOS
-bool MeshPartPayload::DEFAULT_ENABLE_MATERIAL_PROCEDURAL_SHADERS = false;
-bool MeshPartPayload::enableMaterialProceduralShaders = false;
-#else
+// On everywhere (Settings > Custom Shaders on Models). It was off on macOS from 2020, when a procedural on a Mac read
+// the wrong textures and inputs and drew its small mips black; with it off, a model whose material is a procedural
+// draws nothing at all (Tivoli Town's ground)
 bool MeshPartPayload::DEFAULT_ENABLE_MATERIAL_PROCEDURAL_SHADERS = true;
 bool MeshPartPayload::enableMaterialProceduralShaders = true;
-#endif
 
 bool MeshPartPayload::sceneIsReady = false;
 
@@ -80,6 +80,7 @@ MeshPartPayload::MeshPartPayload(const std::shared_ptr<const graphics::Mesh>& me
 
 void MeshPartPayload::updateMeshPart(const std::shared_ptr<const graphics::Mesh>& drawMesh, int partIndex) {
     _drawMesh = drawMesh;
+    _partIndex = partIndex;   // was never stored (editor-renderer's find, 10-22): every part of a mesh read as part 0
     if (_drawMesh) {
         auto vertexFormat = _drawMesh->getVertexFormat();
         _hasColorAttrib = vertexFormat->hasAttribute(gpu::Stream::COLOR);
@@ -143,6 +144,10 @@ Item::Bound MeshPartPayload::getBound() const {
 }
 
 ShapeKey MeshPartPayload::getShapeKey() const {
+    return buildShapeKey(true);
+}
+
+ShapeKey MeshPartPayload::buildShapeKey(bool allowOwnPipeline) const {
     ShapeKey::Builder builder;
     graphics::MaterialPointer material = _drawMaterials.empty() ? nullptr : _drawMaterials.top().material;
     graphics::MaterialKey drawMaterialKey = _drawMaterials.getMaterialKey();
@@ -151,7 +156,7 @@ ShapeKey MeshPartPayload::getShapeKey() const {
         builder.withTranslucent();
     }
 
-    if (material && material->isProcedural() && material->isReady()) {
+    if (allowOwnPipeline && material && material->isProcedural() && material->isReady()) {
         builder.withOwnPipeline();
     } else {
         builder.withMaterial();
@@ -171,6 +176,17 @@ ShapeKey MeshPartPayload::getShapeKey() const {
     }
 
     return builder.build();
+}
+
+bool MeshPartPayload::bindPlainPipeline(RenderArgs* args, const render::ShapeKey& plainKey) const {
+    if (!args->_shapePlumber) {
+        return false;
+    }
+    // the pass's own flags ride on the item's (renderShape ORs its global key in): a shadow pass's, the wireframe's
+    render::ShapeKey key = plainKey | render::ShapeKey(render::ShapeKey::Flags(args->_itemShapeKey));
+    key._flags.reset(render::ShapeKey::OWN_PIPELINE);
+    // picking a pipeline sets it on the batch and runs its batch setter (the lights, in forward)
+    return (bool)args->_shapePlumber->pickPipeline(args, key);
 }
 
 void MeshPartPayload::drawCall(gpu::Batch& batch) const {
@@ -206,14 +222,30 @@ void MeshPartPayload::render(RenderArgs* args) {
 
     if (!_drawMaterials.empty() && _drawMaterials.top().material && _drawMaterials.top().material->isProcedural() &&
         _drawMaterials.top().material->isReady()) {
-        if (enableMaterialProceduralShaders == false) return;
         auto procedural = std::static_pointer_cast<graphics::ProceduralMaterial>(_drawMaterials.top().material);
         auto& schema = _drawMaterials.getSchemaBuffer().get<graphics::MultiMaterial::Schema>();
         glm::vec4 outColor = glm::vec4(ColorUtils::tosRGBVec3(schema._albedo), schema._opacity);
         outColor = procedural->getColor(outColor);
-        procedural->prepare(batch, _worldFromLocalTransform.getTranslation(), _worldFromLocalTransform.getScale(),
-                            _worldFromLocalTransform.getRotation(), _created, ProceduralProgramKey(outColor.a < 1.0f));
-        batch._glColor4f(outColor.r, outColor.g, outColor.b, outColor.a);
+        const bool forward = DeferredLightingEffect::isForwardLit(args);
+        const ProceduralProgramKey programKey(outColor.a < 1.0f, false, false, forward);
+        // a shadow pass wants depth alone (see ModelMeshPartPayload::render)
+        const bool plainShadow = args->_renderMode == RenderArgs::RenderMode::SHADOW_RENDER_MODE && !procedural->hasVertexShader();
+        if (plainShadow || !enableMaterialProceduralShaders || procedural->compilationFailed(programKey)) {
+            // the plain material underneath, through the standard pipeline (bindPlainPipeline)
+            if (!bindPlainPipeline(args, buildShapeKey(false))) {
+                return;
+            }
+            if (RenderPipelines::bindMaterials(_drawMaterials, batch, args->_renderMode, args->_enableTexturing)) {
+                args->_details._materialSwitches++;
+            }
+        } else {
+            procedural->prepare(batch, _worldFromLocalTransform.getTranslation(), _worldFromLocalTransform.getScale(),
+                                _worldFromLocalTransform.getRotation(), _created, programKey);
+            if (forward) {
+                DependencyManager::get<DeferredLightingEffect>()->setupForwardLightingBatch(args, batch);
+            }
+            batch._glColor4f(outColor.r, outColor.g, outColor.b, outColor.a);
+        }
     } else {
         // apply material properties
         if (RenderPipelines::bindMaterials(_drawMaterials, batch, args->_renderMode, args->_enableTexturing)) {
@@ -259,6 +291,19 @@ const ShapeKey shapeGetShapeKey(const ModelMeshPartPayload::Pointer& payload) {
 template <>
 void payloadRender(const ModelMeshPartPayload::Pointer& payload, RenderArgs* args) {
     return payload->render(args);
+}
+template <>
+Instancing payloadGetInstancing(const ModelMeshPartPayload::Pointer& payload, RenderArgs* args) {
+    if (payload) {
+        return payload->getInstancing(args);
+    }
+    return Instancing(Instancing::NONE);
+}
+template <>
+void payloadRenderInstances(const ModelMeshPartPayload::Pointer& payload, RenderArgs* args, const Transforms& transforms) {
+    if (payload) {
+        payload->renderInstances(args, transforms);
+    }
 }
 
 }  // namespace render
@@ -320,7 +365,42 @@ ModelMeshPartPayload::ModelMeshPartPayload(ModelPointer model,
     _created = created;
 }
 
+std::atomic<int> MeshPartPayload::dumpDrawFrames { 0 };
+std::atomic<bool> MeshPartPayload::_dumpingFrame { false };
+std::atomic<int> MeshPartPayload::_dumpFrame { 0 };
+
+void MeshPartPayload::beginFrame() {
+    int left = dumpDrawFrames.load();
+    if (left > 0) {
+        dumpDrawFrames.store(left - 1);
+        _dumpFrame.fetch_add(1);
+        _dumpingFrame.store(true);
+    } else {
+        _dumpingFrame.store(false);
+    }
+}
+
+namespace {
+    void dumpDraw(const RenderArgs* args, const char* kind, const QString& file, const void* mesh, int part, int lod,
+                  uint32_t numIndices, const render::Transforms& transforms) {
+        if (!MeshPartPayload::dumping() || args->_renderMode != RenderArgs::RenderMode::DEFAULT_RENDER_MODE) {
+            return;
+        }
+        QString at;
+        for (const auto& transform : transforms) {
+            const glm::vec3 t = transform.getTranslation();
+            at += QString(at.isEmpty() ? "%1,%2,%3" : ";%1,%2,%3").arg(t.x, 0, 'f', 2).arg(t.y, 0, 'f', 2).arg(t.z, 0, 'f', 2);
+        }
+        qCDebug(renderutils).noquote() << QString("INSTANCING-DUMP frame=%1 kind=%2 file=%3 mesh=%4 part=%5 lod=%6 indices=%7 n=%8 at=%9")
+            .arg(MeshPartPayload::dumpFrame()).arg(kind).arg(file).arg((quintptr)mesh, 0, 16).arg(part).arg(lod)
+            .arg(numIndices).arg(transforms.size()).arg(at);
+    }
+}
+
 void ModelMeshPartPayload::initCache(const ModelPointer& model) {
+    if (model) {
+        _modelFileForLog = model->getURL().fileName();
+    }
     if (_drawMesh) {
         auto vertexFormat = _drawMesh->getVertexFormat();
         _hasColorAttrib = vertexFormat->hasAttribute(gpu::Stream::COLOR);
@@ -352,8 +432,9 @@ void ModelMeshPartPayload::updateClusterBuffer(const std::vector<glm::mat4>& clu
     }
     _clusterBufferType = ClusterBufferType::Matrices;
 
-    // Once computed the cluster matrices, update the buffer(s)
-    if (clusterMatrices.size() > 1) {
+    // Once computed the cluster matrices, update the buffer(s); a mesh skinned to one joint has one (a VRM's head
+    // pieces), and without it the shader read no buffer and drew the piece off the neck
+    if (!clusterMatrices.empty()) {
         if (!_clusterBuffer) {
             _clusterBuffer = std::make_shared<gpu::Buffer>(clusterMatrices.size() * sizeof(glm::mat4),
                                                            (const gpu::Byte*)clusterMatrices.data());
@@ -370,8 +451,8 @@ void ModelMeshPartPayload::updateClusterBuffer(const std::vector<Model::Transfor
     }
     _clusterBufferType = ClusterBufferType::DualQuaternions;
 
-    // Once computed the cluster matrices, update the buffer(s)
-    if (clusterDualQuaternions.size() > 1) {
+    // Once computed the cluster matrices, update the buffer(s), for a mesh skinned to one joint too
+    if (!clusterDualQuaternions.empty()) {
         if (!_clusterBuffer) {
             _clusterBuffer =
                 std::make_shared<gpu::Buffer>(clusterDualQuaternions.size() * sizeof(Model::TransformDualQuaternion),
@@ -381,6 +462,43 @@ void ModelMeshPartPayload::updateClusterBuffer(const std::vector<Model::Transfor
                                        (const gpu::Byte*)clusterDualQuaternions.data());
         }
     }
+}
+
+// The part's mesh-space bound carried by every cluster's skinning transform holds wherever the skin can put its
+// vertices, in the model's frame; that includes a single cluster (a VRM head piece weighted to one joint draws at that
+// joint). With no clusters the part draws unskinned at the model (updateClusterBuffer keeps no buffer then), so its
+// bound is the mesh's own there.
+void ModelMeshPartPayload::updateSkinnedBound(const Transform& modelTransform, const std::vector<glm::mat4>& clusterMatrices) {
+    graphics::Box modelBound;
+    if (!clusterMatrices.empty() && !_localBound.isInvalid()) {
+        for (const auto& clusterMatrix : clusterMatrices) {
+            graphics::Box clusterBound = _localBound;
+            clusterBound.transform(clusterMatrix);
+            modelBound += clusterBound;
+        }
+    }
+    if (modelBound.isInvalid()) {
+        modelBound = _localBound;
+    }
+    _worldBound = modelBound;
+    _worldBound.transform(modelTransform);
+}
+
+void ModelMeshPartPayload::updateSkinnedBound(const Transform& modelTransform,
+                                              const std::vector<Model::TransformDualQuaternion>& clusterDualQuaternions) {
+    graphics::Box modelBound;
+    if (!clusterDualQuaternions.empty() && !_localBound.isInvalid()) {
+        for (const auto& clusterDualQuaternion : clusterDualQuaternions) {
+            graphics::Box clusterBound = _localBound;
+            clusterBound.transform(clusterDualQuaternion.getMatrix());
+            modelBound += clusterBound;
+        }
+    }
+    if (modelBound.isInvalid()) {
+        modelBound = _localBound;
+    }
+    _worldBound = modelBound;
+    _worldBound.transform(modelTransform);
 }
 
 // Note that this method is called for models but not for shapes
@@ -394,6 +512,7 @@ void ModelMeshPartPayload::updateKey(const render::ItemKey& key) {
 
     if (_drawMaterials.shouldUpdate()) {
         RenderPipelines::updateMultiMaterial(_drawMaterials);
+        _materialContentKeyDirty = true;
     }
 
     auto matKey = _drawMaterials.getMaterialKey();
@@ -403,6 +522,10 @@ void ModelMeshPartPayload::updateKey(const render::ItemKey& key) {
 
     if (_cullWithParent) {
         builder.withSubMetaCulled();
+    }
+
+    if (_hidden) {
+        builder.withInvisible();
     }
 
     _itemKey = builder.build();
@@ -416,6 +539,7 @@ void ModelMeshPartPayload::setShapeKey(bool invalidateShapeKey, PrimitiveMode pr
 
     if (_drawMaterials.shouldUpdate()) {
         RenderPipelines::updateMultiMaterial(_drawMaterials);
+        _materialContentKeyDirty = true;
     }
 
     ShapeKey::Builder builder;
@@ -437,9 +561,10 @@ void ModelMeshPartPayload::setShapeKey(bool invalidateShapeKey, PrimitiveMode pr
         }
     }
 
-    if (material && material->isProcedural() && material->isReady()) {
-        builder.withOwnPipeline();
-    } else {
+    // the plain key, the part's whether or not its material has a custom shader (bindPlainPipeline draws with it when
+    // the shader can't)
+    ShapeKey::Builder plain(builder);
+    {
         bool hasTangents = drawMaterialKey.isNormalMap() && _hasTangents;
         bool hasLightmap = drawMaterialKey.isLightMap();
         bool isUnlit = drawMaterialKey.isUnlit();
@@ -448,24 +573,30 @@ void ModelMeshPartPayload::setShapeKey(bool invalidateShapeKey, PrimitiveMode pr
             hasTangents = hasLightmap = false;
         }
 
-        builder.withMaterial();
+        plain.withMaterial();
 
         if (hasTangents) {
-            builder.withTangents();
+            plain.withTangents();
         }
         if (hasLightmap) {
-            builder.withLightMap();
+            plain.withLightMap();
         }
         if (isUnlit) {
-            builder.withUnlit();
+            plain.withUnlit();
         }
         if (material) {
-            builder.withCullFaceMode(material->getCullFaceMode());
+            plain.withCullFaceMode(material->getCullFaceMode());
         }
     }
+    _plainShapeKey = plain.build();
 
+    if (material && material->isProcedural() && material->isReady()) {
+        builder.withOwnPipeline();
+        _shapeKey = builder.build();
+    } else {
+        _shapeKey = _plainShapeKey;
+    }
     _prevUseDualQuaternionSkinning = useDualQuaternionSkinning;
-    _shapeKey = builder.build();
 }
 
 ShapeKey ModelMeshPartPayload::getShapeKey() const {
@@ -499,8 +630,15 @@ void ModelMeshPartPayload::render(RenderArgs* args) {
     if (!args || (args->_renderMode == RenderArgs::RenderMode::DEFAULT_RENDER_MODE && _cauterized)) {
         return;
     }
+    // hidden (Model::setShapesHidden): the invisible key keeps a part out of the scene's own fetch, but a group's
+    // parts (an avatar's) reach the passes through their parent (MetaToSubItems), whatever their key
+    if (_hidden) {
+        return;
+    }
+    // settled by getInstancing for this pass (GPU instancing): the impostor choice and the level were made then
+    const bool settled = _settledPass != 0 && _settledPass == args->_instancingPass;
     // the model's impostor card stands in for it in this view, or the two dissolve into each other (IMPOSTORS.md 2.4)
-    if (_impostorSwitch && !_impostorSwitch->evaluate(args).model) {
+    if (!settled && _impostorSwitch && !_impostorSwitch->evaluate(args).model) {
         return;
     }
 
@@ -512,7 +650,7 @@ void ModelMeshPartPayload::render(RenderArgs* args) {
     bindMesh(batch);
     // the automatic LOD this view draws (AUTOMATIC-LODS.md 3.3): a range of the mesh's LOD index buffer over the same
     // vertices
-    const int lodLevel = chooseLodLevel(args);
+    const int lodLevel = settled ? _settledLodLevel : chooseLodLevel(args);
     const graphics::Mesh::Part& drawPart = lodLevel > 0 ? _lodParts[lodLevel - 1] : _drawPart;
     if (lodLevel > 0) {
         batch.setIndexBuffer(gpu::UINT32, _drawMesh->getLodIndexBuffer()._buffer, 0);
@@ -526,17 +664,35 @@ void ModelMeshPartPayload::render(RenderArgs* args) {
     }
 
     if (_shapeKey.hasOwnPipeline()) {
-        if (enableMaterialProceduralShaders == false || !sceneIsReady) {
-            return;
-        }
         auto procedural = std::static_pointer_cast<graphics::ProceduralMaterial>(_drawMaterials.top().material);
         auto& schema = _drawMaterials.getSchemaBuffer().get<graphics::MultiMaterial::Schema>();
         glm::vec4 outColor = glm::vec4(ColorUtils::tosRGBVec3(schema._albedo), schema._opacity);
         outColor = procedural->getColor(outColor);
-        procedural->prepare(batch, _worldFromLocalTransform.getTranslation(), _worldFromLocalTransform.getScale(),
-                            _worldFromLocalTransform.getRotation(), _created,
-                            ProceduralProgramKey(outColor.a < 1.0f, _shapeKey.isDeformed(), _shapeKey.isDualQuatSkinned()));
-        batch._glColor4f(outColor.r, outColor.g, outColor.b, outColor.a);
+        const bool forward = DeferredLightingEffect::isForwardLit(args);
+        const ProceduralProgramKey programKey(outColor.a < 1.0f, _shapeKey.isDeformed(), _shapeKey.isDualQuatSkinned(), forward);
+        // a shadow pass wants depth alone: a part whose shader only colours its pixels casts its mesh's shadow through
+        // the standard shadow pipeline (one pipeline for all such parts, no shader setup a draw); a shader that moves
+        // vertices keeps its own program there, so its shadow follows the moved shape. 20 Lightlings' three neon parts
+        // in four cascades were 240 full-shader draws a frame, each with Procedural::prepare (performance's crowd run,
+        // 2026-10-28)
+        const bool plainShadow = args->_renderMode == RenderArgs::RenderMode::SHADOW_RENDER_MODE && !procedural->hasVertexShader();
+        if (plainShadow || !enableMaterialProceduralShaders || !sceneIsReady || procedural->compilationFailed(programKey)) {
+            // the plain material underneath, through the standard pipeline (bindPlainPipeline): the part shows, and
+            // the shader takes over when it can
+            if (!bindPlainPipeline(args, _plainShapeKey)) {
+                return;
+            }
+            if (RenderPipelines::bindMaterials(_drawMaterials, batch, args->_renderMode, args->_enableTexturing)) {
+                args->_details._materialSwitches++;
+            }
+        } else {
+            procedural->prepare(batch, _worldFromLocalTransform.getTranslation(), _worldFromLocalTransform.getScale(),
+                                _worldFromLocalTransform.getRotation(), _created, programKey);
+            if (forward) {
+                DependencyManager::get<DeferredLightingEffect>()->setupForwardLightingBatch(args, batch);
+            }
+            batch._glColor4f(outColor.r, outColor.g, outColor.b, outColor.a);
+        }
     } else {
         // apply material properties
         if (RenderPipelines::bindMaterials(_drawMaterials, batch, args->_renderMode, args->_enableTexturing)) {
@@ -554,6 +710,9 @@ void ModelMeshPartPayload::render(RenderArgs* args) {
         PerformanceTimer perfTimer("batch.drawIndexed()");
         batch.drawIndexed(gpu::TRIANGLES, drawPart._numIndices, drawPart._startIndex);
     }
+    if (MeshPartPayload::dumping()) {
+        dumpDraw(args, "single", _modelFileForLog, _drawMesh.get(), _partIndex, lodLevel, drawPart._numIndices, { _worldFromLocalTransform });
+    }
 
     args->_details._trianglesRendered += drawPart._numIndices / INDICES_PER_TRIANGLE;
 }
@@ -562,6 +721,109 @@ namespace {
     // the main view's hysteresis band on the error test, as the impostor switch's: a part steps down to a coarser
     // level where that level's error is a fifth under the tolerance, and back up where it is a fifth over
     const float LOD_BAND = 0.2f;
+    // a caster's shadow takes this many times the view's error: a shadow shows a mesh's outline, softened by the
+    // filtering, never its shading, so about a level coarser does
+    const float SHADOW_LOD_ERROR_SCALE = 2.0f;
+
+    // the drawn material by content (INSTANCING.md 3.2): its schema's bytes, its textures and its cull mode, hashed
+    // (FNV-1a); two parts with equal keys bind the same uniform block and texture table, so one may draw for both
+    uint64_t materialContentKey(graphics::MultiMaterial& materials) {
+        uint64_t hash = 1469598103934665603ULL;
+        auto mix = [&hash](const void* data, size_t size) {
+            const uint8_t* bytes = (const uint8_t*)data;
+            for (size_t i = 0; i < size; i++) {
+                hash ^= bytes[i];
+                hash *= 1099511628211ULL;
+            }
+        };
+        const auto& schema = materials.getSchemaBuffer();
+        if (schema._buffer) {
+            mix(schema._buffer->getData() + schema._offset, schema._size);
+        }
+        if (materials.getTextureTable()) {
+            for (const auto& texture : materials.getTextureTable()->getTextures()) {
+                const void* pointer = texture.get();
+                mix(&pointer, sizeof(pointer));
+            }
+        }
+        auto cullFaceMode = materials.getCullFaceMode();
+        mix(&cullFaceMode, sizeof(cullFaceMode));
+        return hash == 0 ? 1 : hash;
+    }
+}
+
+render::Instancing ModelMeshPartPayload::getInstancing(RenderArgs* args) {
+    render::Instancing answer(render::Instancing::NONE);
+    if (!args || (args->_renderMode == RenderArgs::RenderMode::DEFAULT_RENDER_MODE && _cauterized) || _hidden) {
+        return answer;
+    }
+    if (_impostorSwitch && !_impostorSwitch->evaluate(args).model) {
+        return answer;
+    }
+    // settled for this pass: the level this view draws, chosen once (the main view's hysteresis moves once a frame)
+    _settledLodLevel = chooseLodLevel(args);
+    _settledPass = args->_instancingPass;
+    answer.draw = render::Instancing::ALONE;
+    answer.transform = _worldFromLocalTransform;
+
+    // what draws on its own (INSTANCING.md 3.1): translucent (its order), deformed (its skinning buffer), fading (its
+    // dissolve), procedural (its pipeline), lightmapped (its texture transform, until 3.5)
+    const auto shapeKey = getShapeKey();
+    if (!shapeKey.isValid() || shapeKey.hasOwnPipeline() || shapeKey.isTranslucent() || shapeKey.isDeformed() ||
+        shapeKey.isFaded() || shapeKey.hasLightMap() || !_drawMesh || _drawMaterials.empty()) {
+        return answer;
+    }
+    if (_drawMaterials.shouldUpdate()) {
+        RenderPipelines::updateMultiMaterial(_drawMaterials);
+        _materialContentKeyDirty = true;
+    }
+    if (_materialContentKeyDirty) {
+        _materialContentKey = materialContentKey(_drawMaterials);
+        _materialContentKeyDirty = false;
+    }
+    answer.draw = render::Instancing::SHARED;
+    answer.key.mesh = _drawMesh.get();
+    answer.key.material = _materialContentKey;
+    // the range the draw takes at this level, which is what the group's draw binds for every member
+    const graphics::Mesh::Part& drawPart = _settledLodLevel > 0 ? _lodParts[_settledLodLevel - 1] : _drawPart;
+    answer.key.range = ((uint64_t)drawPart._startIndex << 32) | (uint64_t)drawPart._numIndices;
+    answer.key.part = ((uint32_t)(_partIndex & 0xffffff) << 8) | (uint32_t)(_settledLodLevel & 0xff);
+    answer.key.shape = (uint32_t)shapeKey._flags.to_ulong();
+    return answer;
+}
+
+void ModelMeshPartPayload::renderInstances(RenderArgs* args, const render::Transforms& transforms) {
+    PerformanceTimer perfTimer("ModelMeshPartPayload::renderInstances");
+    if (!args || !args->_batch || transforms.empty()) {
+        return;
+    }
+    gpu::Batch& batch = *(args->_batch);
+    // settled by getInstancing for this pass: every member of the group answered the same key, so the mesh, the part
+    // and level, the material and the pipeline are this part's; only the transforms differ
+    const bool settled = _settledPass != 0 && _settledPass == args->_instancingPass;
+    const int lodLevel = settled ? _settledLodLevel : chooseLodLevel(args);
+
+    bindMesh(batch);
+    const graphics::Mesh::Part& drawPart = lodLevel > 0 ? _lodParts[lodLevel - 1] : _drawPart;
+    if (lodLevel > 0) {
+        batch.setIndexBuffer(gpu::UINT32, _drawMesh->getLodIndexBuffer()._buffer, 0);
+    }
+    if (RenderPipelines::bindMaterials(_drawMaterials, batch, args->_renderMode, args->_enableTexturing)) {
+        args->_details._materialSwitches++;
+    }
+    if (_impostorSwitch) {
+        batch.setUniformBuffer(render_utils::slot::buffer::FadeObjectParameters, _impostorSwitch->fadeParams(args));
+    }
+    {
+        PerformanceTimer perfTimer("batch.drawIndexedInstances()");
+        batch.drawIndexedInstances(gpu::TRIANGLES, drawPart._numIndices, drawPart._startIndex, transforms);
+    }
+    if (MeshPartPayload::dumping()) {
+        dumpDraw(args, "group", _modelFileForLog, _drawMesh.get(), _partIndex, lodLevel, drawPart._numIndices, transforms);
+    }
+    args->_details._trianglesRendered += (int)(drawPart._numIndices / INDICES_PER_TRIANGLE) * (int)transforms.size();
+    args->_details._instancedDrawcalls++;
+    args->_details._instancesDrawn += (int)transforms.size();
 }
 
 int ModelMeshPartPayload::chooseLodLevel(const RenderArgs* args) {
@@ -569,20 +831,24 @@ int ModelMeshPartPayload::chooseLodLevel(const RenderArgs* args) {
     if (levels == 0) {
         return 0;
     }
-    if (args->_renderMode == RenderArgs::RenderMode::SHADOW_RENDER_MODE) {
-        return _mainViewLodLevel;   // the shadow pass's camera is the light's
+    const bool shadow = args->_renderMode == RenderArgs::RenderMode::SHADOW_RENDER_MODE;
+    if (shadow && (args->_meshLodForceLevel < 0 && args->_shadowLodPixelsPerRadian <= 0.0f)) {
+        return _mainViewLodLevel;   // no camera to choose from: as the main view last drew it
     }
     const bool mainView = args->_renderMode == RenderArgs::RenderMode::DEFAULT_RENDER_MODE;
     int level = 0;
     if (args->_meshLodForceLevel >= 0) {
         level = std::min(args->_meshLodForceLevel, levels);
     } else if (args->_meshLodErrorPixels > 0.0f && args->hasViewFrustum()) {
+        // a shadow pass's view is the light's: its casters choose from the camera the shadow is seen from, every
+        // caster from where it is, in view or not (one out of view kept full detail before, 2026-10-21)
         const ViewFrustum& frustum = args->getViewFrustum();
-        glm::vec3 eye = frustum.getPosition();
+        glm::vec3 eye = shadow ? args->_shadowLodEye : frustum.getPosition();
         glm::vec3 nearest = glm::clamp(eye, _worldBound.getMinimumPoint(), _worldBound.getMaximumPoint());
         float distance = glm::distance(eye, nearest);   // 0 inside the part's box: full detail
         // the view's pixels per radian at its centre, and the part's scale from its mesh's units to the world's
-        float pixelsPerRadian = 0.5f * (float)args->_viewport.w * frustum.getProjection()[1][1];
+        float pixelsPerRadian = shadow ? args->_shadowLodPixelsPerRadian
+            : 0.5f * (float)args->_viewport.w * frustum.getProjection()[1][1];
         glm::vec3 scale = glm::abs(_worldFromLocalTransform.getScale());
         float worldPerUnit = std::max(scale.x, std::max(scale.y, scale.z));
         // the coarsest level, going from the finest, whose error looks no bigger than the tolerance: a level's error in
@@ -601,6 +867,8 @@ int ModelMeshPartPayload::chooseLodLevel(const RenderArgs* args) {
             int stepDownTo = coarsestWithin(args->_meshLodErrorPixels * (1.0f - LOD_BAND));
             int coarsestAllowed = coarsestWithin(args->_meshLodErrorPixels * (1.0f + LOD_BAND));
             level = glm::clamp(_mainViewLodLevel, stepDownTo, coarsestAllowed);
+        } else if (shadow) {
+            level = coarsestWithin(args->_meshLodErrorPixels * SHADOW_LOD_ERROR_SCALE);
         } else {
             level = coarsestWithin(args->_meshLodErrorPixels);   // mirrors and the secondary camera: no band
         }

@@ -65,6 +65,8 @@ public:
     void registerGlobal(const QString& name, QObject* object);
     Handle global(const QString& name) const;
     QStringList globalNames() const;
+    /// Whether the handle is a registered global's (a module may not release those).
+    bool isGlobal(Handle handle) const;
 
     int size() const { return _entries.size(); }
 

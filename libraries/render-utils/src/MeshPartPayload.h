@@ -52,11 +52,21 @@ public:
     virtual render::Item::Bound getBound() const;
     virtual render::ShapeKey getShapeKey() const;
     virtual void render(RenderArgs* args);
+    // GPU instancing (INSTANCING.md 3): a plain part draws alone
+    virtual render::Instancing getInstancing(RenderArgs* args) { return render::Instancing(); }
+    virtual void renderInstances(RenderArgs* args, const render::Transforms& transforms) { render(args); }
 
     // ModelMeshPartPayload functions to perform render
     void drawCall(gpu::Batch& batch) const;
     virtual void bindMesh(gpu::Batch& batch);
     virtual void bindTransform(gpu::Batch& batch, RenderArgs::RenderMode renderMode) const;
+
+    // A part whose material has a custom shader draws through the shader's own pipeline (its key says so). When the shader
+    // can't draw (Settings > Custom Shaders on Models off, the world still loading, a shader this GPU doesn't compile) the
+    // part draws its plain material instead (a colour, textures, a glow), through the pass's standard pipeline for the
+    // plain key, so that nothing vanishes (the Lightling's body, 10-28). The plumber comes with the args (DrawTask).
+    bool bindPlainPipeline(RenderArgs* args, const render::ShapeKey& plainKey) const;
+    render::ShapeKey buildShapeKey(bool allowOwnPipeline) const;   // getShapeKey's; false = the plain key
 
     // Payload resource cached values
     Transform _worldFromLocalTransform;
@@ -84,10 +94,20 @@ public:
     static bool enableMaterialProceduralShaders; // set from menu/settings
     static bool sceneIsReady; // set from entity tree renderer
 
+    // A diagnostic (Test.dumpDraws(frames)): for that many frames, every main-view draw of a model part logs what it
+    // drew and where (INSTANCING-DUMP lines), so a frame with GPU instancing on can be diffed against one with it off
+    // (tests-manual/instancing/diff-dump.py). beginFrame is called once a frame on the render thread, before the frame.
+    static std::atomic<int> dumpDrawFrames;
+    static void beginFrame();
+    static bool dumping() { return _dumpingFrame.load(std::memory_order_relaxed); }
+    static int dumpFrame() { return _dumpFrame.load(std::memory_order_relaxed); }
+
 protected:
     render::ItemKey _itemKey{ render::ItemKey::Builder::opaqueShape().build() };
     bool _cullWithParent{ false };
     uint64_t _created;
+    static std::atomic<bool> _dumpingFrame;
+    static std::atomic<int> _dumpFrame;
 };
 
 namespace render {
@@ -118,15 +138,29 @@ public:
 
     void updateKey(const render::ItemKey& key) override;
 
+    // a part left out of every pass, its shadow too, until shown again (Model::setShapesHidden)
+    void setHidden(bool hidden) { _hidden = hidden; }
+
     // matrix palette skinning
     void updateClusterBuffer(const std::vector<glm::mat4>& clusterMatrices);
 
     // dual quaternion skinning
     void updateClusterBuffer(const std::vector<Model::TransformDualQuaternion>& clusterDualQuaternions);
 
+    // A skinned part's culling bound, from the clusters that place its vertices rather than from its mesh node: a
+    // glTF armature exported at 1/100 scale left the node's bound a hundredth of the drawn body, at its feet.
+    void updateSkinnedBound(const Transform& modelTransform, const std::vector<glm::mat4>& clusterMatrices);
+    void updateSkinnedBound(const Transform& modelTransform,
+                            const std::vector<Model::TransformDualQuaternion>& clusterDualQuaternions);
+
     // Render Item interface
     render::ShapeKey getShapeKey() const override;
     void render(RenderArgs* args) override;
+    // GPU instancing (INSTANCING.md 3): settles the pass's level of detail and impostor choice, and says whether this
+    // part can share a draw (its key: the mesh, the part and level, the material by content, the ShapeKey);
+    // renderInstances then draws the part once for every transform of its group
+    render::Instancing getInstancing(RenderArgs* args) override;
+    void renderInstances(RenderArgs* args, const render::Transforms& transforms) override;
 
     void setShapeKey(bool invalidateShapeKey, PrimitiveMode primitiveMode, bool useDualQuaternionSkinning);
     void setCauterized(bool cauterized) { _cauterized = cauterized; }
@@ -154,6 +188,7 @@ public:
     ClusterBufferType _clusterBufferType{ ClusterBufferType::Matrices };
 
     int _meshIndex;
+    bool _hidden { false };
     int _shapeID;
     uint32_t _deformerIndex;
 
@@ -170,6 +205,7 @@ private:
     gpu::BufferPointer _meshBlendshapeBuffer;
     int _meshNumVertices;
     render::ShapeKey _shapeKey{ render::ShapeKey::Builder::invalid() };
+    render::ShapeKey _plainShapeKey{ render::ShapeKey::Builder::invalid() };   // _shapeKey without the shader's own pipeline (bindPlainPipeline)
     bool _prevUseDualQuaternionSkinning{ false };
     bool _cauterized{ false };
     std::shared_ptr<ImpostorSwitch> _impostorSwitch;
@@ -182,6 +218,14 @@ private:
     std::vector<float> _lodErrors;                 // each level's error, in the mesh's units
     int _mainViewLodLevel { 0 };
     std::atomic<int> _shownLodLevel { 0 };
+
+    // GPU instancing: what getInstancing settled, and the pass it settled it for (render::Args::_instancingPass)
+    uint32_t _settledPass { 0 };
+    int _settledLodLevel { 0 };
+    // the drawn material by content (INSTANCING.md 3.2), recomputed after the materials change; 0 until computed
+    uint64_t _materialContentKey { 0 };
+    bool _materialContentKeyDirty { true };
+    QString _modelFileForLog;   // the model file's name, for the draw dump
 };
 
 namespace render {
@@ -193,6 +237,10 @@ template <>
 const ShapeKey shapeGetShapeKey(const ModelMeshPartPayload::Pointer& payload);
 template <>
 void payloadRender(const ModelMeshPartPayload::Pointer& payload, RenderArgs* args);
+template <>
+Instancing payloadGetInstancing(const ModelMeshPartPayload::Pointer& payload, RenderArgs* args);
+template <>
+void payloadRenderInstances(const ModelMeshPartPayload::Pointer& payload, RenderArgs* args, const Transforms& transforms);
 }  // namespace render
 
 #endif  // hifi_MeshPartPayload_h

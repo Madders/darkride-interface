@@ -142,6 +142,9 @@ LaserPointer::RenderState::RenderState(const QUuid& startID, const QUuid& pathID
             desiredProperties += PROP_STROKE_WIDTHS;
             auto widths = entityScriptingInterface->getEntityProperties(getPathID(), desiredProperties).getStrokeWidths();
             _lineWidth = widths.length() == 0 ? PolyLineEntityItem::DEFAULT_LINE_WIDTH : widths[0];
+            if (widths.length() > 2) {
+                _lineWidths = widths;   // a tapering line (the VR lasers, Caity 10-28)
+            }
         }
     }
 }
@@ -169,18 +172,25 @@ void LaserPointer::RenderState::update(const glm::vec3& origin, const glm::vec3&
     StartEndRenderState::update(origin, end, surfaceNormal, parentScale, distanceScaleEnd, centerEndY, faceAvatar, followNormal, followNormalStrength, distance, pickResult);
     if (!getPathID().isNull()) {
         EntityItemProperties properties;
+        // two points, or as many as the line's widths, evenly from the hand to the end: a texture stretched along the
+        // line (isUVModeStretch) fades it however many there are
+        const int count = std::max(2, (int)_lineWidths.size());
         QVector<glm::vec3> points;
-        points.append(glm::vec3(0.0f));
-        points.append(end - origin);
+        QVector<float> widths;
+        QVector<glm::vec3> normals;
+        for (int i = 0; i < count; i++) {
+            points.append((end - origin) * ((float)i / (float)(count - 1)));
+            widths.append((_lineWidths.isEmpty() ? getLineWidth() : _lineWidths[i]) * parentScale);
+            normals.append(Vectors::UP);
+        }
         properties.setPosition(origin);
         properties.setLinePoints(points);
         properties.setVisible(true);
         properties.setIgnorePickIntersection(doesPathIgnorePicks());
-        QVector<float> widths;
-        float width = getLineWidth() * parentScale;
-        widths.append(width);
-        widths.append(width);
         properties.setStrokeWidths(widths);
+        if (count > 2) {
+            properties.setNormals(normals);
+        }
         DependencyManager::get<EntityScriptingInterface>()->editEntity(getPathID(), properties);        
         DependencyManager::get<PickManager>()->addEnabledLaser(getPathID());
     }

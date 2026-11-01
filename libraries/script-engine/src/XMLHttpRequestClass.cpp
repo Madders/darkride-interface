@@ -14,6 +14,8 @@
 
 #include "XMLHttpRequestClass.h"
 
+#include <ScriptNetworkPolicy.h>
+
 #include <QEventLoop>
 #include <qurlquery.h>
 
@@ -34,6 +36,11 @@ XMLHttpRequestClass::XMLHttpRequestClass(QScriptEngine* engine) :
 
     _request.setAttribute(QNetworkRequest::FollowRedirectsAttribute, true);
     _timer.setSingleShot(true);
+    if (auto scriptEngine = qobject_cast<ScriptEngine*>(engine)) {
+        _origin = scriptEngine->currentScriptOrigin();
+        _ruled = scriptEngine->isClientSide();
+        _worldIsLocal = scriptEngine->worldIsLocal();
+    }
 }
 
 XMLHttpRequestClass::~XMLHttpRequestClass() {
@@ -59,6 +66,8 @@ QString XMLHttpRequestClass::getStatusText() const {
 }
 
 void XMLHttpRequestClass::abort() {
+    ++_generation;
+    _deciding = false;
     abortRequest();
 }
 
@@ -146,30 +155,93 @@ void XMLHttpRequestClass::send() {
 }
 
 void XMLHttpRequestClass::send(const QScriptValue& data) {
-    if (_readyState == OPENED && !_reply) {
-
-        if (!data.isNull()) {
-            if (data.isObject()) {
-                _sendData = qscriptvalue_cast<QByteArray>(data);
-            } else {
-                _sendData = data.toString().toUtf8();
-            }
-        }
-
-        doSend();
-
-        if (!_async) {
-            QEventLoop loop;
-            connect(this, SIGNAL(requestComplete()), &loop, SLOT(quit()));
-            loop.exec();
+    if (_readyState != OPENED || _reply || _deciding) {
+        return;
+    }
+    if (!data.isNull()) {
+        if (data.isObject()) {
+            _sendData = qscriptvalue_cast<QByteArray>(data);
+        } else {
+            _sendData = data.toString().toUtf8();
         }
     }
+    if (!_ruled) {
+        doSend();
+    } else {
+        // the network rule for a script's own requests: judged at once, or after a name lookup
+        _deciding = true;
+        const int generation = ++_generation;
+        ScriptNetworkPolicy::decide(_url, _origin, this, [this, generation](const ScriptNetworkPolicy::Decision& decision) {
+            if (generation != _generation) {
+                return;     // aborted meanwhile
+            }
+            if (decision.allowed) {
+                _deciding = false;
+                doSend();
+                return;
+            }
+            // refused: ends as a failed request does, after send() has returned
+            const QString reason = decision.reason;
+            QMetaObject::invokeMethod(this, [this, generation, reason] {
+                if (generation == _generation) {
+                    _deciding = false;
+                    refuse(reason);
+                }
+            }, Qt::QueuedConnection);
+        }, _worldIsLocal);
+    }
+    if (!_async && _readyState != DONE) {
+        QEventLoop loop;
+        connect(this, SIGNAL(requestComplete()), &loop, SLOT(quit()));
+        loop.exec();
+    }
+}
+
+void XMLHttpRequestClass::refuse(const QString& reason) {
+    if (auto scriptEngine = qobject_cast<ScriptEngine*>(_engine)) {
+        scriptEngine->scriptWarningMessage(ScriptNetworkPolicy::refusalLine(_origin, _url, reason));
+    }
+    _errorCode = QNetworkReply::ContentAccessDenied;
+    setReadyState(DONE);
+    emit requestComplete();
 }
 
 void XMLHttpRequestClass::doSend() {
     DependencyManager::get<ResourceRequestObserver>()->update(_url, -1, "XMLHttpRequestClass::doSend");
+    const bool ruled = _ruled && ScriptNetworkPolicy::applies(_origin, _worldIsLocal);
+    if (ruled) {
+        // a redirect is judged as the request was
+        _request.setAttribute(QNetworkRequest::FollowRedirectsAttribute, false);
+        _request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::UserVerifiedRedirectPolicy);
+    }
     _reply = NetworkAccessManager::getInstance().sendCustomRequest(_request, _method.toLatin1(), _sendData);
     connectToReply(_reply);
+    if (ruled) {
+        QNetworkReply* reply = _reply;
+        connect(reply, &QNetworkReply::redirected, this, [this, reply](const QUrl& url) {
+            if (reply->url().scheme().toLower() == "https" && url.scheme().toLower() != "https") {
+                // a secure request stays secure
+                if (auto scriptEngine = qobject_cast<ScriptEngine*>(_engine)) {
+                    scriptEngine->scriptWarningMessage(ScriptNetworkPolicy::refusalLine(_origin, url, "a redirect from https to a plain address"));
+                }
+                reply->abort();
+                return;
+            }
+            ScriptNetworkPolicy::decide(url, _origin, this, [this, reply, url](const ScriptNetworkPolicy::Decision& decision) {
+                if (_reply != reply) {
+                    return;
+                }
+                if (decision.allowed) {
+                    emit reply->redirectAllowed();
+                    return;
+                }
+                if (auto scriptEngine = qobject_cast<ScriptEngine*>(_engine)) {
+                    scriptEngine->scriptWarningMessage(ScriptNetworkPolicy::refusalLine(_origin, url, decision.reason + " (a redirect)"));
+                }
+                reply->abort();
+            }, _worldIsLocal);
+        });
+    }
 
     if (_timeout > 0) {
         _timer.start(_timeout);
@@ -203,8 +275,11 @@ void XMLHttpRequestClass::requestFinished() {
         _rawResponseData.append(_reply->readAll());
 
         if (_responseType == "json") {
-            _responseData = _engine->evaluate("(" + QString(_rawResponseData.data()) + ")");
-            if (_responseData.isError()) {
+            // the reply is data: JSON.parse, never evaluate (a server's answer must not get to run as code in the
+            // requesting script); a reply that isn't JSON gives null, as before
+            QScriptValue parse = _engine->globalObject().property("JSON").property("parse");
+            _responseData = parse.call(QScriptValue(), QScriptValueList() << QString::fromUtf8(_rawResponseData));
+            if (_engine->hasUncaughtException() || _responseData.isError()) {
                 _engine->clearExceptions();
                 _responseData = QScriptValue::NullValue;
             }

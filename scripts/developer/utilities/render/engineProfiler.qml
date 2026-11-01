@@ -11,8 +11,8 @@ import QtQuick 2.7
 import QtQuick.Controls 1.4
 import QtQuick.Layouts 1.3
 
-import "qrc:///qml/styles-uit"
-import "qrc:///qml/controls-uit" as HifiControls
+import "qrc:///qml/stylesUit"
+import "qrc:///qml/controlsUit" as HifiControls
 
 import "../lib/jet/qml" as Jet
 

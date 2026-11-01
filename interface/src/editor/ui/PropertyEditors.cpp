@@ -25,8 +25,11 @@
 #include <NetworkAccessManager.h>
 
 #include "ImpostorEditor.h"
+#include "ScriptEditor.h"
 #include "TerrainCapsEditor.h"
 #include "TerrainLayersEditor.h"
+#include "TrackPointsEditor.h"
+#include "VehiclePartsEditor.h"
 #include "UserDataEditor.h"
 #include <QtCore/QRect>
 #include <QtCore/QRegularExpression>
@@ -422,14 +425,19 @@ PropertyEditor* PropertyEditor::create(const PropertySpec& spec, QWidget* parent
             return editor;
         }
         case PropertyKind::Slider: return new NumberEditor(spec, parent);
-        case PropertyKind::String:
-        case PropertyKind::Url: return new TextEditor(spec, parent);
+        case PropertyKind::String: return new TextEditor(spec, parent);
+        case PropertyKind::Url:
+            // Script and Server Script: the link, and what the script is doing now with Reload under it
+            return ScriptEditor::isFor(spec) ? (PropertyEditor*)new ScriptEditor(spec, parent) : new TextEditor(spec, parent);
         case PropertyKind::Json: return new JsonEditor(spec, parent);
         case PropertyKind::Image: return new ImageEditor(spec, parent);
         case PropertyKind::UserData: return new UserDataEditor(spec, parent);
         case PropertyKind::TerrainLayers: return new TerrainLayersEditor(spec, parent);
         case PropertyKind::TerrainCaps: return new TerrainCapsEditor(spec, parent);
         case PropertyKind::Impostor: return new ImpostorEditor(spec, parent);
+        case PropertyKind::VehicleWheels:
+        case PropertyKind::VehicleSeats: return new VehiclePartsEditor(spec, parent);
+        case PropertyKind::TrackPoints: return new TrackPointsEditor(spec, parent);
         case PropertyKind::Color:
         case PropertyKind::FloatColor: return new ColorEditor(spec, parent);
         case PropertyKind::Vec2:

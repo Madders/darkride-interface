@@ -1,0 +1,536 @@
+JSON.stringify: write keys, strings and numbers directly into the result
+
+The writer made a JavaScript array of key strings for every object, a quoted copy of every key and string value,
+a string for every number and for every array index (needed only by a toJSON method or a replacer function), and
+kept the objects being written, to find cycles, in a JavaScript array searched through Array.prototype.includes.
+Now the keys are atoms, listed and checked for enumerability as Object.keys does (the order of proxy traps is
+unchanged), each value is read by its atom, the key string is made only when toJSON or the replacer is called,
+keys, strings and numbers are written into the result directly (runs of characters that need no escape are copied
+at once), and the objects being written are a C array. The output and the observable behavior are unchanged.
+
+diff --git a/quickjs.c b/quickjs.c
+index 9592e97..103ede0 100644
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -14737,25 +14737,49 @@ static JSValue JS_ToStringCheckObject(JSContext *ctx, JSValueConst val)
+     return JS_ToString(ctx, val);
+ }
+ 
+-static JSValue JS_ToQuotedString(JSContext *ctx, JSValueConst val1)
++/* Appends the JSON form of a string (QuoteJSONString). */
++static int string_buffer_put_quoted(StringBuffer *b, JSString *p)
+ {
+-    JSValue val;
+-    JSString *p;
+-    int i;
++    const uint8_t *s8;
++    int i, start;
+     uint32_t c;
+-    StringBuffer b_s, *b = &b_s;
+     char buf[16];
+ 
+-    val = JS_ToStringCheckObject(ctx, val1);
+-    if (JS_IsException(val))
+-        return val;
+-    p = JS_VALUE_GET_STRING(val);
+-
+-    if (string_buffer_init(ctx, b, p->len + 2))
+-        goto fail;
+-
+     if (string_buffer_putc8(b, '\"'))
+-        goto fail;
++        return -1;
++    if (!p->is_wide_char) {
++        /* the characters that need no escape are copied in runs */
++        s8 = str8(p);
++        for(i = start = 0; i < p->len; i++) {
++            c = s8[i];
++            if (c >= 32 && c != '\"' && c != '\\')
++                continue;
++            if (i > start && string_buffer_write8(b, s8 + start, i - start))
++                return -1;
++            start = i + 1;
++            switch(c) {
++            case '\t': c = 't'; goto quote8;
++            case '\r': c = 'r'; goto quote8;
++            case '\n': c = 'n'; goto quote8;
++            case '\b': c = 'b'; goto quote8;
++            case '\f': c = 'f'; goto quote8;
++            case '\"':
++            case '\\':
++            quote8:
++                if (string_buffer_putc8(b, '\\') || string_buffer_putc8(b, c))
++                    return -1;
++                break;
++            default:
++                snprintf(buf, sizeof(buf), "\\u%04x", c);
++                if (string_buffer_write8(b, (uint8_t*)buf, 6))
++                    return -1;
++                break;
++            }
++        }
++        if (i > start && string_buffer_write8(b, s8 + start, i - start))
++            return -1;
++        return string_buffer_putc8(b, '\"');
++    }
+     for(i = 0; i < p->len; ) {
+         c = string_getc(p, &i);
+         switch(c) {
+@@ -14778,30 +14802,23 @@ static JSValue JS_ToQuotedString(JSContext *ctx, JSValueConst val1)
+         case '\\':
+         quote:
+             if (string_buffer_putc8(b, '\\'))
+-                goto fail;
++                return -1;
+             if (string_buffer_putc8(b, c))
+-                goto fail;
++                return -1;
+             break;
+         default:
+             if (c < 32 || is_surrogate(c)) {
+                 snprintf(buf, sizeof(buf), "\\u%04x", c);
+                 if (string_buffer_write8(b, (uint8_t*)buf, 6))
+-                    goto fail;
++                    return -1;
+             } else {
+                 if (string_buffer_putc(b, c))
+-                    goto fail;
++                    return -1;
+             }
+             break;
+         }
+     }
+-    if (string_buffer_putc8(b, '\"'))
+-        goto fail;
+-    JS_FreeValue(ctx, val);
+-    return string_buffer_end(b);
+- fail:
+-    JS_FreeValue(ctx, val);
+-    string_buffer_free(b);
+-    return JS_EXCEPTION;
++    return string_buffer_putc8(b, '\"');
+ }
+ 
+ static __maybe_unused void JS_DumpObjectHeader(JSRuntime *rt)
+@@ -51820,43 +51837,66 @@ static JSValue js_json_rawJSON(JSContext *ctx, JSValueConst this_val,
+ 
+ typedef struct JSONStringifyContext {
+     JSValueConst replacer_func;
+-    JSValue stack;
++    JSObject **stack; /* the objects being written, to find cycles */
++    int stack_len;
++    int stack_size;
+     JSValue property_list;
+     JSValue gap;
+     JSValue empty;
+     StringBuffer *b;
+ } JSONStringifyContext;
+ 
+-static JSValue JS_ToQuotedStringFree(JSContext *ctx, JSValue val) {
+-    JSValue r = JS_ToQuotedString(ctx, val);
+-    JS_FreeValue(ctx, val);
+-    return r;
++/* The key of a value for js_json_check: a string, or an atom or an index
++   made into a string only when a toJSON method or the replacer function is
++   called with it. */
++typedef struct JSONKey {
++    JSValue str; /* JS_UNDEFINED until made */
++    JSAtom atom; /* JS_ATOM_NULL for an index */
++    int64_t index;
++} JSONKey;
++
++static JSValue js_json_key(JSContext *ctx, JSONKey *key)
++{
++    if (JS_IsUndefined(key->str)) {
++        if (key->atom != JS_ATOM_NULL)
++            key->str = JS_AtomToString(ctx, key->atom);
++        else
++            key->str = JS_ToStringFree(ctx, js_int64(key->index));
++    }
++    return key->str;
+ }
+ 
+ static JSValue js_json_check(JSContext *ctx, JSONStringifyContext *jsc,
+                              JSValueConst holder, JSValue val,
+-                             JSValueConst key)
++                             JSONKey *key)
+ {
+     JSValue v;
+     JSValueConst args[2];
+ 
+     if (JS_IsObject(val) || JS_IsBigInt(val)) {
+-		JSValue f = JS_GetProperty(ctx, val, JS_ATOM_toJSON);
+-		if (JS_IsException(f))
+-			goto exception;
+-		if (JS_IsFunction(ctx, f)) {
+-			v = JS_CallFree(ctx, f, val, 1, &key);
+-			JS_FreeValue(ctx, val);
+-			val = v;
+-			if (JS_IsException(val))
+-				goto exception;
+-		} else {
+-			JS_FreeValue(ctx, f);
+-		}
+-	}
++        JSValue f = JS_GetProperty(ctx, val, JS_ATOM_toJSON);
++        if (JS_IsException(f))
++            goto exception;
++        if (JS_IsFunction(ctx, f)) {
++            args[0] = js_json_key(ctx, key);
++            if (JS_IsException(args[0])) {
++                JS_FreeValue(ctx, f);
++                goto exception;
++            }
++            v = JS_CallFree(ctx, f, val, 1, args);
++            JS_FreeValue(ctx, val);
++            val = v;
++            if (JS_IsException(val))
++                goto exception;
++        } else {
++            JS_FreeValue(ctx, f);
++        }
++    }
+ 
+     if (!JS_IsUndefined(jsc->replacer_func)) {
+-        args[0] = key;
++        args[0] = js_json_key(ctx, key);
++        if (JS_IsException(args[0]))
++            goto exception;
+         args[1] = val;
+         v = JS_Call(ctx, jsc->replacer_func, holder, 2, args);
+         JS_FreeValue(ctx, val);
+@@ -51890,21 +51930,130 @@ exception:
+     return JS_EXCEPTION;
+ }
+ 
++/* Adds an object to the ones being written, or throws if it is one of
++   them. */
++static int js_json_push(JSContext *ctx, JSONStringifyContext *jsc,
++                        JSObject *p)
++{
++    int i;
++
++    for (i = 0; i < jsc->stack_len; i++) {
++        if (jsc->stack[i] == p) {
++            JS_ThrowTypeError(ctx, "circular reference");
++            return -1;
++        }
++    }
++    if (js_resize_array(ctx, (void **)&jsc->stack, sizeof(jsc->stack[0]),
++                        &jsc->stack_size, jsc->stack_len + 1))
++        return -1;
++    jsc->stack[jsc->stack_len++] = p;
++    return 0;
++}
++
++/* The keys of an object to write: the replacer's property list, or its
++   own string keys, of which the enumerable ones are marked, checked as
++   Object.keys checks them (EnumerableOwnProperties). */
++static int js_json_keys(JSContext *ctx, JSONStringifyContext *jsc,
++                        JSObject *p, JSPropertyEnum **ptab, uint32_t *plen)
++{
++    JSPropertyEnum *tab;
++    uint32_t i, len;
++    int64_t n;
++    int flags, res;
++    JSValue v;
++
++    *ptab = NULL;
++    *plen = 0;
++    if (JS_IsUndefined(jsc->property_list)) {
++        if (JS_GetOwnPropertyNamesInternal(ctx, &tab, &len, p,
++                                           JS_GPN_STRING_MASK))
++            return -1;
++        for (i = 0; i < len; i++) {
++            res = JS_GetOwnPropertyFlagsInternal(ctx, &flags, p, tab[i].atom);
++            if (res < 0) {
++                js_free_prop_enum(ctx, tab, len);
++                return -1;
++            }
++            tab[i].is_enumerable = res && (flags & JS_PROP_ENUMERABLE);
++        }
++    } else {
++        if (js_get_length64(ctx, &n, jsc->property_list))
++            return -1;
++        tab = js_malloc(ctx, sizeof(tab[0]) * max_int(n, 1));
++        if (!tab)
++            return -1;
++        for (len = 0; len < n; len++) {
++            v = JS_GetPropertyInt64(ctx, jsc->property_list, len);
++            if (JS_IsException(v))
++                goto fail;
++            tab[len].atom = JS_ValueToAtom(ctx, v);
++            JS_FreeValue(ctx, v);
++            if (tab[len].atom == JS_ATOM_NULL)
++                goto fail;
++            tab[len].is_enumerable = true;
++        }
++    }
++    *ptab = tab;
++    *plen = len;
++    return 0;
++ fail:
++    js_free_prop_enum(ctx, tab, len);
++    return -1;
++}
++
++/* Appends the JSON form of a property key (QuoteJSONString). */
++static int string_buffer_put_quoted_atom(JSContext *ctx, StringBuffer *b,
++                                         JSAtom atom)
++{
++    char buf[16];
++    size_t len;
++
++    if (__JS_AtomIsTaggedInt(atom)) {
++        buf[0] = '\"';
++        len = 1 + u32toa(buf + 1, __JS_AtomToUInt32(atom));
++        buf[len++] = '\"';
++        return string_buffer_write8(b, (const uint8_t *)buf, len);
++    }
++    return string_buffer_put_quoted(b, ctx->rt->atom_array[atom]);
++}
++
++/* Appends a finite number as ToString writes it. */
++static int string_buffer_put_number(StringBuffer *b, JSValueConst val)
++{
++    char buf[128];
++    JSDTOATempMem dtoa_mem;
++    double d;
++    int len;
++
++    if (JS_VALUE_GET_TAG(val) == JS_TAG_INT) {
++        len = i32toa(buf, JS_VALUE_GET_INT(val));
++    } else {
++        d = JS_VALUE_GET_FLOAT64(val);
++        if (js_dtoa_max_len(d, 10, 0, JS_DTOA_FORMAT_FREE) > sizeof(buf) - 1)
++            return string_buffer_concat_value(b, val);
++        len = js_dtoa(buf, d, 10, 0, JS_DTOA_FORMAT_FREE, &dtoa_mem);
++    }
++    return string_buffer_write8(b, (const uint8_t *)buf, len);
++}
++
+ static int js_json_to_str(JSContext *ctx, JSONStringifyContext *jsc,
+                           JSValueConst holder, JSValue val,
+                           JSValueConst indent)
+ {
+-    JSValue indent1, sep, sep1, tab, v, prop;
++    JSValue indent1, sep, sep1, v;
++    JSPropertyEnum *tab;
++    JSONKey key;
+     JSObject *p;
+     int64_t i, len;
++    uint32_t tab_len;
+     int cl, ret;
+     bool has_content;
+ 
+     indent1 = JS_UNDEFINED;
+     sep = JS_UNDEFINED;
+     sep1 = JS_UNDEFINED;
+-    tab = JS_UNDEFINED;
+-    prop = JS_UNDEFINED;
++    tab = NULL;
++    tab_len = 0;
+ 
+     if (js_check_stack_overflow(ctx->rt, 0)) {
+         JS_ThrowStackOverflow(ctx);
+@@ -51936,13 +52085,8 @@ static int js_json_to_str(JSContext *ctx, JSONStringifyContext *jsc,
+             val = val1;
+             goto concat_value;
+         }
+-        v = js_array_includes(ctx, jsc->stack, 1, vc(&val));
+-        if (JS_IsException(v))
+-            goto exception;
+-        if (JS_ToBoolFree(ctx, v)) {
+-            JS_ThrowTypeError(ctx, "circular reference");
++        if (js_json_push(ctx, jsc, p))
+             goto exception;
+-        }
+         indent1 = JS_ConcatString(ctx, js_dup(indent), js_dup(jsc->gap));
+         if (JS_IsException(indent1))
+             goto exception;
+@@ -51957,9 +52101,6 @@ static int js_json_to_str(JSContext *ctx, JSONStringifyContext *jsc,
+             sep = js_dup(jsc->empty);
+             sep1 = js_dup(jsc->empty);
+         }
+-        v = js_array_push(ctx, jsc->stack, 1, vc(&val), 0);
+-        if (check_exception_free(ctx, v))
+-            goto exception;
+         ret = js_is_array(ctx, val);
+         if (ret < 0)
+             goto exception;
+@@ -51974,13 +52115,11 @@ static int js_json_to_str(JSContext *ctx, JSONStringifyContext *jsc,
+                 v = JS_GetPropertyInt64(ctx, val, i);
+                 if (JS_IsException(v))
+                     goto exception;
+-                /* XXX: could do this string conversion only when needed */
+-                prop = JS_ToStringFree(ctx, js_int64(i));
+-                if (JS_IsException(prop))
+-                    goto exception;
+-                v = js_json_check(ctx, jsc, val, v, prop);
+-                JS_FreeValue(ctx, prop);
+-                prop = JS_UNDEFINED;
++                key.str = JS_UNDEFINED;
++                key.atom = JS_ATOM_NULL;
++                key.index = i;
++                v = js_json_check(ctx, jsc, val, v, &key);
++                JS_FreeValue(ctx, key.str);
+                 if (JS_IsException(v))
+                     goto exception;
+                 if (JS_IsUndefined(v))
+@@ -51994,38 +52133,32 @@ static int js_json_to_str(JSContext *ctx, JSONStringifyContext *jsc,
+             }
+             string_buffer_putc8(jsc->b, ']');
+         } else {
+-            if (!JS_IsUndefined(jsc->property_list))
+-                tab = js_dup(jsc->property_list);
+-            else
+-                tab = js_object_keys(ctx, JS_UNDEFINED, 1, vc(&val),
+-                                     JS_ITERATOR_KIND_KEY);
+-            if (JS_IsException(tab))
+-                goto exception;
+-            if (js_get_length64(ctx, &len, tab))
++            if (js_json_keys(ctx, jsc, p, &tab, &tab_len))
+                 goto exception;
+             string_buffer_putc8(jsc->b, '{');
+             has_content = false;
+-            for(i = 0; i < len; i++) {
+-                JS_FreeValue(ctx, prop);
+-                prop = JS_GetPropertyInt64(ctx, tab, i);
+-                if (JS_IsException(prop))
+-                    goto exception;
+-                v = JS_GetPropertyValue(ctx, val, js_dup(prop));
++            for(i = 0; i < tab_len; i++) {
++                if (!tab[i].is_enumerable)
++                    continue;
++                v = JS_GetProperty(ctx, val, tab[i].atom);
+                 if (JS_IsException(v))
+                     goto exception;
+-                v = js_json_check(ctx, jsc, val, v, prop);
++                key.str = JS_UNDEFINED;
++                key.atom = tab[i].atom;
++                key.index = 0;
++                v = js_json_check(ctx, jsc, val, v, &key);
++                JS_FreeValue(ctx, key.str);
+                 if (JS_IsException(v))
+                     goto exception;
+                 if (!JS_IsUndefined(v)) {
+                     if (has_content)
+                         string_buffer_putc8(jsc->b, ',');
+-                    prop = JS_ToQuotedStringFree(ctx, prop);
+-                    if (JS_IsException(prop)) {
++                    string_buffer_concat_value(jsc->b, sep);
++                    if (string_buffer_put_quoted_atom(ctx, jsc->b,
++                                                      tab[i].atom)) {
+                         JS_FreeValue(ctx, v);
+                         goto exception;
+                     }
+-                    string_buffer_concat_value(jsc->b, sep);
+-                    string_buffer_concat_value(jsc->b, prop);
+                     string_buffer_putc8(jsc->b, ':');
+                     string_buffer_concat_value(jsc->b, sep1);
+                     if (js_json_to_str(ctx, jsc, val, v, indent1))
+@@ -52039,30 +52172,35 @@ static int js_json_to_str(JSContext *ctx, JSONStringifyContext *jsc,
+             }
+             string_buffer_putc8(jsc->b, '}');
+         }
+-        if (check_exception_free(ctx, js_array_pop(ctx, jsc->stack, 0, NULL, 0)))
+-            goto exception;
++        jsc->stack_len--;
+         JS_FreeValue(ctx, val);
+-        JS_FreeValue(ctx, tab);
++        js_free_prop_enum(ctx, tab, tab_len);
+         JS_FreeValue(ctx, sep);
+         JS_FreeValue(ctx, sep1);
+         JS_FreeValue(ctx, indent1);
+-        JS_FreeValue(ctx, prop);
+         return 0;
+     }
+  concat_primitive:
+     switch (JS_VALUE_GET_NORM_TAG(val)) {
+-    case JS_TAG_STRING:
+     case JS_TAG_STRING_ROPE:
+-        val = JS_ToQuotedStringFree(ctx, val);
++        val = JS_ToStringFree(ctx, val);
+         if (JS_IsException(val))
+             goto exception;
+-        goto concat_value;
++        ret = string_buffer_put_quoted(jsc->b, JS_VALUE_GET_STRING(val));
++        JS_FreeValue(ctx, val);
++        return ret;
++    case JS_TAG_STRING:
++        ret = string_buffer_put_quoted(jsc->b, JS_VALUE_GET_STRING(val));
++        JS_FreeValue(ctx, val);
++        return ret;
+     case JS_TAG_FLOAT64:
+         if (!isfinite(JS_VALUE_GET_FLOAT64(val))) {
+             val = JS_NULL;
++            goto concat_value;
+         }
+-        goto concat_value;
++        return string_buffer_put_number(jsc->b, val);
+     case JS_TAG_INT:
++        return string_buffer_put_number(jsc->b, val);
+     case JS_TAG_BOOL:
+     case JS_TAG_NULL:
+     concat_value:
+@@ -52078,11 +52216,10 @@ static int js_json_to_str(JSContext *ctx, JSONStringifyContext *jsc,
+ 
+ exception:
+     JS_FreeValue(ctx, val);
+-    JS_FreeValue(ctx, tab);
++    js_free_prop_enum(ctx, tab, tab_len);
+     JS_FreeValue(ctx, sep);
+     JS_FreeValue(ctx, sep1);
+     JS_FreeValue(ctx, indent1);
+-    JS_FreeValue(ctx, prop);
+     return -1;
+ }
+ 
+@@ -52092,11 +52229,14 @@ JSValue JS_JSONStringify(JSContext *ctx, JSValueConst obj,
+     StringBuffer b_s;
+     JSONStringifyContext jsc_s, *jsc = &jsc_s;
+     JSValue val, v, space, ret, wrapper;
++    JSONKey key;
+     int res;
+     int64_t i, j, n;
+ 
+     jsc->replacer_func = JS_UNDEFINED;
+-    jsc->stack = JS_UNDEFINED;
++    jsc->stack = NULL;
++    jsc->stack_len = 0;
++    jsc->stack_size = 0;
+     jsc->property_list = JS_UNDEFINED;
+     jsc->gap = JS_UNDEFINED;
+     jsc->b = &b_s;
+@@ -52105,9 +52245,6 @@ JSValue JS_JSONStringify(JSContext *ctx, JSValueConst obj,
+     wrapper = JS_UNDEFINED;
+ 
+     string_buffer_init(ctx, jsc->b, 0);
+-    jsc->stack = JS_NewArray(ctx);
+-    if (JS_IsException(jsc->stack))
+-        goto exception;
+     if (JS_IsFunction(ctx, replacer)) {
+         jsc->replacer_func = replacer;
+     } else {
+@@ -52198,7 +52335,11 @@ JSValue JS_JSONStringify(JSContext *ctx, JSValueConst obj,
+         goto exception;
+     val = js_dup(obj);
+ 
+-    val = js_json_check(ctx, jsc, wrapper, val, jsc->empty);
++    key.str = js_dup(jsc->empty);
++    key.atom = JS_ATOM_NULL;
++    key.index = 0;
++    val = js_json_check(ctx, jsc, wrapper, val, &key);
++    JS_FreeValue(ctx, key.str);
+     if (JS_IsException(val))
+         goto exception;
+     if (JS_IsUndefined(val)) {
+@@ -52220,7 +52361,7 @@ done:
+     JS_FreeValue(ctx, jsc->empty);
+     JS_FreeValue(ctx, jsc->gap);
+     JS_FreeValue(ctx, jsc->property_list);
+-    JS_FreeValue(ctx, jsc->stack);
++    js_free(ctx, jsc->stack);
+     return ret;
+ }
+ 

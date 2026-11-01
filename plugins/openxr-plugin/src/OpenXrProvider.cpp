@@ -55,13 +55,24 @@ public:
 
     virtual void destroyInputPlugins() override {
         _inputPlugins.clear();
+        shutdownRuntimeWhenUnused();
     }
 
     virtual void destroyDisplayPlugins() override {
         _displayPlugins.clear();
+        shutdownRuntimeWhenUnused();
     }
 
 private:
+    // At quit (PluginManager::shutdown), once both plugin lists are gone: the session and the instance end now, on the
+    // main thread, not when this library unloads after Qt and GL. A session kept after Leave VR and torn down that late
+    // hung Meta's runtime for a minute and crashed it (Caity's Quest 3, 2026-10-28).
+    void shutdownRuntimeWhenUnused() {
+        if (_runtime && _inputPlugins.empty() && _displayPlugins.empty()) {
+            _runtime->shutdown();
+        }
+    }
+
     // made on first use, by whichever of the display and input lists is asked for first
     std::shared_ptr<OpenXrRuntime> getRuntime() {
         std::call_once(_runtimeOnce, [&] { _runtime = std::make_shared<OpenXrRuntime>(); });

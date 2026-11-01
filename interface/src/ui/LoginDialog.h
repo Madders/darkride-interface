@@ -14,9 +14,9 @@
 #ifndef hifi_LoginDialog_h
 #define hifi_LoginDialog_h
 
-#include <OffscreenQmlDialog.h>
+#include <QSet>
 
-class QNetworkReply;
+#include <OffscreenQmlDialog.h>
 
 extern const QUrl LOGIN_DIALOG;
 
@@ -33,18 +33,16 @@ public:
 
     static void showWithSelection();
 
+    // a sign-in page is on screen, however it came: the start's full-window one (LoginDialog.qml), the headset's
+    // (OverlayLoginDialog.qml) or the one in the tablet from inside a world (dialogs/TabletLoginDialog.qml); each makes
+    // one of these. Loaded but not shown doesn't count: hidden with its window (the desktop's tablet window toggled
+    // off), or on the headset's tablet put away (which also sends that tablet Home, see the constructor). Its links
+    // (Create an Account, Can't access your account?) open the web browser. Main thread
+    static bool isShown();
+
 signals:
     void handleLoginCompleted();
     void handleLoginFailed();
-
-    void handleLinkCompleted();
-    void handleLinkFailed(QString error);
-
-    void handleCreateCompleted();
-    void handleCreateFailed(QString error);
-
-    void handleSignupCompleted();
-    void handleSignupFailed(QString errorString);
 
     // occurs upon dismissing the encouraging log in.
     void dismissedLoginDialog();
@@ -52,35 +50,15 @@ signals:
     void focusEnabled();
     void focusDisabled();
 
-public slots:
-    void linkCompleted(QNetworkReply* reply);
-    void linkFailed(QNetworkReply* reply);
-
-    void createCompleted(QNetworkReply* reply);
-    void createFailed(QNetworkReply* reply);
-
-    void signupCompleted(QNetworkReply* reply);
-    void signupFailed(QNetworkReply* reply);
-
 protected slots:
     Q_INVOKABLE void dismissLoginDialog();
 
-    Q_INVOKABLE bool isSteamRunning() const;
-    Q_INVOKABLE bool isOculusRunning() const;
-
-    Q_INVOKABLE QString oculusUserID() const;
-
     Q_INVOKABLE void login(const QString& username, const QString& password) const;
-    Q_INVOKABLE void loginThroughSteam();
-    Q_INVOKABLE void linkSteam();
-    Q_INVOKABLE void createAccountFromSteam(QString username = QString());
-    Q_INVOKABLE void loginThroughOculus();
-    Q_INVOKABLE void linkOculus();
-    Q_INVOKABLE void createAccountFromOculus(QString email = QString(), QString username = QString(), QString password = QString());
-
-    Q_INVOKABLE void signup(const QString& email, const QString& username, const QString& password);
 
     Q_INVOKABLE bool getLoginDialogPoppedUp() const;
+
+private:
+    static QSet<LoginDialog*> _instances;   // the live ones (made and destroyed on the main thread, with their QML)
 };
 
 #endif // hifi_LoginDialog_h

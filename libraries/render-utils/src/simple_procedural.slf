@@ -10,7 +10,19 @@
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 
-<@if not HIFI_USE_TRANSLUCENT@>
+<@if HIFI_USE_FORWARD@>
+    // the forward path lights in place, as model.slf's forward variant does: the sun with its shadow cascades, the point
+    // and spot lights of the fragment's cluster, the ambient and the haze (the procedural's draw binds them, having a
+    // pipeline of its own: DeferredLightingEffect::setupForwardLightingBatch)
+    <@include DefaultMaterials.slh@>
+    <@include GlobalLight.slh@>
+    <@include Shadow.slh@>
+    <@include LightLocal.slh@>
+    <$declareEvalLightmappedColor()$>
+    <$declareEvalSkyboxGlobalColor(_SCRIBE_NULL, HIFI_USE_FORWARD)$>
+
+    layout(location=0) out vec4 _fragColor0;
+<@elif not HIFI_USE_TRANSLUCENT@>
     <@include DeferredBufferWrite.slh@>
 <@else@>
     <@include DefaultMaterials.slh@>
@@ -86,6 +98,9 @@ void main(void) {
 <@else@>
     float alpha = 1.0;
 <@endif@>
+<@if HIFI_USE_FORWARD@>
+    vec3 fragPositionES = _positionES.xyz;
+<@endif@>
 
 #if defined(PROCEDURAL_V1)
     diffuse = getProceduralColor().rgb;
@@ -146,13 +161,74 @@ void main(void) {
 <@if HIFI_USE_TRANSLUCENT@>
     posEye = posEye4.xyz;
 <@endif@>
+<@if HIFI_USE_FORWARD@>
+    fragPositionES = posEye4.xyz;
+<@endif@>
     vec4 posClip = cam._projection * posEye4;
     gl_FragDepth = transformClipToDepth(posClip);
 #endif
 
 #endif
 
-<@if not HIFI_USE_TRANSLUCENT@>
+    // a procedural that leaves no normal (an emissive-only one: Tivoli Town's ocean sets it to 0) shades with the
+    // surface's own: a zero normal, packed or lit, takes the light away from the emissive too
+    if (dot(normal, normal) < 1.0e-8) {
+        normal = evalFrontOrBackFaceNormal(normalize(_normalWS.xyz));
+    }
+
+<@if HIFI_USE_FORWARD@>
+    // lit here as the deferred path lights what its variant packs below: unlit as it is, an emissive amount over 0 as a
+    // full-bake lightmap, everything else by the sun, the ambient and the local lights, with the emissive and the haze
+    TransformCamera camera = getTransformCamera();
+    vec4 fragPositionWS = camera._viewInverse * vec4(fragPositionES, 1.0);
+    // the derivatives for the lights' cookies, taken here where control flow is uniform
+    vec3 fragPositionWSDx = dFdx(fragPositionWS.xyz);
+    vec3 fragPositionWSDy = dFdy(fragPositionWS.xyz);
+    vec3 fragNormalWS = normalize(normal);
+    if (unlit) {
+        _fragColor0 = vec4(diffuse, 1.0);
+    } else {
+        float shadowAttenuation = 1.0;
+        if (getShadowCascadeCount() > 0) {
+            shadowAttenuation = evalShadowAttenuation(getLightDirection(getKeyLight()), fragPositionWS, -fragPositionES.z, fragNormalWS);
+        }
+        vec3 fragToEyeDirWS = normalize(camera._viewInverse[3].xyz - fragPositionWS.xyz);
+        SurfaceData surfaceWS = initSurfaceData(roughness, fragNormalWS, fragToEyeDirWS);
+        // the specular colour from the metallic and the albedo, as the deferred lighting has it from what was packed
+        vec3 fresnelF0 = getFresnelF0(metallic, diffuse);
+
+        vec4 localLighting = vec4(0.0);
+        <$fetchClusterInfo(fragPositionWS)$>;
+        if (hasLocalLights(cluster)) {
+            localLighting = evalLocalLighting(cluster, fragPositionWS.xyz, fragPositionWSDx, fragPositionWSDy, surfaceWS,
+                                              metallic, fresnelF0, diffuse, 0.0,
+                                              vec4(0), vec4(0), 1.0);
+        }
+        if (emissiveAmount > 0.0) {
+            _fragColor0 = vec4(evalLightmappedColor(
+                camera._viewInverse,
+                shadowAttenuation,
+                occlusion,
+                fragNormalWS,
+                diffuse,
+                emissive) + localLighting.rgb,
+                1.0);
+        } else {
+            _fragColor0 = vec4(evalSkyboxGlobalColor(
+                camera._viewInverse,
+                shadowAttenuation,
+                occlusion,
+                fragPositionES,
+                diffuse,
+                fresnelF0,
+                metallic,
+                emissive,
+                surfaceWS,
+                localLighting.rgb),
+                1.0);
+        }
+    }
+<@elif not HIFI_USE_TRANSLUCENT@>
     if (unlit) {
         packDeferredFragmentUnlit(
             normal,

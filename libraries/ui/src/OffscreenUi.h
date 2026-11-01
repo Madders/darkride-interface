@@ -67,6 +67,8 @@ public:
     bool isVisible(const QString& name);
     void toggle(const QUrl& url, const QString& name, std::function<void(QQmlContext*, QObject*)> f = [](QQmlContext*, QObject*) {});
     bool shouldSwallowShortcut(QEvent* event);
+    // "Cut", "Copy" or "Paste" done by the overlay's focused item itself; false when nothing there takes it
+    bool editFocusedItem(const char* action);
     bool navigationFocused();
     void setNavigationFocused(bool focused);
     void unfocusWindows();
@@ -172,6 +174,14 @@ public:
         QMessageBox::StandardButtons buttons = QMessageBox::Ok,
         QMessageBox::StandardButton defaultButton = QMessageBox::NoButton);
 
+    /// The words on one of a message box's or prompt's buttons where the standard ones don't fit: "Run" for Yes. Set on
+    /// a box from createMessageBox or createInputDialog, or the one an async call's listener holds (getDialogItem()),
+    /// before it is answered, on the main thread. A box's other parts are properties set the same way (setProperty):
+    /// "destructiveButton", a button that deletes or replaces something for good, drawn red and never the default;
+    /// "detailedText", behind a Details button in a scrolling field; and a prompt's "placeholderText" and "monospace",
+    /// a fixed-width field for paths and addresses.
+    static void setButtonText(QQuickItem* dialog, QMessageBox::StandardButton button, const QString& text);
+
     Q_INVOKABLE QString fileOpenDialog(const QString &caption = QString(), const QString &dir = QString(), const QString &filter = QString(), QString *selectedFilter = 0, QFileDialog::Options options = QFileDialog::Options());
     Q_INVOKABLE ModalDialogListener* fileOpenDialogAsync(const QString &caption = QString(), const QString &dir = QString(), const QString &filter = QString(), QString *selectedFilter = 0, QFileDialog::Options options = QFileDialog::Options());
 
@@ -200,9 +210,16 @@ public:
 
     Q_INVOKABLE QVariant inputDialog(const Icon icon, const QString& title, const QString& label = QString(), const QVariant& current = QVariant());
     Q_INVOKABLE ModalDialogListener* inputDialogAsync(const Icon icon, const QString& title, const QString& label = QString(), const QVariant& current = QVariant());
+    // The same, with more of the prompt's properties set as it opens: "buttonTexts", "placeholderText", "monospace"
+    // (see setButtonText).
+    Q_INVOKABLE QVariant inputDialog(const Icon icon, const QString& title, const QString& label, const QVariant& current,
+                                     const QVariantMap& properties);
+    Q_INVOKABLE ModalDialogListener* inputDialogAsync(const Icon icon, const QString& title, const QString& label,
+                                                      const QVariant& current, const QVariantMap& properties);
     Q_INVOKABLE QVariant customInputDialog(const Icon icon, const QString& title, const QVariantMap& config);
     Q_INVOKABLE ModalDialogListener* customInputDialogAsync(const Icon icon, const QString& title, const QVariantMap& config);
-    QQuickItem* createInputDialog(const Icon icon, const QString& title, const QString& label, const QVariant& current);
+    QQuickItem* createInputDialog(const Icon icon, const QString& title, const QString& label, const QVariant& current,
+                                  const QVariantMap& properties = QVariantMap());
     QQuickItem* createCustomInputDialog(const Icon icon, const QString& title, const QVariantMap& config);
     QVariant waitForInputDialogResult(QQuickItem* inputDialog);
 

@@ -7,10 +7,6 @@
       "name": "aristo",
       "platform": "windows"
     },
-    {
-      "name": "crashpad",
-      "platform": "x64 & (osx | windows)"
-    },
     "gif-h",
     {
       "name": "glslang",
@@ -18,33 +14,12 @@
     },
     "hifi-deps",
     {
-      "name": "leapmotion",
-      "platform": "!android & !windows & !(osx & arm64)"
-    },
-    {
-      "name": "liblo",
-      "platform": "windows"
-    },
-    {
-      "name": "libspnav",
-      "platform": "linux"
-    },
-    {
-      "name": "neuron",
-      "platform": "windows | (osx & x64)"
-    },
-    "nlohmann-json",
-    {
       "name": "openvr",
       "platform": "x64 & (windows | linux)"
     },
     {
       "name": "openxr-loader",
       "platform": "x64 & (windows | linux)"
-    },
-    {
-      "name": "quazip",
-      "platform": "!android"
     },
     {
       "name": "sdl2",
@@ -59,9 +34,8 @@
       "platform": "windows"
     },
     {
-      "name": "steamworks",
-      "platform": "!android & !(osx & arm64)"
-    },
-    "vulkan-memory-allocator"
+      "name": "tensorflow-lite",
+      "platform": "osx | windows"
+    }
   ]
 }

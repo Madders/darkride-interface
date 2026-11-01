@@ -220,10 +220,10 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                 } else if (subdata.name == "NormalsIndex") {
                     data.normalIndices = getIntVector(subdata);
 
-                } else if (subdata.name == "MappingInformationType" && subdata.properties.at(0) == BY_VERTICE) {
+                } else if (subdata.name == "MappingInformationType" && subdata.properties.value(0) == BY_VERTICE) {
                     data.normalsByVertex = true;
                     
-                } else if (subdata.name == "ReferenceInformationType" && subdata.properties.at(0) == INDEX_TO_DIRECT) {
+                } else if (subdata.name == "ReferenceInformationType" && subdata.properties.value(0) == INDEX_TO_DIRECT) {
                     indexToDirect = true;
                 }
             }
@@ -240,10 +240,10 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                 } else if (subdata.name == "ColorsIndex" || subdata.name == "ColorIndex") {
                     data.colorIndices = getIntVector(subdata);
 
-                } else if (subdata.name == "MappingInformationType" && subdata.properties.at(0) == BY_VERTICE) {
+                } else if (subdata.name == "MappingInformationType" && subdata.properties.value(0) == BY_VERTICE) {
                     data.colorsByVertex = true;
                     
-                } else if (subdata.name == "ReferenceInformationType" && subdata.properties.at(0) == INDEX_TO_DIRECT) {
+                } else if (subdata.name == "ReferenceInformationType" && subdata.properties.value(0) == INDEX_TO_DIRECT) {
                     indexToDirect = true;
                 }
             }
@@ -266,9 +266,9 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
 #endif
          
         } else if (child.name == "LayerElementUV") {
-            if (child.properties.at(0).toInt() == 0) {
+            if (child.properties.value(0).toInt() == 0) {
                 AttributeData attrib;
-                attrib.index = child.properties.at(0).toInt();
+                attrib.index = child.properties.value(0).toInt();
                 foreach (const FBXNode& subdata, child.children) {
                     if (subdata.name == "UV") {
                         data.texCoords = createVec2Vector(getDoubleVector(subdata));
@@ -277,7 +277,7 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                         data.texCoordIndices = getIntVector(subdata);
                         attrib.texCoordIndices = getIntVector(subdata);
                     } else if (subdata.name == "Name") {
-                        attrib.name = subdata.properties.at(0).toString();
+                        attrib.name = subdata.properties.value(0).toString();
                     } 
 #if defined(DEBUG_FBXSERIALIZER)
                     else {
@@ -296,14 +296,14 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                 data.attributes.push_back(attrib);
             } else {
                 AttributeData attrib;
-                attrib.index = child.properties.at(0).toInt();
+                attrib.index = child.properties.value(0).toInt();
                 foreach (const FBXNode& subdata, child.children) {
                     if (subdata.name == "UV") {
                         attrib.texCoords = createVec2Vector(getDoubleVector(subdata));
                     } else if (subdata.name == "UVIndex") {
                         attrib.texCoordIndices = getIntVector(subdata);
                     } else if  (subdata.name == "Name") {
-                        attrib.name = subdata.properties.at(0).toString();
+                        attrib.name = subdata.properties.value(0).toString();
                     }
 #if defined(DEBUG_FBXSERIALIZER)
                     else {
@@ -334,7 +334,7 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                 if (subdata.name == "Materials") {
                     materials = getIntVector(subdata);
                 } else if (subdata.name == "MappingInformationType") {
-                    if (subdata.properties.at(0) == BY_POLYGON) {
+                    if (subdata.properties.value(0) == BY_POLYGON) {
                         isMaterialPerPolygon = true;
                     }
                 } else {
@@ -372,11 +372,17 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
             // load the draco mesh from the FBX and create a draco::Mesh
             draco::Decoder decoder;
             draco::DecoderBuffer decodedBuffer;
-            hifi::ByteArray dracoArray = child.properties.at(0).value<hifi::ByteArray>();
+            hifi::ByteArray dracoArray = child.properties.value(0).value<hifi::ByteArray>();
             decodedBuffer.Init(dracoArray.data(), dracoArray.size());
 
             std::unique_ptr<draco::Mesh> dracoMesh(new draco::Mesh());
-            decoder.DecodeBufferToGeometry(&decodedBuffer, dracoMesh.get());
+            auto decodeStatus = decoder.DecodeBufferToGeometry(&decodedBuffer, dracoMesh.get());
+            if (!decodeStatus.ok()) {
+                // a compressed mesh that does not decode is left out; nothing of it is read
+                qCWarning(modelformat) << "FBX: a compressed (Draco) mesh did not decode and is left out:"
+                                       << QString::fromStdString(decodeStatus.error_msg_string());
+                continue;
+            }
 
             // prepare attributes for this mesh
             auto positionAttribute = dracoMesh->GetNamedAttribute(draco::GeometryAttribute::POSITION);
@@ -418,7 +424,7 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                     // read position from draco mesh to extracted mesh
                     auto mappedIndex = positionAttribute->mapped_index(vertexIndex);
 
-                    positionAttribute->ConvertValue<float, 3>(mappedIndex,
+                    if (mappedIndex.value() < positionAttribute->size()) positionAttribute->ConvertValue<float, 3>(mappedIndex,
                                                               reinterpret_cast<float*>(&data.extracted.mesh.vertices[i]));
                 }
 
@@ -426,7 +432,7 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                     // read normals from draco mesh to extracted mesh
                     auto mappedIndex = normalAttribute->mapped_index(vertexIndex);
 
-                    normalAttribute->ConvertValue<float, 3>(mappedIndex,
+                    if (mappedIndex.value() < normalAttribute->size()) normalAttribute->ConvertValue<float, 3>(mappedIndex,
                                                             reinterpret_cast<float*>(&data.extracted.mesh.normals[i]));
                 }
 
@@ -434,7 +440,7 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                     // read UVs from draco mesh to extracted mesh
                     auto mappedIndex = texCoordAttribute->mapped_index(vertexIndex);
 
-                    texCoordAttribute->ConvertValue<float, 2>(mappedIndex,
+                    if (mappedIndex.value() < texCoordAttribute->size()) texCoordAttribute->ConvertValue<float, 2>(mappedIndex,
                                                               reinterpret_cast<float*>(&data.extracted.mesh.texCoords[i]));
                 }
 
@@ -442,7 +448,7 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                     // some meshes have a second set of UVs, read those to extracted mesh
                     auto mappedIndex = extraTexCoordAttribute->mapped_index(vertexIndex);
 
-                    extraTexCoordAttribute->ConvertValue<float, 2>(mappedIndex,
+                    if (mappedIndex.value() < extraTexCoordAttribute->size()) extraTexCoordAttribute->ConvertValue<float, 2>(mappedIndex,
                                                                    reinterpret_cast<float*>(&data.extracted.mesh.texCoords1[i]));
                 }
 
@@ -450,16 +456,17 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                     // read vertex colors from draco mesh to extracted mesh
                     auto mappedIndex = colorAttribute->mapped_index(vertexIndex);
 
-                    colorAttribute->ConvertValue<float, 3>(mappedIndex,
+                    if (mappedIndex.value() < colorAttribute->size()) colorAttribute->ConvertValue<float, 3>(mappedIndex,
                                                            reinterpret_cast<float*>(&data.extracted.mesh.colors[i]));
                 }
 
                 if (originalIndexAttribute) {
                     auto mappedIndex = originalIndexAttribute->mapped_index(vertexIndex);
 
-                    int32_t originalIndex;
-
-                    originalIndexAttribute->ConvertValue<int32_t, 1>(mappedIndex, &originalIndex);
+                    int32_t originalIndex = (int32_t)i;
+                    if (mappedIndex.value() < originalIndexAttribute->size()) {
+                        originalIndexAttribute->ConvertValue<int32_t, 1>(mappedIndex, &originalIndex);
+                    }
 
                     data.extracted.newIndices.insert(originalIndex, i);
                 } else {
@@ -471,6 +478,11 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                 // grab the material ID and texture ID for this face, if we have it
                 auto& dracoFace = dracoMesh->face(draco::FaceIndex(i));
                 auto& firstCorner = dracoFace[0];
+                // a face whose corners name points the mesh does not have is skipped
+                if (dracoFace[0].value() >= numVertices || dracoFace[1].value() >= numVertices ||
+                    dracoFace[2].value() >= numVertices) {
+                    continue;
+                }
 
                 uint16_t materialID { 0 };
 
@@ -478,7 +490,9 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                     // read material ID and texture ID mappings into materials and texture vectors
                     auto mappedIndex = materialIDAttribute->mapped_index(firstCorner);
 
-                    materialIDAttribute->ConvertValue<uint16_t, 1>(mappedIndex, &materialID);
+                    if (mappedIndex.value() < materialIDAttribute->size()) {
+                        materialIDAttribute->ConvertValue<uint16_t, 1>(mappedIndex, &materialID);
+                    }
                 }
 
                 QPair<int, int> materialTexture(materialID, 0);
@@ -491,8 +505,9 @@ ExtractedMesh FBXSerializer::extractMesh(const FBXNode& object, unsigned int& me
                     // Figure out if this is the older way of defining the per-part material for baked FBX
                     if (dracoMeshNodeVersion >= 2) {
                         // Define the materialID for this mesh part index
-                        uint16_t safeMaterialID = materialID < dracoMaterialList.size() ? materialID : 0;
-                        data.extracted.materialIDPerMeshPart.push_back(dracoMaterialList[safeMaterialID].c_str());
+                        // a material the list does not have (an empty list included) gives the part no name
+                        data.extracted.materialIDPerMeshPart.push_back(
+                            materialID < dracoMaterialList.size() ? dracoMaterialList[materialID].c_str() : "");
                     } else {
                         // Define the materialID later, based on the order of first appearance of the materials in the _connectionChildMap
                         data.extracted.partMaterialTextures.append(materialTexture);

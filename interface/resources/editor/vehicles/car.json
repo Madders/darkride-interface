@@ -1,0 +1,205 @@
+{
+ "DataVersion": 0,
+ "Entities": [
+  {
+   "id": "{0ffed0a6-52a6-45ab-ba22-5a2ea670e977}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Car",
+   "position": {
+    "x": 0,
+    "y": 1.05,
+    "z": 0
+   },
+   "dimensions": {
+    "x": 1.68,
+    "y": 1.1,
+    "z": 3.62
+   },
+   "color": {
+    "red": 200,
+    "green": 96,
+    "blue": 28
+   },
+   "dynamic": true,
+   "collisionless": false,
+   "gravity": {
+    "x": 0,
+    "y": -9.8,
+    "z": 0
+   },
+   "damping": 0.02,
+   "angularDamping": 0.1,
+   "friction": 0.6,
+   "restitution": 0.0,
+   "grab": {
+    "grabbable": false
+   },
+   "vehicle": {
+    "type": "wheeled",
+    "mass": 1320,
+    "centerOfMass": {
+     "x": 0,
+     "y": -0.3,
+     "z": 0
+    },
+    "wheels": "[{\"name\": \"FL\", \"center\": [-0.654, -0.54, -1.1175], \"radius\": 0.37, \"width\": 0.16, \"mass\": 25, \"suspensionDistance\": 0.18, \"targetPosition\": 0.5, \"steer\": 1, \"brake\": 1, \"handBrake\": 0}, {\"name\": \"FR\", \"center\": [0.654, -0.54, -1.1175], \"radius\": 0.37, \"width\": 0.16, \"mass\": 25, \"suspensionDistance\": 0.18, \"targetPosition\": 0.5, \"steer\": 1, \"brake\": 1, \"handBrake\": 0}, {\"name\": \"RL\", \"center\": [-0.654, -0.54, 1.1175], \"radius\": 0.37, \"width\": 0.16, \"mass\": 25, \"suspensionDistance\": 0.18, \"targetPosition\": 0.5, \"steer\": 0, \"brake\": 1, \"handBrake\": 1}, {\"name\": \"RR\", \"center\": [0.654, -0.54, 1.1175], \"radius\": 0.37, \"width\": 0.16, \"mass\": 25, \"suspensionDistance\": 0.18, \"targetPosition\": 0.5, \"steer\": 0, \"brake\": 1, \"handBrake\": 1}]",
+    "seats": "[{\"name\": \"driver\", \"position\": [0.42, -0.05, -0.35], \"yaw\": 0, \"driver\": true}, {\"name\": \"passenger\", \"position\": [-0.42, -0.05, -0.35], \"yaw\": 0}, {\"name\": \"rear left\", \"position\": [-0.42, -0.05, 0.75], \"yaw\": 0}, {\"name\": \"rear right\", \"position\": [0.42, -0.05, 0.75], \"yaw\": 0}]",
+    "maxSteerAngle": 32,
+    "maxTorque": 163,
+    "minRPM": 700,
+    "maxRPM": 4500,
+    "gearRatios": "[3.68, 2.22, 1.5, 1.0]",
+    "reverseGearRatio": 4.02,
+    "finalDriveRatio": 5.3956,
+    "maxBrakeTorque": 1500,
+    "maxHandBrakeTorque": 2500,
+    "driveType": "rear",
+    "suspensionFrequency": 1.4,
+    "suspensionDamping": 0.6
+   }
+  },
+  {
+   "id": "{431af79f-36be-4edb-9f9c-47cbcf6c0a29}",
+   "type": "Shape",
+   "shape": "Cylinder",
+   "name": "Car wheel FL",
+   "parentID": "{0ffed0a6-52a6-45ab-ba22-5a2ea670e977}",
+   "position": {
+    "x": -0.654,
+    "y": -0.63,
+    "z": -1.1175
+   },
+   "rotation": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.7071067811865475,
+    "w": 0.7071067811865476
+   },
+   "dimensions": {
+    "x": 0.74,
+    "y": 0.16,
+    "z": 0.74
+   },
+   "color": {
+    "red": 16,
+    "green": 16,
+    "blue": 22
+   },
+   "dynamic": false,
+   "collisionless": true,
+   "vehicle": {
+    "type": "wheel",
+    "wheel": "FL",
+    "axle": "y"
+   }
+  },
+  {
+   "id": "{8bfa2212-75b5-4056-8694-57778181cf58}",
+   "type": "Shape",
+   "shape": "Cylinder",
+   "name": "Car wheel FR",
+   "parentID": "{0ffed0a6-52a6-45ab-ba22-5a2ea670e977}",
+   "position": {
+    "x": 0.654,
+    "y": -0.63,
+    "z": -1.1175
+   },
+   "rotation": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.7071067811865475,
+    "w": 0.7071067811865476
+   },
+   "dimensions": {
+    "x": 0.74,
+    "y": 0.16,
+    "z": 0.74
+   },
+   "color": {
+    "red": 16,
+    "green": 16,
+    "blue": 22
+   },
+   "dynamic": false,
+   "collisionless": true,
+   "vehicle": {
+    "type": "wheel",
+    "wheel": "FR",
+    "axle": "y"
+   }
+  },
+  {
+   "id": "{42b38268-c652-4764-a8ea-76dd1eaec508}",
+   "type": "Shape",
+   "shape": "Cylinder",
+   "name": "Car wheel RL",
+   "parentID": "{0ffed0a6-52a6-45ab-ba22-5a2ea670e977}",
+   "position": {
+    "x": -0.654,
+    "y": -0.63,
+    "z": 1.1175
+   },
+   "rotation": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.7071067811865475,
+    "w": 0.7071067811865476
+   },
+   "dimensions": {
+    "x": 0.74,
+    "y": 0.16,
+    "z": 0.74
+   },
+   "color": {
+    "red": 16,
+    "green": 16,
+    "blue": 22
+   },
+   "dynamic": false,
+   "collisionless": true,
+   "vehicle": {
+    "type": "wheel",
+    "wheel": "RL",
+    "axle": "y"
+   }
+  },
+  {
+   "id": "{3e85ea0e-9207-4fbf-a75c-43a6b99bd572}",
+   "type": "Shape",
+   "shape": "Cylinder",
+   "name": "Car wheel RR",
+   "parentID": "{0ffed0a6-52a6-45ab-ba22-5a2ea670e977}",
+   "position": {
+    "x": 0.654,
+    "y": -0.63,
+    "z": 1.1175
+   },
+   "rotation": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.7071067811865475,
+    "w": 0.7071067811865476
+   },
+   "dimensions": {
+    "x": 0.74,
+    "y": 0.16,
+    "z": 0.74
+   },
+   "color": {
+    "red": 16,
+    "green": 16,
+    "blue": 22
+   },
+   "dynamic": false,
+   "collisionless": true,
+   "vehicle": {
+    "type": "wheel",
+    "wheel": "RR",
+    "axle": "y"
+   }
+  }
+ ],
+ "Id": "{00a97d23-af81-4913-b731-1f9e5264b11d}",
+ "Version": 141
+}

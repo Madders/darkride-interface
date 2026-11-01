@@ -17,7 +17,7 @@ import stylesUit 1.0
 import controlsUit 1.0 as HifiControls
 import "toolbars"
 
-// references Users, UserActivityLogger, MyAvatar, Vec3, Quat, AddressManager, Account from root context
+// references Users, MyAvatar, Vec3, Quat, AddressManager, Account from root context
 
 Item {
     id: thisNameCard
@@ -194,7 +194,6 @@ Item {
             onEditingFinished: {
                 if (MyAvatar.displayName !== text) {
                     MyAvatar.displayName = text;
-                    UserActivityLogger.palAction("display_name_change", text);
                 }
                 focus = false;
             }
@@ -248,7 +247,6 @@ Item {
                 hoverEnabled: enabled
                 onClicked: {
                     goToUserInDomain(thisNameCard.uuid);
-                    UserActivityLogger.palAction("go_to_user_in_domain", thisNameCard.uuid);
                 }
                 onEntered: {
                     displayNameText.color = hifi.colors.blueHighlight;
@@ -343,7 +341,6 @@ Item {
             hoverEnabled: enabled
             onClicked: {
                 goToUserInDomain(thisNameCard.uuid);
-                UserActivityLogger.palAction("go_to_user_in_domain", thisNameCard.uuid);
             }
             onEntered: {
                 displayNameText.color = hifi.colors.blueHighlight;
@@ -441,7 +438,6 @@ Item {
         onClicked: {
             console.log("Vist user button clicked."); // Remove after debugging.
             AddressManager.goToUser(thisNameCard.userName, false);
-            UserActivityLogger.palAction("go_to_user", thisNameCard.userName);
         }
     }
 
@@ -586,7 +582,6 @@ Item {
         if (Users.getAvatarGain(avatarUuid) != sliderValue) {
             Users.setAvatarGain(avatarUuid, sliderValue);
             if (isReleased) {
-                UserActivityLogger.palAction("avatar_gain_changed", avatarUuid);
             }
         }
     }

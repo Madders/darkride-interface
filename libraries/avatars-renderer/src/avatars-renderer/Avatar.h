@@ -781,8 +781,6 @@ protected:
     void updateAvatarMenu(float deltaTime);
     AvatarMenu _avatarMenu;
     QString _avatarMenuModelURL;
-    graphics::MaterialPointer _avatarMenuHideMaterial;
-    std::string _avatarMenuHiddenParts;
 
     void processMaterials();
 

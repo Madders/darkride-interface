@@ -167,8 +167,29 @@ QDockWidget#EditorHierarchy::title, QDockWidget#EditorInspector::title {
 #EditorInspector QSlider::handle:horizontal:disabled {
     background: #555555;
 }
+/* an entity whose model, image or texture failed to load: its name red, the reasons under it (setLoadProblem) */
+#EditorInspector QLabel#EditorInspectorTitle[loadFailed="true"] {
+    color: #ff6b6b;
+}
+#EditorInspector QLabel#EditorInspectorLoadProblem {
+    color: #ff6b6b;
+    padding: 2px 2px 4px 2px;
+}
+/* Script and Server Script: what the script is doing now (ScriptEditor), grey, red when it failed */
+#EditorInspector QLabel#EditorScriptStatus {
+    color: #8f8f8f;
+}
+#EditorInspector QLabel#EditorScriptStatus[state="error"] {
+    color: #ff6b6b;
+}
 #EditorInspector QLabel#EditorInspectorNote {
     color: #8f8f8f;
+}
+/* the header (Unity's): Visible and the name, the ticks under them, and why everything is greyed when it's locked */
+#EditorInspector QLabel#EditorInspectorLockNote {
+    color: #8f8f8f;
+    font-size: 11px;
+    padding: 0 2px 2px 2px;
 }
 #EditorInspector QLabel#EditorImageThumbnail {
     background: #2a2a2a;
@@ -251,8 +272,8 @@ QToolBar#EditorToolBar::separator, QToolBar#EditorTerrainBar::separator {
 /* the splitters between the panels and the viewport */
 QMainWindow::separator {
     background: #232323;
-    width: 2px;
-    height: 2px;
+    width: 4px;     /* as MainWindow's own (libraries/ui/src/MainWindow.cpp): wide enough to grab */
+    height: 4px;
 }
 QMainWindow::separator:hover {
     background: #2c5d87;
@@ -302,6 +323,23 @@ QToolBar#EditorToolBar QToolButton#EditorWorldEdit:checked:hover {
 }
 #EditorHierarchy QTreeView[readOnly="true"] {
     color: #8a8a8a;
+}
+#EditorHierarchy QLabel#EditorHierarchyCounts {
+    color: #9a9a9a;
+    padding: 2px 4px;
+}
+#EditorHierarchy QToolButton#EditorHierarchyRefresh {
+    color: #d0d0d0;
+    background: #454545;
+    border: 1px solid #2a2a2a;
+    border-radius: 3px;
+    padding: 1px 8px;
+}
+#EditorHierarchy QToolButton#EditorHierarchyRefresh:hover {
+    background: #505050;
+}
+#EditorHierarchy QToolButton#EditorHierarchyRefresh:pressed {
+    background: #2c5d87;
 }
 #EditorInspector QDoubleSpinBox:disabled, #EditorInspector QLineEdit:disabled, #EditorInspector QComboBox:disabled,
 #EditorInspector QPlainTextEdit:disabled, #EditorInspector QToolButton:disabled {
@@ -360,6 +398,31 @@ QToolBar#EditorTerrainBar QLabel#EditorHint {
     background: #3a6f9c;
     border: 1px solid #8cc4f0;
     border-radius: 3px;
+}
+
+/* the Inspector's vehicle wheel and seat lists (VehiclePartsEditor), the same way */
+#EditorVehicleList::item {
+    height: 22px;
+}
+#EditorVehicleList::item:hover {
+    background: #404040;
+}
+#EditorVehicleList::item:selected {
+    background: #2c5d87;
+}
+#EditorVehicleRow[selected="true"] {
+    background: #2c5d87;
+    border-radius: 3px;
+}
+#EditorVehicleRow QLabel#EditorVehicleSummary {
+    color: #8f8f8f;
+}
+#EditorVehicleRow[selected="true"] QLabel#EditorVehicleName {
+    color: #ffffff;
+    font-weight: bold;
+}
+#EditorVehicleRow[selected="true"] QLabel#EditorVehicleSummary {
+    color: #d0e0ee;
 }
 
 /* the Assets panel along the bottom: My Files as a folder tree beside a grid of the folder's contents */
@@ -436,7 +499,7 @@ QDockWidget#EditorAssets::title {
     background: #474747;
 }
 #EditorAssets QToolButton#EditorAssetsCrumb[last="true"] {
-    color: #ffffff;
+    color: #f0f0f0;   /* the skin's text under a skin (Editor::applyStyle): it sits on the panel, not on the selection */
     font-weight: bold;
 }
 #EditorAssets QLabel#EditorAssetsCrumbSeparator {
@@ -450,6 +513,12 @@ QDockWidget#EditorAssets::title {
 #EditorAssets QLabel#EditorAssetsEmpty {
     color: #7a7a7a;
     background: transparent;
+}
+#EditorAssets QLabel#EditorAssetsNote { color: #b8b8b8; font-size: 11px; padding: 0 4px; }
+#EditorAssets QLabel#EditorRightsLine {
+    color: #8f8f8f;
+    font-size: 11px;
+    padding: 0 4px;
 }
 #EditorAssets QLabel#EditorReadOnlyBanner {
     background: #4d3b1c;

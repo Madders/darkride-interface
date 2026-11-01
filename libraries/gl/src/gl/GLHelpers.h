@@ -10,6 +10,7 @@
 #ifndef hifi_GLHelpers_h
 #define hifi_GLHelpers_h
 
+#include <cstdint>
 #include <functional>
 #include <QJsonObject>
 
@@ -60,8 +61,12 @@ namespace gl {
 
     void globalLock();
     void globalRelease(bool finish = true);
+    // Whether a thread is waiting for the global lock: the lock is not fair, so the thread that holds it most of the
+    // time (the presenting thread, with vsync) gives a waiter a moment to take it after a release, or the waiter
+    // (the QML UI's renderer, whose sync the main thread waits on) starves. False where GL is not serialized.
+    bool globalLockWanted();
 
-    // Whether the presenting thread should leave the window's GL view alone for now (see ViewChangeGuard)
+    // Whether the presenting thread should leave the window's GL view alone for now (see ViewChangeGuard); macOS only
     bool isPresentationPaused();
     // How the main thread puts its pending window changes in place at once (on macOS, a Core Animation commit,
     // which otherwise waits for the end of the run loop pass): set by the app, run by ViewChangeGuard
@@ -84,11 +89,20 @@ namespace gl {
     // only, nests; nothing under it may wait for the QML render thread, which takes the lock too.
     class ViewChangeGuard {
     public:
-        ViewChangeGuard();
+        // eventType: the Qt event that changes the view, for the present-stall report (0 for the editor's own changes)
+        explicit ViewChangeGuard(int eventType = 0);
         ~ViewChangeGuard();
         ViewChangeGuard(const ViewChangeGuard&) = delete;
         ViewChangeGuard& operator=(const ViewChangeGuard&) = delete;
     };
+
+    // The view changes so far, for the report when presents stop (Application's deadlock watchdog)
+    struct ViewChangeState {
+        uint32_t guards { 0 };          // changes begun since start
+        int lastEventType { 0 };        // the last one's Qt event type, 0 for the editor's own
+        int64_t pauseLeftMs { 0 };      // how much longer presents are held off (honoured on macOS only)
+    };
+    ViewChangeState viewChangeState();
 
     bool debugContextEnabled();
 

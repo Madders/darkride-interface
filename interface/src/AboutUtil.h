@@ -29,6 +29,9 @@
  * @property {string} buildVersion - The build version of Tivoli Interface that is currently running. <em>Read-only.</em>
  * @property {string} qtVersion - The Qt version used in Tivoli Interface that is currently running. <em>Read-only.</em>
  * @property {string} platform - The name of the platform that is currently running, usually "Darkride". <em>Read-only.</em>
+ * @property {string} buildCommit - The short git commit the build was made from; empty if unknown. <em>Read-only.</em>
+ * @property {string} buildLine - The version and build in one line, as the sign-in page shows them for bug reports:
+ *     "Darkride 1.1.0 · build 7382ec48ce". <em>Read-only.</em>
  *
  * @example <caption>Report build information for the version of Interface currently running.</caption>
  * print("Tivoli build date: " + About.buildDate);  // Returns the build date of the version of Interface currently running on your machine.
@@ -44,6 +47,8 @@ class AboutUtil : public QObject {
     Q_PROPERTY(QString buildVersion READ getBuildVersion CONSTANT)
     Q_PROPERTY(QString qtVersion READ getQtVersion CONSTANT)
     Q_PROPERTY(QString platform READ getPlatform CONSTANT)
+    Q_PROPERTY(QString buildCommit READ getBuildCommit CONSTANT)
+    Q_PROPERTY(QString buildLine READ getBuildLine CONSTANT)
 public:
     static AboutUtil* getInstance();
     ~AboutUtil() {}
@@ -52,6 +57,8 @@ public:
     QString getBuildVersion() const;
     QString getQtVersion() const;
     QString getPlatform() { return "Darkride"; };
+    QString getBuildCommit() const;
+    QString getBuildLine() const;
 
 private:
     AboutUtil(QObject* parent = nullptr);

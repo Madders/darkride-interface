@@ -67,7 +67,10 @@ public:
 public slots:
     void run() override;
 
-    void playAvatarSound(SharedSoundPointer avatarSound);
+    // volume 0 to 1, the sound's samples scaled by it
+    void playAvatarSound(SharedSoundPointer avatarSound, float volume = 1.0f);
+    // the sound playAvatarSound plays is cut short (avatarSoundFinished(false))
+    void stopAvatarSound();
 
     void setIsAvatar(bool isAvatar);
     bool isAvatar() const { return _isAvatar; }
@@ -83,6 +86,11 @@ public slots:
      */
     Q_INVOKABLE QByteArray takeHeardAudio();
 
+signals:
+    // a sound playAvatarSound played is over: completed when it was played to its end, not when it was cut short (by
+    // stopAvatarSound or another playAvatarSound) or could not be loaded
+    void avatarSoundFinished(bool completed);
+
 private slots:
     void requestScript();
     void scriptRequestFinished();
@@ -91,6 +99,7 @@ private slots:
     void handleAudioPacket(QSharedPointer<ReceivedMessage> message);
     void handleOctreePacket(QSharedPointer<ReceivedMessage> message, SharedNodePointer senderNode);
     void handleSelectedAudioFormat(QSharedPointer<ReceivedMessage> message);
+    void handleMismatchAudioFormat(SharedNodePointer node, const QString& currentCodec, const QString& receivedCodec);
 
     void nodeActivated(SharedNodePointer activatedNode);
     void nodeKilled(SharedNodePointer killedNode);
@@ -99,6 +108,9 @@ private slots:
 
     // an AI resident signed in with its account tells the metaverse where it is, like Interface does
     void sendPresence();
+
+    // the entities parented to this agent's avatar follow it: their bounds go to the entity server, as MyAvatar's do
+    void updateAvatarChildren();
 
 private:
     void negotiateAudioFormat();
@@ -116,8 +128,12 @@ private:
     QMutex _heardAudioMutex;
 
     void setAvatarSound(SharedSoundPointer avatarSound) { _avatarSound = avatarSound; }
+    void finishAvatarSound(bool completed);
 
     void queryAvatars();
+    // the avatar as a parent, or not: the parent finder finds it, and the entity tree can take shared_from_this()
+    void setAvatarAsParent(bool isParent);
+    std::shared_ptr<SpatiallyNestable> _avatarAsParent;    // deletes nothing: the DependencyManager owns the avatar
 
     QString _scriptContents;
     QTimer* _scriptRequestTimeout { nullptr };
@@ -128,6 +144,7 @@ private:
     SharedSoundPointer _avatarSound;
     bool _shouldMuteRecordingAudio { false };
     int _numAvatarSoundSentBytes = 0;
+    float _avatarSoundVolume { 1.0f };
     bool _isAvatar = false;
     QTimer* _avatarQueryTimer = nullptr;
     QTimer* _presenceTimer { nullptr };

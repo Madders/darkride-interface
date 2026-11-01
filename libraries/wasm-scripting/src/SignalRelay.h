@@ -8,6 +8,9 @@
 //  The connection type is automatic: a signal from an object on the relay's own thread arrives at once, one
 //  from another thread is queued through the relay's event loop, so the handler always runs on the relay's
 //  thread, which is the script engine's.
+//  Qt keeps a connection's method index in 16 bits, so slots are reused: a slot whose subscription ended serves a
+//  new one once any emission queued to it before the end has arrived. A script that never ends would otherwise
+//  run past 65,535 after about 65,000 subscriptions in its life, and Qt would call the wrong method.
 //
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
@@ -36,7 +39,7 @@ public:
 
     /// Subscribes to `signal` of `sender`, given as a name ("positionChanged") or a signature
     /// ("positionChanged(glm::vec3)"); a name picks the first signal of that name. Returns the connection id,
-    /// greater than zero, or zero with the error text.
+    /// greater than zero, or zero with the error text (also when every slot is taken: 65,531 at once).
     int connect(QObject* sender, const QString& signal, Handler handler, QString& error);
     /// Ends a subscription. False when the id is unknown.
     bool disconnect(int connection);
@@ -48,6 +51,9 @@ public:
     QMetaMethod signal(int connection) const;
 
     int qt_metacall(QMetaObject::Call call, int id, void** arguments) override;
+
+protected:
+    bool event(QEvent* event) override;
 
 private:
     struct Connection {
@@ -62,6 +68,7 @@ private:
 
     QHash<int, Connection> _connections;  // by connection id
     QHash<int, int> _connectionBySlot;    // slot index (relative to QObject's method count) to connection id
+    QVector<int> _freeSlots;              // slots whose subscriptions ended and whose queued emissions have all arrived
     int _nextConnection { 1 };
     int _nextSlot { 0 };
 };

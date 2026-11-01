@@ -11,6 +11,7 @@
 #include <cmath>
 #include <functional>
 
+#include <QtCore/QDateTime>
 #include <QtCore/QHash>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
@@ -317,6 +318,125 @@ namespace {
         P_INT("terrainVersion", TerrainVersion, uint32_t);
         P_STR("terrainLayers", TerrainLayers);
 
+        // a moving frame, and riding a track (PHYSICS.md 4.1 and 4.8)
+        P_BOOL("frame", Frame);
+        P_UUID("trackID", TrackID);
+        P_FLOAT("trackOffset", TrackOffset);
+        // the Track entity: the curve's points, bank and stops as one JSON list the points editor shows, wrapped with
+        // the loop flag ({"points": [{"x","y","z","bank","dwell"}...], "closed": bool}) so the editor can give the length
+        add("trackPoints", [](const EP& p) {
+            QJsonArray points;
+            const QVector<glm::vec3>& positions = p.getTrackPoints();
+            const QVector<float>& bank = p.getTrackBank();
+            const QVector<float>& dwell = p.getTrackDwell();
+            for (int i = 0; i < positions.size(); ++i) {
+                QJsonObject point;
+                point["x"] = (double)positions[i].x;
+                point["y"] = (double)positions[i].y;
+                point["z"] = (double)positions[i].z;
+                point["bank"] = i < bank.size() ? (double)bank[i] : 0.0;
+                point["dwell"] = i < dwell.size() ? (double)dwell[i] : 0.0;
+                points.append(point);
+            }
+            QJsonObject wrapper;
+            wrapper["points"] = points;
+            wrapper["closed"] = p.getTrackClosed();
+            return QVariant(QString::fromUtf8(QJsonDocument(wrapper).toJson(QJsonDocument::Compact)));
+        }, [](EP& p, const QVariant& v) {
+            QJsonDocument document = QJsonDocument::fromJson(v.toString().toUtf8());
+            QJsonArray points = document.isObject() ? document.object().value("points").toArray() : document.array();
+            QVector<glm::vec3> positions;
+            QVector<float> bank;
+            QVector<float> dwell;
+            for (const QJsonValue& item : points) {
+                QJsonObject point = item.toObject();
+                positions << glm::vec3((float)point.value("x").toDouble(), (float)point.value("y").toDouble(), (float)point.value("z").toDouble());
+                bank << (float)point.value("bank").toDouble();
+                dwell << (float)point.value("dwell").toDouble();
+            }
+            p.setTrackPoints(positions);
+            p.setTrackBank(bank);
+            p.setTrackDwell(dwell);
+        });
+        P_BOOL("trackClosed", TrackClosed);
+        P_FLOAT("trackSpeed", TrackSpeed);
+        P_FLOAT("trackAcceleration", TrackAcceleration);
+        P_STR("trackProfile", TrackProfile);
+        P_FLOAT("trackWidth", TrackWidth);
+        P_FLOAT("trackHeight", TrackHeight);
+        P_FLOAT("trackClearance", TrackClearance);
+        P_FLOAT("trackPylonSpacing", TrackPylonSpacing);
+        P_FLOAT("trackPylonFloor", TrackPylonFloor);
+        // the train's state, read-only: the physics server writes it
+        P_FLOAT("trainDistance", TrainDistance);
+        P_FLOAT("trainSpeed", TrainSpeed);
+        add("trainStation", [](const EP& p) {
+            quint16 station = p.getTrainStation();
+            return QVariant(station == TrackEntityItem::NO_STATION ? QString("none") : QString("point %1").arg(station + 1));
+        }, [](EP&, const QVariant&) {});
+        P_BOOL("trainReversed", TrainReversed);
+
+        // vehicle (PHYSICS.md 4.8): the group's definition, which the simulator rebuilds the vehicle from whenever it
+        // changes, and the state the simulator writes (shown read-only)
+#define G_VEC3(key, G, N)   add(key, [](const EP& p) { return QVariant(toQ(p.G().get##N())); }, [](EP& p, const QVariant& v) { p.G().set##N(fromQ(v.value<QVector3D>())); })
+#define G_INT(key, G, N, T) add(key, [](const EP& p) { return QVariant((int)p.G().get##N()); }, [](EP& p, const QVariant& v) { p.G().set##N((T)v.toInt()); })
+        G_STR("vehicle.type", getVehicle, Type);
+        G_FLOAT("vehicle.mass", getVehicle, Mass);
+        G_VEC3("vehicle.centerOfMass", getVehicle, CenterOfMass);
+        G_STR("vehicle.wheels", getVehicle, Wheels);
+        G_STR("vehicle.seats", getVehicle, Seats);
+        G_FLOAT("vehicle.maxSteerAngle", getVehicle, MaxSteerAngle);
+        G_FLOAT("vehicle.maxTorque", getVehicle, MaxTorque);
+        G_FLOAT("vehicle.minRPM", getVehicle, MinRPM);
+        G_FLOAT("vehicle.maxRPM", getVehicle, MaxRPM);
+        G_STR("vehicle.gearRatios", getVehicle, GearRatios);
+        G_FLOAT("vehicle.reverseGearRatio", getVehicle, ReverseGearRatio);
+        G_FLOAT("vehicle.finalDriveRatio", getVehicle, FinalDriveRatio);
+        G_FLOAT("vehicle.maxBrakeTorque", getVehicle, MaxBrakeTorque);
+        G_FLOAT("vehicle.maxHandBrakeTorque", getVehicle, MaxHandBrakeTorque);
+        G_STR("vehicle.driveType", getVehicle, DriveType);
+        G_FLOAT("vehicle.suspensionFrequency", getVehicle, SuspensionFrequency);
+        G_FLOAT("vehicle.suspensionDamping", getVehicle, SuspensionDamping);
+        G_STR("vehicle.wheel", getVehicle, Wheel);
+        G_STR("vehicle.axle", getVehicle, Axle);
+        add("vehicle.driver", [](const EP& p) { return QVariant(p.getVehicle().getDriver().toString(QUuid::WithoutBraces)); },
+            [](EP& p, const QVariant& v) { p.getVehicle().setDriver(QUuid(v.toString())); });
+        G_INT("vehicle.inputSequence", getVehicle, InputSequence, quint32);
+        G_FLOAT("vehicle.throttle", getVehicle, Throttle);
+        G_FLOAT("vehicle.steering", getVehicle, Steering);
+        G_FLOAT("vehicle.brake", getVehicle, Brake);
+        G_FLOAT("vehicle.handBrake", getVehicle, HandBrake);
+        G_FLOAT("vehicle.engineRPM", getVehicle, EngineRPM);
+        G_INT("vehicle.gear", getVehicle, Gear, int);
+        // the domain time of the state (microseconds since the epoch) as a clock time; the simulator's to write
+        add("vehicle.stateTime", [](const EP& p) {
+                quint64 time = p.getVehicle().getStateTime();
+                return QVariant(time == 0 ? QString() : QDateTime::fromMSecsSinceEpoch((qint64)(time / 1000)).toString("HH:mm:ss.zzz"));
+            }, [](EP&, const QVariant&) {});
+        G_FLOAT("vehicle.envelopeVolume", getVehicle, EnvelopeVolume);
+        G_VEC3("vehicle.centerOfBuoyancy", getVehicle, CenterOfBuoyancy);
+        G_FLOAT("vehicle.gasDensity", getVehicle, GasDensity);
+        G_FLOAT("vehicle.maxThrust", getVehicle, MaxThrust);
+        G_FLOAT("vehicle.maxVerticalThrust", getVehicle, MaxVerticalThrust);
+        G_VEC3("vehicle.thrustPoint", getVehicle, ThrustPoint);
+        G_VEC3("vehicle.dragArea", getVehicle, DragArea);
+        G_VEC3("vehicle.angularDragArea", getVehicle, AngularDragArea);
+        G_FLOAT("vehicle.rudderArea", getVehicle, RudderArea);
+        G_FLOAT("vehicle.elevatorArea", getVehicle, ElevatorArea);
+        G_VEC3("vehicle.finPoint", getVehicle, FinPoint);
+        G_FLOAT("vehicle.maxFinAngle", getVehicle, MaxFinAngle);
+        G_FLOAT("vehicle.ballastRate", getVehicle, BallastRate);
+        G_FLOAT("vehicle.ventRate", getVehicle, VentRate);
+        G_FLOAT("vehicle.pitch", getVehicle, Pitch);
+        G_FLOAT("vehicle.lift", getVehicle, Lift);
+        G_FLOAT("vehicle.trim", getVehicle, Trim);
+        G_FLOAT("vehicle.ballast", getVehicle, Ballast);
+        G_FLOAT("vehicle.fill", getVehicle, Fill);
+        G_FLOAT("vehicle.wingArea", getVehicle, WingArea);
+        G_FLOAT("vehicle.wingSpan", getVehicle, WingSpan);
+        G_VEC3("vehicle.wingPoint", getVehicle, WingPoint);
+        G_FLOAT("vehicle.tilt", getVehicle, Tilt);
+
         // particles
         P_BOOL("isEmitting", IsEmitting);
         P_FLOAT("lifespan", Lifespan);
@@ -365,6 +485,7 @@ namespace {
         P_BOOL("ignorePickIntersection", IgnorePickIntersection);
         P_STR("script", Script);
         P_STR("serverScripts", ServerScripts);
+        P_BOOL("scriptsEnabled", ScriptsEnabled);
         P_FLOAT("lifetime", Lifetime);
         P_STR("userData", UserData);
 
@@ -691,19 +812,21 @@ namespace {
                 lightmap.insert("params", QJsonArray { offset, std::round(v.toDouble() * 10000.0) / 10000.0 });
                 setLightmapEntry(p, lightmap);
             });
-        // a light's Shadows: Off is Cast Shadows off; Normal and Important cast, and Important, the entry "shadows"
-        // set to "important", goes before the other lights when more cast shadows than there are maps
+        // a light's Shadows: the entry "shadows", "on" or "important" (Important goes before the other lights when
+        // more cast shadows than there are maps); without it the light casts none. Off also turns Cast Shadows off,
+        // which is all that clients from before 2026-10-21 read, so that they leave it without shadows too
         a.insert(SHADOWS_KEY, Accessor {
             [=](const EP& p) {
-                if (!p.getCanCastShadow()) {
+                QString mode = userDataEntry(p, "shadows");
+                if (!p.getCanCastShadow() || (mode != "on" && mode != "important")) {
                     return QVariant("off");
                 }
-                return QVariant(userDataEntry(p, "shadows") == "important" ? "important" : "normal");
+                return QVariant(mode);
             },
             [=](EP& p, const QVariant& v) {
                 QString mode = v.toString();
                 p.setCanCastShadow(mode != "off");
-                setUserDataEntry(p, "shadows", mode == "important" ? mode : QString());
+                setUserDataEntry(p, "shadows", mode == "off" ? QString() : mode);
             }
         });
 
@@ -939,14 +1062,19 @@ namespace {
         auto with = [](PropertySpec& s, const char* showWhen) -> PropertySpec& { s.showWhen = showWhen; return s; };
         using K = PropertyKind;
 
-        // base
-        add(spec("name", "Name", K::String, "base"));
+        // base. Its header first, as Unity's: the Visible tick before the name; under them the Hierarchy rows' four
+        // toggles as icons (Caity, 10-27: "Look at how unity presents these toggles"), of which Locked and whether
+        // its scripts run (Caity, 10-26: "disable attached scripts", so a door stops opening) are the entity's own
+        add(spec("visible", "Visible", K::Bool, "base")).header = true;
+        add(spec("name", "Name", K::String, "base")).header = true;
+        add(spec("locked", "Locked", K::Bool, "base")).headerIcon = true;
+        add(spec("scriptsEnabled", "Scripts", K::Bool, "base")).headerIcon = true;
+        // everyone's clicks, which isn't the pointer icon's (that one is this builder's own, in Build mode)
+        add(spec("ignorePickIntersection", "Clicks Pass Through", K::Bool, "base"));
         add(spec("id", "ID", K::String, "base")).readOnly = true;   // to copy: for Parent, for scripts
         add(spec("description", "Description", K::String, "base"));
         add(spec("parentID", "Parent", K::String, "base"));
         add(spec("parentJointIndex", "Parent Joint", K::Int, "base"));
-        add(spec("visible", "Visible", K::Bool, "base"));
-        add(spec("locked", "Locked", K::Bool, "base"));
         en("entityPriority", "Priority", "base", { "automatic:Automatic", "prioritized:Prioritized", "static:Static" });
         en("renderLayer", "Render Layer", "base", { "world:World", "front:Front", "hud:HUD" });
         en("primitiveMode", "Primitive Mode", "base", { "solid:Solid", "lines:Wireframe" });
@@ -1110,10 +1238,11 @@ namespace {
         range(add(spec("range", "Range", K::Float, "light")), 0.01, 5000, 0.1, 2, "m");
         range(add(spec("intensity", "Intensity", K::Float, "light")), 0, 10000, 0.1, 2);
         range(add(spec("falloffRadius", "Falloff Radius", K::Float, "light")), 0, 10000, 0.1, 2, "m");
-        // whether the light casts shadows (its Cast Shadows, which the Behavior section leaves out for a light), and
-        // whether it comes before the other lights for one of the shadow maps there are at once (eight for spot
-        // lights, four for point lights); Important is kept in userData
-        en(SHADOWS_KEY, "Shadows", "light", { "off:Off", "normal:Normal", "important:Important" });
+        // whether the light casts shadows, which a light does only when turned On (Cast Shadows, which the Behavior
+        // section leaves out for a light, is on for every entity unless turned off), and whether it comes before the
+        // other lights for one of the shadow maps there are at once (eight for spot lights, four for point lights) and
+        // casts at any distance; On and Important are kept in userData
+        en(SHADOWS_KEY, "Shadows", "light", { "off:Off", "on:On", "important:Important" });
         with(range(add(spec("exponent", "Spot Exponent", K::Float, "light")), 0, DBL_MAX, 0.01, 2), "isSpotlight=true");
         with(range(add(spec("cutoff", "Spot Cutoff", K::Float, "light")), 0, 90, 0.5, 1, "°"), "isSpotlight=true");
         // a picture the light shines through (Unity's cookie): a spot light projects it down its cone, as a slide in a
@@ -1202,6 +1331,102 @@ namespace {
         add(spec("terrainClosedBox", "Closed Box", K::TerrainCaps, "terrain"));
         add(spec("terrainLayers", "Layers", K::TerrainLayers, "terrain"));
 
+        // track (PHYSICS.md 4.8): the curve a train rides, its schedule, the guideway it draws and the train's state
+        add(spec("trackClosed", "Loop", K::Bool, "track"));
+        range(add(spec("trackSpeed", "Speed", K::Float, "track")), 0, 200, 0.5, 1, "m/s");
+        range(add(spec("trackAcceleration", "Acceleration", K::Float, "track")), 0, 100, 0.1, 2, "m/s²");
+        add(spec("trackPoints", "Points", K::TrackPoints, "track"));
+        en("trackProfile", "Profile", "track_guideway", { "beam:Beam (a monorail's)", "none:None (dress it with models)" });
+        const char* BEAM = "trackProfile=beam";
+        with(range(add(spec("trackWidth", "Beam Width", K::Float, "track_guideway")), 0.01, 1000, 0.05, 2, "m"), BEAM);
+        with(range(add(spec("trackHeight", "Beam Height", K::Float, "track_guideway")), 0.01, 1000, 0.05, 2, "m"), BEAM);
+        with(range(add(spec("trackClearance", "Clearance", K::Float, "track_guideway")), -1000, 1000, 0.05, 2, "m"), BEAM);
+        with(range(add(spec("trackPylonSpacing", "Pylon Spacing", K::Float, "track_guideway")), 0, 1000, 0.5, 1, "m"), BEAM);
+        with(range(add(spec("trackPylonFloor", "Pylon Floor", K::Float, "track_guideway")), -1000, 1000, 0.1, 2, "m"), BEAM);
+        with(add(spec("color", "Color", K::Color, "track_guideway")), BEAM);
+        add(spec("trainDistance", "Distance", K::Float, "track_train")).readOnly = true;
+        add(spec("trainSpeed", "Speed", K::Float, "track_train")).readOnly = true;
+        add(spec("trainStation", "Station", K::String, "track_train")).readOnly = true;
+        add(spec("trainReversed", "Reversed", K::Bool, "track_train")).readOnly = true;
+
+        // a moving frame (PHYSICS.md 4.1): a physics world of its own that rides along; and a car on a track
+        add(spec("frame", "Reference Frame", K::Bool, "frame"));
+        add(spec("trackID", "Track", K::String, "frame"));
+        with(stepping(add(spec("trackOffset", "Track Offset", K::Float, "frame")), 0.1, 2, "m"), "trackID!=");
+
+        // vehicle (PHYSICS.md 4.8): the entity is the chassis or hull, with the names Unity gives a Rigidbody and a
+        // WheelCollider where it has them and Jolt's for the engine and transmission; the simulator (the physics server,
+        // or the owning client) rebuilds the vehicle as any of these change, so they can be tuned while it drives.
+        // The state at the bottom is what the simulator last published: read it, the simulator writes it.
+        const char* ANY_VEHICLE = "vehicle.type in wheeled,airship,aircraft";
+        const char* WHEELED = "vehicle.type=wheeled";
+        const char* WHEEL = "vehicle.type=wheel";
+        const char* AIRSHIP = "vehicle.type=airship";
+        const char* AIRCRAFT = "vehicle.type=aircraft";
+        const char* FLYING = "vehicle.type in airship,aircraft";
+        en("vehicle.type", "Type", "vehicle", { "none:None", "wheeled:Wheeled", "wheel:Wheel (of the parent)", "airship:Airship",
+            "aircraft:Aircraft" });
+        with(range(add(spec("vehicle.mass", "Mass", K::Float, "vehicle")), 0, 10000000, 1, 1, "kg"), ANY_VEHICLE);
+        with(stepping(add(spec("vehicle.centerOfMass", "Center of Mass", K::Vec3, "vehicle")), 0.01, 3, "m"), ANY_VEHICLE);
+        // the wheels and seats take the whole width, under their own headings
+        with(add(spec("vehicle.wheels", "Wheels", K::VehicleWheels, "vehicle")), WHEELED);
+        with(add(spec("vehicle.seats", "Seats", K::VehicleSeats, "vehicle")), ANY_VEHICLE);
+        with(range(add(spec("vehicle.maxSteerAngle", "Steering Lock", K::Float, "vehicle")), 0, 80, 1, 1, "°"), WHEELED);
+        en("vehicle.driveType", "Drive", "vehicle", { "rear:Rear wheels", "front:Front wheels", "all:All wheels" }, WHEELED);
+        with(range(add(spec("vehicle.maxTorque", "Engine Torque", K::Float, "vehicle")), 0, 1000000, 10, 0, "N m"), WHEELED);
+        with(range(add(spec("vehicle.minRPM", "Idle RPM", K::Float, "vehicle")), 1, 50000, 100, 0), WHEELED);
+        with(range(add(spec("vehicle.maxRPM", "Red Line RPM", K::Float, "vehicle")), 2, 50000, 100, 0), WHEELED);
+        with(add(spec("vehicle.gearRatios", "Gear Ratios", K::String, "vehicle")), WHEELED);
+        with(range(add(spec("vehicle.reverseGearRatio", "Reverse Ratio", K::Float, "vehicle")), 0.01, 100, 0.01, 2), WHEELED);
+        with(range(add(spec("vehicle.finalDriveRatio", "Final Drive Ratio", K::Float, "vehicle")), 0.01, 100, 0.01, 2), WHEELED);
+        with(range(add(spec("vehicle.maxBrakeTorque", "Brake Torque", K::Float, "vehicle")), 0, 1000000, 10, 0, "N m"), WHEELED);
+        with(range(add(spec("vehicle.maxHandBrakeTorque", "Hand Brake Torque", K::Float, "vehicle")), 0, 1000000, 10, 0, "N m"), WHEELED);
+        with(range(add(spec("vehicle.suspensionFrequency", "Suspension Frequency", K::Slider, "vehicle")), 0.1, 5, 0.01, 2, "Hz"), WHEELED);
+        with(range(add(spec("vehicle.suspensionDamping", "Suspension Damping", K::Slider, "vehicle")), 0, 2, 0.01, 2), WHEELED);
+        // a wheel entity: a child of the chassis that shows one of its wheels
+        with(add(spec("vehicle.wheel", "Wheel Name", K::String, "vehicle")), WHEEL);
+        en("vehicle.axle", "Axle Axis", "vehicle", { "x:X (a model made for Unity)", "y:Y (a Cylinder shape)", "z:Z" }, WHEEL);
+        // an airship: a hull with buoyancy, propellers, fins and ballast
+        with(range(add(spec("vehicle.envelopeVolume", "Envelope Volume", K::Float, "vehicle")), 0, 10000000, 10, 1, "m³"), AIRSHIP);
+        with(stepping(add(spec("vehicle.centerOfBuoyancy", "Center of Buoyancy", K::Vec3, "vehicle")), 0.01, 3, "m"), AIRSHIP);
+        with(range(add(spec("vehicle.gasDensity", "Gas Density", K::Float, "vehicle")), 0, 2, 0.0001, 4, "kg/m³"), AIRSHIP);
+        with(range(add(spec("vehicle.maxThrust", "Thrust", K::Float, "vehicle")), 0, 10000000, 10, 0, "N"), FLYING);
+        with(range(add(spec("vehicle.maxVerticalThrust", "Vertical Thrust", K::Float, "vehicle")), 0, 10000000, 10, 0, "N"), AIRSHIP);
+        with(stepping(add(spec("vehicle.thrustPoint", "Thrust Point", K::Vec3, "vehicle")), 0.01, 3, "m"), FLYING);
+        // an aircraft: a wing, tilting engines and a tail
+        with(range(add(spec("vehicle.wingArea", "Wing Area", K::Float, "vehicle")), 0, 100000, 0.1, 2, "m²"), AIRCRAFT);
+        with(range(add(spec("vehicle.wingSpan", "Wing Span", K::Float, "vehicle")), 0, 1000, 0.1, 2, "m"), AIRCRAFT);
+        with(stepping(add(spec("vehicle.wingPoint", "Wing Point", K::Vec3, "vehicle")), 0.01, 3, "m"), AIRCRAFT);
+        with(range(add(spec("vehicle.rudderArea", "Rudder Area", K::Float, "vehicle")), 0, 100000, 0.1, 2, "m²"), FLYING);
+        with(range(add(spec("vehicle.elevatorArea", "Elevator Area", K::Float, "vehicle")), 0, 100000, 0.1, 2, "m²"), FLYING);
+        with(stepping(add(spec("vehicle.finPoint", "Fin Point", K::Vec3, "vehicle")), 0.01, 3, "m"), FLYING);
+        with(range(add(spec("vehicle.maxFinAngle", "Fin Deflection", K::Float, "vehicle")), 0, 90, 1, 1, "°"), FLYING);
+        with(stepping(add(spec("vehicle.dragArea", "Drag Area", K::Vec3, "vehicle")), 0.1, 2, "m²"), FLYING);
+        with(stepping(add(spec("vehicle.angularDragArea", "Angular Drag Area", K::Vec3, "vehicle")), 0.1, 2, "m⁵"), FLYING);
+        with(range(add(spec("vehicle.ballastRate", "Ballast Drop Rate", K::Float, "vehicle")), 0, 100000, 1, 1, "kg/s"), AIRSHIP);
+        with(range(add(spec("vehicle.ventRate", "Vent Rate", K::Float, "vehicle")), 0, 1, 0.001, 3, "/s"), AIRSHIP);
+        with(range(add(spec("vehicle.ballast", "Ballast", K::Float, "vehicle")), 0, 10000000, 1, 1, "kg"), AIRSHIP);
+        // the state, read-only
+        auto state = [&](const char* key, const char* label, const char* showWhen, double min, double max, int decimals, const char* unit = "") {
+            PropertySpec& s = with(range(add(spec(key, label, K::Float, "vehicle_state")), min, max, 0.01, decimals, unit), showWhen);
+            s.readOnly = true;
+            return &s;
+        };
+        with(add(spec("vehicle.driver", "Driver", K::String, "vehicle_state")), ANY_VEHICLE).readOnly = true;
+        state("vehicle.inputSequence", "Input Sequence", ANY_VEHICLE, 0, DBL_MAX, 0);
+        state("vehicle.throttle", "Throttle", ANY_VEHICLE, -1, 1, 2);
+        state("vehicle.steering", "Steering", ANY_VEHICLE, -1, 1, 2);
+        state("vehicle.brake", "Brake", WHEELED, 0, 1, 2);
+        state("vehicle.handBrake", "Hand Brake", WHEELED, 0, 1, 2);
+        state("vehicle.engineRPM", "Engine RPM", WHEELED, 0, DBL_MAX, 0);
+        state("vehicle.gear", "Gear", WHEELED, -1, 100, 0);
+        state("vehicle.pitch", "Pitch", FLYING, -1, 1, 2);
+        state("vehicle.lift", "Lift", FLYING, -1, 1, 2);
+        state("vehicle.trim", "Trim", AIRSHIP, -1, 1, 2);
+        state("vehicle.fill", "Fill", AIRSHIP, 0, 1, 3);
+        state("vehicle.tilt", "Tilt", AIRCRAFT, 0, 1, 2);
+        with(add(spec("vehicle.stateTime", "State Time", K::String, "vehicle_state")), ANY_VEHICLE).readOnly = true;
+
         // particles
         add(spec("isEmitting", "Emit", K::Bool, "particles"));
         range(add(spec("lifespan", "Lifespan", K::Float, "particles")), 0, 86400, 0.01, 2, "s");
@@ -1254,7 +1479,6 @@ namespace {
         // its Shadows field, and a zone or a material casts none, so on those the box would only mislead
         with(add(spec("canCastShadow", "Cast Shadows", K::Bool, "behavior")), "type not in Light,Zone,Material");
         add(spec("href", "Link", K::Url, "behavior"));
-        add(spec("ignorePickIntersection", "Ignore Picking", K::Bool, "behavior"));
         add(spec("script", "Script", K::Url, "behavior"));
         add(spec("serverScripts", "Server Script", K::Url, "behavior"));
         stepping(add(spec("lifetime", "Lifetime", K::Float, "behavior")), 1, 0, "s");
@@ -1299,6 +1523,9 @@ namespace {
         { "material_data", "Material Data", true },
         { "grid", "Grid", false },
         { "terrain", "Terrain", false },
+        { "track", "Track", false },
+        { "track_guideway", "Guideway", true },
+        { "track_train", "Train", true },
         { "particles", "Particles", false },
         { "particles_emit", "Emit", true },
         { "particles_size", "Size", true },
@@ -1310,6 +1537,9 @@ namespace {
         { "behavior", "Behavior", false },
         { "collision", "Collision", false },
         { "physics", "Physics", false },
+        { "vehicle", "Vehicle", false },
+        { "vehicle_state", "Vehicle State", true },
+        { "frame", "Moving Frame", false },
         { "userData", "User Data", false }
     };
 }
@@ -1358,13 +1588,13 @@ static QStringList typeSections(EntityTypes::EntityType type, bool multiple) {
         case EntityTypes::Box:
         case EntityTypes::Sphere:
         case EntityTypes::Shape:
-            return { "base", "spatial", "shape", "reflectionProbe", "impostor", "behavior", "collision", "physics" };
+            return { "base", "spatial", "shape", "reflectionProbe", "impostor", "behavior", "collision", "physics", "vehicle", "vehicle_state", "frame" };
         case EntityTypes::Text:
             return { "base", "spatial", "text", "behavior", "collision", "physics" };
         case EntityTypes::Zone:
             return { "base", "spatial", "zone", "behavior", "physics" };
         case EntityTypes::Model:
-            return { "base", "spatial", "model", "lightmap", "impostor", "behavior", "collision", "physics" };
+            return { "base", "spatial", "model", "lightmap", "impostor", "behavior", "collision", "physics", "vehicle", "vehicle_state", "frame" };
         case EntityTypes::Image:
             return { "base", "spatial", "image", "behavior", "collision", "physics" };
         case EntityTypes::Web:
@@ -1380,8 +1610,10 @@ static QStringList typeSections(EntityTypes::EntityType type, bool multiple) {
             return { "base", "spatial", "grid", "behavior", "physics" };
         case EntityTypes::Terrain:
             return { "base", "spatial", "terrain", "behavior", "collision" };
+        case EntityTypes::Track:
+            return { "base", "spatial", "track", "track_guideway", "track_train", "behavior", "collision" };
         default:
-            return { "base", "spatial", "behavior", "collision", "physics" };
+            return { "base", "spatial", "behavior", "collision", "physics", "frame" };
     }
 }
 
@@ -1428,6 +1660,9 @@ bool takesEntry(const QString& key, const EntityItemProperties& properties) {
 QStringList storedKeys(const QString& key) {
     if (key == QStringLiteral("scale")) {
         return { QStringLiteral("dimensions") };
+    }
+    if (key == QStringLiteral("trackPoints")) {
+        return { key, QStringLiteral("dimensions") };   // a points edit refits the track's box (Editor::fitTrackBox)
     }
     if (key == QLatin1String(SHADOWS_KEY)) {
         return { QStringLiteral("userData"), QStringLiteral("canCastShadow") };

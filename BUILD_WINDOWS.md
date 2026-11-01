@@ -39,6 +39,7 @@ winget install -e --id Microsoft.PowerShell --source winget --installer-type wix
 winget install -e --id Python.Python.3.13
 winget install -e --id OpenJS.NodeJS.LTS
 winget install -e --id Git.Git
+winget install -e --id Rustlang.Rustup
 ```
 
 | Tool | Why |
@@ -48,6 +49,7 @@ winget install -e --id Git.Git
 | Python 3 | Runs the build's setup scripts. 3.13 is tested |
 | Node.js (LTS) | Builds the in-world web UI |
 | Git | Gets the code, and some dependencies |
+| Rust (rustup) | Builds chat's library (`libraries/chat/native`), which is written in Rust. The build installs the Rust version that library needs the first time |
 
 Close the terminal and open a new one, so it sees the new programs, and check that each one answers:
 
@@ -56,6 +58,7 @@ pwsh --version
 python --version
 node --version
 git --version
+rustup --version
 ```
 
 ## 2. Install Qt 5.15.2
@@ -162,8 +165,9 @@ VS Code builds Darkride with the same compiler and presets as steps 4 and 5, thr
 These SDKs can no longer be downloaded, so the build leaves out the plugins that need them:
 
 -   **Oculus PC SDK.** Rift and Quest headsets work through SteamVR with the OpenVR plugin. If you have `LibOVR.lib` in the vcpkg tree, `oculus-plugin` is built again.
--   **Leap Motion 2.3 SDK.**
--   **Tea protocol plugin**, a prebuilt binary on every platform. It is used if its extracted archive is in `plugins/tea-protocol-plugin-prebuilt/tea-protocol-plugin-2021-12-12`.
+
+The Leap Motion plugin and the prebuilt `tea:` protocol plugin, whose downloads are gone too, were removed from the code
+(10-22).
 
 ## Troubleshooting
 
@@ -172,7 +176,7 @@ These SDKs can no longer be downloaded, so the build leaves out the plugins that
 | `PowerShell 7 (pwsh) is not on the PATH`, `PowerShell 7 is the Microsoft Store version`, or `Could not find PowerShell Core` | Install PowerShell 7 with `winget install -e --id Microsoft.PowerShell --source winget --installer-type wix` (step 1), not the Microsoft Store version, then close every terminal and open a **new** one. `where.exe pwsh` should find `C:\Program Files\PowerShell\7\pwsh.exe`; a `pwsh.exe` in `AppData\Local\Microsoft\WindowsApps` is the Store version or winget's MSIX package, which vcpkg can't use: uninstall it (**Settings → Apps → Installed apps → PowerShell**) and install the regular one with `winget install -e --id Microsoft.PowerShell --source winget --installer-type wix`. Configure again; vcpkg keeps the libraries it already built |
 | `Git (git) is not on the PATH` | Install Git with `winget install -e --id Git.Git` (step 1), then open a **new** terminal and configure again |
 | `No suitable Visual Studio instances were found`, then `vcpkg configuration missing` | vcpkg found no compiler it can use. In the Visual Studio Installer, check that **MSVC v143 - VS 2022 C++ x64/x86 build tools (v14.44-17.14)** is ticked (a default of the C++ workload), and that the **English** language pack is installed (**Language packs** tab), which vcpkg also needs. Then configure again |
-| `has no v143 build tools`, or `error MSB8020: The build tools for Visual Studio 2022 (Platform Toolset = 'v143') cannot be found` | The Visual Studio CMake picked lacks the v143 compiler. The message names it and gives the command to add the component; or, in the Visual Studio Installer, click **Modify** on that install and tick **MSVC v143 - VS 2022 C++ x64/x86 build tools (v14.44-17.14)**. With more than one install (say Community and Build Tools), it may be the one you didn't expect: see [More than one Visual Studio installed](BUILD_WINDOWS_VISUAL_STUDIO.md#more-than-one-visual-studio-installed). Then delete the `build` folder and configure again |
+| `has no v143 build tools`, or `error MSB8020: The build tools for Visual Studio 2022 (Platform Toolset = 'v143') cannot be found` | The Visual Studio CMake picked lacks the v143 compiler. The message names it and gives the command to add the component; or, in the Visual Studio Installer, click **Modify** on that install and tick **MSVC v143 - VS 2022 C++ x64/x86 build tools (v14.44-17.14)**. With more than one install (say Community and Build Tools), it may be the one you didn't expect: see [More than one Visual Studio installed](BUILD_WINDOWS_VISUAL_STUDIO.md#more-than-one-visual-studio-installed). A separate Visual Studio 2022 install doesn't give Visual Studio 2026 the v143 tools, but you can build with it: delete the `build` folder, then `cmake --preset vs2022` and `cmake --build --preset vs2022`. Otherwise delete the `build` folder and configure again |
 | Errors about paths that are too long | Keep the repository near the root of the drive (step 3), and if your Windows user name is long, set a short `TIVOLI_VCPKG_BASE` such as `C:\vcpkg` (step 4) |
 | `'stdext': is not a class or namespace name` in Qt's `qvector.h` | Visual Studio 2026's own compiler can't build Qt 5.15's headers. Configure with the preset (step 4), which uses the v143 compiler, in a new build folder. Configuring by hand, add `-T v143` |
 | `Compatibility with CMake < 3.5 has been removed`, when configuring Darkride | Configure with the preset (step 4), which sets it. Configuring by hand, add `"-DCMAKE_POLICY_VERSION_MINIMUM=3.5"` |

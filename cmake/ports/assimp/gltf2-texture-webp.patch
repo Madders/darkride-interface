@@ -1,0 +1,20 @@
+glTF EXT_texture_webp: a texture with no plain "source" takes its picture from the extension's source, so a
+model whose textures are WebP only (Blender's Image Format: WebP without a fallback) shows them instead of coming
+out untextured.
+
+--- a/code/AssetLib/glTF2/glTF2Asset.inl
++++ b/code/AssetLib/glTF2/glTF2Asset.inl
+@@ -1135,6 +1135,13 @@
+ inline void Texture::Read(Value &obj, Asset &r) {
+     if (Value *sourceVal = FindUInt(obj, "source")) {
+         source = r.images.Retrieve(sourceVal->GetUint());
++    } else if (Value *webp = FindExtension(obj, "EXT_texture_webp")) {
++        // Darkride: a texture whose picture is WebP only names it in EXT_texture_webp (what Blender writes for Image
++        // Format: WebP without a fallback); it is read as any other picture, and the app decodes WebP. A texture with
++        // a plain source (a PNG or JPEG fallback) keeps it.
++        if (Value *webpSourceVal = FindUInt(*webp, "source")) {
++            source = r.images.Retrieve(webpSourceVal->GetUint());
++        }
+     }
+ 
+     if (Value *samplerVal = FindUInt(obj, "sampler")) {

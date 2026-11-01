@@ -87,7 +87,8 @@ public:
 private:
     QNetworkDiskCache* networkDiskCache;
 
-    Setting::Handle<float> maximumCacheSizeSetting{ "maximumCacheSize", 2.0f };
+    // GB: the HTTP cache of the models, scripts, sounds and source images (a large world is about 0.5 GB of it)
+    Setting::Handle<float> maximumCacheSizeSetting{ "maximumCacheSize", 4.0f };
     Setting::Handle<QString> cacheDirectorySetting{
         "cacheDirectory", PathUtils::getAppLocalDataFilePath("cache")
     };

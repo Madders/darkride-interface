@@ -1,0 +1,11 @@
+{
+  "port": 40105,
+  "metaverse": "https://vr.darkride.ai",
+  "world": {"address": "127.0.0.1", "udp_port": 40102, "name": "My world"},
+  "residents": ["duck_guide"],
+  "assignment_client": "",
+  "body_script": "../scripts/ai-residents/resident-body.js",
+  "logs": "logs",
+  "limits": {"say_per_minute": 20, "requests_per_second": 20, "speed_max": 6.0},
+  "body_grace_seconds": 60
+}

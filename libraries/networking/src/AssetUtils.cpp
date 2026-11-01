@@ -111,21 +111,4 @@ bool isValidHash(const AssetHash& hash) {
     return hashRegex.exactMatch(hash);
 }
 
-QString bakingStatusToString(BakingStatus status) {
-    switch (status) {
-        case NotBaked:
-            return "Not Baked";
-        case Pending:
-            return "Pending";
-        case Baking:
-            return "Baking";
-        case Baked:
-            return "Baked";
-        case Error:
-            return "Error";
-        default:
-            return "--";
-    }
-}
-
 } // namespace AssetUtils

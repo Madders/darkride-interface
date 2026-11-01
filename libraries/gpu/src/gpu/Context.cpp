@@ -37,6 +37,7 @@ void ContextStats::evalDelta(const ContextStats& begin, const ContextStats& end)
     _RSAmountTextureMemoryBounded = subWrap<uint64_t>(end._RSAmountTextureMemoryBounded, begin._RSAmountTextureMemoryBounded);
 
     _DSNumAPIDrawcalls = subWrap<uint32_t>(end._DSNumAPIDrawcalls, begin._DSNumAPIDrawcalls);
+    _DSNumInstancedDrawcalls = subWrap<uint32_t>(end._DSNumInstancedDrawcalls, begin._DSNumInstancedDrawcalls);
     _DSNumDrawcalls = subWrap<uint32_t>(end._DSNumDrawcalls, begin._DSNumDrawcalls);
     _DSNumTriangles= subWrap<uint32_t>(end._DSNumTriangles, begin._DSNumTriangles);
 

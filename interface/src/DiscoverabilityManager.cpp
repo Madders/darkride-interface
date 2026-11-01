@@ -18,12 +18,8 @@
 #include <AddressManager.h>
 #include <DomainHandler.h>
 #include <NodeList.h>
-#include <plugins/PluginManager.h>
-#include <plugins/SteamClientPlugin.h>
-#include <UserActivityLogger.h>
 #include <UUID.h>
 
-#include "CrashHandler.h"
 #include "Menu.h"
 
 const Discoverability::Mode DEFAULT_DISCOVERABILITY_MODE = Discoverability::Connections;
@@ -117,23 +113,7 @@ void DiscoverabilityManager::updateLocation() {
                                    QNetworkAccessManager::PutOperation,
                                    callbackParameters, QJsonDocument(rootObject).toJson());
 
-    } else if (UserActivityLogger::getInstance().isEnabled()) {
-        // we still send a heartbeat to the metaverse server for stats collection
-
-        JSONCallbackParameters callbackParameters;
-        callbackParameters.callbackReceiver = this;
-        callbackParameters.jsonCallbackMethod = "handleHeartbeatResponse";
-
-        accountManager->sendRequest(API_USER_HEARTBEAT_PATH, AccountManagerAuth::Optional,
-                                   QNetworkAccessManager::PutOperation, callbackParameters);
     }
-
-    // Update Steam and crash logger
-    QUrl currentAddress = addressManager->currentFacingPublicAddress();
-    if (auto steamClient = PluginManager::getInstance()->getSteamClientPlugin()) {
-        steamClient->updateLocation(domainHandler.getHostname(), currentAddress);
-    }
-    setCrashAnnotation("address", currentAddress.toString().toStdString());
 }
 
 void DiscoverabilityManager::handleHeartbeatResponse(QNetworkReply* requestReply) {

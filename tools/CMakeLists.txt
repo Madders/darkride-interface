@@ -1,11 +1,4 @@
 # add the tool directories
-find_npm()
-
-if (NPM_EXECUTABLE)
-  add_subdirectory(jsdoc)
-  set_target_properties(jsdoc PROPERTIES FOLDER "Tools")
-endif()
-
 function(check_test name)
     set(RESULT TRUE)
     if (BUILD_TOOLS_INCLUDE)
@@ -20,24 +13,13 @@ endfunction()
 
 if (BUILD_TOOLS)
     set(ALL_TOOLS 
-        udt-test
-        vhacd-util
-        gpu-frame-player
-        ice-client
-        ktx-tool
         ac-client
-        skeleton-dump
         auto-rig
         unity-avatar
         atp-client
-        oven
     )
 
     # Allow different tools for stable builds
-    if (STABLE_BUILD)
-    else()
-        list(APPEND ALL_TOOLS nitpick)
-    endif()
 
     foreach(TOOL ${ALL_TOOLS})
         check_test(${TOOL})

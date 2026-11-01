@@ -39,6 +39,7 @@ GLBackend::CommandCall GLBackend::_commandCalls[Batch::NUM_COMMANDS] =
     (&::gpu::gl::GLBackend::do_drawIndexedInstanced),
     (&::gpu::gl::GLBackend::do_multiDrawIndirect),
     (&::gpu::gl::GLBackend::do_multiDrawIndexedIndirect),
+    (&::gpu::gl::GLBackend::do_drawIndexedInstances),
 
     (&::gpu::gl::GLBackend::do_setInputFormat),
     (&::gpu::gl::GLBackend::do_setInputBuffer),
@@ -220,6 +221,7 @@ void GLBackend::renderPassTransfer(const Batch& batch) {
                 case Batch::COMMAND_drawIndexedInstanced:
                 case Batch::COMMAND_multiDrawIndirect:
                 case Batch::COMMAND_multiDrawIndexedIndirect:
+                case Batch::COMMAND_drawIndexedInstances:
                 {
                     Vec2u outputSize{ 1,1 };
 
@@ -292,7 +294,8 @@ void GLBackend::renderPassDraw(const Batch& batch) {
             case Batch::COMMAND_drawInstanced:
             case Batch::COMMAND_drawIndexedInstanced:
             case Batch::COMMAND_multiDrawIndirect:
-            case Batch::COMMAND_multiDrawIndexedIndirect: {
+            case Batch::COMMAND_multiDrawIndexedIndirect:
+            case Batch::COMMAND_drawIndexedInstances: {
 #ifdef GPU_BATCH_DETAILED_TRACING
                 PROFILE_RANGE(render_gpu_gl_detail, "drawcall");
 #endif 

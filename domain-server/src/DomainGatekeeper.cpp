@@ -32,11 +32,10 @@ DomainGatekeeper::DomainGatekeeper(DomainServer* server) :
     initLocalIDManagement();
 }
 
-void DomainGatekeeper::addPendingAssignedNode(const QUuid& nodeUUID, const QUuid& assignmentUUID,
-                                              const QUuid& walletUUID, const QString& nodeVersion) {
+void DomainGatekeeper::addPendingAssignedNode(const QUuid& nodeUUID, const QUuid& assignmentUUID, const QString& nodeVersion) {
     _pendingAssignedNodes.emplace(std::piecewise_construct,
                                   std::forward_as_tuple(nodeUUID),
-                                  std::forward_as_tuple(assignmentUUID, walletUUID, nodeVersion));
+                                  std::forward_as_tuple(assignmentUUID, nodeVersion));
 }
 
 QUuid DomainGatekeeper::assignmentUUIDForPendingAssignment(const QUuid& tempUUID) {
@@ -364,7 +363,6 @@ SharedNodePointer DomainGatekeeper::processAssignmentConnectRequest(const NodeCo
 
     // set assignment related data on the linked data for this node
     nodeData->setAssignmentUUID(matchingQueuedAssignment->getUUID());
-    nodeData->setWalletUUID(it->second.getWalletUUID());
     nodeData->setNodeVersion(it->second.getNodeVersion());
     nodeData->setHardwareAddress(nodeConnection.hardwareAddress);
     nodeData->setMachineFingerprint(nodeConnection.machineFingerprint);
@@ -727,9 +725,11 @@ void DomainGatekeeper::publicKeyJSONErrorCallback(QNetworkReply* requestReply) {
 }
 
 void DomainGatekeeper::sendProtocolMismatchConnectionDenial(const HifiSockAddr& senderSockAddr) {
-    QString protocolVersionError = "Protocol version mismatch - Domain version: " + QCoreApplication::applicationVersion();
+    // Only a 1.0 app shows this text (it puts it under "Unable to connect to the location you are visiting."); 1.1 and
+    // later show their own sentence for a mismatch. A 1.0 app is always the older side, so the text says to update.
+    QString protocolVersionError = "This world runs a newer version of Darkride. Download it at darkride.ai/download";
 
-    qDebug() << "Protocol Version mismatch - denying connection.";
+    qDebug() << "Protocol Version mismatch - denying connection. Domain version:" << QCoreApplication::applicationVersion();
 
     sendConnectionDeniedPacket(protocolVersionError, senderSockAddr,
                                DomainHandler::ConnectionRefusedReason::ProtocolMismatch);

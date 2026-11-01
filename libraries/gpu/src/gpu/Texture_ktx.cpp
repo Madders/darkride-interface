@@ -267,8 +267,10 @@ PixelsPointer KtxStorage::getMipFace(uint16 level, uint8 face) const {
         }
     }
     if (!storageView) {
+        // the cache file can't be read (gone from the KTX cache, or not openable): the mip is missing, the callers skip it
         qWarning() << "Failed to get a valid storageView for faceSize=" << faceSize << "  faceOffset=" << faceOffset
                     << "out of valid file " << QString::fromStdString(_filename);
+        return PixelsPointer();
     }
     return storageView->toMemoryStorage();
 }

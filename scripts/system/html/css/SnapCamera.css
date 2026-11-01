@@ -1,0 +1,523 @@
+/*
+//  SnapCamera.css
+//
+//  Snap's camera on desktop: the frame over the world, its switch bar and its shutter bar, in the interface's
+//  colours (navy glass; cyan for what is on, violet for the action to take).
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+*/
+
+:root {
+    --night: #091023;
+    --bg-darker: #171b2d;
+    --bg: #1c2136;
+    --surface: #242a44;
+    --selection: #333a5a;
+    --text: #f4f6f8;
+    --text-muted: #9aa1bd;
+    --cyan: #00afff;
+    --violet: #a548ff;
+    --red: #ff5555;
+    --glass: rgba(23, 27, 45, 0.78);
+    --glass-edge: rgba(244, 246, 248, 0.14);
+}
+
+html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.part[hidden], [hidden] {
+    display: none !important;
+}
+
+button {
+    font-family: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+
+button:focus {
+    outline: none;
+}
+
+button:focus-visible {
+    box-shadow: 0 0 0 2px var(--cyan);
+}
+
+.glass {
+    background: var(--glass);
+    border: 1px solid var(--glass-edge);
+    box-shadow: inset 0 1px 0 rgba(244, 246, 248, 0.14), 0 8px 24px rgba(9, 16, 35, 0.45);
+}
+
+.round {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* --- the switch bar ------------------------------------------------------------------------------------------- */
+
+#bar-part {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+}
+
+.chips {
+    height: 40px;
+    padding: 4px;
+    box-sizing: border-box;
+    border-radius: 20px;
+    display: flex;
+    gap: 4px;
+}
+
+.chip {
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 16px;
+    border: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text);
+    background: transparent;
+}
+
+.chip:hover {
+    background: rgba(244, 246, 248, 0.08);
+}
+
+.chip.on {
+    color: var(--cyan);
+    background: rgba(0, 175, 255, 0.16);
+}
+
+/* a time ("3s"), not a word */
+#timer-label {
+    text-transform: none;
+    letter-spacing: 0.02em;
+}
+
+/* --- the shutter bar ------------------------------------------------------------------------------------------ */
+
+#dock-part {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dock {
+    height: 100px;
+    padding: 0 18px;
+    box-sizing: border-box;
+    border-radius: 50px;
+    display: flex;
+    align-items: center;
+    gap: 26px;
+}
+
+.thumb {
+    position: relative;
+    width: 52px;
+    height: 52px;
+    padding: 0;
+    border-radius: 12px;
+    border: 1.5px solid rgba(244, 246, 248, 0.4);
+    background: var(--bg-darker);
+    overflow: visible;
+}
+
+.thumb img {
+    width: 100%;
+    height: 100%;
+    border-radius: 10px;
+    object-fit: cover;
+    display: block;
+}
+
+.thumb .empty {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(244, 246, 248, 0.35);
+}
+
+.thumb .badge {
+    position: absolute;
+    right: -7px;
+    bottom: -7px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 2px solid var(--night);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.thumb .badge.in-files {
+    background: var(--cyan);
+}
+
+.thumb .badge.local {
+    background: var(--text-muted);
+}
+
+.thumb .badge.saving {
+    background: var(--selection);
+}
+
+.shutter {
+    position: relative;
+    width: 80px;
+    height: 80px;
+    padding: 0;
+    border-radius: 50%;
+    border: 4px solid var(--text);
+    background: rgba(9, 16, 35, 0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 8px 28px rgba(9, 16, 35, 0.5);
+}
+
+.shutter .core {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: var(--violet);
+    box-shadow: 0 0 24px rgba(165, 72, 255, 0.6), inset 0 2px 0 rgba(244, 246, 248, 0.35);
+    transition: width 0.12s, height 0.12s, border-radius 0.12s;
+}
+
+.shutter:active .core {
+    width: 52px;
+    height: 52px;
+}
+
+.shutter.counting .core {
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+}
+
+.shutter:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+
+.shutter .ring {
+    position: absolute;
+    left: -12px;
+    top: -12px;
+    width: 96px;
+    height: 96px;
+    transform: rotate(-90deg);
+    pointer-events: none;
+}
+
+.flip.on {
+    color: var(--cyan);
+    border-color: rgba(0, 175, 255, 0.5);
+}
+
+.flip {
+    width: 52px;
+    height: 52px;
+}
+
+/* --- the frame over the world --------------------------------------------------------------------------------- */
+
+#frame-part {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+.band {
+    position: absolute;
+    background: rgba(9, 16, 35, 0.52);
+}
+
+.corner {
+    position: absolute;
+    width: 26px;
+    height: 26px;
+    border-color: rgba(244, 246, 248, 0.85);
+    border-style: solid;
+    border-width: 0;
+}
+
+.corner.tl { border-left-width: 2px; border-top-width: 2px; border-top-left-radius: 6px; }
+.corner.tr { border-right-width: 2px; border-top-width: 2px; border-top-right-radius: 6px; }
+.corner.bl { border-left-width: 2px; border-bottom-width: 2px; border-bottom-left-radius: 6px; }
+.corner.br { border-right-width: 2px; border-bottom-width: 2px; border-bottom-right-radius: 6px; }
+
+#flash {
+    position: absolute;
+    background: var(--text);
+    opacity: 0;
+    pointer-events: none;
+}
+
+#flash.go {
+    animation: snap-flash 0.45s ease-out;
+}
+
+@keyframes snap-flash {
+    0% { opacity: 0.75; }
+    100% { opacity: 0; }
+}
+
+#toast {
+    position: absolute;
+    left: 50%;
+    top: 76px;
+    transform: translateX(-50%);
+    height: 36px;
+    padding: 0 16px 0 12px;
+    border-radius: 18px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+#toast.ok {
+    border-color: rgba(0, 175, 255, 0.4);
+}
+
+#toast .detail {
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+#countdown {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+#countdown-number {
+    font-size: 220px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.04em;
+    color: rgba(244, 246, 248, 0.94);
+    text-shadow: 0 0 40px rgba(165, 72, 255, 0.55);
+}
+
+#countdown-number.pop {
+    animation: snap-pop 0.35s ease-out;
+}
+
+@keyframes snap-pop {
+    0% { transform: scale(1.25); opacity: 0.3; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+#countdown-rabbit {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 84px;
+    height: 84px;
+    margin: -170px 0 0 40px;
+    color: var(--text);
+    filter: drop-shadow(0 0 14px rgba(0, 175, 255, 0.55));
+}
+
+#countdown-rabbit.hop {
+    animation: snap-hop 0.9s cubic-bezier(0.3, 0.7, 0.4, 1) both;
+}
+
+@keyframes snap-hop {
+    0% { transform: translate(-140px, 60px) rotate(-14deg); }
+    50% { transform: translate(-20px, -40px) rotate(2deg); }
+    100% { transform: translate(60px, 30px) rotate(12deg); }
+}
+
+/* --- the review card ------------------------------------------------------------------------------------------ */
+
+#review {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(9, 16, 35, 0.64);
+}
+
+.card {
+    width: 760px;
+    max-width: 92vw;
+    max-height: 94vh;
+    box-sizing: border-box;
+    padding: 22px 28px 24px;
+    border-radius: 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    background: rgba(36, 42, 68, 0.94);
+    border: 1px solid rgba(165, 72, 255, 0.45);
+    box-shadow: inset 0 1px 0 rgba(244, 246, 248, 0.12), 0 0 48px rgba(165, 72, 255, 0.18), 0 24px 60px rgba(9, 16, 35, 0.6);
+}
+
+.card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.card-head h2 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 800;
+}
+
+.card-head .when {
+    margin-left: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.picture {
+    position: relative;
+    width: 100%;
+    padding-top: 52.36%;
+    border-radius: 16px;
+    overflow: hidden;
+    background: var(--bg-darker);
+}
+
+.picture img {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.picture .gif-badge {
+    position: absolute;
+    left: 14px;
+    top: 14px;
+    height: 28px;
+    padding: 0 10px 0 8px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--cyan);
+    background: rgba(9, 16, 35, 0.6);
+    border: 1px solid rgba(0, 175, 255, 0.35);
+}
+
+.strip {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+}
+
+.strip button {
+    width: 64px;
+    height: 34px;
+    padding: 0;
+    border-radius: 7px;
+    overflow: hidden;
+    border: 1px solid rgba(244, 246, 248, 0.18);
+    background: var(--bg-darker);
+    opacity: 0.75;
+}
+
+.strip button img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.strip button.selected {
+    border: 2px solid var(--cyan);
+    opacity: 1;
+}
+
+.actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.action {
+    height: 44px;
+    padding: 0 16px;
+    border-radius: 22px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    border: 1px solid var(--glass-edge);
+    background: rgba(23, 27, 45, 0.6);
+}
+
+.action:hover {
+    background: var(--selection);
+}
+
+.action.primary {
+    border: none;
+    font-weight: 800;
+    background: var(--violet);
+    box-shadow: 0 0 22px rgba(165, 72, 255, 0.45);
+}
+
+.action.danger {
+    margin-left: auto;
+    border: none;
+    color: var(--red);
+    background: transparent;
+}
+
+.where {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+}

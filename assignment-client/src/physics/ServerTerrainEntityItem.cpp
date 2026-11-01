@@ -5,8 +5,21 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: the whole file.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 
 #include "ServerTerrainEntityItem.h"
+
+#include <atomic>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -21,6 +34,14 @@
 #include <terrain/SurfaceNets.h>
 #include <terrain/TerrainFile.h>
 #include <terrain/VoxelGrid.h>
+
+// The serial in a shape key ("terrain/<id>/<serial>") comes from one counter for the whole process: per entity object it
+// restarted at 1 whenever the entity was made again (leaving and re-entering a domain), and the shape manager keeps
+// released shapes for a while under their keys, so a changed shape could come back as the old one (10-21 review).
+static uint64_t nextShapeSerial() {
+    static std::atomic<uint64_t> serial { 0 };
+    return ++serial;
+}
 
 EntityItemPointer ServerTerrainEntityItem::factory(const EntityItemID& entityID, const EntityItemProperties& properties) {
     std::shared_ptr<ServerTerrainEntityItem> entity(new ServerTerrainEntityItem(entityID), [](ServerTerrainEntityItem* ptr) { ptr->deleteLater(); });
@@ -191,7 +212,7 @@ void ServerTerrainEntityItem::build(const terrain::VoxelGrid& grid) {
         }
     });
 
-    ++_shapeSerial;
+    _shapeSerial = nextShapeSerial();
     ShapeInfo info;
     if (points.size() >= 3 && indices.size() >= 3) {
         info.setParams(SHAPE_TYPE_STATIC_MESH, 0.5f * getScaledDimensions(),

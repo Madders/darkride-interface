@@ -27,9 +27,9 @@ public:
     const DisplayPluginList& getDisplayPlugins();
     const InputPluginList& getInputPlugins();
     const CodecPluginList& getCodecPlugins();
-    const SteamClientPluginPointer getSteamClientPlugin();
-    const OculusPlatformPluginPointer getOculusPlatformPlugin();
     const TeaProtocolPluginPointer getTeaProtocolPlugin();
+    // loads the runtime plug-ins now, on the calling thread (the lookups above load them on first use otherwise)
+    void loadPlugins() { getLoadedPlugins(); }
 
     DisplayPluginList getPreferredDisplayPlugins();
     void setPreferredDisplayPlugins(const QStringList& displays);

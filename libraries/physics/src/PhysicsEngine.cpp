@@ -8,6 +8,20 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: these functions: the moving frames (registerFrame, unregisterFrame, refreshFrameInteriors,
+//   feedFrameTransforms, getFrameTransform) and stepSimulation, the paced clock (whole periods of the presents, the
+//   substep cap and histogram; setPresentPeriod, getLastSteppedTime and getPacedClockLeadMs in PhysicsEngine.h), each
+//   with everything it calls on the vehicle's path.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 
 #include "PhysicsEngine.h"
 
@@ -29,6 +43,7 @@
 #include <PhysicsCollisionGroups.h>
 #include <Profile.h>
 #include <SharedUtil.h>
+#include <FrameTrace.h>
 
 #include "CharacterController.h"
 #include "JoltLayers.h"
@@ -129,6 +144,7 @@ PhysicsWorld* PhysicsEngine::worldFor(ObjectMotionState* motionState) {
     return getWorld(motionState->getFrameID());
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 bool PhysicsEngine::getFrameTransform(const QUuid& frameID, glm::vec3& position, glm::quat& rotation, glm::vec3& linearVelocity, glm::vec3& angularVelocity, bool asSimulated) const {
     auto itr = _frameStates.find(frameID);
     if (itr == _frameStates.end()) {
@@ -183,25 +199,47 @@ PhysicsWorld* PhysicsEngine::characterWorld() const {
 }
 
 // private
-void PhysicsEngine::removeDynamicsForObject(ObjectMotionState* motionState) {
+std::vector<EntityDynamicPointer> PhysicsEngine::removeDynamicsForObject(ObjectMotionState* motionState) {
+    std::vector<EntityDynamicPointer> removed;
     JPH::Body* body = motionState->getBody();
     PhysicsWorld* world = motionState->getWorld();
     if (!body || !world) {
-        return;
+        return removed;
     }
     auto key = std::make_pair(world, body->GetID().GetIndexAndSequenceNumber());
     auto itr = _objectDynamicsByBody.find(key);
     if (itr == _objectDynamicsByBody.end()) {
-        return;
+        return removed;
     }
     QSet<QUuid> ids = itr->second;
     for (const QUuid& dynamicID : ids) {
         if (!dynamicID.isNull() && _objectDynamics.contains(dynamicID)) {
+            EntityDynamicPointer dynamic = _objectDynamics[dynamicID];
             removeDynamic(dynamicID);
+            if (dynamic) {
+                removed.push_back(dynamic);
+            }
+        }
+    }
+    return removed;
+}
+
+// private: puts back the dynamics that couldn't go back on a rebuilt body at once
+void PhysicsEngine::restoreDynamics() {
+    if (_dynamicsToRestore.isEmpty()) {
+        return;
+    }
+    // (addDynamic can remove a dynamic, which takes it out of _dynamicsToRestore too)
+    QHash<QUuid, EntityDynamicPointer> pending;
+    pending.swap(_dynamicsToRestore);
+    for (const EntityDynamicPointer& dynamic : pending) {
+        if (!addDynamic(dynamic)) {
+            _dynamicsToRestore[dynamic->getID()] = dynamic;
         }
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 // private: a frame is known to the engine (membership, transforms) and has its hull twin in its own world
 void PhysicsEngine::registerFrame(ObjectMotionState* frameState) {
     const QUuid& frameID = frameState->getObjectID();
@@ -215,6 +253,7 @@ void PhysicsEngine::registerFrame(ObjectMotionState* frameState) {
     world->markInteriorChanged();   // a new hull body, or a new own shape: the interior copy is rebuilt on it
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 // The interior copy (round 8, PHYSICS.md 4.1). A frame's walls are static bodies in its own world and nothing of them
 // is in the parent world, where the frame's hull body is; so whoever walks in from outside stood in a wall until the
 // frame's world received them and shoved them out. Now the hull body wears a compound shape: the frame's own shape at
@@ -279,6 +318,7 @@ void PhysicsEngine::refreshFrameInteriors() {
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 // private
 void PhysicsEngine::unregisterFrame(const QUuid& frameID) {
     if (_frameStates.erase(frameID)) {
@@ -313,6 +353,8 @@ void PhysicsEngine::removeSetOfObjects(const SetOfMotionStates& objects) {
         }
         object->clearIncomingDirtyFlags();
     }
+    // the ones waiting to go back on a rebuilt body are on no body, so the loop above doesn't find them
+    _dynamicsToRestore.clear();
     std::vector<QUuid> frameIDs;
     for (const auto& entry : _frameStates) {
         frameIDs.push_back(entry.first);
@@ -339,9 +381,15 @@ void PhysicsEngine::reinsertObject(ObjectMotionState* object) {
     }
     PhysicsWorld* oldWorld = object->getWorld();
     PhysicsWorld* newWorld = worldFor(object);
+
+    // The body is rebuilt (PhysicsWorld::addObject destroys it and creates a new one), and Jolt's constraints hold
+    // pointers to their bodies: a constraint left on the old body crashed the next step, in
+    // ConstraintManager::GetActiveConstraints, as a world with hinges loaded. They come off first, and go back on
+    // the new body after, built afresh; one that can't yet (its other body isn't there) is retried every transaction.
+    std::vector<EntityDynamicPointer> dynamics = removeDynamicsForObject(object);
+
     if (oldWorld && oldWorld != newWorld) {
         // the object changed frame: out of one world, into another, in the new frame's coordinates
-        removeDynamicsForObject(object);
         oldWorld->removeObject(object);
     }
     newWorld->addObject(object);
@@ -352,9 +400,17 @@ void PhysicsEngine::reinsertObject(ObjectMotionState* object) {
         // in case it was a frame until now
         unregisterFrame(object->getObjectID());
     }
+
+    for (const EntityDynamicPointer& dynamic : dynamics) {
+        if (!addDynamic(dynamic)) {
+            _dynamicsToRestore[dynamic->getID()] = dynamic;
+        }
+    }
 }
 
 void PhysicsEngine::processTransaction(PhysicsEngine::Transaction& transaction) {
+    restoreDynamics();
+
     // removes
     for (auto object : transaction.objectsToRemove) {
         PhysicsWorld* world = object->getWorld();
@@ -362,6 +418,9 @@ void PhysicsEngine::processTransaction(PhysicsEngine::Transaction& transaction) 
             removeDynamicsForObject(object);
             world->removeObject(object);
         }
+        // its contacts in the other worlds too, before its motion state is deleted: a frame's interior part is in the
+        // contacts of the world its frame stands in, through the frame's copy of its interior (round 8)
+        removeContactsInEveryWorld(object);
         unregisterFrame(object->getObjectID());
     }
 
@@ -425,6 +484,14 @@ void PhysicsEngine::dropEmptyWorlds() {
     }
 }
 
+// private
+void PhysicsEngine::removeContactsInEveryWorld(ObjectMotionState* motionState) {
+    _rootWorld->removeContacts(motionState);
+    for (auto& entry : _frameWorlds) {
+        entry.second->removeContacts(motionState);
+    }
+}
+
 void PhysicsEngine::removeContacts(ObjectMotionState* motionState) {
     if (motionState && motionState->getWorld()) {
         motionState->getWorld()->removeContacts(motionState);
@@ -437,6 +504,7 @@ void PhysicsEngine::removeContacts(ObjectMotionState* motionState) {
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 // private
 void PhysicsEngine::feedFrameTransforms() {
     for (auto& entry : _frameWorlds) {
@@ -480,6 +548,7 @@ void PhysicsEngine::stepOnce(float dt) {
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void PhysicsEngine::stepSimulation() {
     PROFILE_RANGE(simulation_physics, "stepSimulation");
     // NOTE: the grand order of operations is:
@@ -499,20 +568,80 @@ void PhysicsEngine::stepSimulation() {
     // duration and is eased back to the wall clock, within a frame of it; a hitch snaps it back.
     const float FRAME_SMOOTHING = 0.05f;
     const float CLOCK_EASING = 0.05f;
-    if (_smoothedFrameDuration <= 0.0f) {
-        _smoothedFrameDuration = dt;
+    float paced;
+    if (_presentPeriod > 0.0f) {
+        // The presents are paced at the display's period (the editor renderer's frame-pacing round, 10-19): this
+        // update is a whole number of periods after the last, whatever the wall clock read between them (the
+        // threads' wake-up jitter, a fraction of a millisecond). The paced clock advances by that number of
+        // periods, so a frame presented two periods later advances two: the display's time is the frame's time
+        // (PHYSICS.md "The driver's stutter"). The lead is then only the jitter, bounded; it is eased out through
+        // its slow average, so a nominal period a little off the panel's true one never accumulates, and a lead
+        // beyond a period and a half (a wrong period) snaps.
+        // The periods come counted from the present schedule when the game loop has them (Application::update):
+        // an update run late and the next one on time are 2 ms apart on the wall clock, yet each one's frame shows
+        // for a refresh, and rounding that 2 ms up to a period would put a whole period of lead on the clock each
+        // time, to be taken out later as a snap. Without the count, the wall clock rounded.
+        const float LEAD_SMOOTHING = 0.02f;
+        float refreshes = _presentPeriods > 0 ? (float)_presentPeriods : glm::max(1.0f, roundf(dt / _presentPeriod));
+        paced = glm::min(refreshes * _presentPeriod, MAX_TIMESTEP);
+        _smoothedFrameDuration = paced;   // where the free-running clock picks up if vsync goes off
+        _pacedClockLead += paced - dt;
+        if (refreshes >= 2.0f) {
+            _pacedMultiFrames++;
+        }
+        if (fabsf(_pacedClockLead) > 1.5f * _presentPeriod) {
+            // a period and a half off (a wrong period, a stall the count missed): taken out at once, but never
+            // backwards, which the eye reads as a snap: a clock ahead holds this frame's picture (paced 0) and the
+            // rest comes off the next; a clock behind jumps forward, the substep cap below bounding it
+            float taken = glm::min(_pacedClockLead, paced);
+            paced -= taken;
+            _pacedClockLead -= taken;
+            _smoothedClockLead = 0.0f;
+            _pacedSnaps++;
+            _pacedSnapTotal += taken;
+        } else {
+            _smoothedClockLead += LEAD_SMOOTHING * (_pacedClockLead - _smoothedClockLead);
+            float correction = CLOCK_EASING * _smoothedClockLead;
+            paced -= correction;
+            _pacedClockLead -= correction;
+        }
+        // the record, every five seconds while there is something in it
+        const uint64_t PACED_LOG_INTERVAL = 5 * USECS_PER_SECOND;
+        if (_pacedLogTime == 0) {
+            _pacedLogTime = now;
+        } else if (now - _pacedLogTime > PACED_LOG_INTERVAL) {
+            if (_pacedMultiFrames > 0 || _pacedSnaps > 0) {
+                qCDebug(physics) << "paced clock, last" << (int)((now - _pacedLogTime) / USECS_PER_SECOND) << "s:" << _pacedMultiFrames
+                                 << "updates of two or more periods," << _pacedSnaps << "leads taken out at once, total"
+                                 << (_pacedSnapTotal * 1000.0f) << "ms; lead now" << (_pacedClockLead * 1000.0f) << "ms";
+            }
+            _pacedLogTime = now;
+            _pacedMultiFrames = 0;
+            _pacedSnaps = 0;
+            _pacedSnapTotal = 0.0f;
+        }
     } else {
-        _smoothedFrameDuration += FRAME_SMOOTHING * (dt - _smoothedFrameDuration);
-    }
-    float paced = _smoothedFrameDuration;
-    _pacedClockLead += paced - dt;
-    if (fabsf(_pacedClockLead) > _smoothedFrameDuration) {
-        paced -= _pacedClockLead;
-        _pacedClockLead = 0.0f;
-    } else {
-        float correction = CLOCK_EASING * _pacedClockLead;
-        paced -= correction;
-        _pacedClockLead -= correction;
+        if (_smoothedFrameDuration <= 0.0f) {
+            _smoothedFrameDuration = dt;
+        } else {
+            _smoothedFrameDuration += FRAME_SMOOTHING * (dt - _smoothedFrameDuration);
+        }
+        paced = _smoothedFrameDuration;
+        _pacedClockLead += paced - dt;
+        if (fabsf(_pacedClockLead) > _smoothedFrameDuration) {
+            // more than a frame off: taken out at once, but never backwards (the eye reads a step back as a snap): a
+            // clock ahead holds this frame (paced 0) and the rest comes off the next frames; a clock behind jumps
+            // forward. Until the 10-21 review this subtracted the whole lead, which could make paced negative; the
+            // free clock runs whenever the presents are not paced (vsync, a present that overran, a restart).
+            float taken = _pacedClockLead > 0.0f ? glm::min(_pacedClockLead, paced) : _pacedClockLead;
+            paced -= taken;
+            _pacedClockLead -= taken;
+        } else {
+            float correction = CLOCK_EASING * _pacedClockLead;
+            paced -= correction;
+            _pacedClockLead -= correction;
+        }
+        _smoothedClockLead = 0.0f;
     }
     if (_timeShiftPending != 0.0f) {
         // time dilation (round 10): a few percent of each frame's time added or left out until the shift is in
@@ -523,16 +652,21 @@ void PhysicsEngine::stepSimulation() {
         paced += extra;
         _timeShiftPending -= extra;
     }
+    float accumulatedBefore = _accumulatedTime;
     _accumulatedTime = glm::max(_accumulatedTime + paced, 0.0f);
+    _lastSteppedTime = _accumulatedTime - accumulatedBefore;
 
     int numSubsteps = (int)(_accumulatedTime / PHYSICS_ENGINE_FIXED_SUBSTEP);
     if (numSubsteps > PHYSICS_ENGINE_MAX_NUM_SUBSTEPS) {
         // the simulation can't keep up; drop time rather than spiral
+        _lastSteppedTime -= _accumulatedTime - (float)PHYSICS_ENGINE_MAX_NUM_SUBSTEPS * PHYSICS_ENGINE_FIXED_SUBSTEP;
         numSubsteps = PHYSICS_ENGINE_MAX_NUM_SUBSTEPS;
         _accumulatedTime = 0.0f;
     } else {
         _accumulatedTime -= (float)numSubsteps * PHYSICS_ENGINE_FIXED_SUBSTEP;
     }
+    _lastSteppedTime = glm::max(_lastSteppedTime, 0.0f);
+    _stepCount++;
 
     if (numSubsteps > 0 && _idleWhenStill && isStill()) {
         // nothing to simulate: the substeps are skipped, their time dropped (a body that wakes is stepped from now),
@@ -557,6 +691,23 @@ void PhysicsEngine::stepSimulation() {
     // still reads fresh positions, and nothing is ever shown ahead of what was simulated.
     ObjectMotionState::setLeftoverTime(_accumulatedTime);
     _hasOutgoingChanges = true;
+
+    // the substeps-per-frame histogram behind the Stats line (kept always) and the frame trace's physics columns
+    // (item 4 of team/performance/INSTRUMENTS-PLAN.md): the substeps this update ran, where between the last
+    // substep's start and end this frame presents the bodies, and the paced clock's lead on the wall clock
+    if (now - _substepWindowStart >= USECS_PER_SECOND) {
+        for (int i = 0; i < 4; i++) {
+            _substepCountsLastSecond[i] = _substepCounts[i];
+            _substepCounts[i] = 0;
+        }
+        _substepWindowStart = now;
+    }
+    _substepCounts[glm::min(numSubsteps, 3)]++;
+    if (FrameTrace::enabled()) {
+        FrameTrace::set("physics.substeps", (double)numSubsteps);
+        FrameTrace::set("physics.alpha", ObjectMotionState::getPresentationAlpha());
+        FrameTrace::set("physics.lead_ms", getPacedClockLeadMs());
+    }
 
     if (numSubsteps > 0) {
         if (_debugDrawMode != PhysicsDebugDraw::DRAW_NOTHING) {
@@ -698,17 +849,21 @@ bool PhysicsEngine::addDynamic(EntityDynamicPointer dynamic) {
     if (dynamic->isAction()) {
         success = true;
     } else if (dynamic->isConstraint()) {
+        // A constraint lives in the world of its owner's body, and both bodies must be there: Jolt's constraint holds
+        // both bodies, and one from another world's physics system would be stepped by neither, then left on a body
+        // that world destroys. Until they are (a frame carries one of them, say), it isn't built, and waits to be
+        // added again. Checked before getConstraint(), which keeps the constraint it builds.
         ObjectConstraint* objectConstraint = static_cast<ObjectConstraint*>(dynamic.get());
-        JPH::Constraint* constraint = objectConstraint->getConstraint();
-        if (constraint) {
-            // a constraint lives in the world of its owner's body; both bodies must be there
-            ObjectMotionState* owner = ownerMotionState(objectConstraint);
-            world = owner ? owner->getWorld() : nullptr;
-            if (world) {
+        ObjectMotionState* owner = ownerMotionState(objectConstraint);
+        PhysicsWorld* ownerWorld = owner ? owner->getWorld() : nullptr;
+        if (ownerWorld && objectConstraint->otherIsInWorld(ownerWorld)) {
+            JPH::Constraint* constraint = objectConstraint->getConstraint();
+            if (constraint) {
+                world = ownerWorld;
                 world->getPhysicsSystem()->AddConstraint(constraint);
                 success = true;
-            }
-        } // else perhaps not all the rigid bodies are available, yet
+            } // else perhaps not all the rigid bodies are available, yet
+        }
     }
 
     if (success) {
@@ -728,6 +883,8 @@ bool PhysicsEngine::addDynamic(EntityDynamicPointer dynamic) {
 }
 
 void PhysicsEngine::removeDynamic(const QUuid dynamicID) {
+    // (one waiting to go back on a rebuilt body is removed for good)
+    _dynamicsToRestore.remove(dynamicID);
     if (_objectDynamics.contains(dynamicID)) {
         ObjectDynamicPointer dynamic = std::static_pointer_cast<ObjectDynamic>(_objectDynamics[dynamicID]);
         if (!dynamic) {
@@ -824,4 +981,63 @@ void PhysicsEngine::castRayAll(const glm::vec3& start, const glm::vec3& end, int
         }
     }
     std::sort(results.begin(), results.end(), [](const RayHit& a, const RayHit& b) { return a.fraction < b.fraction; });
+}
+
+// the nearest of one cast in the root world and in each frame's world, made in that world's coordinates
+template <typename Frames, typename Cast>
+static bool closestInAllWorlds(const PhysicsWorld* root, const Frames& frames,
+                               const glm::vec3& start, const glm::vec3& end, const Cast& cast, RayHit& result) {
+    result = RayHit();
+    if (root) {
+        cast(root, start, end, result);
+    }
+    for (const auto& entry : frames) {
+        const PhysicsWorld* world = entry.second.get();
+        RayHit hit;
+        if (cast(world, world->toLocal(start), world->toLocal(end), hit) && (!result.hit || hit.fraction < result.fraction)) {
+            hit.point = world->toParent(hit.point);
+            hit.normal = world->getFrameRotation() * hit.normal;
+            result = hit;
+        }
+    }
+    return result.hit;
+}
+
+glm::vec3 PhysicsEngine::sphereOutOfOverlapsAllWorlds(const glm::vec3& center, float radius, int32_t group, int32_t mask,
+                                                      const JPH::BodyFilter* bodyFilter) const {
+    const int ROUNDS = 4;
+    const float SLOP = 0.002f;   // m, past the surface, so the next round finds it clear
+    glm::vec3 position = center;
+    for (int round = 0; round < ROUNDS; ++round) {
+        glm::vec3 push(0.0f);
+        if (_rootWorld) {
+            push += _rootWorld->sphereOverlapPush(position, radius, group, mask, bodyFilter);
+        }
+        for (const auto& entry : _frameWorlds) {
+            const PhysicsWorld* world = entry.second.get();
+            push += world->getFrameRotation() * world->sphereOverlapPush(world->toLocal(position), radius, group, mask, bodyFilter);
+        }
+        float length = glm::length(push);
+        if (length < EPSILON) {
+            break;
+        }
+        position += push * ((length + SLOP) / length);
+    }
+    return position;
+}
+
+bool PhysicsEngine::castRayClosestAllWorlds(const glm::vec3& start, const glm::vec3& end, int32_t group, int32_t mask,
+                                            const JPH::BodyFilter* bodyFilter, RayHit& result) const {
+    return closestInAllWorlds(_rootWorld.get(), _frameWorlds, start, end,
+                              [&](const PhysicsWorld* world, const glm::vec3& a, const glm::vec3& b, RayHit& hit) {
+                                  return world->castRayClosest(a, b, group, mask, bodyFilter, hit);
+                              }, result);
+}
+
+bool PhysicsEngine::castSphereClosestAllWorlds(const glm::vec3& start, const glm::vec3& end, float radius, int32_t group,
+                                               int32_t mask, const JPH::BodyFilter* bodyFilter, RayHit& result) const {
+    return closestInAllWorlds(_rootWorld.get(), _frameWorlds, start, end,
+                              [&](const PhysicsWorld* world, const glm::vec3& a, const glm::vec3& b, RayHit& hit) {
+                                  return world->castSphereClosest(a, b, radius, group, mask, bodyFilter, hit);
+                              }, result);
 }

@@ -103,12 +103,7 @@ public:
 
     void removeAccountFromFile();
 
-    bool getLimitedCommerce() { return _limitedCommerce; }
-    void setLimitedCommerce(bool isLimited);
-
     void setAccessTokens(const QString& response);
-    void setConfigFileURL(const QString& fileURL) { _configFileURL = fileURL; }
-    void saveLoginStatus(bool isLoggedIn);
 
     AccountSettings& getAccountSettings() { return _settings; }
 
@@ -116,8 +111,6 @@ public slots:
     void requestAccessToken(const QString& login, const QString& password);
     // an AI resident's body: its username and its connection key (the client-credentials grant)
     void requestAccessTokenWithKey(const QString& username, const QString& key);
-    void requestAccessTokenWithSteam(QByteArray authSessionTicket);
-    void requestAccessTokenWithOculus(const QString& nonce, const QString& oculusID);
     void requestAccessTokenWithAuthCode(const QString& authCode,
                                         const QString& clientId,
                                         const QString& clientSecret,
@@ -142,7 +135,6 @@ signals:
     void loginFailed();
     void logoutComplete();
     void newKeypair();
-    void limitedCommerceChanged();
     void accountSettingsLoaded();
 
 private slots:
@@ -184,8 +176,6 @@ private:
 
     QUuid _sessionID { QUuid::createUuid() };
 
-    bool _limitedCommerce { false };
-    QString _configFileURL;
 
     bool _accountSettingsEnabled { false };
     AccountSettings _settings;

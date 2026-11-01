@@ -12,6 +12,8 @@
 
 #include <QtCore/QObject>
 
+#include <functional>
+
 #if defined(Q_OS_WIN)
 // Enable event queue debugging
 #define DEBUG_EVENT_QUEUE
@@ -49,6 +51,18 @@ bool blockingInvokeMethod(
     QGenericArgument val8 = QGenericArgument(),
     QGenericArgument val9 = QGenericArgument());
 
+// The same hop for a callable: f runs on obj's thread and the caller waits. The warnings (a forbidden thread) and the
+// profile range are the named forms'; on obj's own thread f runs in place, with the warning the named forms give,
+// where they would wait for themselves. blockingInvokeResult returns what f returns, value-initialised if the hop
+// fails. BLOCKING_INVOKE(obj, callable) names the caller for the warnings, like BLOCKING_INVOKE_METHOD.
+void blockingInvoke(const char* function, QObject* obj, const std::function<void()>& f);
+template <typename F>
+auto blockingInvokeResult(const char* function, QObject* obj, F&& f) -> decltype(f()) {
+    decltype(f()) result{};
+    blockingInvoke(function, obj, [&] { result = f(); });
+    return result;
+}
+
 // Inspecting of the qt event queue
 // requres access to private Qt datastructures
 // Querying the event queue should be done with
@@ -65,5 +79,7 @@ bool blockingInvokeMethod(
 
 #define BLOCKING_INVOKE_METHOD(obj, member, ...) \
     ::hifi::qt::blockingInvokeMethod(__FUNCTION__, obj, member, ##__VA_ARGS__)
+#define BLOCKING_INVOKE(obj, callable) \
+    ::hifi::qt::blockingInvokeResult(__FUNCTION__, obj, callable)
 
 #endif

@@ -29,12 +29,12 @@ class OverviewHandler extends WebEventHandler {
 		return AvatarList.getAvatarIdentifiers()
 			.map(id => {
 				const avatar = AvatarList.getAvatar(id);
-				// an AI resident's mark, from the metaverse by session id (AI-FIRST-CLIENT.md §10.4)
+				// an AI resident's or a bot's mark, from the metaverse by session id (AI-FIRST-CLIENT.md §10.4)
 				const cached = usersCache.get(id);
 				const mark =
-					cached && cached.ai
-						? { ai: true, markLine: markLine(cached) }
-						: { ai: false, markLine: "" };
+					cached && (cached.ai || cached.bot)
+						? { ai: cached.ai, bot: cached.bot, markLine: markLine(cached) }
+						: { ai: false, bot: false, markLine: "" };
 
 				return MyAvatar.SELF_ID == id
 					? {

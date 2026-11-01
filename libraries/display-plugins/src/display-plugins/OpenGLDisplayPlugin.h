@@ -5,15 +5,31 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: the declarations of the present path (see OpenGLDisplayPlugin.cpp) and the members it keeps (the vsync
+// state, the display link's watch, the rate counters).
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 #pragma once
 
 #include "DisplayPlugin.h"
 
+#include <atomic>
 #include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <queue>
+#include <vector>
 
 #include <QtCore/QThread>
+#include <QtCore/QByteArray>
 #include <QtCore/QTimer>
 #include <QtGui/QImage>
 
@@ -27,7 +43,7 @@ namespace gpu { namespace gl {
 class GLBackend;
 }}  // namespace gpu::gl
 
-class RefreshRateController;
+#include "RefreshRateController.h"
 
 class OpenGLDisplayPlugin : public DisplayPlugin {
     Q_OBJECT
@@ -44,7 +60,26 @@ public:
     // These must be final to ensure proper ordering of operations
     // between the main thread and the presentation thread
 
-    static std::function<void(int)> getRefreshRateOperator();
+    // FROZEN (vehicle path): see the note at the top of this file.
+    // (the target rate, the display's own rate)
+    static std::function<void(int, int)> getRefreshRateOperator();
+    // FROZEN (vehicle path): see the note at the top of this file.
+    // the present cadence's last whole second, for the refresh governor and the Stats line (any thread)
+    static std::function<RefreshRateController::CadenceCounters()> getCadenceCountersOperator();
+    // A test knob: every present costs this many microseconds more, busy-waited, as a heavy scene's would (the
+    // pacing's overrun cases, 10-21 review). TIVOLI_PRESENT_LOAD_US in the environment sets it at start, Test.setPresentLoad
+    // while running; 0, the default, is no load.
+    static void setPresentLoad(int microseconds);
+    static int getPresentLoad();
+    // The present loop's state, for the report when presents stop (Application's deadlock watchdog; release-1.1's
+    // Windows run of 10-21, where presents and new frames stopped while the loop kept going): the frames it has
+    // presented, where it is now, and whether it has no display plugin on purpose (deactivated: minimized, quitting).
+    // Kept with relaxed atomic stores, so it costs the loop nothing to speak of.
+    static uint64_t getPresentsDone();
+    static const char* getPresentLoopStage();
+    static bool isPresentLoopIdle();
+    // A test knob: the present loop presents nothing for this long, as a stall would (Test.holdPresents)
+    static void holdPresents(int milliseconds);
 
     bool activate() override final;
     void deactivate() override final;
@@ -62,6 +97,7 @@ public:
     virtual bool setDisplayTexture(const QString& name) override;
     virtual bool onDisplayTextureReset() { return false; };
 
+    // FROZEN (vehicle path): see the note at the top of this file.
     float presentRate() const override;
 
     void resetPresentRate() override;
@@ -74,9 +110,33 @@ public:
 
     bool beginFrameRender(uint32_t frameIndex) override;
 
-    virtual bool wantVsync() const { return false; }
+    // Vsync: the swap waits for the display's refresh. Off by default: the presents are paced at the display's period
+    // instead (RefreshRateController) and the compositor shows the newest at each refresh, which is even; with vsync
+    // on, macOS's GL swap was measured (10-19) to wait two refreshes and to queue the odd frame without waiting, a
+    // ragged 72 Hz on a 144 Hz panel (PHYSICS.md "The driver's stutter"). Wanted = the Render.vsyncEnabled setting,
+    // read at activation and pushed on a change; TIVOLI_VSYNC=1 or 0 in the environment forces it; the HMD plugins
+    // never want it (HmdDisplayPlugin::wantVsync: the headset's compositor paces them). The present thread applies it
+    // (applyVsync), but not while the display link paces the presents (macOS, vsyncApplies): they are in phase with the
+    // display already, 2 ms after each refresh, and a swap that waited on top would hold the GL lock through the
+    // refresh, take the presents off the paced clock (getPresentPeriod) and hide a missed refresh from the cadence
+    // governor, which cannot see the display's refreshes through the swap (Caity's ride of 2026-10-31: the governor
+    // blind at the full rate, the car juddering standing still; the setting had been ticked the night before).
+    virtual bool wantVsync() const {
+        static const int forced = qgetenv("TIVOLI_VSYNC").isEmpty() ? -1 : (qgetenv("TIVOLI_VSYNC") != "0" ? 1 : 0);
+        return forced < 0 ? _vsyncWanted.load() : (forced != 0);
+    }
+    // FROZEN (vehicle path): see the note at the top of this file.
+    // whether the swap is to wait for the refresh now: wanted, and no display link pacing the presents. A forced
+    // TIVOLI_VSYNC=1 applies even under the link: a measurement knob that reproduces the 2026-10-31 14:40 state (the
+    // cadence governor blind under the swap's wait, the presents off the paced clock), never a way to turn vsync on.
+    bool vsyncApplies() const;
     void setVsyncEnabled(bool vsyncEnabled) { _vsyncEnabled = vsyncEnabled; }
-    bool isVsyncEnabled() const { return _vsyncEnabled; }
+    bool isVsyncEnabled() const override { return _vsyncEnabled; }
+    void setVsyncWanted(bool wanted) override { _vsyncWanted = wanted; }
+    // FROZEN (vehicle path): see the note at the top of this file.
+    float getPresentPeriod() const override;
+    void setPresentTracing(bool on) override;
+    std::vector<PresentSample> takePresentTrace() override;
     // Three threads, one for rendering, one for texture transfers, one reserved for the GL driver
     // Drop to one reserved for better other-task performance in desktop
     int getRequiredThreadCount() const override { return 1; }
@@ -135,14 +195,36 @@ protected:
 
     void withOtherThreadContext(std::function<void()> f) const;
 
+    // FROZEN (vehicle path): see the note at the top of this file.
     void present(const std::shared_ptr<RefreshRateController>& refreshRateController);
     virtual void swapBuffers();
+    // FROZEN (vehicle path): see the note at the top of this file.
+    // present thread only, the context current: sets the swap interval to what is wanted when that changed
+    void applyVsync();
+    // present thread only, after the swap: records this present when the trace is on
+    void tracePresent(uint64_t startPresent);
 
     void render(std::function<void(gpu::Batch& batch)> f);
 
-    bool _vsyncEnabled{ false };
+    // FROZEN (vehicle path): see the note at the top of this file.
+    std::atomic<bool> _vsyncEnabled{ false };   // what the swap does (the driver's answer)
+    std::atomic<bool> _vsyncWanted{ false };    // the setting
+    bool _vsyncApplied{ false };                // what the present thread last asked the driver for
+    std::atomic<bool> _presentTracing{ false };
+    std::mutex _presentTraceMutex;
+    std::vector<PresentSample> _presentTrace;
+    bool _presentedNewFrame{ false };           // this present's frame was not shown before
+    uint64_t _previousPresentStart{ 0 };        // the start of the present before this one (present thread)
+    int _tracePresentRefreshes{ 0 };            // refreshes the current gpu frame has been shown for, for the trace
+    uint32_t _lastSwapUsecs{ 0 };               // how long the last swap took (the wait for the display, with vsync)
+    QMetaObject::Connection _screenConnection;  // the window's screen change restarts the display link
+    QMetaObject::Connection _visibilityConnection;  // minimizing the window stops it, showing it starts it
+    QTimer* _linkWatchdog { nullptr };          // every 2 s: the link follows the window's display and restarts when quiet
+    int _linkQuietRestarts { 0 };               // restarts for a quiet link in a row; after the first that did not help, one a minute
+    int64_t _linkNextRestartNs { 0 };
     QThread* _presentThread{ nullptr };
     std::queue<gpu::FramePointer> _newFrameQueue;
+    // FROZEN (vehicle path): see the note at the top of this file.
     RateCounter<200> _droppedFrameRate;
     RateCounter<200> _newFrameRate;
     RateCounter<200> _presentRate;

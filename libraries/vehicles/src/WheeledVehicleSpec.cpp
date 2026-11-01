@@ -9,6 +9,7 @@
 #include "WheeledVehicleSpec.h"
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 
 #include <QtCore/QJsonArray>
@@ -231,4 +232,38 @@ int WheeledVehicleSpec::driverSeat() const {
         }
     }
     return -1;
+}
+
+float WheeledVehicleSpec::wheelbase() const {
+    if (wheels.empty()) {
+        return 0.0f;
+    }
+    float front = wheels[0].center.z;
+    float back = front;
+    for (const WheelSpec& wheel : wheels) {
+        front = std::min(front, wheel.center.z);
+        back = std::max(back, wheel.center.z);
+    }
+    return back - front;
+}
+
+float WheeledVehicleSpec::steeringFor(float current, float wanted, float speed, float dt) const {
+    const float STEER_IN_TIME = 0.2f;    // s from straight ahead to full lock
+    const float STEER_OUT_TIME = 0.12f;  // s from full lock back to straight ahead
+    // g: at the tyres' grip or under (kart 2's hold about 1.1 g on a 0.9 ground); the kart test's 1.5 slid 35 degrees at
+    // 16 m/s and 3 spun, 0.8 and 1.0 held on both a 0.9 and a 0.5 ground
+    const float STEER_GRIP = 1.0f;
+    const float GRAVITY = 9.8f;
+    wanted = glm::clamp(wanted, -1.0f, 1.0f);
+    float lock = glm::radians(maxSteerAngle);
+    float length = wheelbase();
+    if (lock > 0.0f && length > 0.0f && speed > 0.0f) {
+        float most = atanf(STEER_GRIP * GRAVITY * length / (speed * speed));
+        float fraction = std::min(1.0f, most / lock);
+        wanted = glm::clamp(wanted, -fraction, fraction);
+    }
+    // out from the centre at the slower rate; back toward it, or across it, at the quicker
+    bool outward = wanted * current >= 0.0f && fabsf(wanted) > fabsf(current);
+    float step = std::max(0.0f, dt) / (outward ? STEER_IN_TIME : STEER_OUT_TIME);
+    return current + glm::clamp(wanted - current, -step, step);
 }

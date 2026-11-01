@@ -175,6 +175,55 @@ void GL45Backend::do_drawIndexedInstanced(const Batch& batch, size_t paramOffset
     (void)CHECK_GL_ERROR();
 }
 
+// GPU instancing (INSTANCING.md 3.4): an indexed draw of the batch's inline instance list, one instance per entry
+void GL45Backend::do_drawIndexedInstances(const Batch& batch, size_t paramOffset) {
+    GLint numInstances = batch._params[paramOffset + 4]._uint;
+    GLenum mode = gl::PRIMITIVE_TO_GL[(Primitive)batch._params[paramOffset + 3]._uint];
+    uint32 numIndices = batch._params[paramOffset + 2]._uint;
+    uint32 startIndex = batch._params[paramOffset + 1]._uint;
+    uint32 listOffset = batch._params[paramOffset + 0]._uint;
+    GLenum glType = gl::ELEMENT_TYPE_TO_GL[_input._indexBufferType];
+    auto typeByteSize = TYPE_SIZE[_input._indexBufferType];
+    GLvoid* indexBufferByteOffset = reinterpret_cast<GLvoid*>(startIndex * typeByteSize + _input._indexBufferOffset);
+
+    // the draw-call-info attribute reads this draw's list, an entry per instance (per two in stereo), as it reads a
+    // named call's; updateTransform set it constant before this draw and sets it constant again for the next plain one
+    if (!_transform._enabledDrawcallInfoBuffer) {
+        glEnableVertexAttribArray(gpu::Stream::DRAW_CALL_INFO);
+        glVertexAttribIFormat(gpu::Stream::DRAW_CALL_INFO, 2, GL_UNSIGNED_SHORT, 0);
+        glVertexAttribBinding(gpu::Stream::DRAW_CALL_INFO, gpu::Stream::DRAW_CALL_INFO);
+#ifdef GPU_STEREO_DRAWCALL_INSTANCED
+        glVertexBindingDivisor(gpu::Stream::DRAW_CALL_INFO, (isStereo() ? 2 : 1));
+#else
+        glVertexBindingDivisor(gpu::Stream::DRAW_CALL_INFO, 1);
+#endif
+        _transform._enabledDrawcallInfoBuffer = true;
+    }
+    glBindVertexBuffer(gpu::Stream::DRAW_CALL_INFO, _transform._drawCallInfoBuffer,
+        (GLintptr)(_transform._instanceDrawCallInfoOffset + listOffset * sizeof(Batch::DrawCallInfo)), 2 * sizeof(GLushort));
+
+    if (isStereo()) {
+        GLint trueNumInstances = 2 * numInstances;
+#ifdef GPU_STEREO_DRAWCALL_INSTANCED
+        glDrawElementsInstancedBaseVertexBaseInstance(mode, numIndices, glType, indexBufferByteOffset, trueNumInstances, 0, 0);
+#else
+        setupStereoSide(0);
+        glDrawElementsInstancedBaseVertexBaseInstance(mode, numIndices, glType, indexBufferByteOffset, numInstances, 0, 0);
+        setupStereoSide(1);
+        glDrawElementsInstancedBaseVertexBaseInstance(mode, numIndices, glType, indexBufferByteOffset, numInstances, 0, 0);
+#endif
+        _stats._DSNumTriangles += (trueNumInstances * numIndices) / 3;
+        _stats._DSNumDrawcalls += trueNumInstances;
+    } else {
+        glDrawElementsInstancedBaseVertexBaseInstance(mode, numIndices, glType, indexBufferByteOffset, numInstances, 0, 0);
+        _stats._DSNumTriangles += (numInstances * numIndices) / 3;
+        _stats._DSNumDrawcalls += numInstances;
+    }
+    _stats._DSNumAPIDrawcalls++;
+    _stats._DSNumInstancedDrawcalls++;
+    (void)CHECK_GL_ERROR();
+}
+
 void GL45Backend::do_multiDrawIndirect(const Batch& batch, size_t paramOffset) {
     uint commandCount = batch._params[paramOffset + 0]._uint;
     GLenum mode = gl::PRIMITIVE_TO_GL[(Primitive)batch._params[paramOffset + 1]._uint];

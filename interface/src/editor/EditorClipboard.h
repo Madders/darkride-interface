@@ -26,6 +26,9 @@ class EditorClipboard {
 public:
     // copies the entities and their descendants; the anchor is the point a paste lands on
     void copy(const QList<QUuid>& ids, const glm::vec3& anchor);
+    // takes entities from elsewhere (an imported file), as an add takes them, parents before children; those whose
+    // parent is not among them are the top level a paste moves
+    void set(const QVector<EntityItemProperties>& properties, const QList<QUuid>& ids, const glm::vec3& anchor);
     bool isEmpty() const { return _properties.isEmpty(); }
     const glm::vec3& anchor() const { return _anchor; }
 

@@ -16,13 +16,15 @@
 #include "EntityItemProperties.h"
 #include "EntityItemPropertiesMacros.h"
 
-void BloomPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties, QScriptEngine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
+template <typename Value, typename Engine>
+void BloomPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties, Engine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_BLOOM_INTENSITY, Bloom, bloom, BloomIntensity, bloomIntensity);
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_BLOOM_THRESHOLD, Bloom, bloom, BloomThreshold, bloomThreshold);
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_BLOOM_SIZE, Bloom, bloom, BloomSize, bloomSize);
 }
 
-void BloomPropertyGroup::copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) {
+template <typename Value>
+void BloomPropertyGroup::copyFromScriptValue(const Value& object, bool& _defaultSettings) {
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(bloom, bloomIntensity, float, setBloomIntensity);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(bloom, bloomThreshold, float, setBloomThreshold);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(bloom, bloomSize, float, setBloomSize);
@@ -68,14 +70,14 @@ bool BloomPropertyGroup::appendToEditPacket(OctreePacketData* packetData,
     return true;
 }
 
-bool BloomPropertyGroup::decodeFromEditPacket(EntityPropertyFlags& propertyFlags, const unsigned char*& dataAt , int& processedBytes) {
+bool BloomPropertyGroup::decodeFromEditPacket(EntityPropertyFlags& propertyFlags, const unsigned char*& dataAt , int& processedBytes, int bytesToRead) {
     int bytesRead = 0;
     bool overwriteLocalData = true;
     bool somethingChanged = false;
 
-    READ_ENTITY_PROPERTY(PROP_BLOOM_INTENSITY, float, setBloomIntensity);
-    READ_ENTITY_PROPERTY(PROP_BLOOM_THRESHOLD, float, setBloomThreshold);
-    READ_ENTITY_PROPERTY(PROP_BLOOM_SIZE, float, setBloomSize);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_BLOOM_INTENSITY, float, setBloomIntensity);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_BLOOM_THRESHOLD, float, setBloomThreshold);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_BLOOM_SIZE, float, setBloomSize);
 
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_BLOOM_INTENSITY, BloomIntensity);
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_BLOOM_THRESHOLD, BloomThreshold);
@@ -157,3 +159,5 @@ int BloomPropertyGroup::readEntitySubclassDataFromBuffer(const unsigned char* da
 
     return bytesRead;
 }
+
+INSTANTIATE_PROPERTY_GROUP_CONVERSIONS(BloomPropertyGroup)

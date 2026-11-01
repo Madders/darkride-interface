@@ -8,9 +8,12 @@
 
 #include "ValueCodecTests.h"
 
+#include <limits>
+
 #include <QtCore/QCborArray>
 #include <QtCore/QCborMap>
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDateTime>
 #include <QtCore/QPointer>
 #include <QtCore/QSharedPointer>
 #include <QtCore/QUrl>
@@ -22,7 +25,7 @@
 
 #include "TestObjects.h"
 
-QTEST_MAIN(ValueCodecTests)
+QTEST_GUILESS_MAIN(ValueCodecTests)
 
 namespace {
 
@@ -656,6 +659,118 @@ void ValueCodecTests::testMalformedInput() {
     QVERIFY(!codec.decode(QByteArray("\xff", 1), QMetaType::Int, out, error));
     QVERIFY(!error.isEmpty());
     QVERIFY(codec.decode(QByteArray(), out, error) == false || !out.isValid());
+}
+
+// encode() writes the common types directly; the bytes must be the ones toCbor(value).toCbor() gives.
+void ValueCodecTests::testDirectEncodingMatchesTheTree() {
+    ValueCodec codec;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const QVariantList values {
+        QVariant(), QVariant::fromValue(nullptr), QVariant(true), QVariant(false),
+        QVariant(0), QVariant(1), QVariant(23), QVariant(24), QVariant(255), QVariant(256), QVariant(65535), QVariant(65536),
+        QVariant(-1), QVariant(-24), QVariant(-25), QVariant(-256), QVariant(-257), QVariant(std::numeric_limits<int>::min()),
+        QVariant(qlonglong(1) << 40), QVariant(-(qlonglong(1) << 40)), QVariant(std::numeric_limits<qlonglong>::min()),
+        QVariant(std::numeric_limits<qlonglong>::max()), QVariant(uint(4000000000u)), QVariant(qulonglong(1) << 63),
+        QVariant(std::numeric_limits<qulonglong>::max()), QVariant(short(-7)), QVariant::fromValue<char>('A'),
+        QVariant(0.0), QVariant(-0.0), QVariant(1.0), QVariant(1.5), QVariant(-3.25), QVariant(1e300), QVariant(nan),
+        QVariant(std::numeric_limits<double>::infinity()), QVariant(1.0f / 3.0f), QVariant(float(2.5)),
+        QVariant(QString()), QVariant(QString("x")), QVariant(QString("héllo ✓")), QVariant(QString(23, 'a')),
+        QVariant(QString(24, 'b')), QVariant(QString(300, 'c')), QVariant(QString(70000, 'd')),
+        QVariant(QUuid()), QVariant(QUuid("{6ba7b810-9dad-11d1-80b4-00c04fd430c8}")),
+        QVariant::fromValue(glm::vec3(1.0f, -2.5f, 1.0f / 3.0f)), QVariant::fromValue(glm::vec3(0.0f)),
+        QVariant::fromValue(glm::quat(0.5f, -0.5f, 0.25f, 1.0f / 7.0f)), QVariant::fromValue(glm::vec2(3.0f, 0.1f)),
+        QVariant::fromValue(glm::vec4(1.0f, 2.0f, 3.0f, 4.0f)),
+    };
+    for (const QVariant& value : values) {
+        QByteArray direct = codec.encode(value);
+        QByteArray tree = codec.toCbor(value).toCbor();
+        QVERIFY2(direct == tree, qPrintable(QString("%1 (%2): %3, the tree gives %4").arg(value.toString(), value.typeName())
+                                                .arg(QString::fromLatin1(direct.toHex()), QString::fromLatin1(tree.toHex()))));
+    }
+    // lists and maps, item by item: the member orders of the known shapes, nesting, and items that still go
+    // through the tree (a URL, bytes, a date, a CBOR value)
+    QVariantMap large;
+    for (int i = 0; i < 300; ++i) {
+        large.insert(QString("key%1").arg(i, 3, 10, QChar('0')), i % 3 ? QVariant(i * 0.5) : QVariant(QString::number(i)));
+    }
+    QVariantHash hash;
+    hash.insert("one", 1);
+    hash.insert("two", QVariantList { 2, "2" });
+    hash.insert("three", QVariantMap { { "x", 3 }, { "y", 4 } });
+    const QVariantList containers {
+        QVariant(QVariantList()), QVariant(QVariantMap()), QVariant(QStringList()), QVariant(QVariantHash()),
+        QVariant(QVariantList { 1, "two" }), QVariant(QStringList { "a", "", "héllo" }),
+        QVariant(QVariantMap { { "z", 3 }, { "x", 1 }, { "y", 2 } }),
+        QVariant(QVariantMap { { "w", 4 }, { "z", 3 }, { "x", 1 }, { "y", 2 } }),
+        QVariant(QVariantMap { { "y", 2 }, { "x", 1 } }),
+        QVariant(QVariantMap { { "blue", 3 }, { "green", 2 }, { "red", 1 } }),
+        QVariant(QVariantMap { { "x", 1 }, { "z", 3 }, { "q", 2 } }),
+        QVariant(QVariantMap { { "red", 1 }, { "blue", 3 }, { "alpha", 2 } }),
+        QVariant(QVariantMap { { "position", QVariant::fromValue(glm::vec3(1.0f, 2.0f, 3.0f)) },
+                               { "list", QVariantList { QVariantMap { { "a", QVariant() } }, QVariantList { true } } },
+                               { "id", QUuid("{6ba7b810-9dad-11d1-80b4-00c04fd430c8}") }, { "none", QUuid() } }),
+        QVariant(QVariantList { QUrl("https://example.invalid/x"), QByteArray("\x01\x02"), QDateTime::fromMSecsSinceEpoch(0, Qt::UTC),
+                                QVariant::fromValue(QCborValue(QCborMap { { "kept", "as it is" } })) }),
+        QVariant(large), QVariant(hash),
+    };
+    for (const QVariant& value : containers) {
+        QByteArray direct = codec.encode(value);
+        QByteArray tree = codec.toCbor(value).toCbor();
+        QVERIFY2(direct == tree, qPrintable(QString("%1: %2, the tree gives %3").arg(value.typeName())
+                                                .arg(QString::fromLatin1(direct.left(80).toHex()), QString::fromLatin1(tree.left(80).toHex()))));
+    }
+}
+
+// A large map, as a host call returning one many times a second sends it: written directly, in O(n).
+void ValueCodecTests::benchmarkLargeMap() {
+    ValueCodec codec;
+    QVariantMap map;
+    for (int i = 0; i < 500; ++i) {
+        map.insert(QString("action%1").arg(i), double(i) * 0.25);
+    }
+    const QVariant value(map);
+    QByteArray bytes;
+    QBENCHMARK {
+        bytes = codec.encode(value);
+    }
+    QVERIFY(bytes.size() > 500);
+}
+
+// The same map through the tree (a QCborMap), as encode() wrote it before: for comparison.
+void ValueCodecTests::benchmarkLargeMapThroughTheTree() {
+    ValueCodec codec;
+    QVariantMap map;
+    for (int i = 0; i < 500; ++i) {
+        map.insert(QString("action%1").arg(i), double(i) * 0.25);
+    }
+    const QVariant value(map);
+    QByteArray bytes;
+    QBENCHMARK {
+        bytes = codec.toCbor(value).toCbor();
+    }
+    QCOMPARE(bytes, codec.encode(value));
+}
+
+// genericTypeOf gives the type of the value fromCbor makes, without making it.
+void ValueCodecTests::testGenericTypes() {
+    ObjectTable objects;
+    ValueCodec codec(&objects);
+    Probe probe;
+    ObjectTable::Handle handle = objects.handleFor(&probe);
+    QCborMap object;
+    object.insert(QStringLiteral("@object"), qint64(handle));
+    QCborMap callback;
+    callback.insert(QStringLiteral("@callback"), 3);
+    QCborMap plain;
+    plain.insert(QStringLiteral("x"), 1);
+    const QList<QCborValue> items {
+        QCborValue(1), QCborValue(qint64(1) << 40), QCborValue(2.5), QCborValue(true), QCborValue(nullptr),
+        QCborValue(QCborValue::Undefined), QCborValue(QStringLiteral("text")), QCborValue(QByteArray("bytes")),
+        QCborValue(QCborArray { 1, 2 }), QCborValue(object), QCborValue(callback), QCborValue(plain),
+    };
+    for (const QCborValue& item : items) {
+        QCOMPARE(codec.genericTypeOf(item), codec.fromCbor(item).userType());
+    }
 }
 
 // TestObjects.h has no source file of its own, so its moc output is pulled in here.

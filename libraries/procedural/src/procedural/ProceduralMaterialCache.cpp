@@ -697,6 +697,25 @@ std::pair<std::string, std::shared_ptr<NetworkMaterial>> NetworkMaterialResource
                 if (value.isBool()) {
                     material->setDefaultFallthrough(value.toBool());
                 }
+            // the plain material under the shader, drawn whenever the shader can't be (Settings > Custom Shaders on
+            // Models off, the world still loading, a shader this GPU doesn't compile): a colour texture, a glow map
+            // (the material's emissive tints it when both are given), an emissive colour. The Lightling's lines, 10-28
+            } else if (key == "albedoMap") {
+                auto value = materialJSON.value(key);
+                if (value.isString() && value.toString() != FALLTHROUGH) {
+                    material->setAlbedoMap(baseUrl.resolved(value.toString()), false);
+                }
+            } else if (key == "emissiveMap") {
+                auto value = materialJSON.value(key);
+                if (value.isString() && value.toString() != FALLTHROUGH) {
+                    material->setEmissiveMap(baseUrl.resolved(value.toString()));
+                }
+            } else if (key == "emissive") {
+                glm::vec3 color;
+                bool isSRGB;
+                if (parseJSONColor(materialJSON.value(key), color, isSRGB)) {
+                    material->setEmissive(color, isSRGB);
+                }
             } else if (key == "procedural") {
                 auto value = materialJSON.value(key);
                 material->setProceduralData(QJsonDocument::fromVariant(value.toVariant()).toJson());

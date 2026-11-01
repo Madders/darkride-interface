@@ -16,7 +16,8 @@
 #include "EntityItemProperties.h"
 #include "EntityItemPropertiesMacros.h"
 
-void HazePropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties, QScriptEngine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
+template <typename Value, typename Engine>
+void HazePropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties, Engine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_HAZE_RANGE, Haze, haze, HazeRange, hazeRange);
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE_TYPED(PROP_HAZE_COLOR, Haze, haze, HazeColor, hazeColor, u8vec3Color);
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE_TYPED(PROP_HAZE_GLARE_COLOR, Haze, haze, HazeGlareColor, hazeGlareColor, u8vec3Color);
@@ -34,7 +35,8 @@ void HazePropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProp
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_HAZE_KEYLIGHT_ALTITUDE, Haze, haze, HazeKeyLightAltitude, hazeKeyLightAltitude);
 }
 
-void HazePropertyGroup::copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) {
+template <typename Value>
+void HazePropertyGroup::copyFromScriptValue(const Value& object, bool& _defaultSettings) {
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(haze, hazeRange, float, setHazeRange);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(haze, hazeColor, u8vec3Color, setHazeColor);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(haze, hazeGlareColor, u8vec3Color, setHazeGlareColor);
@@ -160,27 +162,27 @@ bool HazePropertyGroup::appendToEditPacket(OctreePacketData* packetData,
     return true;
 }
 
-bool HazePropertyGroup::decodeFromEditPacket(EntityPropertyFlags& propertyFlags, const unsigned char*& dataAt , int& processedBytes) {
+bool HazePropertyGroup::decodeFromEditPacket(EntityPropertyFlags& propertyFlags, const unsigned char*& dataAt , int& processedBytes, int bytesToRead) {
 
     int bytesRead = 0;
     bool overwriteLocalData = true;
     bool somethingChanged = false;
 
-    READ_ENTITY_PROPERTY(PROP_HAZE_RANGE, float, setHazeRange);
-    READ_ENTITY_PROPERTY(PROP_HAZE_COLOR, u8vec3Color, setHazeColor);
-    READ_ENTITY_PROPERTY(PROP_HAZE_GLARE_COLOR, u8vec3Color, setHazeGlareColor);
-    READ_ENTITY_PROPERTY(PROP_HAZE_ENABLE_GLARE, bool, setHazeEnableGlare);
-    READ_ENTITY_PROPERTY(PROP_HAZE_GLARE_ANGLE, float, setHazeGlareAngle);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_HAZE_RANGE, float, setHazeRange);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_HAZE_COLOR, u8vec3Color, setHazeColor);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_HAZE_GLARE_COLOR, u8vec3Color, setHazeGlareColor);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_HAZE_ENABLE_GLARE, bool, setHazeEnableGlare);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_HAZE_GLARE_ANGLE, float, setHazeGlareAngle);
 
-    READ_ENTITY_PROPERTY(PROP_HAZE_ALTITUDE_EFFECT, bool, setHazeAltitudeEffect);
-    READ_ENTITY_PROPERTY(PROP_HAZE_CEILING, float, setHazeCeiling);
-    READ_ENTITY_PROPERTY(PROP_HAZE_BASE_REF, float, setHazeBaseRef);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_HAZE_ALTITUDE_EFFECT, bool, setHazeAltitudeEffect);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_HAZE_CEILING, float, setHazeCeiling);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_HAZE_BASE_REF, float, setHazeBaseRef);
 
-    READ_ENTITY_PROPERTY(PROP_HAZE_BACKGROUND_BLEND, float, setHazeBackgroundBlend);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_HAZE_BACKGROUND_BLEND, float, setHazeBackgroundBlend);
 
-    READ_ENTITY_PROPERTY(PROP_HAZE_ATTENUATE_KEYLIGHT, bool, setHazeAttenuateKeyLight);
-    READ_ENTITY_PROPERTY(PROP_HAZE_KEYLIGHT_RANGE, float, setHazeKeyLightRange);
-    READ_ENTITY_PROPERTY(PROP_HAZE_KEYLIGHT_ALTITUDE, float, setHazeKeyLightAltitude);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_HAZE_ATTENUATE_KEYLIGHT, bool, setHazeAttenuateKeyLight);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_HAZE_KEYLIGHT_RANGE, float, setHazeKeyLightRange);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_HAZE_KEYLIGHT_ALTITUDE, float, setHazeKeyLightAltitude);
 
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_HAZE_RANGE, HazeRange);
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_HAZE_COLOR, HazeColor);
@@ -360,3 +362,5 @@ int HazePropertyGroup::readEntitySubclassDataFromBuffer(const unsigned char* dat
 
     return bytesRead;
 }
+
+INSTANTIATE_PROPERTY_GROUP_CONVERSIONS(HazePropertyGroup)

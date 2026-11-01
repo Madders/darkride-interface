@@ -1,0 +1,182 @@
+#
+#  linux.yml
+#  .github/workflows
+#
+#  Copyright 2026 Darkride.
+#
+#  Distributed under the MIT License.
+#  See the accompanying file LICENSE-MIT or https://opensource.org/licenses/MIT
+#
+# Builds the Linux servers (domain-server and assignment-client, the way the live worlds' build does) for every push
+# to any branch and every pull request, on GitHub's runners, then packs them into server.AppDir as a release would.
+# A red check means the change doesn't build on Linux. It publishes nothing and uses no secrets: the token is
+# read-only, so a pull request from anyone's fork runs safely. Windows is Build (build.yml); this file is only Linux.
+#
+# The recipe is the release Linux server build's (linux-server-build.sh in the ops repo): Ubuntu 24.04, Ubuntu's Qt
+# 5.15 through a shim prefix laid out as SetupQt.cmake expects, SERVER_ONLY, the dependencies from vcpkg. Three
+# differences: CMake is pinned to 3.31 (the 2020-era scripts don't configure under CMake 4, which runner images may
+# move to); webrtc's Linux archive, whose only URL in the port is the dead cdn.tivolicloud.com, comes from Overte's
+# build-deps mirror and is checked against the port's SHA512; and the compile goes through ccache.
+#
+# Caches: vcpkg's packages (keyed by the ports and hifi_vcpkg.py, so a ports change starts cold: an hour or two on a
+# runner) and ccache. Pushes save them; pull requests only restore, so they can't crowd out the 10 GB GitHub gives
+# each repository. A push that changes only Markdown builds nothing.
+
+name: Linux
+
+on:
+  push:
+    paths-ignore: ['**.md']
+  pull_request:
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# a newer push to the same branch or pull request replaces a build that's still running; builds of main all finish
+concurrency:
+  group: linux-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  servers:
+    name: Linux servers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      # the runner's second disk (/mnt) has the room vcpkg's build trees need
+      WORK: /mnt/w
+      TIVOLI_VCPKG_BASE: /mnt/w/vcpkg
+      TIVOLI_QT_BASE: /mnt/w/qt
+      VCPKG_DOWNLOADS: /mnt/w/downloads
+      QT_CMAKE_PREFIX_PATH: /mnt/w/qt5/lib/cmake
+      BUILD_DIR: /mnt/w/build
+      CCACHE_DIR: /mnt/w/ccache
+      CCACHE_MAXSIZE: 1500M
+      # GCC 13 needs <cstdint> included explicitly in the 2021 vcpkg tool and some 2020 ports
+      CXXFLAGS: -include cstdint -Wno-changes-meaning
+      DEBIAN_FRONTEND: noninteractive
+      CACHE_SAVE: ${{ github.event_name == 'push' }}
+      WEBRTC_ARCHIVE: webrtc-20190626-linux.tar.gz
+      WEBRTC_MIRROR: https://build-deps.overte.org/seth/webrtc-20190626-linux.tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work folder
+        run: |
+          sudo mkdir -p "$WORK" && sudo chown "$USER" "$WORK"
+          mkdir -p "$VCPKG_DOWNLOADS" "$CCACHE_DIR"
+          df -h / /mnt
+
+      - name: Packages
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            build-essential gcc g++ ninja-build git curl ca-certificates zip unzip tar xz-utils ccache \
+            pkg-config autoconf automake libtool python3 python3-pip python3-setuptools patchelf nodejs npm \
+            libssl-dev libdouble-conversion-dev libpng-dev libharfbuzz-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libasound2-dev libpulse-dev libudev-dev libdbus-1-dev libibus-1.0-dev libdrm-dev libgbm-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxxf86vm-dev \
+            libxss-dev libxmu-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            zlib1g-dev libpcre2-dev libglib2.0-dev libjpeg-dev libfontconfig1-dev libevent-dev libminizip-dev \
+            qtbase5-dev qtbase5-private-dev qt5-qmake qtscript5-dev qtdeclarative5-dev libqt5websockets5-dev \
+            qtmultimedia5-dev libqt5svg5-dev libqt5webchannel5-dev libqt5xmlpatterns5-dev libqt5opengl5-dev \
+            qttools5-dev libqt5sql5-sqlite
+          python3 -m pip install --user --break-system-packages cmake==3.31.10
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # $WORK/qt5: Ubuntu's Qt packages laid out the way SetupQt.cmake expects (include/QtCore, lib/cmake/Qt5,
+      # lib/libQt5*.so, bin, plugins)
+      - name: Qt shim
+        run: |
+          mkdir -p "$WORK/qt5/lib"
+          ln -sfn /usr/include/x86_64-linux-gnu/qt5 "$WORK/qt5/include"
+          ln -sfn /usr/lib/x86_64-linux-gnu/cmake "$WORK/qt5/lib/cmake"
+          ln -sfn /usr/lib/qt5/bin "$WORK/qt5/bin"
+          ln -sfn /usr/lib/x86_64-linux-gnu/qt5/plugins "$WORK/qt5/plugins"
+          for lib in /usr/lib/x86_64-linux-gnu/libQt5*.so*; do ln -sfn "$lib" "$WORK/qt5/lib/$(basename "$lib")"; done
+          test -d "$WORK/qt5/include/QtCore" && test -d "$WORK/qt5/lib/cmake/Qt5"
+          cmake --version | head -1
+
+      # vcpkg finds a download already in VCPKG_DOWNLOADS by its file name, and checks it against the port's SHA512
+      # as well; it is checked here first so a changed mirror fails with a clear message
+      - name: webrtc from Overte's mirror
+        run: |
+          want=$(sed -n '/webrtc-20190626-linux/,/FILENAME/s/.*SHA512 \([0-9a-f]*\).*/\1/p' cmake/ports/webrtc/portfile.cmake)
+          test -n "$want"
+          curl -fsSL --retry 3 -o "$VCPKG_DOWNLOADS/$WEBRTC_ARCHIVE" "$WEBRTC_MIRROR"
+          got=$(sha512sum "$VCPKG_DOWNLOADS/$WEBRTC_ARCHIVE" | cut -d' ' -f1)
+          [ "$got" = "$want" ] || { echo "::error::$WEBRTC_MIRROR doesn't match the port's SHA512"; exit 1; }
+
+      - name: Restore vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /mnt/w/vcpkg
+          key: vcpkg-linux-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: /mnt/w/ccache
+          key: ccache-linux-${{ github.sha }}
+          restore-keys: ccache-linux-
+
+      # vcpkg builds (or finds) the dependencies here, as part of configuring
+      - name: Configure
+        run: |
+          cmake -S . -B "$BUILD_DIR" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSERVER_ONLY=1 \
+            -DVCPKG_BUILD_TYPE=release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      # without the build trees and downloads: they're large and only needed while a port builds
+      - name: Trim vcpkg for its cache
+        if: env.CACHE_SAVE == 'true' && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        run: |
+          rm -rf /mnt/w/vcpkg/*/buildtrees /mnt/w/vcpkg/*/packages
+          du -sh /mnt/w/vcpkg
+
+      - name: Save vcpkg packages
+        if: env.CACHE_SAVE == 'true' && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /mnt/w/vcpkg
+          key: vcpkg-linux-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}
+
+      - name: Build
+        run: |
+          ccache --zero-stats
+          ninja -C "$BUILD_DIR" domain-server assignment-client
+          ccache --show-stats
+
+      # the packaging step a release runs: a plugin or library the build no longer makes fails here
+      - name: Pack server.AppDir
+        working-directory: /mnt/w/build
+        run: |
+          python3 "$GITHUB_WORKSPACE/tools/make_appdir.py" server .
+          test -x server.AppDir/usr/bin/domain-server
+          du -sh server.AppDir
+
+      - name: Save ccache
+        if: always() && env.CACHE_SAVE == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /mnt/w/ccache
+          key: ccache-linux-${{ github.sha }}
+
+      - name: Keep the logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-logs
+          path: |
+            /mnt/w/vcpkg/*/buildtrees/**/*.log
+            /mnt/w/build/CMakeFiles/CMakeOutput.log
+            /mnt/w/build/CMakeFiles/CMakeError.log
+          retention-days: 7
+          if-no-files-found: ignore

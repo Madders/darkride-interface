@@ -1,0 +1,229 @@
+Array.prototype.sort: compare numbers directly for an a - b comparator
+
+A comparator that is exactly function (a, b) { return a - b; } or (a, b) => a - b, or the same with b - a, is
+recognized by its bytecode, as JavaScriptCore and SpiderMonkey recognize it. When every value to sort is a number,
+the values are sorted by a stable merge sort on the numbers instead of a call of the comparator per comparison.
+The result is the same: without NaN the comparison is a total order with stable ties, which has one result; with
+NaN, which compares equal to everything, the previous algorithm is kept with a direct comparison. Such a function
+has no side effects on numbers, so skipping its calls is not observable.
+
+diff --git a/quickjs.c b/quickjs.c
+index 6ca030b..bc27479 100644
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -44754,6 +44754,187 @@ exception:
+     return 0;
+ }
+ 
++/* A comparator that is exactly function (a, b) { return a - b; } or
++   (a, b) => a - b, or the same with b - a, orders numbers as comparing
++   them does: the sign of the difference, 0 when a NaN is involved. When
++   all the values to sort are numbers, the sort compares them directly
++   instead of calling it, with the same result: such a function has no
++   side effects on numbers. Returns 1 for a - b, -1 for b - a and 0 for
++   any other function. */
++static int js_array_numeric_comparator(JSValueConst func)
++{
++    JSObject *p;
++    JSFunctionBytecode *b;
++    const uint8_t *pc;
++
++    if (JS_VALUE_GET_TAG(func) != JS_TAG_OBJECT)
++        return 0;
++    p = JS_VALUE_GET_OBJ(func);
++    if (p->class_id != JS_CLASS_BYTECODE_FUNCTION)
++        return 0;
++    b = p->u.func.function_bytecode;
++    if (b->func_kind != JS_FUNC_NORMAL || b->byte_code_len != 4)
++        return 0;
++    pc = b->byte_code_buf;
++    if (pc[2] != OP_sub || pc[3] != OP_return)
++        return 0;
++    if (pc[0] == OP_get_arg0 && pc[1] == OP_get_arg1)
++        return 1;
++    if (pc[0] == OP_get_arg1 && pc[1] == OP_get_arg0)
++        return -1;
++    return 0;
++}
++
++static bool js_array_slots_are_numbers(const ValueSlot *array, size_t count)
++{
++    size_t i;
++    uint32_t tag;
++
++    for (i = 0; i < count; i++) {
++        tag = JS_VALUE_GET_TAG(array[i].val);
++        if (tag != JS_TAG_INT && !JS_TAG_IS_FLOAT64(tag))
++            return false;
++    }
++    return true;
++}
++
++static inline double js_array_slot_number(const ValueSlot *slot)
++{
++    if (JS_VALUE_GET_TAG(slot->val) == JS_TAG_INT)
++        return JS_VALUE_GET_INT(slot->val);
++    return JS_VALUE_GET_FLOAT64(slot->val);
++}
++
++static inline int js_array_cmp_positions(const ValueSlot *ap,
++                                         const ValueSlot *bp)
++{
++    /* make sort stable: compare array offsets */
++    return (ap->pos > bp->pos) - (ap->pos < bp->pos);
++}
++
++/* the sign of a - b, as returned by the comparator a - b */
++static int js_array_cmp_numbers(const void *a, const void *b, void *opaque)
++{
++    const ValueSlot *ap = a, *bp = b;
++    double x = js_array_slot_number(ap), y = js_array_slot_number(bp);
++    int cmp = (x > y) - (x < y);
++
++    return cmp != 0 ? cmp : js_array_cmp_positions(ap, bp);
++}
++
++/* the sign of b - a, as returned by the comparator b - a */
++static int js_array_cmp_numbers_reversed(const void *a, const void *b,
++                                         void *opaque)
++{
++    const ValueSlot *ap = a, *bp = b;
++    double x = js_array_slot_number(ap), y = js_array_slot_number(bp);
++    int cmp = (y > x) - (y < x);
++
++    return cmp != 0 ? cmp : js_array_cmp_positions(ap, bp);
++}
++
++typedef struct NumberSlot {
++    double key;
++    size_t index;
++} NumberSlot;
++
++/* Stable merge sort by key: runs of 16 sorted by insertion, then merged
++   pairwise between the two buffers. Returns the buffer that holds the
++   result: a or tmp. */
++static NumberSlot *js_sort_number_slots(NumberSlot *a, NumberSlot *tmp,
++                                        size_t n)
++{
++    NumberSlot t, *src, *dst, *swap;
++    size_t i, j, k, l, r, lo, mid, hi, run;
++
++    for (lo = 0; lo < n; lo += 16) {
++        hi = n - lo > 16 ? lo + 16 : n;
++        for (i = lo + 1; i < hi; i++) {
++            t = a[i];
++            for (j = i; j > lo && t.key < a[j - 1].key; j--)
++                a[j] = a[j - 1];
++            a[j] = t;
++        }
++    }
++    src = a;
++    dst = tmp;
++    for (run = 16; run < n; run *= 2) {
++        for (lo = 0; lo < n; lo += 2 * run) {
++            mid = n - lo > run ? lo + run : n;
++            hi = n - mid > run ? mid + run : n;
++            l = lo;
++            r = mid;
++            k = lo;
++            if (mid < hi && !(src[mid].key < src[mid - 1].key)) {
++                /* already in order */
++                memcpy(dst + lo, src + lo, (hi - lo) * sizeof(*src));
++                continue;
++            }
++            while (l < mid && r < hi) {
++                if (src[r].key < src[l].key)
++                    dst[k++] = src[r++];
++                else
++                    dst[k++] = src[l++];
++            }
++            while (l < mid)
++                dst[k++] = src[l++];
++            while (r < hi)
++                dst[k++] = src[r++];
++        }
++        swap = src;
++        src = dst;
++        dst = swap;
++    }
++    return src;
++}
++
++/* Sorts number slots as rqsort with js_array_cmp_numbers (direction > 0)
++   or js_array_cmp_numbers_reversed would. Without NaN, both compare
++   numbers as a total order with stable ties, which has a single result, so
++   a faster stable sort gives the same one; with NaN, which compares equal
++   to everything, the result depends on the algorithm, so rqsort is kept.
++   *parray may be replaced by a sorted copy. */
++static int js_array_sort_numbers(JSContext *ctx, ValueSlot **parray,
++                                 size_t count, int direction)
++{
++    ValueSlot *array = *parray, *sorted;
++    NumberSlot *keys, *result;
++    size_t i;
++    double d;
++
++    if (count < 2)
++        return 0;
++    keys = js_malloc(ctx, sizeof(*keys) * count * 2);
++    if (!keys)
++        return -1;
++    for (i = 0; i < count; i++) {
++        d = js_array_slot_number(&array[i]);
++        if (isnan(d)) {
++            js_free(ctx, keys);
++            rqsort(array, count, sizeof(*array),
++                   direction > 0 ? js_array_cmp_numbers :
++                   js_array_cmp_numbers_reversed, NULL);
++            return 0;
++        }
++        /* descending is ascending on the opposite numbers (-0 and +0 still
++           compare equal) */
++        keys[i].key = direction > 0 ? d : -d;
++        keys[i].index = i;
++    }
++    result = js_sort_number_slots(keys, keys + count, count);
++    sorted = js_malloc(ctx, sizeof(*sorted) * count);
++    if (!sorted) {
++        js_free(ctx, keys);
++        return -1;
++    }
++    for (i = 0; i < count; i++)
++        sorted[i] = array[result[i].index];
++    js_free(ctx, keys);
++    js_free(ctx, array);
++    *parray = sorted;
++    return 0;
++}
++
+ static JSValue js_array_sort(JSContext *ctx, JSValueConst this_val,
+                              int argc, JSValueConst *argv)
+ {
+@@ -44762,7 +44943,7 @@ static JSValue js_array_sort(JSContext *ctx, JSValueConst this_val,
+     ValueSlot *array = NULL;
+     size_t array_size = 0, pos = 0, n = 0;
+     int64_t i, len, undefined_count = 0;
+-    int present;
++    int present, direction;
+ 
+     if (!JS_IsUndefined(asc.method)) {
+         if (check_function(ctx, asc.method))
+@@ -44798,9 +44979,15 @@ static JSValue js_array_sort(JSContext *ctx, JSValueConst this_val,
+         array[pos].pos = i;
+         pos++;
+     }
+-    rqsort(array, pos, sizeof(*array), js_array_cmp_generic, &asc);
+-    if (asc.exception)
+-        goto exception;
++    direction = asc.has_method ? js_array_numeric_comparator(asc.method) : 0;
++    if (direction != 0 && js_array_slots_are_numbers(array, pos)) {
++        if (js_array_sort_numbers(ctx, &array, pos, direction))
++            goto exception;
++    } else {
++        rqsort(array, pos, sizeof(*array), js_array_cmp_generic, &asc);
++        if (asc.exception)
++            goto exception;
++    }
+ 
+     /* XXX: should special case fast arrays */
+     while (n < pos) {

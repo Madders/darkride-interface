@@ -14,8 +14,13 @@
 #include <chrono>
 #include <thread>
 
+#include <atomic>
+#include <memory>
+
 #include <QtCore/QCoreApplication>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QEventLoop>
+#include <QtCore/QDir>
 #include <QtCore/QFileInfo>
 #include <QtCore/QTimer>
 #include <QtCore/QThread>
@@ -61,7 +66,6 @@
 #include <NetworkAccessManager.h>
 #include <PathUtils.h>
 #include <ResourceScriptingInterface.h>
-#include <UserActivityLoggerScriptingInterface.h>
 #include <NodeList.h>
 #include <ScriptAvatarData.h>
 #include <udt/PacketHeaders.h>
@@ -73,6 +77,11 @@
 #include "ArrayBufferViewClass.h"
 #include "AssetScriptingInterface.h"
 #include "BatchLoader.h"
+#include <ScriptNetworkPolicy.h>
+#include "GuardedObject.h"
+#include "WorldMessages.h"
+#include "RefusedGlobal.h"
+#include "ScriptApiPolicy.h"
 #include "BaseScriptEngine.h"
 #include "DataViewClass.h"
 #include "EventTypes.h"
@@ -94,7 +103,6 @@
 
 #include <Profile.h>
 
-#include "../../midi/src/Midi.h"        // FIXME why won't a simpler include work?
 #include "MIDIEvent.h"
 
 const QString ScriptEngine::_SETTINGS_ENABLE_EXTENDED_EXCEPTIONS {
@@ -194,18 +202,21 @@ ScriptEnginePointer scriptEngineFactory(ScriptEngine::Context context,
                                                  const QString& fileNameString,
                                                  const QUrl& scriptURL) {
     // a WebAssembly module runs on the engine beside this one; it is told from the file name's suffix, which
-    // ScriptEngines::loadScript puts in the name before the content is fetched. A JavaScript client script
-    // and the entities engines (the client's, the entity script server's) go there too when the setting says
-    // so, and a client script for which an engine was chosen goes to that one; agents stay on this engine
-    // until their owners say otherwise. JavaScript goes there only when the build has the guest module that runs it.
+    // ScriptEngines::loadScript puts in the name before the content is fetched. A JavaScript client script,
+    // an agent's script and the entities engines (the client's, the entity script server's) go there too when
+    // the setting says so (on a server, DARKRIDE_RUN_JS_ON_WASM=1), and a client script for which an engine was
+    // chosen goes to that one. An agent's script is JavaScript unless it is a module, whatever its URL ends with.
+    // JavaScript goes there only when the build has the guest module that runs it.
     const bool isEntitiesEngine = context == ScriptEngine::ENTITY_CLIENT_SCRIPT || context == ScriptEngine::ENTITY_SERVER_SCRIPT;
     const bool isClientJavaScript = context == ScriptEngine::CLIENT_SCRIPT && WasmScriptEngine::isJavaScriptFile(fileNameString);
+    const bool isAgentJavaScript = context == ScriptEngine::AGENT_SCRIPT && !WasmScriptEngine::isWasmScript(fileNameString);
     bool javaScriptOnWebAssembly = WasmScriptEngine::runJavaScriptOnWebAssembly();
     if (isClientJavaScript && !scriptURL.isEmpty()) {
         WasmScriptEngine::engineChosenForScript(scriptURL, javaScriptOnWebAssembly);
     }
     const bool onWebAssembly = WasmScriptEngine::isWasmScript(fileNameString) ||
-        (javaScriptOnWebAssembly && (isClientJavaScript || isEntitiesEngine) && WasmScriptEngine::hasJavaScriptGuest());
+        (javaScriptOnWebAssembly && (isClientJavaScript || isAgentJavaScript || isEntitiesEngine) &&
+         WasmScriptEngine::hasJavaScriptGuest());
     ScriptEngine* engine = onWebAssembly ? new WasmScriptEngine(context, scriptContents, fileNameString)
                                          : new ScriptEngine(context, scriptContents, fileNameString);
     ScriptEnginePointer engineSP = ScriptEnginePointer(engine, &QObject::deleteLater);
@@ -504,6 +515,13 @@ void ScriptEngine::waitTillDoneRunning() {
         auto startedWaiting = usecTimestampNow();
         static const auto MAX_SHUTDOWN_WAIT = 10 * USECS_PER_SECOND;
         while (workerThread->isRunning()) {
+            // Once run() has returned, the script is done, but its thread's event loop only quits when this engine
+            // is destroyed: end it now, rather than wait out the timeout below, which made quitting take a second
+            // for every running script
+            if (!isRunning()) {
+                workerThread->quit();
+            }
+
             auto elapsedUsecs = usecTimestampNow() - startedWaiting;
             if (elapsedUsecs > MAX_SHUTDOWN_WAIT) {
                 qCWarning(scriptengine) << "Script Engine did not stop within" << (MAX_SHUTDOWN_WAIT / USECS_PER_SECOND)
@@ -534,7 +552,7 @@ void ScriptEngine::waitTillDoneRunning() {
                 }
             }
 
-            // NOTE: This will be called on the main application thread (among other threads) from stopAllScripts.
+            // NOTE: This will be called on the main application thread (among other threads) from shutdownScripting.
             //       The thread will need to continue to process events, because
             //       the scripts will likely need to marshall messages across to the main thread, e.g.
             //       if they access Settings or Menu in any of their shutdown code. So:
@@ -598,6 +616,65 @@ void ScriptEngine::loadURL(const QUrl& scriptURL, bool reload) {
         }
         emit scriptLoaded(url);
     }, reload, maxRetries);
+}
+
+QUrl ScriptEngine::currentScriptOrigin() const {
+    if (!currentSandboxURL.isEmpty()) {
+        const QString scheme = currentSandboxURL.scheme().toLower();
+        if (scheme == "javascript") {
+            return QUrl("about:EmbeddedEntityScript");   // the code itself, as a javascript: URL
+        }
+        if (!scheme.isEmpty()) {
+            return effectiveSandbox(currentSandboxURL);
+        }
+        // an entity script given as code in the script property keeps that code as its sandbox (entityScriptContentAvailable)
+        const QString text = currentSandboxURL.toString();
+        return text.startsWith('/') ? effectiveSandbox(QUrl::fromLocalFile(text)) : QUrl("about:EmbeddedEntityScript");
+    }
+    QUrl url(_fileNameString);
+    if (url.scheme().isEmpty() && !_fileNameString.isEmpty()) {
+        url = QUrl::fromLocalFile(_fileNameString);
+    }
+    return url;
+}
+
+bool ScriptEngine::entityScriptsMayBeLocal() const {
+    if (_context != ENTITY_CLIENT_SCRIPT || _servedNonLocalWorld) {
+        return false;
+    }
+    // decided by the world the engine serves, never by anything a script passes
+    if (ScriptNetworkPolicy::isStrict() || !ScriptNetworkPolicy::isWorldLocal()) {
+        _servedNonLocalWorld = true;
+        return false;
+    }
+    return true;
+}
+
+bool ScriptEngine::worldIsLocal() const {
+    return _context == ENTITY_CLIENT_SCRIPT ? entityScriptsMayBeLocal() : ScriptNetworkPolicy::isWorldLocal();
+}
+
+QUrl ScriptEngine::effectiveSandbox(const QUrl& sandbox) const {
+    if (_context != ENTITY_CLIENT_SCRIPT || !ScriptNetworkPolicy::isLocalOrigin(sandbox) || entityScriptsMayBeLocal()) {
+        return sandbox;
+    }
+    return QUrl("about:Entities");
+}
+
+QString ScriptEngine::entityScriptRefusal(const QString& entityScript) const {
+    if (_context != ENTITY_CLIENT_SCRIPT || entityScriptsMayBeLocal()) {
+        return QString();
+    }
+    // the address as the script cache reads it: code given as the script, or a javascript: URL, is no address; an
+    // address the cache takes as a file here (a file URL, a path, an unknown scheme) is judged as that file
+    if (ScriptCache::isInlineScript(entityScript) || QUrl(entityScript).scheme().toLower() == "javascript") {
+        return QString();
+    }
+    const QUrl url = DependencyManager::get<ResourceManager>()->normalizeURL(QUrl(entityScript));
+    if (!url.isLocalFile() || ScriptNetworkPolicy::isAppScript(url)) {
+        return QString();
+    }
+    return "a file of this machine, in a world that isn't served from it or its network";
 }
 
 void ScriptEngine::scriptErrorMessage(const QString& message) {
@@ -759,31 +836,9 @@ void ScriptEngine::init() {
 
     _isInitialized = true;
 
-    auto entityScriptingInterface = DependencyManager::get<EntityScriptingInterface>();
-    entityScriptingInterface->init();
+    DependencyManager::get<EntityScriptingInterface>()->init();
 
-    // register various meta-types
-    registerMetaTypes(this);
-    registerMIDIMetaTypes(this);
-    registerEventTypes(this);
-    registerMenuItemProperties(this);
-    registerAnimationTypes(this);
-    registerAvatarTypes(this);
-    registerAudioMetaTypes(this);
-
-    qScriptRegisterMetaType(this, EntityPropertyFlagsToScriptValue, EntityPropertyFlagsFromScriptValue);
-    qScriptRegisterMetaType(this, EntityItemPropertiesToScriptValue, EntityItemPropertiesFromScriptValueHonorReadOnly);
-    qScriptRegisterMetaType(this, EntityPropertyInfoToScriptValue, EntityPropertyInfoFromScriptValue);
-    qScriptRegisterMetaType(this, EntityItemIDtoScriptValue, EntityItemIDfromScriptValue);
-    qScriptRegisterMetaType(this, RayToEntityIntersectionResultToScriptValue, RayToEntityIntersectionResultFromScriptValue);
-    qScriptRegisterMetaType(this, RayToAvatarIntersectionResultToScriptValue, RayToAvatarIntersectionResultFromScriptValue);
-    qScriptRegisterMetaType(this, AvatarEntityMapToScriptValue, AvatarEntityMapFromScriptValue);
-    qScriptRegisterSequenceMetaType<QVector<QUuid>>(this);
-    qScriptRegisterSequenceMetaType<QVector<EntityItemID>>(this);
-
-    qScriptRegisterSequenceMetaType<QVector<glm::vec2>>(this);
-    qScriptRegisterSequenceMetaType<QVector<glm::quat>>(this);
-    qScriptRegisterSequenceMetaType<QVector<QString>>(this);
+    registerConversions();
 
     QScriptValue xmlHttpRequestConstructorValue = newFunction(XMLHttpRequestClass::constructor);
     globalObject().setProperty("XMLHttpRequest", xmlHttpRequestConstructorValue);
@@ -802,55 +857,6 @@ void ScriptEngine::init() {
 
     QScriptValue audioEffectOptionsConstructorValue = newFunction(AudioEffectOptions::constructor);
     globalObject().setProperty("AudioEffectOptions", audioEffectOptionsConstructorValue);
-
-    qScriptRegisterMetaType(this, injectorToScriptValue, injectorFromScriptValue);
-    qScriptRegisterMetaType(this, inputControllerToScriptValue, inputControllerFromScriptValue);
-    qScriptRegisterMetaType(this, avatarDataToScriptValue, avatarDataFromScriptValue);
-    qScriptRegisterMetaType(this, animationDetailsToScriptValue, animationDetailsFromScriptValue);
-    qScriptRegisterMetaType(this, webSocketToScriptValue, webSocketFromScriptValue);
-    qScriptRegisterMetaType(this, qWSCloseCodeToScriptValue, qWSCloseCodeFromScriptValue);
-    qScriptRegisterMetaType(this, wscReadyStateToScriptValue, wscReadyStateFromScriptValue);
-
-    // NOTE: You do not want to end up creating new instances of singletons here. They will be on the ScriptEngine thread
-    // and are likely to be unusable if we "reset" the ScriptEngine by creating a new one (on a whole new thread).
-
-    registerGlobalObject("Script", this);
-
-    {
-        // set up Script.require.resolve and Script.require.cache
-        auto Script = globalObject().property("Script");
-        auto require = Script.property("require");
-        auto resolve = Script.property("_requireResolve");
-        require.setProperty("resolve", resolve, READONLY_PROP_FLAGS);
-        resetModuleCache();
-    }
-
-    registerGlobalObject("Audio", DependencyManager::get<AudioScriptingInterface>().data());
-
-    registerGlobalObject("Midi", DependencyManager::get<Midi>().data());
-
-    registerGlobalObject("Entities", entityScriptingInterface.data());
-    registerFunction("Entities", "getMultipleEntityProperties", EntityScriptingInterface::getMultipleEntityProperties);
-    registerGlobalObject("Quat", &_quatLibrary);
-    registerGlobalObject("Vec3", &_vec3Library);
-    registerGlobalObject("Mat4", &_mat4Library);
-    registerGlobalObject("Uuid", &_uuidLibrary);
-    registerGlobalObject("Messages", DependencyManager::get<MessagesClient>().data());
-    registerGlobalObject("File", new FileScriptingInterface(this));
-    registerGlobalObject("console", &_consoleScriptingInterface);
-    registerFunction("console", "info", ConsoleScriptingInterface::info, currentContext()->argumentCount());
-    registerFunction("console", "log", ConsoleScriptingInterface::log, currentContext()->argumentCount());
-    registerFunction("console", "debug", ConsoleScriptingInterface::debug, currentContext()->argumentCount());
-    registerFunction("console", "warn", ConsoleScriptingInterface::warn, currentContext()->argumentCount());
-    registerFunction("console", "error", ConsoleScriptingInterface::error, currentContext()->argumentCount());
-    registerFunction("console", "exception", ConsoleScriptingInterface::exception, currentContext()->argumentCount());
-    registerFunction("console", "assert", ConsoleScriptingInterface::assertion, currentContext()->argumentCount());
-    registerFunction("console", "group", ConsoleScriptingInterface::group, 1);
-    registerFunction("console", "groupCollapsed", ConsoleScriptingInterface::groupCollapsed, 1);
-    registerFunction("console", "groupEnd", ConsoleScriptingInterface::groupEnd, 0);
-
-    qScriptRegisterMetaType(this, animVarMapToScriptValue, animVarMapFromScriptValue);
-    qScriptRegisterMetaType(this, resultHandlerToScriptValue, resultHandlerFromScriptValue);
 
     /**jsdoc
      * Encodes text to base64.
@@ -902,17 +908,97 @@ void ScriptEngine::init() {
     // constants
     globalObject().setProperty("TREE_SCALE", newVariant(QVariant(TREE_SCALE)));
 
+    registerStandardGlobals();
+
+    {
+        // set up Script.require.resolve and Script.require.cache
+        auto Script = globalObject().property("Script");
+        auto require = Script.property("require");
+        auto resolve = Script.property("_requireResolve");
+        require.setProperty("resolve", resolve, READONLY_PROP_FLAGS);
+        resetModuleCache();
+    }
+}
+
+// The QtScript conversions of the engine's types, registered on this QScriptEngine: how a value of each type
+// becomes a script value and back. (The WebAssembly engine registers them on the QScriptEngine it carries for
+// its serializer alone, WasmScriptEngine::installSerializer.)
+void ScriptEngine::registerConversions() {
+    registerMetaTypes(this);
+    registerMIDIMetaTypes(this);
+    registerEventTypes(this);
+    registerMenuItemProperties(this);
+    registerAnimationTypes(this);
+    registerAvatarTypes(this);
+    registerAudioMetaTypes(this);
+
+    qScriptRegisterMetaType(this, EntityPropertyFlagsToScriptValue, EntityPropertyFlagsFromScriptValue);
+    qScriptRegisterMetaType(this, EntityItemPropertiesToScriptValue, EntityItemPropertiesFromScriptValueHonorReadOnly);
+    qScriptRegisterMetaType(this, EntityPropertyInfoToScriptValue, EntityPropertyInfoFromScriptValue);
+    qScriptRegisterMetaType(this, EntityItemIDtoScriptValue, EntityItemIDfromScriptValue);
+    qScriptRegisterMetaType(this, RayToEntityIntersectionResultToScriptValue, RayToEntityIntersectionResultFromScriptValue);
+    qScriptRegisterMetaType(this, RayToAvatarIntersectionResultToScriptValue, RayToAvatarIntersectionResultFromScriptValue);
+    qScriptRegisterMetaType(this, AvatarEntityMapToScriptValue, AvatarEntityMapFromScriptValue);
+    qScriptRegisterSequenceMetaType<QVector<QUuid>>(this);
+    qScriptRegisterSequenceMetaType<QVector<EntityItemID>>(this);
+
+    qScriptRegisterSequenceMetaType<QVector<glm::vec2>>(this);
+    qScriptRegisterSequenceMetaType<QVector<glm::quat>>(this);
+    qScriptRegisterSequenceMetaType<QVector<QString>>(this);
+
+    qScriptRegisterMetaType(this, injectorToScriptValue, injectorFromScriptValue);
+    qScriptRegisterMetaType(this, inputControllerToScriptValue, inputControllerFromScriptValue);
+    qScriptRegisterMetaType(this, avatarDataToScriptValue, avatarDataFromScriptValue);
+    qScriptRegisterMetaType(this, animationDetailsToScriptValue, animationDetailsFromScriptValue);
+    qScriptRegisterMetaType(this, webSocketToScriptValue, webSocketFromScriptValue);
+    qScriptRegisterMetaType(this, qWSCloseCodeToScriptValue, qWSCloseCodeFromScriptValue);
+    qScriptRegisterMetaType(this, wscReadyStateToScriptValue, wscReadyStateFromScriptValue);
+
+    qScriptRegisterMetaType(this, animVarMapToScriptValue, animVarMapFromScriptValue);
+    qScriptRegisterMetaType(this, resultHandlerToScriptValue, resultHandlerFromScriptValue);
+
+    qScriptRegisterMetaType(this, meshToScriptValue, meshFromScriptValue);
+    qScriptRegisterMetaType(this, meshesToScriptValue, meshesFromScriptValue);
+}
+
+// The globals every engine gives a script, through the register calls each engine implements (the WebAssembly
+// engine records them in its object table). The objects made here for the script alone (File, Model) are the
+// engine's children.
+void ScriptEngine::registerStandardGlobals() {
+    // NOTE: You do not want to end up creating new instances of singletons here. They will be on the ScriptEngine thread
+    // and are likely to be unusable if we "reset" the ScriptEngine by creating a new one (on a whole new thread).
+
+    registerGlobalObject("Script", this);
+    registerGlobalObject("Audio", DependencyManager::get<AudioScriptingInterface>().data());
+
+    registerGlobalObject("Entities", DependencyManager::get<EntityScriptingInterface>().data());
+    registerFunction("Entities", "getMultipleEntityProperties", EntityScriptingInterface::getMultipleEntityProperties);
+    registerGlobalObject("Quat", &_quatLibrary);
+    registerGlobalObject("Vec3", &_vec3Library);
+    registerGlobalObject("Mat4", &_mat4Library);
+    registerGlobalObject("Uuid", &_uuidLibrary);
+    // a world's entity scripts get their own Messages: the world's send path, the app's channels refused (WorldMessages)
+    registerGlobalObject("Messages", isEntityClientScript() ? static_cast<QObject*>(new WorldMessages(this))
+                                                            : DependencyManager::get<MessagesClient>().data());
+    registerGlobalObject("File", new FileScriptingInterface(this));
+    registerGlobalObject("console", &_consoleScriptingInterface);
+    registerFunction("console", "info", ConsoleScriptingInterface::info, currentContext()->argumentCount());
+    registerFunction("console", "log", ConsoleScriptingInterface::log, currentContext()->argumentCount());
+    registerFunction("console", "debug", ConsoleScriptingInterface::debug, currentContext()->argumentCount());
+    registerFunction("console", "warn", ConsoleScriptingInterface::warn, currentContext()->argumentCount());
+    registerFunction("console", "error", ConsoleScriptingInterface::error, currentContext()->argumentCount());
+    registerFunction("console", "exception", ConsoleScriptingInterface::exception, currentContext()->argumentCount());
+    registerFunction("console", "assert", ConsoleScriptingInterface::assertion, currentContext()->argumentCount());
+    registerFunction("console", "group", ConsoleScriptingInterface::group, 1);
+    registerFunction("console", "groupCollapsed", ConsoleScriptingInterface::groupCollapsed, 1);
+    registerFunction("console", "groupEnd", ConsoleScriptingInterface::groupEnd, 0);
+
     registerGlobalObject("Assets", _assetScriptingInterface);
     registerGlobalObject("Resources", DependencyManager::get<ResourceScriptingInterface>().data());
 
     registerGlobalObject("DebugDraw", &DebugDraw::getInstance());
 
     registerGlobalObject("Model", new ModelScriptingInterface(this));
-    qScriptRegisterMetaType(this, meshToScriptValue, meshFromScriptValue);
-    qScriptRegisterMetaType(this, meshesToScriptValue, meshesFromScriptValue);
-
-    registerGlobalObject("UserActivityLogger", DependencyManager::get<UserActivityLoggerScriptingInterface>().data());
-
 #if DEV_BUILD || PR_BUILD
     registerGlobalObject("StackTest", new StackTestScriptingInterface(this));
 #endif
@@ -964,9 +1050,7 @@ void ScriptEngine::registerGlobalObject(const QString& name, QObject* object) {
 #ifdef THREAD_DEBUGGING
         qCDebug(scriptengine) << "*** WARNING *** ScriptEngine::registerGlobalObject() called on wrong thread [" << QThread::currentThread() << "], invoking on correct thread [" << thread() << "]  name:" << name;
 #endif
-        QMetaObject::invokeMethod(this, "registerGlobalObject",
-                                  Q_ARG(const QString&, name),
-                                  Q_ARG(QObject*, object));
+        QMetaObject::invokeMethod(this, [this, name, object] { registerGlobalObject(name, object); });
         return;
     }
 #ifdef THREAD_DEBUGGING
@@ -975,7 +1059,14 @@ void ScriptEngine::registerGlobalObject(const QString& name, QObject* object) {
 
     if (!globalObject().property(name).isValid()) {
         if (object) {
+            if (isEntityClientScript() && !ScriptApiPolicy::allowsGlobal(name)) {
+                // a world's entity scripts don't get this one: a stand-in of the same name, with no members
+                object = new RefusedGlobal(name, this);
+            }
             QScriptValue value = newQObject(object, QScriptEngine::QtOwnership, DEFAULT_QOBJECT_WRAP_OPTIONS);
+            if (isEntityClientScript()) {
+                value = guardClass()->wrap(value);   // a world's scripts see the guard, never the wrapper
+            }
             globalObject().setProperty(name, value);
         } else {
             globalObject().setProperty(name, QScriptValue());
@@ -998,6 +1089,11 @@ void ScriptEngine::registerFunction(const QString& name, QScriptEngine::Function
     qCDebug(scriptengine) << "ScriptEngine::registerFunction() called on thread [" << QThread::currentThread() << "] name:" << name;
 #endif
 
+    if (isEntityClientScript() && !ScriptApiPolicy::allowsGlobal(name)) {
+        // a world's entity scripts don't get this one (the QML and web window constructors): the stand-in, as for objects
+        registerGlobalObject(name, new RefusedGlobal(name, this));
+        return;
+    }
     QScriptValue scriptFun = newFunction(functionSignature, numArguments);
     globalObject().setProperty(name, scriptFun);
 }
@@ -1019,9 +1115,39 @@ void ScriptEngine::registerFunction(const QString& parent, const QString& name, 
 
     QScriptValue object = globalObject().property(parent);
     if (object.isValid()) {
-        QScriptValue scriptFun = newFunction(functionSignature, numArguments);
+        if (isEntityClientScript() && !ScriptApiPolicy::allowsGlobal(parent)) {
+        return;   // a world's entity scripts don't get the parent, so not its functions either
+    }
+    QScriptValue scriptFun = newFunction(functionSignature, numArguments);
         object.setProperty(name, scriptFun);
     }
+}
+
+GuardedObjectClass* ScriptEngine::guardClass() {
+    if (!isEntityClientScript()) {
+        return nullptr;
+    }
+    if (!_guardClass) {
+        HostInterface::MemberGate gate;
+        gate.allowsClass = &ScriptApiPolicy::allowsClass;
+        gate.deniesMethod = &ScriptApiPolicy::deniesMethod;
+        gate.deniesPropertyWrite = &ScriptApiPolicy::deniesPropertyWrite;
+        gate.deniesPropertyRead = &ScriptApiPolicy::deniesPropertyRead;
+        gate.refusalLine = &ScriptApiPolicy::refusalLine;
+        _guardClass = std::make_unique<GuardedObjectClass>(this, std::move(gate));
+    }
+    return _guardClass.get();
+}
+
+static QScriptValue guardedGetter(QScriptContext* context, QScriptEngine* engine) {
+    auto getter = reinterpret_cast<QScriptEngine::FunctionSignature>(
+        reinterpret_cast<void*>(context->callee().data().toVariant().value<quintptr>()));
+    QScriptValue result = getter ? getter(context, engine) : QScriptValue();
+    ScriptEngine* scriptEngine = qobject_cast<ScriptEngine*>(engine);
+    if (result.isQObject() && scriptEngine && scriptEngine->guardClass()) {
+        result = scriptEngine->guardClass()->wrap(result);
+    }
+    return result;
 }
 
 void ScriptEngine::registerGetterSetter(const QString& name, QScriptEngine::FunctionSignature getter,
@@ -1042,8 +1168,16 @@ void ScriptEngine::registerGetterSetter(const QString& name, QScriptEngine::Func
     qCDebug(scriptengine) << "ScriptEngine::registerGetterSetter() called on thread [" << QThread::currentThread() << "] name:" << name << "parent:" << parent;
 #endif
 
+    if (isEntityClientScript() && !ScriptApiPolicy::allowsGlobal(parent.isEmpty() ? name : parent)) {
+        return;   // a world's entity scripts don't get this global
+    }
     QScriptValue setterFunction = newFunction(setter, 1);
     QScriptValue getterFunction = newFunction(getter);
+    if (isEntityClientScript()) {
+        // what the getter hands back (location: the address manager) goes behind the guard too
+        getterFunction = newFunction(guardedGetter);
+        getterFunction.setData(newVariant(QVariant::fromValue(quintptr(reinterpret_cast<void*>(getter)))));
+    }
 
     if (!parent.isNull() && !parent.isEmpty()) {
         QScriptValue object = globalObject().property(parent);
@@ -1551,6 +1685,8 @@ void ScriptEngine::updateMemoryCost(const qint64& deltaSize) {
     }
 }
 
+static bool entityIsGone(ScriptEngine::Context context, const EntityItemID& entityID);   // below, by loadEntityScript
+
 void ScriptEngine::timerFired() {
     {
         QSharedPointer<ScriptEngines> scriptEngines(_scriptEngines);
@@ -1567,6 +1703,26 @@ void ScriptEngine::timerFired() {
         // this timer is done, we can kill it
         _timerFunctionMap.remove(callingTimer);
         delete callingTimer;
+    }
+
+    // an entity script's timer whose entity has left the tree: that script was never unloaded (a world left while it
+    // loaded), so its timers stop here instead of calling it for an entity that's gone, once a second each, forever
+    // (Caity's client, 10-22: Tivoli Town's hideByDistance.js after two Cancels). At a leave this catches the timers
+    // that fire between the erasing of the world's entities and their scripts' queued unloads. Logged at most once a
+    // second, with a count and one example.
+    if (entityIsGone(_context, timerData.definingEntityIdentifier)) {
+        const EntityItemID entityID = timerData.definingEntityIdentifier;
+        _goneEntityTimersStopped++;
+        const quint64 now = usecTimestampNow();
+        if (now - _goneEntityTimersLoggedAt > USECS_PER_SECOND) {
+            qCDebug(scriptengine) << "stopping the timers of entity scripts whose entities are gone ("
+                                  << _goneEntityTimersStopped << "since the last such line ), such as" << entityID.toString()
+                                  << "(its script" << (hasEntityScriptDetails(entityID) ? "still listed)" : "not listed)");
+            _goneEntityTimersLoggedAt = now;
+            _goneEntityTimersStopped = 0;
+        }
+        stopAllTimersForEntityScript(entityID);
+        return;
     }
 
     // call the associated JS function, if it exists
@@ -1722,13 +1878,25 @@ bool ScriptEngine::dumpApi(const QString& path) {
         globals[it.name()] = entry;
     }
     root["globals"] = globals;
-    QFile file(path);
+    const QString fileName = dumpApiFile(path, _testApiOn);
+    QFile file(fileName);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        scriptWarningMessage("Script.dumpApi: cannot write " + path);
+        scriptWarningMessage("Script.dumpApi: cannot write " + fileName);
         return false;
     }
     file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    scriptInfoMessage("Script.dumpApi wrote " + fileName);
     return true;
+}
+
+QString ScriptEngine::dumpApiFile(const QString& requested, bool anyPath) const {
+    if (anyPath) {
+        return requested;
+    }
+    QDir folder(QDir(PathUtils::getAppDataPath()).filePath("api-dumps"));
+    folder.mkpath(".");
+    const QString name = QFileInfo(requested).fileName();
+    return folder.filePath(name.isEmpty() ? QStringLiteral("api.json") : name);
 }
 
 void ScriptEngine::print(const QString& message) {
@@ -1815,12 +1983,13 @@ QString ScriptEngine::_requireResolve(const QString& moduleId, const QString& re
             canonical.setPath(file.canonicalFilePath());
         }
 
-        bool disallowOutsideFiles = !PathUtils::defaultScriptsLocation().isParentOf(canonical) && !currentSandboxURL.isLocalFile();
-        if (disallowOutsideFiles && !PathUtils::isDescendantOf(canonical, currentSandboxURL)) {
+        const QUrl sandbox = effectiveSandbox(currentSandboxURL);
+        bool disallowOutsideFiles = !ScriptNetworkPolicy::isAppScript(canonical) && !sandbox.isLocalFile();
+        if (disallowOutsideFiles && !PathUtils::isDescendantOf(canonical, sandbox)) {
             return throwResolveError(makeError(message.arg(
                 QString("path '%1' outside of origin script '%2' '%3'")
                     .arg(PathUtils::stripFilename(url))
-                    .arg(PathUtils::stripFilename(currentSandboxURL))
+                    .arg(PathUtils::stripFilename(sandbox))
                     .arg(canonical.toString())
             )));
         }
@@ -1912,6 +2081,18 @@ QVariantMap ScriptEngine::fetchModuleSource(const QString& modulePath, const boo
     using UrlMap = QMap<QUrl, QString>;
     auto scriptCache = DependencyManager::get<ScriptCache>();
     QVariantMap req;
+    if (isClientSide()) {
+        // the network rule for a script's own requests: a module's download is a request too (a JSON module comes
+        // back to the script as data)
+        QString reason;
+        if (!ScriptNetworkPolicy::decideBlocking(QUrl(modulePath), currentScriptOrigin(), reason, worldIsLocal())) {
+            scriptWarningMessage(ScriptNetworkPolicy::refusalLine(currentScriptOrigin(), QUrl(modulePath), reason));
+            req["url"] = modulePath;
+            req["status"] = "Refused";
+            req["success"] = false;
+            return req;
+        }
+    }
     qCDebug(scriptengine_module) << "require.fetchModuleSource: " << QUrl(modulePath).fileName() << QThread::currentThread();
 
     auto onload = [=, &req](const UrlMap& data, const UrlMap& _status) {
@@ -2114,8 +2295,7 @@ void ScriptEngine::include(const QStringList& includeFiles, QScriptValue callbac
         bool isStandardLibrary = false;
         if (file.startsWith("/~/")) {
             thisURL = expandScriptUrl(QUrl::fromLocalFile(expandScriptPath(file)));
-            QUrl defaultScriptsLoc = PathUtils::defaultScriptsLocation();
-            if (!defaultScriptsLoc.isParentOf(thisURL)) {
+            if (!ScriptNetworkPolicy::isAppScript(thisURL)) {
                 scriptWarningMessage("Script.include() -- skipping" + file + "-- outside of standard libraries");
                 continue;
             }
@@ -2124,11 +2304,18 @@ void ScriptEngine::include(const QStringList& includeFiles, QScriptValue callbac
             thisURL = resolvePath(file);
         }
 
-        bool disallowOutsideFiles = thisURL.isLocalFile() && !isStandardLibrary && !currentSandboxURL.isLocalFile();
-        if (disallowOutsideFiles && !PathUtils::isDescendantOf(thisURL, currentSandboxURL)) {
+        const QUrl sandbox = effectiveSandbox(currentSandboxURL);
+        bool disallowOutsideFiles = thisURL.isLocalFile() && !isStandardLibrary && !sandbox.isLocalFile();
+        if (disallowOutsideFiles && !PathUtils::isDescendantOf(thisURL, sandbox)) {
             scriptWarningMessage("Script.include() ignoring file path" + thisURL.toString()
-                                + "outside of original entity script" + currentSandboxURL.toString());
+                                + "outside of original entity script" + sandbox.toString());
         } else {
+            QString reason;
+            if (isClientSide() && !ScriptNetworkPolicy::decideBlocking(thisURL, currentScriptOrigin(), reason, worldIsLocal())) {
+                // the network rule for a script's own requests: an include's download is a request too
+                scriptWarningMessage(ScriptNetworkPolicy::refusalLine(currentScriptOrigin(), thisURL, reason));
+                continue;
+            }
             // We could also check here for CORS, but we don't yet.
             // It turns out that QUrl.resolve will not change hosts and copy authority, so we don't need to check that here.
             urls.append(thisURL);
@@ -2352,6 +2539,27 @@ bool ScriptEngine::hasEntityScriptDetails(const EntityItemID& entityID) const {
     return _entityScripts.contains(entityID);
 }
 
+// Whether an entity script's entity has left the tree since its script was asked for. A world's scripts are asked for
+// on the main thread and wait in this thread's queue, while leaving the world unloads the scripts this engine already
+// lists, read on the main thread: a load still queued as the world was left started after it, for an entity that was
+// gone, and its script ran on with no entity (Tivoli Town's hideByDistance.js on 1,300 plants, a timer each, after a
+// hop away during the world's load; 10-22). Client entity scripts only; the renderer checks the same before asking.
+static bool entityIsGone(ScriptEngine::Context context, const EntityItemID& entityID) {
+    if (context != ScriptEngine::ENTITY_CLIENT_SCRIPT || entityID.isInvalidID()) {
+        return false;
+    }
+    auto entities = DependencyManager::get<EntityScriptingInterface>();
+    auto tree = entities ? entities->getEntityTree() : nullptr;
+    if (!tree) {
+        return false;
+    }
+    // under the tree's read lock, so an entity between two octree elements (being moved) isn't taken for gone; with
+    // the lock busy, it isn't gone this time
+    bool gone = false;
+    tree->withTryReadLock([&] { gone = !tree->findEntityByEntityItemID(entityID); });
+    return gone;
+}
+
 void ScriptEngine::loadEntityScript(const EntityItemID& entityID, const QString& entityScript, bool forceRedownload) {
     if (QThread::currentThread() != thread()) {
         QMetaObject::invokeMethod(this, "loadEntityScript",
@@ -2368,6 +2576,11 @@ void ScriptEngine::loadEntityScript(const EntityItemID& entityID, const QString&
         qCDebug(scriptengine) << "loadEntityScript.start " << entityID.toString()
                                      << " but isStopping==" << isStopping()
                                      << " || engines->isStopped==" << scriptEngines->isStopped();
+        return;
+    }
+    if (entityIsGone(_context, entityID)) {
+        qCDebug(scriptengine) << "loadEntityScript: not starting the script of" << entityID.toString()
+                              << ", whose entity is gone since it was asked for";
         return;
     }
 
@@ -2391,9 +2604,17 @@ void ScriptEngine::loadEntityScript(const EntityItemID& entityID, const QString&
     if (WasmScriptEngine::isWasmScript(entityScript)) {
         // a module runs on the WebAssembly engine; this engine cannot host it
         newDetails.status = EntityScriptStatus::ERROR_LOADING_SCRIPT;
-        newDetails.errorInfo = "a WebAssembly entity script needs the entities engine on WebAssembly (Developer > Scripting > Run JavaScript on WebAssembly)";
+        newDetails.errorInfo = "a WebAssembly entity script needs the entities engine on WebAssembly (untick Developer > Scripting > Run JavaScript on QtScript)";
         setEntityScriptDetails(entityID, newDetails);
         scriptWarningMessage(QString("entity script %1 (%2): %3").arg(entityScript, entityID.toString(), newDetails.errorInfo));
+        return;
+    }
+    const QString refusal = entityScriptRefusal(entityScript);
+    if (!refusal.isEmpty()) {
+        newDetails.status = EntityScriptStatus::ERROR_LOADING_SCRIPT;
+        newDetails.errorInfo = "not run: " + refusal;
+        setEntityScriptDetails(entityID, newDetails);
+        scriptWarningMessage(QString("entity script %1 (%2) %3").arg(entityScript, entityID.toString(), newDetails.errorInfo));
         return;
     }
     newDetails.status = EntityScriptStatus::LOADING;
@@ -2482,6 +2703,18 @@ void ScriptEngine::entityScriptContentAvailable(const EntityItemID& entityID, co
 #ifdef THREAD_DEBUGGING
     qCDebug(scriptengine) << "ScriptEngine::entityScriptContentAvailable() thread [" << QThread::currentThread() << "] expected thread [" << thread() << "]";
 #endif
+
+    // the script arrived after its entity left (its world left while it downloaded): it doesn't run
+    if (entityIsGone(_context, entityID)) {
+        qCDebug(scriptengine) << "entityScriptContentAvailable: not running the script of" << entityID.toString()
+                              << ", whose entity is gone";
+        {
+            QWriteLocker locker { &_entityScriptsLock };
+            _entityScripts.remove(entityID);
+        }
+        emit entityScriptDetailsUpdated();
+        return;
+    }
 
     auto scriptCache = DependencyManager::get<ScriptCache>();
     bool isFileUrl = isURL && scriptOrURL.startsWith("file://");
@@ -2695,9 +2928,62 @@ void ScriptEngine::unloadEntityScript(const EntityItemID& entityID, bool shouldR
     }
 }
 
+void ScriptEngine::unloadEntityScriptsOfGoneEntities() {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, "unloadEntityScriptsOfGoneEntities", Qt::QueuedConnection);
+        return;
+    }
+    QList<EntityItemID> entityIDs;
+    {
+        QReadLocker locker { &_entityScriptsLock };
+        entityIDs = _entityScripts.keys();
+    }
+    int unloaded = 0;
+    for (const auto& entityID : entityIDs) {
+        if (entityIsGone(_context, entityID)) {
+            unloadEntityScript(entityID, true);
+            unloaded++;
+        }
+    }
+    qCDebug(scriptengine) << "after a world was left: of" << entityIDs.size() << "entity scripts listed," << unloaded
+                         << "were of entities that are gone, and are unloaded";
+}
+
 QList<EntityItemID> ScriptEngine::getListOfEntityScriptIDs() {
     QReadLocker locker{ &_entityScriptsLock };
     return _entityScripts.keys();
+}
+
+const int MAX_ENTITY_UNLOAD_WAIT_MS = 3000; // for a world's unload handlers, at quit or a world change
+const int SERVING_POLL_MS = 5;
+
+bool ScriptEngine::waitServingCalls(const std::function<bool()>& finished, int milliseconds) {
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (!finished()) {
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        if (elapsed.elapsed() >= milliseconds) {
+            return false;
+        }
+        QThread::msleep(SERVING_POLL_MS);
+    }
+    return true;
+}
+
+void ScriptEngine::waitForEntityScriptsToUnload() {
+    QThread* engineThread = thread();
+    if (!engineThread || !engineThread->isRunning()) {
+        return; // nothing runs there, so no unload handler will
+    }
+    auto done = std::make_shared<std::atomic<bool>>(false);
+    QMetaObject::invokeMethod(this, [this, done] {
+        unloadAllEntityScripts(false);
+        done->store(true);
+    }, Qt::QueuedConnection);
+    if (!waitServingCalls([done] { return done->load(); }, MAX_ENTITY_UNLOAD_WAIT_MS)) {
+        qCWarning(scriptengine) << "The entity scripts of" << getFilename() << "did not unload within"
+                                << MAX_ENTITY_UNLOAD_WAIT_MS << "ms; going on without waiting for them";
+    }
 }
 
 void ScriptEngine::unloadAllEntityScripts(bool blockingCall) {
@@ -2706,8 +2992,11 @@ void ScriptEngine::unloadAllEntityScripts(bool blockingCall) {
         qCDebug(scriptengine) << "*** WARNING *** ScriptEngine::unloadAllEntityScripts() called on wrong thread [" << QThread::currentThread() << "], invoking on correct thread [" << thread() << "]";
 #endif
 
-        QMetaObject::invokeMethod(this, "unloadAllEntityScripts",
-            blockingCall ? Qt::BlockingQueuedConnection : Qt::QueuedConnection);
+        if (blockingCall) {
+            waitForEntityScriptsToUnload();
+        } else {
+            QMetaObject::invokeMethod(this, "unloadAllEntityScripts", Qt::QueuedConnection);
+        }
         return;
     }
 #ifdef THREAD_DEBUGGING

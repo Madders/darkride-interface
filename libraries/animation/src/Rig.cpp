@@ -1806,6 +1806,11 @@ void Rig::updateAnimations(float deltaTime, const glm::mat4& rootTransform, cons
         }
     }
 
+    applyHeadTurn(_internalPoseSet._relativePoses);
+    if (_sendNetworkNode) {
+        applyHeadTurn(_networkPoseSet._relativePoses);
+    }
+
     buildAbsoluteRigPoses(_internalPoseSet._relativePoses, _internalPoseSet._absolutePoses);    
     _internalFlow.update(deltaTime, _internalPoseSet._relativePoses, _internalPoseSet._absolutePoses, _internalPoseSet._overrideFlags);
     _springBones.update(deltaTime, _internalPoseSet._relativePoses, _internalPoseSet._absolutePoses, _internalPoseSet._overrideFlags);
@@ -1880,6 +1885,31 @@ void Rig::updateHead(bool headEnabled, bool hipsEnabled, const AnimPose& headPos
             _animVars.set("headType", (int)IKTarget::Type::Unknown);
         }
     }
+}
+
+// Face tracking's head turn, on top of the animated head: the head joint turned by _headTurn in the rig's frame, about
+// itself, local = parent⁻¹ · turn · parent · local, with the parent's rotation as animated. Before the absolute poses,
+// the flow and the spring bones, so the hair follows and the network pose carries it. A script's override of the head
+// wins.
+void Rig::applyHeadTurn(AnimPoseVec& relativePoses) const {
+    if (!_animSkeleton || isEqual(_headTurn, glm::quat())) {
+        return;
+    }
+    const int headIndex = indexOfJoint("Head");
+    if (headIndex < 0 || headIndex >= (int)relativePoses.size() ||
+        (headIndex < (int)_internalPoseSet._overrideFlags.size() && _internalPoseSet._overrideFlags[headIndex])) {
+        return;
+    }
+    glm::quat parentRotation = AnimPose(_geometryToRigTransform).rot();
+    std::vector<int> chain;
+    for (int i = _animSkeleton->getParentIndex(headIndex); i >= 0; i = _animSkeleton->getParentIndex(i)) {
+        chain.push_back(i);
+    }
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        parentRotation = parentRotation * relativePoses[*it].rot();
+    }
+    glm::quat& head = relativePoses[headIndex].rot();
+    head = glm::normalize(glm::inverse(parentRotation) * _headTurn * parentRotation * head);
 }
 
 glm::vec3 Rig::deflectHandFromTorso(const glm::vec3& handPosition, const HFMJointShapeInfo& hipsShapeInfo, const HFMJointShapeInfo& spineShapeInfo,
@@ -2395,6 +2425,7 @@ void Rig::updateFromControllerParameters(const ControllerParameters& params, flo
 
 
     _headEnabled = params.primaryControllerFlags[PrimaryControllerType_Head] & (uint8_t)ControllerFlags::Enabled;
+    _headTurn = _headEnabled ? glm::quat() : params.headTurn;
     bool leftHandEnabled = params.primaryControllerFlags[PrimaryControllerType_LeftHand] & (uint8_t)ControllerFlags::Enabled;
     bool rightHandEnabled = params.primaryControllerFlags[PrimaryControllerType_RightHand] & (uint8_t)ControllerFlags::Enabled;
     bool hipsEnabled = params.primaryControllerFlags[PrimaryControllerType_Hips] & (uint8_t)ControllerFlags::Enabled;

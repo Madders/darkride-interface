@@ -8,6 +8,18 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: the paced clock's setPresentPeriod, getLastSteppedTime and getPacedClockLeadMs (their bodies are
+//   here).
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 
 #ifndef hifi_PhysicsEngine_h
 #define hifi_PhysicsEngine_h
@@ -104,6 +116,24 @@ public:
     void processTransaction(Transaction& transaction);
 
     void stepSimulation();
+    // FROZEN (vehicle path): see the note at the top of this file.
+    // the period the presents are paced at, in seconds, 0 while they are not, and the periods this update covers
+    // (the intervals between the present that posted it and the one before; 0 = count them from the wall clock):
+    // the paced clock then advances by whole periods (stepSimulation)
+    void setPresentPeriod(float seconds, int periods = 0) { _presentPeriod = seconds; _presentPeriods = periods; }
+    // FROZEN (vehicle path): see the note at the top of this file.
+    // the time the world moved on in the last stepSimulation, in seconds (the paced clock's step, less any time the
+    // substep cap dropped; counted while the world idles too), and how many steps there have been: what moves beside
+    // the physics each frame (the avatar's turn) steps by it, to keep to the world's clock (GitHub #15)
+    float getLastSteppedTime() const { return _lastSteppedTime; }
+    // FROZEN (vehicle path): see the note at the top of this file.
+    // how far the paced clock is ahead of the wall clock, in ms (negative: behind): the Stats panel's present cadence
+    // line and the frame trace (team/performance/INSTRUMENTS-PLAN.md, items 3 and 4); 0 while the presents are not paced
+    float getPacedClockLeadMs() const { return _presentPeriod > 0.0f ? _pacedClockLead * 1000.0f : 0.0f; }
+    // the frames of the last whole second by their substeps, 0, 1, 2 and 3 or more (the Stats line's histogram,
+    // item 4 of the instruments plan); kept always
+    void getSubstepsPerFrameLastSecond(uint32_t counts[4]) const { for (int i = 0; i < 4; i++) { counts[i] = _substepCountsLastSecond[i]; } }
+    uint64_t getStepCount() const { return _stepCount; }
     void harvestPerformanceStats();
     void printPerformanceStatsToFile(const QString& filename);
     void updateContactMap();
@@ -158,6 +188,17 @@ public:
                         const JPH::BodyFilter* bodyFilter, RayHit& result) const;
     void castRayAll(const glm::vec3& start, const glm::vec3& end, int32_t group, int32_t mask,
                     std::vector<RayHit>& results) const;
+    // The nearest hit of a ray, or of a sphere of the radius swept along it (PhysicsWorld::castSphereClosest), in the
+    // root world and in every frame's world (inside a moving cabin), as castRayAll goes; the hit comes back in root
+    // world coordinates.
+    bool castRayClosestAllWorlds(const glm::vec3& start, const glm::vec3& end, int32_t group, int32_t mask,
+                                 const JPH::BodyFilter* bodyFilter, RayHit& result) const;
+    bool castSphereClosestAllWorlds(const glm::vec3& start, const glm::vec3& end, float radius, int32_t group,
+                                    int32_t mask, const JPH::BodyFilter* bodyFilter, RayHit& result) const;
+    // a sphere of the radius at the centre moved out of what it overlaps, in the root world and every frame's world, a
+    // few rounds (a corner pushes it out of one wall into the next): where it can stand, in root world coordinates
+    glm::vec3 sphereOutOfOverlapsAllWorlds(const glm::vec3& center, float radius, int32_t group, int32_t mask,
+                                           const JPH::BodyFilter* bodyFilter) const;
 
     // Worlds. The root is the domain; a frame's world is made the first time something asks for it and
     // dropped when it is empty.
@@ -181,10 +222,13 @@ public:
     static ObjectMotionState* motionStateOf(const JPH::Body& body) { return PhysicsWorld::motionStateOf(body); }
 
 private:
-    void removeDynamicsForObject(ObjectMotionState* motionState);
+    // removes the dynamics on the object's body (as owner or other body) from the engine, and returns them
+    std::vector<EntityDynamicPointer> removeDynamicsForObject(ObjectMotionState* motionState);
+    void restoreDynamics();
     void stepOnce(float dt);
     void feedFrameTransforms();
     void dropEmptyWorlds();
+    void removeContactsInEveryWorld(ObjectMotionState* motionState);
     void rehomeObjects();
     void registerFrame(ObjectMotionState* frameState);
     void unregisterFrame(const QUuid& frameID);
@@ -206,6 +250,8 @@ private:
     QHash<QUuid, EntityDynamicPointer> _objectDynamics;
     QHash<QUuid, PhysicsWorld*> _dynamicWorlds; // the world a constraint was added to
     std::map<std::pair<PhysicsWorld*, uint32_t>, QSet<QUuid>> _objectDynamicsByBody;
+    // dynamics taken off a body that was rebuilt, which couldn't go back on at once; retried every transaction
+    QHash<QUuid, EntityDynamicPointer> _dynamicsToRestore;
     VectorOfMotionStates _changedMotionStates;
     VectorOfMotionStates _deactivatedMotionStates;
     QString _statsFilename;
@@ -213,11 +259,24 @@ private:
     CharacterController* _myAvatarController { nullptr };
     uint64_t _lastStepTime { 0 };
     float _accumulatedTime { 0.0f };
+    float _lastSteppedTime { 0.0f };
+    uint64_t _stepCount { 0 };
     float _timeShiftPending { 0.0f };   // s of simulation still to add (or, negative, to leave out) by time dilation
     float _smoothedFrameDuration { 0.0f }; // the paced clock's frame (see stepSimulation)
     float _pacedClockLead { 0.0f }; // how far the paced clock is ahead of the wall clock
+    float _presentPeriod { 0.0f }; // the period the presents are paced at, else 0
+    int _presentPeriods { 0 }; // the periods this update covers, 0 to count them from the wall clock
+    float _smoothedClockLead { 0.0f }; // the lead's slow average, what the eased correction follows when paced
+    // the paced clock's record for the log: frames of two or more periods, leads taken out at once, since the last line
+    uint64_t _pacedLogTime { 0 };
+    uint32_t _pacedMultiFrames { 0 };
+    uint32_t _pacedSnaps { 0 };
+    float _pacedSnapTotal { 0.0f };
     float _lastStepDuration { 0.0f };
     uint32_t _numSubsteps { 0 };
+    uint32_t _substepCounts[4] { 0, 0, 0, 0 };             // the frames of this second by their substeps (0, 1, 2, 3+)
+    uint32_t _substepCountsLastSecond[4] { 0, 0, 0, 0 };   // the last whole second's
+    uint64_t _substepWindowStart { 0 };
     uint32_t _debugDrawMode { 0 };
     bool _dumpNextStats { false };
     bool _saveNextStats { false };

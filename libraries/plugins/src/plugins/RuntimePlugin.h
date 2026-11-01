@@ -45,27 +45,10 @@ public:
 #define CodecProvider_iid "com.highfidelity.plugins.codec"
 Q_DECLARE_INTERFACE(CodecProvider, CodecProvider_iid)
 
-class SteamClientProvider {
-public:
-    virtual ~SteamClientProvider() {}
-    virtual SteamClientPluginPointer getSteamClientPlugin() = 0;
-};
-
-class OculusPlatformProvider {
-public:
-    virtual OculusPlatformPluginPointer getOculusPlatformPlugin() = 0;
-};
-
 class TeaProtocolProvider {
 public:
     virtual TeaProtocolPluginPointer getTeaProtocolPlugin() = 0;
 };
-
-#define SteamClientProvider_iid "com.highfidelity.plugins.steamclient"
-Q_DECLARE_INTERFACE(SteamClientProvider, SteamClientProvider_iid)
-
-#define OculusPlatformProvider_iid "com.highfidelity.plugins.oculusplatform"
-Q_DECLARE_INTERFACE(OculusPlatformProvider, OculusPlatformProvider_iid)
 
 #define TeaProtocolProvider_iid "com.tivolicloud.plugins.teaprotocol"
 Q_DECLARE_INTERFACE(TeaProtocolProvider, TeaProtocolProvider_iid)

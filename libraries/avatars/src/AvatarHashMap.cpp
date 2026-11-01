@@ -23,7 +23,6 @@
 
 #include "Profile.h"
 
-static const QString VERIFY_FAIL_MODEL { "/meshes/verifyFailed.fst" };
 
 void AvatarReplicas::addReplica(const QUuid& parentID, AvatarSharedPointer replica) {
     if (parentID == QUuid()) {

@@ -23,4 +23,10 @@ bool writeJSONFile(QIODevice& device, const QSettings::SettingsMap& map);
 
 void loadOldINIFile(QSettings& settings);
 
+// A walled-off client or a sandboxed server (TIVOLI_APP_DATA_DIR set) keeps its settings file in its own folders too:
+// XDG_CONFIG_HOME when that is set as well, else TIVOLI_APP_DATA_DIR. Qt reads XDG_CONFIG_HOME itself on macOS and
+// Linux, but on Windows it asks the system for the Roaming folder, which no environment variable moves. Returns the
+// folder it set, or an empty string where Qt's own choice already holds. Call it before the first QSettings.
+QString setSettingsPathFromEnvironment();
+
 #endif // hifi_SettingHelpers_h

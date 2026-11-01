@@ -1,0 +1,18 @@
+{
+  "materialVersion": 1,
+  "materials": [
+    {
+      "name": "lightling-body",
+      "model": "hifi_shader_simple",
+      "defaultFallthrough": true,
+      "procedural": {
+        "version": 3,
+        "fragmentShaderURL": "https://cdn.darkride.ai/avatars/lightling-1/lightling.fs",
+        "channels": [
+          "https://cdn.darkride.ai/avatars/lightling-1/body-lines.png",
+          "https://cdn.darkride.ai/avatars/lightling-1/body-colour.png"
+        ]
+      }
+    }
+  ]
+}

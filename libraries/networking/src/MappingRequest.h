@@ -131,20 +131,5 @@ private:
     AssetUtils::AssetMappings _mappings;
 };
 
-class SetBakingEnabledRequest : public MappingRequest {
-    Q_OBJECT
-public:
-    SetBakingEnabledRequest(const AssetUtils::AssetPathList& path, bool enabled);
-
-signals:
-    void finished(SetBakingEnabledRequest* thisRequest);
-
-private:
-    virtual void doStart() override;
-
-    AssetUtils::AssetPathList _paths;
-    bool _enabled;
-};
-
 
 #endif // hifi_MappingRequest_h

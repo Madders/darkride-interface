@@ -7,7 +7,9 @@
 #
 # The QuickJS-NG source archive is taken from $TIVOLI_DOWNLOADS/quickjs-ng-v<version>/ or
 # ../downloads/quickjs-ng-v<version>/ beside the checkout when it is there, and from GitHub otherwise; its
-# SHA-256 is checked either way. It is unpacked under build/, in a directory of its own.
+# SHA-256 is checked either way. It is unpacked under build/, in a directory of its own, and patches/*.patch are
+# applied to it in order (changes to QuickJS-NG for speed, each described at the top of its file). When the
+# patches change, the source is unpacked and the library built again.
 set -e
 D=$(cd "$(dirname "$0")" && pwd)
 WASI_SDK=${WASI_SDK:-$HOME/git/tivolicloud/wasi-sdk/wasi-sdk-34.0-arm64-macos}
@@ -38,12 +40,19 @@ fi
 ACTUAL=$(shasum -a 256 "$ARCHIVE" | cut -d' ' -f1)
 [ "$ACTUAL" = "$QUICKJS_SHA256" ] || { echo "$ARCHIVE: SHA-256 $ACTUAL, expected $QUICKJS_SHA256" >&2; exit 1; }
 SRC="$OUT/quickjs-$QUICKJS_VERSION"
-if [ ! -f "$SRC/quickjs.h" ]; then
-    rm -rf "$SRC"
+PATCHES_ID=$(cat "$D"/patches/*.patch 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+if [ ! -f "$SRC/quickjs.h" ] || [ "$(cat "$SRC/.patches" 2>/dev/null)" != "$PATCHES_ID" ]; then
+    rm -rf "$SRC" "$OUT/quickjs-build"
     mkdir -p "$OUT/unpack"
-    tar -xzf "$ARCHIVE" -C "$OUT/unpack"
+    # -m: the files are dated now, so a build that compiles them (tests/wasm-speed) sees the change
+    tar -xzmf "$ARCHIVE" -C "$OUT/unpack"
     mv "$OUT/unpack/quickjs-$QUICKJS_VERSION" "$SRC"
     rmdir "$OUT/unpack"
+    for PATCH in "$D"/patches/*.patch; do
+        [ -f "$PATCH" ] || continue
+        patch -d "$SRC" -p1 -s < "$PATCH" || { echo "$PATCH does not apply" >&2; exit 1; }
+    done
+    echo "$PATCHES_ID" > "$SRC/.patches"
 fi
 
 # --- the library, with wasi-sdk's CMake toolchain ----------------------------------------------------------

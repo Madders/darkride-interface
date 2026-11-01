@@ -22,6 +22,11 @@ void GL41Backend::initTransform() {
     while (_transform._cameraUboSize < cameraSize) {
         _transform._cameraUboSize += UNIFORM_BUFFER_OFFSET_ALIGNMENT;
     }
+    // the object transforms sit in a texture buffer, 8 texels each (Transform.slh): how many a batch may hold here
+    // (INSTANCING.md 3.6; a batch indexes them by 16 bits in any case)
+    GLint maxTexels = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &maxTexels);
+    qCDebug(gpugllogging) << "GL_MAX_TEXTURE_BUFFER_SIZE" << maxTexels << "texels:" << (maxTexels / 8) << "object transforms a batch";
 }
 
 void GL41Backend::transferTransformState(const Batch& batch) const {
@@ -43,7 +48,7 @@ void GL41Backend::transferTransformState(const Batch& batch) const {
         glBindBuffer(GL_TEXTURE_BUFFER, 0);
     }
 
-    if (!batch._namedData.empty()) {
+    if (!batch._namedData.empty() || !batch._instanceDrawCallInfos.empty()) {
         bufferData.clear();
         for (auto& data : batch._namedData) {
             auto currentSize = bufferData.size();
@@ -51,6 +56,14 @@ void GL41Backend::transferTransformState(const Batch& batch) const {
             bufferData.resize(currentSize + bytesToCopy);
             memcpy(bufferData.data() + currentSize, data.second.drawCallInfos.data(), bytesToCopy);
             _transform._drawCallInfoOffsets[data.first] = (GLvoid*)currentSize;
+        }
+        // the inline instance lists (Batch::drawIndexedInstances), after the named calls' lists
+        if (!batch._instanceDrawCallInfos.empty()) {
+            auto currentSize = bufferData.size();
+            auto bytesToCopy = batch._instanceDrawCallInfos.size() * sizeof(Batch::DrawCallInfo);
+            bufferData.resize(currentSize + bytesToCopy);
+            memcpy(bufferData.data() + currentSize, batch._instanceDrawCallInfos.data(), bytesToCopy);
+            _transform._instanceDrawCallInfoOffset = currentSize;
         }
 
         glBindBuffer(GL_ARRAY_BUFFER, _transform._drawCallInfoBuffer);

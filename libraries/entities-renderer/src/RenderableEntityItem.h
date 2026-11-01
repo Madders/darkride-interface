@@ -2,6 +2,18 @@
 //  RenderableEntityItem.h
 //  interface/src
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: the render-update budget's stamps: getUpdateTime (the budget's sort reads it), the deferred-since and
+// late-frames stamps (getDeferredSinceFrame, setDeferredSinceFrame, getLastLateFrames, setLastLateFrames) and their
+// members.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
 
 
 #ifndef hifi_RenderableEntityItem_h
@@ -59,7 +71,18 @@ public:
     virtual bool addToScene(const ScenePointer& scene, Transaction& transaction) final;
     virtual void removeFromScene(const ScenePointer& scene, Transaction& transaction);
 
+    // FROZEN (vehicle path): see the note at the top of this file.
     const uint64_t& getUpdateTime() const { return _updateTime; }
+
+    // FROZEN (vehicle path): see the note at the top of this file.
+    // The render-update budget's staleness stamps, kept by EntityTreeRenderer::updateChangedEntities (the
+    // instruments plan, item 2): the frame this renderable was first left over by the time budget, 0 while it is
+    // drawn as its entity is; and how many frames late its last refresh came (0 when it came the frame the entity
+    // changed). Main thread only; the inspector shows them for the selected entity.
+    uint64_t getDeferredSinceFrame() const { return _deferredSinceFrame; }
+    void setDeferredSinceFrame(uint64_t frame) { _deferredSinceFrame = frame; }
+    uint32_t getLastLateFrames() const { return _lastLateFrames; }
+    void setLastLateFrames(uint32_t frames) { _lastLateFrames = frames; }
 
     virtual void addMaterial(graphics::MaterialLayer material, const std::string& parentMaterialName);
     virtual void removeMaterial(graphics::MaterialPointer material, const std::string& parentMaterialName);
@@ -69,11 +92,22 @@ public:
     static glm::vec4 calculatePulseColor(const glm::vec4& color, const PulsePropertyGroup& pulseProperties, quint64 start);
     static glm::vec3 calculatePulseColor(const glm::vec3& color, const PulsePropertyGroup& pulseProperties, quint64 start);
 
+    // The transform a billboarded entity draws with: turned to the camera (EntityItem::getBillboardRotation) and, while
+    // the finished picture is shown flipped left to right (RenderArgs::_mirrored: the selfie view on a flat screen, the
+    // mirror camera), mirrored about its own vertical axis too, so that it reads the right way round on the screen:
+    // the name tags over people's heads in View > Selfie (Caity, 2026-10-29). What is fixed in the world stays as a
+    // mirror shows it. Returns whether the transform was mirrored (its X scale negated, which turns the faces inside
+    // out: a draw that culls back faces must cull front faces then, as Font does).
+    static bool applyBillboard(Transform& transform, BillboardMode billboardMode, RenderArgs* args);
+
     virtual uint32_t metaFetchMetaSubItems(ItemIDs& subItems) const override;
     virtual Item::Bound getBound() override;
 
     // the impostor switch of this entity's card (ImpostorCard, IMPOSTORS.md 2.3-2.4): null without an "impostor" entry
     std::shared_ptr<ImpostorSwitch> getImpostorSwitch() const;
+    // what this entity could not load (its model, image or textures), one line each with the reason, for build mode's
+    // Hierarchy and Inspector; empty when nothing has failed. Read on the main thread, where the renderer is updated
+    virtual QStringList loadFailures() const { return QStringList(); }
     // the switch an entity's models follow: its own card's, or the nearest ancestor's (a group's card, Unity's empty
     // parent with Model children, stands in for its children's models); null when none has a card
     static std::shared_ptr<ImpostorSwitch> findImpostorSwitch(const EntityItemPointer& entity);
@@ -193,8 +227,12 @@ protected:
     QUuid _changeHandlerId;
     ItemID _renderItemID{ Item::INVALID_ITEM_ID };
     uint64_t _fadeStartTime{ usecTimestampNow() };
+    // FROZEN (vehicle path): see the note at the top of this file.
     uint64_t _updateTime{ 0 }; // used when sorting/throttling render updates
     uint64_t _staticUpdateTime{ 0 }; 
+    // FROZEN (vehicle path): see the note at the top of this file.
+    uint64_t _deferredSinceFrame { 0 };
+    uint32_t _lastLateFrames { 0 };
 
 
     bool _isFading { EntityTreeRenderer::getEntitiesShouldFadeFunction()() };

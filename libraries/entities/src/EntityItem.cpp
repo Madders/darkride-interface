@@ -146,6 +146,7 @@ EntityPropertyFlags EntityItem::getEntityProperties(EncodeBitstreamParams& param
     requestedProperties += PROP_SCRIPT;
     requestedProperties += PROP_SCRIPT_TIMESTAMP;
     requestedProperties += PROP_SERVER_SCRIPTS;
+    requestedProperties += PROP_SCRIPTS_ENABLED;
 
     // Certifiable properties
     requestedProperties += PROP_ITEM_NAME;
@@ -354,6 +355,7 @@ OctreeElement::AppendState EntityItem::appendEntityData(
         APPEND_ENTITY_PROPERTY(PROP_SCRIPT, getScript());
         APPEND_ENTITY_PROPERTY(PROP_SCRIPT_TIMESTAMP, getScriptTimestamp());
         APPEND_ENTITY_PROPERTY(PROP_SERVER_SCRIPTS, getServerScripts());
+        APPEND_ENTITY_PROPERTY(PROP_SCRIPTS_ENABLED, getScriptsEnabled());
 
         // Certifiable Properties
         APPEND_ENTITY_PROPERTY(PROP_ITEM_NAME, getItemName());
@@ -719,6 +721,11 @@ int EntityItem::readEntityDataFromBuffer(const unsigned char* data, int bytesLef
     const unsigned char* dataAt = parser.data() + parser.offset();
     int bytesRead = (int)parser.offset();
 #endif
+    if (parser.overrun()) {
+        // the header passes the end of the packet: nothing of it is trusted, and the rest of the packet is abandoned
+        args.readFailed = true;
+        return bytesLeftToRead;
+    }
 
     auto nodeList = DependencyManager::get<NodeList>();
     const QUuid& myNodeID = nodeList->getSessionUUID();
@@ -728,7 +735,12 @@ int EntityItem::readEntityDataFromBuffer(const unsigned char* data, int bytesLef
     // even when we would otherwise ignore the rest of the packet.
 
     bool filterRejection = false;
-    if (propertyFlags.getHasProperty(PROP_SIMULATION_OWNER)) {
+    // read by hand, not by READ_ENTITY_PROPERTY, so checked by hand against the bytes left
+    if (propertyFlags.getHasProperty(PROP_SIMULATION_OWNER) &&
+        !OctreePacketData::fits(dataAt, bytesLeftToRead - bytesRead, QByteArray())) {
+        args.readFailed = true;
+    }
+    if (propertyFlags.getHasProperty(PROP_SIMULATION_OWNER) && !args.readFailed) {
         QByteArray simOwnerData;
         int bytes = OctreePacketData::unpackDataFromBytes(dataAt, simOwnerData);
         SimulationOwner newSimOwner;
@@ -1038,6 +1050,14 @@ int EntityItem::readEntityDataFromBuffer(const unsigned char* data, int bytesLef
         bool oldOverwrite = overwriteLocalData;
         overwriteLocalData = !ignoreServerPacket || (lastEditedFromBufferAdjusted > _serverScriptsChangedTimestamp);
         READ_ENTITY_PROPERTY(PROP_SERVER_SCRIPTS, QString, setServerScripts);
+        overwriteLocalData = oldOverwrite;
+    }
+    {
+        // The same for turning the scripts off or on: it has to reach the node whose script keeps editing the entity,
+        // the one running it.
+        bool oldOverwrite = overwriteLocalData;
+        overwriteLocalData = !ignoreServerPacket || (lastEditedFromBufferAdjusted > _scriptsEnabledChangedTimestamp);
+        READ_ENTITY_PROPERTY(PROP_SCRIPTS_ENABLED, bool, setScriptsEnabled);
         overwriteLocalData = oldOverwrite;
     }
 
@@ -1492,6 +1512,7 @@ EntityItemProperties EntityItem::getProperties(const EntityPropertyFlags& desire
     COPY_ENTITY_PROPERTY_TO_PROPERTIES(script, getScript);
     COPY_ENTITY_PROPERTY_TO_PROPERTIES(scriptTimestamp, getScriptTimestamp);
     COPY_ENTITY_PROPERTY_TO_PROPERTIES(serverScripts, getServerScripts);
+    COPY_ENTITY_PROPERTY_TO_PROPERTIES(scriptsEnabled, getScriptsEnabled);
 
     // Certifiable Properties
     COPY_ENTITY_PROPERTY_TO_PROPERTIES(itemName, getItemName);
@@ -1653,6 +1674,7 @@ bool EntityItem::setProperties(const EntityItemProperties& properties) {
     SET_ENTITY_PROPERTY_FROM_PROPERTIES(script, setScript);
     SET_ENTITY_PROPERTY_FROM_PROPERTIES(scriptTimestamp, setScriptTimestamp);
     SET_ENTITY_PROPERTY_FROM_PROPERTIES(serverScripts, setServerScripts);
+    SET_ENTITY_PROPERTY_FROM_PROPERTIES(scriptsEnabled, setScriptsEnabled);
 
     // Certifiable Properties
     SET_ENTITY_PROPERTY_FROM_PROPERTIES(itemName, setItemName);
@@ -3002,6 +3024,27 @@ void EntityItem::setServerScripts(const QString& serverScripts) {
     });
 }
 
+bool EntityItem::getScriptsEnabled() const {
+    return resultWithReadLock<bool>([&] { return _scriptsEnabled; });
+}
+
+void EntityItem::setScriptsEnabled(bool value) {
+    withWriteLock([&] {
+        if (_scriptsEnabled != value) {
+            _scriptsEnabled = value;
+            _scriptsEnabledChangedTimestamp = usecTimestampNow();
+        }
+    });
+}
+
+QString EntityItem::getScriptToRun() const {
+    return resultWithReadLock<QString>([&] { return _scriptsEnabled ? _script : QString(); });
+}
+
+QString EntityItem::getServerScriptsToRun() const {
+    return resultWithReadLock<QString>([&] { return _scriptsEnabled ? _serverScripts : QString(); });
+}
+
 QString EntityItem::getCollisionSoundURL() const {
     QString result;
     withReadLock([&] { result = _collisionSoundURL; });
@@ -3504,38 +3547,6 @@ void EntityItem::somethingChangedNotification() {
     });
 }
 
-// static
-void EntityItem::retrieveMarketplacePublicKey() {
-    // QNetworkAccessManager& networkAccessManager = NetworkAccessManager::getInstance();
-    // QNetworkRequest networkRequest;
-    // networkRequest.setAttribute(QNetworkRequest::FollowRedirectsAttribute, true);
-    // QUrl requestURL = NetworkingConstants::METAVERSE_SERVER_URL();
-    // requestURL.setPath("/api/v1/commerce/marketplace_key");
-    // QJsonObject request;
-    // networkRequest.setUrl(requestURL);
-
-    // QNetworkReply* networkReply = NULL;
-    // networkReply = networkAccessManager.get(networkRequest);
-
-    // connect(networkReply, &QNetworkReply::finished, [=]() {
-    //     QJsonObject jsonObject = QJsonDocument::fromJson(networkReply->readAll()).object();
-    //     jsonObject = jsonObject["data"].toObject();
-
-    //     if (networkReply->error() == QNetworkReply::NoError) {
-    //         if (!jsonObject["public_key"].toString().isEmpty()) {
-    //             EntityItem::_marketplacePublicKey = jsonObject["public_key"].toString();
-    //             qCWarning(entities) << "Marketplace public key has been set to" << _marketplacePublicKey;
-    //         } else {
-    //             qCWarning(entities) << "Marketplace public key is empty!";
-    //         }
-    //     } else {
-    //         qCWarning(entities) << "Call to" << networkRequest.url() << "failed! Error:" << networkReply->error();
-    //     }
-
-    //     networkReply->deleteLater();
-    // });
-}
-
 void EntityItem::collectChildrenForDelete(std::vector<EntityItemPointer>& entitiesToDelete, const QUuid& sessionID) const {
     // Deleting an entity has consequences for its children, however there are rules dictating what can be deleted.
     // This method helps enforce those rules: not for this entity, but for its children.
@@ -3659,7 +3670,7 @@ void EntityItem::setCloneIDs(const QVector<QUuid>& cloneIDs) {
 }
 
 bool EntityItem::shouldPreloadScript() const {
-    return !_script.isEmpty() && ((_loadedScript != _script) || (_loadedScriptTimestamp != _scriptTimestamp));
+    return _scriptsEnabled && !_script.isEmpty() && ((_loadedScript != _script) || (_loadedScriptTimestamp != _scriptTimestamp));
 }
 
 bool EntityItem::shouldBePhysical() const {

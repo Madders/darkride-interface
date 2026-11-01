@@ -139,6 +139,8 @@ public:
     virtual void do_drawIndexed(const Batch& batch, size_t paramOffset) = 0;
     virtual void do_drawInstanced(const Batch& batch, size_t paramOffset) = 0;
     virtual void do_drawIndexedInstanced(const Batch& batch, size_t paramOffset) = 0;
+    // GPU instancing (INSTANCING.md 3.4): the draw-call-info attribute reads the draw's own instance list
+    virtual void do_drawIndexedInstances(const Batch& batch, size_t paramOffset) = 0;
     virtual void do_multiDrawIndirect(const Batch& batch, size_t paramOffset) = 0;
     virtual void do_multiDrawIndexedIndirect(const Batch& batch, size_t paramOffset) = 0;
 
@@ -398,6 +400,8 @@ protected:
         TransformCameras _cameras;
 
         mutable std::map<std::string, GLvoid*> _drawCallInfoOffsets;
+        // where the batch's inline instance lists begin in _drawCallInfoBuffer (bytes), after the named calls' lists
+        mutable size_t _instanceDrawCallInfoOffset { 0 };
 
         GLuint _objectBuffer{ 0 };
         GLuint _cameraBuffer{ 0 };

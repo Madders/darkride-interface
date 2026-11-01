@@ -8,6 +8,17 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: getLookAtRotation, the camera's look direction.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 
 #ifndef hifi_MyAvatar_h
 #define hifi_MyAvatar_h
@@ -1400,6 +1411,14 @@ public:
      */
     Q_INVOKABLE float getIKErrorOnLastSolve() const;
 
+    // The default avatar, which a new player wears and the Avatar panel's Default puts back: the Lightling, at its fixed
+    // web address, so every viewer (1.0.x too) loads the same model and its poses fit. An empty address on the wire still
+    // means AvatarData's default, the mannequin, which 1.0.x players and agents without an avatar of their own wear.
+    static QUrl defaultAvatarURL();
+    // This app reads the default avatar's folder from its own copy (resources/meshes/lightling), never the web: once the
+    // resource manager exists
+    static void useBuiltInDefaultAvatar();
+
     /**jsdoc
      * Randomizes the colors of the default avatar.
      * <code>MyAvatar.useFullAvatarURL(MyAvatar.getDefaultFullAvatarURL(), "Default")</code> will set you back.
@@ -1461,6 +1480,10 @@ public:
     // The moving reference frame the avatar is in (PHYSICS.md 4.1): its parent, when that is a frame entity;
     // null in the domain itself. The character then moves in that frame's physics world, in its coordinates.
     QUuid getFrameID() const;
+    // the carry's counter for the Stats line (team/performance/INSTRUMENTS-PLAN.md, item 5): the largest step of the
+    // avatar's local position in one frame over the last second, in mm, while it is carried by a frame or a parent;
+    // 0 when it is not. Standing still on a car it reads 0; a step that is not the avatar's own walking is a carry fault
+    float getCarryStepMaxMm() const { return _carryStepMaxLastSecond; }
     // The frame's world orientation; identity outside a frame. The camera, the look-at yaw and the motors are world
     // rotations, and the character in a frame moves in the frame's coordinates: the inverse takes them there.
     glm::quat getFrameOrientation() const;
@@ -1952,6 +1975,7 @@ public:
      */
     Q_INVOKABLE bool setPointAt(const glm::vec3& pointAtTarget);
 
+    // FROZEN (vehicle path): see the note at the top of this file.
     glm::quat getLookAtRotation() { return _lookAtYaw * _lookAtPitch; }
 
     /**jsdoc
@@ -2820,6 +2844,15 @@ private:
     bool findAvatarEntity(const QString& modelURL, const QString& jointName, QUuid& entityID);
 
     bool cameraInsideHead(const glm::vec3& cameraPosition) const;
+    // how much of your own avatar to hide from your own view because the third-person camera is right at it (camera
+    // collision pulls it in as far as the eyes in a corner, and the near plane would cut the avatar open): nothing, or
+    // all of it, for the camera near the head or nearer still (preDisplaySide hides the whole avatar for both, 10-29);
+    // set each frame by updateCloseCamera, with a margin so it doesn't flicker as the camera eases out
+    enum class CloseCamera { None, Head, Body };
+    void updateCloseCamera(const glm::vec3& cameraPosition);
+    // whether the camera is within margin (meters) of the head or anything on it (hair, ears, eyes): of any bone in
+    // _headBoneSet, the box around its shape in its own frame, as it is posed now
+    bool cameraNearHeadShapes(const glm::vec3& cameraPosition, float margin) const;
 
     void updateEyeContactTarget(float deltaTime);
     glm::vec3 restTheGaze(const glm::vec3& spot, float deltaTime);  // the gaze style's rests and glances
@@ -2879,6 +2912,13 @@ private:
     void nextLocalAttitude(const glm::vec3& position, const glm::quat& orientation, const glm::vec3& velocity);
     // steps into or out of a frame when the avatar's position says so, with an exact handover of pose and velocity
     void updateFrameMembership();
+    // the frame trace's carry columns (item 5) and the carry's counter, after the frame's harvest each frame
+    void traceCarry(bool inFrame);
+    glm::vec3 _carryLastLocal { 0.0f };
+    QUuid _carryLastParent;
+    float _carryStepMax { 0.0f };            // mm, the window being filled
+    float _carryStepMaxLastSecond { 0.0f };  // mm, the last whole second's
+    uint64_t _carryWindowStart { 0 };
 
     MyCharacterController _characterController;
     int32_t _previousCollisionMask { BULLET_COLLISION_MASK_MY_AVATAR };
@@ -2910,6 +2950,10 @@ private:
     const float MAX_LOOK_AT_TIME_SCRIPT_CONTROL = 2.0f;
     glm::quat _lookAtPitch;
     glm::quat _lookAtYaw;
+    glm::quat _previousMotorRotation;           // the action motor's rotation in its frame last frame (updateMotors)
+    QUuid _previousMotorFrameID;
+    uint64_t _lastPhysicsStepCount { 0 };       // the physics' step the avatar last turned by (simulate)
+    bool _previousMotorRotationValid { false };
     // the frame the look-at yaw was last turned with, and that frame's orientation then (PHYSICS.md 4.4: the camera is
     // a member of the avatar's frame, so the look-at yaw turns with the frame's heading)
     QUuid _lookAtFrameID;
@@ -3057,6 +3101,8 @@ private:
     std::unordered_set<int> _headBoneSet;
     std::unordered_set<SpatiallyNestablePointer> _cauterizedChildrenOfHead;
     bool _prevShouldDrawHead;
+    CloseCamera _closeCamera { CloseCamera::None };
+    bool _prevShouldDrawBody { true };
     bool _rigEnabled { true };
 
     bool _enableDebugDrawBaseOfSupport { false };
@@ -3206,10 +3252,6 @@ private:
     //
     // Also these lists for tracking delayed changes to blobs and Settings
     mutable std::set<EntityItemID> _staleCachedAvatarEntityBlobs;
-    //
-    // keep a ScriptEngine around so we don't have to instantiate on the fly (these are very slow to create/delete)
-    mutable std::mutex _scriptEngineLock;
-    QScriptEngine* _scriptEngine { nullptr };
     bool _needToSaveAvatarEntitySettings { false };
 
     bool _reactionTriggers[NUM_AVATAR_TRIGGER_REACTIONS] { false, false };
@@ -3221,6 +3263,7 @@ private:
     bool _endSitKeyPressComplete { false };
 
     glm::vec3 _cameraEyesOffset;
+    float _cameraHeadClearance { 0.0f };   // the camera's step forward that keeps the hidden head out of view
     float _landingAfterJumpTime { 0.0f };
 };
 

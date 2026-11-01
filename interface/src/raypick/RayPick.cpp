@@ -22,7 +22,40 @@ PickRay RayPick::getMathematicalPick() const {
     Transform currentParentTransform = parentTransform->getTransform();
     glm::vec3 origin = currentParentTransform.transform(_mathPick.origin);
     glm::vec3 direction = glm::normalize(currentParentTransform.transformDirection(_mathPick.direction));
+    if (_minCutoff > 0.0f) {
+        direction = smoothDirection(direction);
+    }
     return PickRay(origin, direction);
+}
+
+glm::vec3 RayPick::smoothDirection(const glm::vec3& direction) const {
+    // the One Euro filter's smoothing factor for a cutoff frequency over dt seconds
+    auto alpha = [](float cutoff, float dt) {
+        const float tau = 1.0f / (2.0f * PI * cutoff);
+        return 1.0f / (1.0f + tau / dt);
+    };
+    const float SPEED_CUTOFF = 1.0f;   // Hz: the filter on the rate of change, as the filter's authors suggest
+    const float RESTART_AFTER = 0.25f;   // seconds without a pick (a disabled pointer): start again from the hand
+
+    std::lock_guard<std::mutex> lock(_smoothingMutex);
+    const quint64 now = usecTimestampNow();
+    const float dt = _smoothingStarted ? (float)(now - _smoothedAt) / (float)USECS_PER_SECOND : 0.0f;
+    if (!_smoothingStarted || dt > RESTART_AFTER) {
+        _smoothingStarted = true;
+        _smoothedDirection = direction;
+        _directionSpeed = glm::vec3(0.0f);
+        _smoothedAt = now;
+        return direction;
+    }
+    if (dt <= 0.0f) {
+        return _smoothedDirection;   // asked again in the same moment: the same answer, the filter not advanced
+    }
+    _smoothedAt = now;
+    const glm::vec3 speed = (direction - _smoothedDirection) / dt;
+    _directionSpeed = glm::mix(_directionSpeed, speed, alpha(SPEED_CUTOFF, dt));
+    const float cutoff = _minCutoff + _beta * glm::length(_directionSpeed);
+    _smoothedDirection = glm::normalize(glm::mix(_smoothedDirection, direction, alpha(cutoff, dt)));
+    return _smoothedDirection;
 }
 
 PickResultPointer RayPick::getEntityIntersection(const PickRay& pick) {

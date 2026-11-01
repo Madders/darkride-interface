@@ -5,20 +5,12 @@
   "dependencies": [
     "assimp",
     "brotli",
-    "bullet3",
     "draco",
     "etc2comp",
     "glad",
-    {
-      "name": "mesa",
-      "platform": "osx & x64"
-    },
     "glm",
-    {
-      "name": "hifi-audio-codec",
-      "platform": "!(osx & arm64) & !android"
-    },
     "libsndfile",
+    "nlohmann-json",
     "nvtt",
     {
       "name": "openexr",
@@ -28,9 +20,11 @@
       "name": "openssl",
       "platform": "windows | osx | android"
     },
-    "polyvox",
+    {
+      "name": "quazip",
+      "platform": "!android"
+    },
     "tbb",
-    "vhacd",
     {
       "name": "webrtc",
       "platform": "!android & !(osx & arm64)"

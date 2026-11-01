@@ -42,7 +42,7 @@ const AnimPoseVec& AnimPoleVectorConstraint::evaluate(const AnimVariantMap& anim
     }
 
     // evalute underPoses
-    AnimPoseVec underPoses = _children[0]->evaluate(animVars, context, dt, triggersOut);
+    const AnimPoseVec& underPoses = _children[0]->evaluate(animVars, context, dt, triggersOut);
 
     // if we don't have a skeleton, or jointName lookup failed.
     if (!_skeleton || _baseJointIndex == -1 || _midJointIndex == -1 || _tipJointIndex == -1 || underPoses.size() == 0) {

@@ -102,9 +102,31 @@ namespace {
     // a mirror smaller than this on screen (in pixels of area) shows its colour: a view's fixed cost (the sun's
     // shadow maps, the lighting passes) is not worth a thumbnail
     const float MIN_AREA = 32.0f * 32.0f;
+
+    // the face's rectangle in a view, in whole pixels of the view's viewport from its low corner, clipped to the
+    // view; a corner behind the eye makes it the whole view. Returns the rectangle's size; pixelLow its low corner.
+    glm::ivec2 rectInView(const glm::mat4& clipFromMirror, const glm::vec3 corners[4], const glm::ivec2& viewportSize,
+                          glm::ivec2& pixelLow) {
+        glm::vec2 low(1.0f);
+        glm::vec2 high(-1.0f);
+        for (int i = 0; i < 4; ++i) {
+            glm::vec4 clip = clipFromMirror * glm::vec4(corners[i], 1.0f);
+            if (clip.w <= 0.001f) {
+                low = glm::vec2(-1.0f);
+                high = glm::vec2(1.0f);
+                break;
+            }
+            glm::vec2 ndc = glm::clamp(glm::vec2(clip) / clip.w, glm::vec2(-1.0f), glm::vec2(1.0f));
+            low = glm::min(low, ndc);
+            high = glm::max(high, ndc);
+        }
+        pixelLow = glm::clamp(glm::ivec2(glm::floor((low + 1.0f) * 0.5f * glm::vec2(viewportSize))), glm::ivec2(0), viewportSize);
+        glm::ivec2 pixelHigh = glm::clamp(glm::ivec2(glm::ceil((high + 1.0f) * 0.5f * glm::vec2(viewportSize))), pixelLow, viewportSize);
+        return pixelHigh - pixelLow;
+    }
 }
 
-bool Mirrors::cameraFor(const Surface& surface, const ViewFrustum& view, const glm::ivec4& viewport, Want& want) const {
+bool Mirrors::cameraFor(const Surface& surface, const ViewFrustum& view, const glm::ivec4& viewport, const Eyes* eyes, Want& want) const {
     glm::vec2 half(surface.dimensions.x * 0.5f, surface.dimensions.y * 0.5f);
     float front = surface.dimensions.z * 0.5f;   // the face's distance from the entity's centre, along +Z
     if (half.x <= 0.0f || half.y <= 0.0f) {
@@ -124,29 +146,30 @@ bool Mirrors::cameraFor(const Surface& surface, const ViewFrustum& view, const g
         return false;
     }
 
-    // its rectangle on screen: the face's corners projected, clipped to the view; a corner behind the eye makes it
-    // the whole view
-    glm::mat4 cameraFromWorld = glm::inverse(glm::translate(view.getPosition()) * glm::mat4_cast(view.getOrientation()));
-    glm::mat4 clipFromMirror = view.getProjection() * cameraFromWorld * worldFromMirror;
+    // its rectangle on screen: the face's corners projected, clipped to the view, in whole pixels from the
+    // viewport's low corner
+    glm::mat4 worldFromCamera = glm::translate(view.getPosition()) * glm::mat4_cast(view.getOrientation());
     glm::vec3 corners[4] = { { -half.x, -half.y, front }, { half.x, -half.y, front }, { half.x, half.y, front }, { -half.x, half.y, front } };
-    glm::vec2 low(1.0f);
-    glm::vec2 high(-1.0f);
-    for (const auto& corner : corners) {
-        glm::vec4 clip = clipFromMirror * glm::vec4(corner, 1.0f);
-        if (clip.w <= 0.001f) {
-            low = glm::vec2(-1.0f);
-            high = glm::vec2(1.0f);
-            break;
+    glm::ivec2 pixelLow;
+    glm::ivec2 rectPixels = rectInView(view.getProjection() * glm::inverse(worldFromCamera) * worldFromMirror, corners,
+                                       glm::ivec2(viewport.z, viewport.w), pixelLow);
+    if (eyes && surface.mode != Mode::Screen) {
+        // a stereo display: the view is the culling one, wider than an eye and drawn across both eyes' halves of the
+        // viewport, so its pixels are not the eyes'. The picture is sized to the glass's rectangle in the eye that
+        // shows it largest (each eye: its own projection, its offset from the camera, half the viewport's width), a
+        // texel an eye's pixel. Sized in the culling view, a headset's picture was about half as wide again as the
+        // glass in an eye and a twelfth short in height (Quest 3, 2026-10-29): rows soft, columns shimmering, and a
+        // third more pixels drawn than shown.
+        glm::ivec2 eyeSize(viewport.z / 2, viewport.w);
+        rectPixels = glm::ivec2(0);
+        for (int eye = 0; eye < 2; ++eye) {
+            // the eye sits at its offset from the camera, in the camera's own axes (the backend's getEyeCamera)
+            glm::mat4 worldFromEye = worldFromCamera * glm::translate(-glm::vec3(eyes->view[eye][3]));
+            glm::ivec2 eyeLow;
+            rectPixels = glm::max(rectPixels, rectInView(eyes->projection[eye] * glm::inverse(worldFromEye) * worldFromMirror,
+                                                         corners, eyeSize, eyeLow));
         }
-        glm::vec2 ndc = glm::clamp(glm::vec2(clip) / clip.w, glm::vec2(-1.0f), glm::vec2(1.0f));
-        low = glm::min(low, ndc);
-        high = glm::max(high, ndc);
     }
-    // to whole pixels, from the viewport's low corner
-    glm::ivec2 viewportSize(viewport.z, viewport.w);
-    glm::ivec2 pixelLow = glm::clamp(glm::ivec2(glm::floor((low + 1.0f) * 0.5f * glm::vec2(viewportSize))), glm::ivec2(0), viewportSize);
-    glm::ivec2 pixelHigh = glm::clamp(glm::ivec2(glm::ceil((high + 1.0f) * 0.5f * glm::vec2(viewportSize))), pixelLow, viewportSize);
-    glm::ivec2 rectPixels = pixelHigh - pixelLow;
     want.area = (float)rectPixels.x * (float)rectPixels.y;
     if (want.area < MIN_AREA) {
         return false;
@@ -227,13 +250,13 @@ void Mirrors::cropScreenCamera(Want& want, const glm::ivec2& pictureSize, const 
     want.camera.setObliqueProjection(obliqueProjection(projection, want.plane));
 }
 
-void Mirrors::plan(const ViewFrustum& view, const glm::ivec4& viewport) {
+void Mirrors::plan(const ViewFrustum& view, const glm::ivec4& viewport, const Eyes* eyes) {
     std::lock_guard<std::mutex> lock(_mutex);
     std::vector<Want> wants;
     if (_enabled && _maxActive > 0 && viewport.z > 0 && viewport.w > 0) {
         for (const auto& entry : _entries) {
             Want want;
-            if (cameraFor(entry.second.surface, view, viewport, want)) {
+            if (cameraFor(entry.second.surface, view, viewport, eyes, want)) {
                 want.id = entry.first;
                 wants.push_back(want);
             }

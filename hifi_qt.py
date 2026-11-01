@@ -1,5 +1,4 @@
 import hifi_utils
-import hifi_android
 import hashlib
 import os
 import platform
@@ -45,7 +44,7 @@ endif()
         if os.getenv("QT_CMAKE_PREFIX_PATH"):
             self.hasQt = True
             self.cmakePath = os.getenv("QT_CMAKE_PREFIX_PATH")
-        elif platform.system() == 'Windows' and not args.android and os.path.isdir(windowsQtCmakePath):
+        elif platform.system() == 'Windows' and os.path.isdir(windowsQtCmakePath):
             self.hasQt = True
             self.cmakePath = windowsQtCmakePath
             print("Using the Qt in {}".format(os.path.dirname(os.path.dirname(windowsQtCmakePath))))

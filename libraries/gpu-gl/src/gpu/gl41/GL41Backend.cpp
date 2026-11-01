@@ -162,6 +162,55 @@ void GL41Backend::do_drawIndexedInstanced(const Batch& batch, size_t paramOffset
 }
 
 
+// GPU instancing (INSTANCING.md 3.4): an indexed draw of the batch's inline instance list, one instance per entry
+void GL41Backend::do_drawIndexedInstances(const Batch& batch, size_t paramOffset) {
+    GLint numInstances = batch._params[paramOffset + 4]._uint;
+    GLenum mode = gl::PRIMITIVE_TO_GL[(Primitive)batch._params[paramOffset + 3]._uint];
+    uint32 numIndices = batch._params[paramOffset + 2]._uint;
+    uint32 startIndex = batch._params[paramOffset + 1]._uint;
+    uint32 listOffset = batch._params[paramOffset + 0]._uint;
+    GLenum glType = gl::ELEMENT_TYPE_TO_GL[_input._indexBufferType];
+    auto typeByteSize = TYPE_SIZE[_input._indexBufferType];
+    GLvoid* indexBufferByteOffset = reinterpret_cast<GLvoid*>(startIndex * typeByteSize + _input._indexBufferOffset);
+
+    // the draw-call-info attribute reads this draw's list, an entry per instance (per two in stereo), as it reads a
+    // named call's; updateTransform set it constant before this draw and sets it constant again for the next plain one
+    if (!_transform._enabledDrawcallInfoBuffer) {
+        glEnableVertexAttribArray(gpu::Stream::DRAW_CALL_INFO);
+#ifdef GPU_STEREO_DRAWCALL_INSTANCED
+        glVertexAttribDivisor(gpu::Stream::DRAW_CALL_INFO, (isStereo() ? 2 : 1));
+#else
+        glVertexAttribDivisor(gpu::Stream::DRAW_CALL_INFO, 1);
+#endif
+        _transform._enabledDrawcallInfoBuffer = true;
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, _transform._drawCallInfoBuffer);
+    glVertexAttribIPointer(gpu::Stream::DRAW_CALL_INFO, 2, GL_UNSIGNED_SHORT, 0,
+        reinterpret_cast<GLvoid*>(_transform._instanceDrawCallInfoOffset + listOffset * sizeof(Batch::DrawCallInfo)));
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    if (isStereo()) {
+        GLint trueNumInstances = 2 * numInstances;
+#ifdef GPU_STEREO_DRAWCALL_INSTANCED
+        glDrawElementsInstanced(mode, numIndices, glType, indexBufferByteOffset, trueNumInstances);
+#else
+        setupStereoSide(0);
+        glDrawElementsInstanced(mode, numIndices, glType, indexBufferByteOffset, numInstances);
+        setupStereoSide(1);
+        glDrawElementsInstanced(mode, numIndices, glType, indexBufferByteOffset, numInstances);
+#endif
+        _stats._DSNumTriangles += (trueNumInstances * numIndices) / 3;
+        _stats._DSNumDrawcalls += trueNumInstances;
+    } else {
+        glDrawElementsInstanced(mode, numIndices, glType, indexBufferByteOffset, numInstances);
+        _stats._DSNumTriangles += (numInstances * numIndices) / 3;
+        _stats._DSNumDrawcalls += numInstances;
+    }
+    _stats._DSNumAPIDrawcalls++;
+    _stats._DSNumInstancedDrawcalls++;
+    (void)CHECK_GL_ERROR();
+}
+
 void GL41Backend::do_multiDrawIndirect(const Batch& batch, size_t paramOffset) {
 #if (GPU_INPUT_PROFILE == GPU_CORE_43)
     uint commandCount = batch._params[paramOffset + 0]._uint;

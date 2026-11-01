@@ -12,9 +12,11 @@
 #ifndef hifi_ScriptEngine_h
 #define hifi_ScriptEngine_h
 
+#include <functional>
 #include <unordered_map>
 #include <vector>
 
+#include <memory>
 #include <QtCore/QObject>
 #include <QtCore/QUrl>
 #include <QtCore/QSet>
@@ -168,6 +170,35 @@ public:
     virtual void run();
 
     QString getFilename() const;
+    /// The URL the running code came from: the entity script being run, else this script's own file. The network
+    /// rule for a script's own requests (ScriptNetworkPolicy) judges them by it.
+    QUrl currentScriptOrigin() const;
+    /// The origin for a call that names where its code came from (the WebAssembly guest does, for the entity script
+    /// running): the claim counts only when the engine loaded such a script itself; otherwise the engine's own
+    /// answer. On this engine, which tracks the running entity script itself, the claim is not needed.
+    virtual QUrl verifiedScriptOrigin(const QString& claimed) const { Q_UNUSED(claimed); return currentScriptOrigin(); }
+    /// Whether this engine's entity scripts may count as local: an entities engine on a client whose world is served
+    /// from this machine or its network, with the strict switch off. Held one way: once the engine has served a world
+    /// that isn't local, it never counts local again (an engine serves one world; the next world gets a new engine).
+    bool entityScriptsMayBeLocal() const;
+    /// Whether the world this engine's scripts are judged in is local, for the network rule: a client's entities engine
+    /// goes by its own world, held one way (entityScriptsMayBeLocal); any other engine by the world the client is in
+    /// now.
+    bool worldIsLocal() const;
+    /// An entity script's address as its rights go: which files here include and require may reach, and the origin
+    /// the network rule judges its requests by. On a client whose world isn't local, no entity script is local,
+    /// whatever its own address (a file here, one of the app's own scripts, an address on this machine or its
+    /// network), and such an address comes back as about:Entities. Any other engine's scripts, and addresses that
+    /// aren't local, keep their own.
+    QUrl effectiveSandbox(const QUrl& sandbox) const;
+    /// Why this engine won't run an entity script from this address, or empty: on a client whose world isn't local, a
+    /// file of this machine that isn't one of the app's own scripts.
+    QString entityScriptRefusal(const QString& entityScript) const;
+    /// The guard in front of every global of a world's entity engine on QtScript (the script API policy); made on
+    /// first use, null on any other engine.
+    class GuardedObjectClass* guardClass();
+    /// Whether this engine runs on a person's client, where its scripts' requests are held to that rule.
+    bool isClientSide() const { return _context == CLIENT_SCRIPT || _context == ENTITY_CLIENT_SCRIPT; }
    
     QList<EntityItemID> getListOfEntityScriptIDs();
 
@@ -197,14 +228,12 @@ public:
     // NOTE - these are NOT intended to be public interfaces available to scripts, the are only Q_INVOKABLE so we can
     //        properly ensure they are only called on the correct thread
 
-    /**jsdoc
-     * @function Script.registerGlobalObject
-     * @param {string} name - Name.
-     * @param {object} object - Object.
-     * @deprecated This function is deprecated and will be removed.
-     */
-    /// registers a global object by name
-    Q_INVOKABLE virtual void registerGlobalObject(const QString& name, QObject* object);
+    /// registers a global object by name (the host's, not a script's: a script could replace a global every script
+    /// of a shared engine relies on; the thread hop inside needs no meta-method)
+    virtual void registerGlobalObject(const QString& name, QObject* object);
+    /// The application says so where it registers the Test API (a --testScript run): Script.dumpApi may then write
+    /// to any path. Not a script's to call.
+    void setTestApiRegistered() { _testApiOn = true; }
 
     /// A plain value (numbers by name, as DriveKeys and PickType are; a number; text) under a global name, unless
     /// the name is taken: for a host that would otherwise put one on the QtScript global object itself, so that
@@ -599,6 +628,11 @@ public:
      */
     Q_INVOKABLE virtual void unloadAllEntityScripts(bool blockingCall = false);
 
+    // Unloads the client entity scripts whose entities are no longer in the tree, on this engine's thread, after
+    // whatever loads are queued before it: a world left while its scripts were still being loaded (EntityTreeRenderer
+    // asks for it once the world's entities are erased).
+    Q_INVOKABLE void unloadEntityScriptsOfGoneEntities();
+
     /**jsdoc
      * Calls a method in an entity script.
      * @function Script.callEntityScriptMethod
@@ -650,7 +684,8 @@ public:
      * Writes a description of every global object this script sees to a JSON file: for an object from the engine, its
      * class and the methods, properties, signals and enums of its meta-object, with parameter and return types; for
      * anything else, its kind and members. A developer tool: the file is the machine-readable form of the API in this
-     * script's context.
+     * script's context. The file goes under the application's own data folder (<code>api-dumps/</code>, the path's
+     * file name only); a test run with the Test API on may name any path.
      * @function Script.dumpApi
      * @param {string} path - The file to write.
      * @returns {boolean} <code>true</code> if the file was written.
@@ -898,6 +933,24 @@ signals:
 
 protected:
     void init();
+    /// From another thread, the entity scripts unloaded on the engine's thread and waited for here, while this
+    /// thread's objects keep answering the unload handlers' blocking calls (waitServingCalls). A blocking invocation
+    /// let the two threads wait on each other: a seated avatar's sit script asks MyAvatar for its animation roles in
+    /// unload, and Darkride never quit (qa, 2026-10-29). Gives up, with a warning, after MAX_ENTITY_UNLOAD_WAIT_MS.
+    void waitForEntityScriptsToUnload();
+    /// Waits on the calling thread until finished() holds, serving meanwhile the queued and blocking invocations of
+    /// this thread's objects, and only those (no user input, no timers). False when milliseconds passed first.
+    static bool waitServingCalls(const std::function<bool()>& finished, int milliseconds);
+    /// Script.dumpApi's file: under the application's data folder (api-dumps/<the path's file name>), or the path
+    /// as given when anyPath (a test run with the Test API on). Every script sees Script, a world's entity scripts
+    /// among them, so a script does not choose where the file goes.
+    QString dumpApiFile(const QString& requested, bool anyPath) const;
+    /// Set where the Test API is registered (a --testScript run), by the host, never from a global a script can assign.
+    bool _testApiOn { false };
+    /// The QtScript conversions of the engine's types, on this QScriptEngine.
+    void registerConversions();
+    /// The globals every engine gives a script, through the register calls.
+    void registerStandardGlobals();
 
     /**jsdoc
      * @function Script.executeOnScriptThread
@@ -951,6 +1004,7 @@ protected:
     void callWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, QScriptValue function, QScriptValue thisObject, QScriptValueList args);
 
     Context _context;
+    std::unique_ptr<class GuardedObjectClass> _guardClass;
     Type _type;
     QString _scriptContents;
     QString _parentURL;
@@ -961,7 +1015,10 @@ protected:
     QHash<QTimer*, CallbackData> _timerFunctionMap;
     QSet<QUrl> _includedURLs;
     mutable QReadWriteLock _entityScriptsLock { QReadWriteLock::Recursive };
+    int _goneEntityTimersStopped { 0 };         // entity scripts whose timers were stopped as their entities were gone,
+    quint64 _goneEntityTimersLoggedAt { 0 };    // since this was last logged
     QHash<EntityItemID, EntityScriptDetails> _entityScripts;
+    mutable std::atomic<bool> _servedNonLocalWorld { false };   // entityScriptsMayBeLocal's one-way answer
     EntityScriptContentAvailableMap _contentAvailableQueue;
 
     bool _isThreaded { false };

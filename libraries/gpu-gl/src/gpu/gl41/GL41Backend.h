@@ -151,6 +151,7 @@ protected:
     void do_drawIndexed(const Batch& batch, size_t paramOffset) override;
     void do_drawInstanced(const Batch& batch, size_t paramOffset) override;
     void do_drawIndexedInstanced(const Batch& batch, size_t paramOffset) override;
+    void do_drawIndexedInstances(const Batch& batch, size_t paramOffset) override;
     void do_multiDrawIndirect(const Batch& batch, size_t paramOffset) override;
     void do_multiDrawIndexedIndirect(const Batch& batch, size_t paramOffset) override;
 

@@ -1,0 +1,46 @@
+Arena allocator: keep one empty arena per size
+
+An arena was released as soon as its last block was freed, so code that allocates and frees one block at a time
+of a size whose arena held nothing else (a loop that makes and drops a temporary object or string) created an
+arena, initialized its free list and released it on every iteration. An arena that becomes empty is now kept when
+it is the only one of its size with free blocks; at most one empty arena per size is kept, and js_arena_free_all
+releases them at runtime teardown.
+
+diff --git a/quickjs.c b/quickjs.c
+index 103ede0..65376ad 100644
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -1885,10 +1885,19 @@ static void js_arena_free(JSRuntime *rt, void *ptr)
+             list_add(&ar->free_link,
+                      &rt->arena_state.free_arena_list[block_size_idx]);
+         ar->n_used_blocks--;
++        /* an arena that becomes empty is released, unless it is the only
++           one of its size with free blocks: then it is kept for the next
++           allocation, so that allocating and freeing one block at a time
++           does not create and release an arena each time. At most one
++           empty arena per size is kept. */
+         if (unlikely(ar->n_used_blocks == 0)) {
+-            list_del(&ar->link);
+-            list_del(&ar->free_link);
+-            rt->mf.js_free(rt->malloc_state.opaque, ar);
++            struct list_head *head =
++                &rt->arena_state.free_arena_list[block_size_idx];
++            if (head->next != &ar->free_link || head->prev != &ar->free_link) {
++                list_del(&ar->link);
++                list_del(&ar->free_link);
++                rt->mf.js_free(rt->malloc_state.opaque, ar);
++            }
+         }
+     }
+ }
+@@ -1979,8 +1988,8 @@ static void *js_arena_calloc(JSRuntime *rt, size_t count, size_t size)
+     return arena_calloc_large(rt, n);
+ }
+ 
+-/* free any arenas still mapped at runtime teardown (normally none: empty
+-   arenas are released eagerly as their last block is freed) */
++/* free any arenas still mapped at runtime teardown (the empty ones that
++   js_arena_free keeps, one per size at most) */
+ static void js_arena_free_all(JSRuntime *rt)
+ {
+     JSArenaState *s = &rt->arena_state;

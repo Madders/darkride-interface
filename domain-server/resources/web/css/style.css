@@ -391,16 +391,6 @@ ul.dropdown-menu .divider {
   margin-left: 10px;
 }
 
-#save-settings-xs-button {
-  float: right;
-  margin-right: 10px;
-}
-
-#button-bars {
-  display: inline-block;
-  float: left;
-}
-
 #hamburger-badge {
   position: relative;
   top: -2px;

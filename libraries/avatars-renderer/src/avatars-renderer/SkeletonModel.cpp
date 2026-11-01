@@ -20,6 +20,7 @@
 #include <DebugDraw.h>
 #include <AnimDebugDraw.h>
 #include <CharacterController.h>
+#include <FSTReader.h>
 
 #include "Avatar.h"
 #include "Logging.h"
@@ -152,12 +153,42 @@ void SkeletonModel::updateAttitude(const glm::quat& orientation) {
     setScale(glm::vec3(1.0f, 1.0f, 1.0f) * _owningAvatar->getModelScale());
 }
 
+void SkeletonModel::updateFaceTrackingOnlyBlendshapes() {
+    const auto& networkModel = getNetworkModel();
+    const std::shared_ptr<const void> current = networkModel;
+    // the same model as last time: compared by owner, not by an address a later model could reuse
+    if (!_faceTrackingOnlyBlendshapesModel.owner_before(current) && !current.owner_before(_faceTrackingOnlyBlendshapesModel)) {
+        return;
+    }
+    _faceTrackingOnlyBlendshapesModel = current;
+    _faceTrackingOnlyBlendshapes.clear();
+    if (networkModel) {
+        for (const QString& name : FSTReader::getFaceTrackingOnlyBlendshapes(networkModel->getMapping())) {
+            auto it = BLENDSHAPE_LOOKUP_MAP.find(name);
+            if (it != BLENDSHAPE_LOOKUP_MAP.end()) {
+                _faceTrackingOnlyBlendshapes << it.value();
+            }
+        }
+    }
+}
+
 // Called by Avatar::simulate after it has set the joint states (fullUpdate true if changed),
 // but just before head has been simulated.
 void SkeletonModel::simulate(float deltaTime, bool fullUpdate) {
     updateAttitude(_owningAvatar->getWorldOrientation());
     QVector<float> coefficients = _owningAvatar->getHead()->getSummedBlendshapeCoefficients();
     if (isLoaded()) {
+        // The shapes the .fst maps only for face tracking take the tracked (or scripted) weights alone: the procedural
+        // face's blinks, brows, smile and talking mouth don't move them.
+        updateFaceTrackingOnlyBlendshapes();
+        if (!_faceTrackingOnlyBlendshapes.isEmpty()) {
+            const QVector<float>& driven = _owningAvatar->getHead()->getBlendshapeCoefficients();
+            for (int index : _faceTrackingOnlyBlendshapes) {
+                if (index < coefficients.size()) {
+                    coefficients[index] = index < driven.size() ? driven[index] : 0.0f;
+                }
+            }
+        }
         // The model's own blend shapes (HFM.h ownBlendshapeNames) follow the standard ones, at their starting weights.
         const HFMModel& model = getHFMModel();
         if (!model.ownBlendshapeNames.isEmpty()) {

@@ -1,0 +1,292 @@
+{
+ "DataVersion": 0,
+ "Entities": [
+  {
+   "id": "{1d20b520-ab6a-4b0b-9b4c-e38440171a1e}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Go-kart",
+   "position": {
+    "x": 0,
+    "y": 0.25,
+    "z": 0
+   },
+   "dimensions": {
+    "x": 0.7,
+    "y": 0.16,
+    "z": 1.45
+   },
+   "color": {
+    "red": 220,
+    "green": 40,
+    "blue": 40
+   },
+   "dynamic": true,
+   "collisionless": false,
+   "gravity": {
+    "x": 0,
+    "y": -9.8,
+    "z": 0
+   },
+   "damping": 0.02,
+   "angularDamping": 0.3,
+   "friction": 0.6,
+   "restitution": 0.0,
+   "grab": {
+    "grabbable": false
+   },
+   "vehicle": {
+    "type": "wheeled",
+    "mass": 150,
+    "centerOfMass": {
+     "x": 0,
+     "y": -0.12,
+     "z": 0
+    },
+    "wheels": "[{\"name\": \"FL\", \"center\": [-0.37, -0.03, -0.5], \"radius\": 0.14, \"width\": 0.12, \"mass\": 3, \"suspensionDistance\": 0.06, \"targetPosition\": 0.5, \"steer\": 1, \"brake\": 1, \"handBrake\": 0}, {\"name\": \"FR\", \"center\": [0.37, -0.03, -0.5], \"radius\": 0.14, \"width\": 0.12, \"mass\": 3, \"suspensionDistance\": 0.06, \"targetPosition\": 0.5, \"steer\": 1, \"brake\": 1, \"handBrake\": 0}, {\"name\": \"RL\", \"center\": [-0.37, -0.03, 0.5], \"radius\": 0.14, \"width\": 0.12, \"mass\": 3, \"suspensionDistance\": 0.06, \"targetPosition\": 0.5, \"steer\": 0, \"brake\": 1, \"handBrake\": 1}, {\"name\": \"RR\", \"center\": [0.37, -0.03, 0.5], \"radius\": 0.14, \"width\": 0.12, \"mass\": 3, \"suspensionDistance\": 0.06, \"targetPosition\": 0.5, \"steer\": 0, \"brake\": 1, \"handBrake\": 1}]",
+    "seats": "[{\"name\": \"driver\", \"position\": [0, 0.06, 0.12], \"yaw\": 0, \"driver\": true}]",
+    "maxSteerAngle": 50,
+    "maxTorque": 100,
+    "minRPM": 1000,
+    "maxRPM": 3200,
+    "gearRatios": "[1.0]",
+    "reverseGearRatio": 3.0,
+    "finalDriveRatio": 2.8,
+    "maxBrakeTorque": 250,
+    "maxHandBrakeTorque": 250,
+    "driveType": "all",
+    "suspensionFrequency": 3.5,
+    "suspensionDamping": 0.7
+   }
+  },
+  {
+   "id": "{b0df266a-75c3-4e5b-b3b5-952aadcbf143}",
+   "type": "Shape",
+   "shape": "Cylinder",
+   "name": "Go-kart wheel FL",
+   "parentID": "{1d20b520-ab6a-4b0b-9b4c-e38440171a1e}",
+   "position": {
+    "x": -0.37,
+    "y": -0.06,
+    "z": -0.5
+   },
+   "rotation": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.7071067811865475,
+    "w": 0.7071067811865476
+   },
+   "dimensions": {
+    "x": 0.28,
+    "y": 0.12,
+    "z": 0.28
+   },
+   "color": {
+    "red": 16,
+    "green": 16,
+    "blue": 22
+   },
+   "dynamic": false,
+   "collisionless": true,
+   "vehicle": {
+    "type": "wheel",
+    "wheel": "FL",
+    "axle": "y"
+   }
+  },
+  {
+   "id": "{aeeb22b8-f111-4f46-a4c1-aabed4e1fbd4}",
+   "type": "Shape",
+   "shape": "Cylinder",
+   "name": "Go-kart wheel FR",
+   "parentID": "{1d20b520-ab6a-4b0b-9b4c-e38440171a1e}",
+   "position": {
+    "x": 0.37,
+    "y": -0.06,
+    "z": -0.5
+   },
+   "rotation": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.7071067811865475,
+    "w": 0.7071067811865476
+   },
+   "dimensions": {
+    "x": 0.28,
+    "y": 0.12,
+    "z": 0.28
+   },
+   "color": {
+    "red": 16,
+    "green": 16,
+    "blue": 22
+   },
+   "dynamic": false,
+   "collisionless": true,
+   "vehicle": {
+    "type": "wheel",
+    "wheel": "FR",
+    "axle": "y"
+   }
+  },
+  {
+   "id": "{97193118-708e-46cc-b268-dad4425f102d}",
+   "type": "Shape",
+   "shape": "Cylinder",
+   "name": "Go-kart wheel RL",
+   "parentID": "{1d20b520-ab6a-4b0b-9b4c-e38440171a1e}",
+   "position": {
+    "x": -0.37,
+    "y": -0.06,
+    "z": 0.5
+   },
+   "rotation": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.7071067811865475,
+    "w": 0.7071067811865476
+   },
+   "dimensions": {
+    "x": 0.28,
+    "y": 0.12,
+    "z": 0.28
+   },
+   "color": {
+    "red": 16,
+    "green": 16,
+    "blue": 22
+   },
+   "dynamic": false,
+   "collisionless": true,
+   "vehicle": {
+    "type": "wheel",
+    "wheel": "RL",
+    "axle": "y"
+   }
+  },
+  {
+   "id": "{331fad73-e905-4af3-8ff2-00eee13f6b77}",
+   "type": "Shape",
+   "shape": "Cylinder",
+   "name": "Go-kart wheel RR",
+   "parentID": "{1d20b520-ab6a-4b0b-9b4c-e38440171a1e}",
+   "position": {
+    "x": 0.37,
+    "y": -0.06,
+    "z": 0.5
+   },
+   "rotation": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.7071067811865475,
+    "w": 0.7071067811865476
+   },
+   "dimensions": {
+    "x": 0.28,
+    "y": 0.12,
+    "z": 0.28
+   },
+   "color": {
+    "red": 16,
+    "green": 16,
+    "blue": 22
+   },
+   "dynamic": false,
+   "collisionless": true,
+   "vehicle": {
+    "type": "wheel",
+    "wheel": "RR",
+    "axle": "y"
+   }
+  },
+  {
+   "id": "{78861166-c5f1-4715-b95b-de128962524f}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Go-kart seat back",
+   "parentID": "{1d20b520-ab6a-4b0b-9b4c-e38440171a1e}",
+   "position": {
+    "x": 0,
+    "y": 0.3,
+    "z": 0.38
+   },
+   "dimensions": {
+    "x": 0.44,
+    "y": 0.45,
+    "z": 0.08
+   },
+   "color": {
+    "red": 30,
+    "green": 30,
+    "blue": 36
+   },
+   "dynamic": false,
+   "collisionless": true,
+   "grab": {
+    "grabbable": false
+   }
+  },
+  {
+   "id": "{9451fdfc-e3a4-48d9-97b7-5cdf4bd069ac}",
+   "type": "Shape",
+   "shape": "Cylinder",
+   "name": "Go-kart steering wheel",
+   "parentID": "{1d20b520-ab6a-4b0b-9b4c-e38440171a1e}",
+   "position": {
+    "x": 0,
+    "y": 0.32,
+    "z": -0.32
+   },
+   "dimensions": {
+    "x": 0.3,
+    "y": 0.03,
+    "z": 0.3
+   },
+   "color": {
+    "red": 30,
+    "green": 30,
+    "blue": 36
+   },
+   "dynamic": false,
+   "collisionless": true,
+   "grab": {
+    "grabbable": false
+   },
+   "rotation": {
+    "x": 0.49999999999999994,
+    "y": 0.0,
+    "z": 0.0,
+    "w": 0.8660254037844387
+   }
+  },
+  {
+   "id": "{5323b40f-05ca-4506-a42b-bfc1cfdb8e72}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Go-kart bumper",
+   "parentID": "{1d20b520-ab6a-4b0b-9b4c-e38440171a1e}",
+   "position": {
+    "x": 0,
+    "y": -0.02,
+    "z": -0.78
+   },
+   "dimensions": {
+    "x": 0.8,
+    "y": 0.1,
+    "z": 0.1
+   },
+   "color": {
+    "red": 240,
+    "green": 200,
+    "blue": 40
+   },
+   "dynamic": false,
+   "collisionless": true,
+   "grab": {
+    "grabbable": false
+   }
+  }
+ ],
+ "Id": "{197f8b41-66dc-4877-b0e8-4565b5313691}",
+ "Version": 141
+}

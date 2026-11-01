@@ -12,6 +12,7 @@
 #include "AssignmentParentFinder.h"
 
 #include <AvatarHashMap.h>
+#include <SharedUtil.h>
 
 SpatiallyNestableWeakPointer AssignmentParentFinder::find(QUuid parentID, bool& success, SpatialParentTree* entityTree) const {
     SpatiallyNestableWeakPointer parent;
@@ -32,6 +33,18 @@ SpatiallyNestableWeakPointer AssignmentParentFinder::find(QUuid parentID, bool& 
         return parent;
     }
 
+    // this process's own avatar (an agent's), before the avatar list: that can hold a stand-in under the agent's own
+    // session id that is never updated, at the origin
+    SpatiallyNestablePointer ownAvatar;
+    {
+        std::lock_guard<std::mutex> lock(_ownAvatarMutex);
+        ownAvatar = _ownAvatar.lock();
+    }
+    if (ownAvatar && (parentID == ownAvatar->getID() || parentID == AVATAR_SELF_ID)) {
+        success = true;
+        return ownAvatar;
+    }
+
     // search avatars
     if (DependencyManager::isSet<AvatarHashMap>()) {
         auto avatarHashMap = DependencyManager::get<AvatarHashMap>();
@@ -44,4 +57,9 @@ SpatiallyNestableWeakPointer AssignmentParentFinder::find(QUuid parentID, bool& 
 
     success = false;
     return parent;
+}
+
+void AssignmentParentFinder::setOwnAvatar(SpatiallyNestableWeakPointer avatar) {
+    std::lock_guard<std::mutex> lock(_ownAvatarMutex);
+    _ownAvatar = avatar;
 }

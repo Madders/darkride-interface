@@ -7,7 +7,22 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: GraphicsEngine::render_performFrame's stamps on the frame handed to the display plugin (frame->mainTime,
+// frame->buildTime), which the refresh governor reads. The render loop here shares the vehicle's per-frame time: a
+// change to it counts as touching the vehicle path.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 #include "GraphicsEngine.h"
+
+#include <MeshPartPayload.h>
 
 #include <shared/GlobalAppProperties.h>
 
@@ -32,6 +47,8 @@
 #include <SecondaryCamera.h>
 
 #include "RenderEventHandler.h"
+
+#include <StartupProfiler.h>
 
 #include <gpu/Batch.h>
 #include <gpu/Context.h>
@@ -85,6 +102,7 @@ namespace {
 void GraphicsEngine::initializeRender() {
 
     // Set up the render engine
+    int graphStep = StartupProfiler::begin("initializeRender: the task graph");
     render::CullFunctor cullFunctor = LODManager::shouldRender;
     _renderEngine->addJob<UpdateSceneTask>("UpdateScene");
     // the terrain layer sets' slices due this frame, drawn before any view: their batch leaves its framebuffer and
@@ -98,12 +116,28 @@ void GraphicsEngine::initializeRender() {
     // the mirrors' pictures, drawn before the main view shows them
     _renderEngine->addJob<RenderMirrorsTask>("RenderMirrors", cullFunctor);
     _renderEngine->addJob<RenderViewTask>("RenderMainView", cullFunctor, render::ItemKey::TAG_BITS_0, render::ItemKey::TAG_BITS_0);
-    _renderEngine->load();
+    StartupProfiler::end(graphStep);
+    {
+        StartupProfiler::Scope step("initializeRender: load (every pipeline's shaders)");
+        _renderEngine->load();
+    }
+    int mirrorsStep = StartupProfiler::begin("initializeRender: the mirror views' configuration");
     // a mirror's view: no ambient occlusion, bloom, selection outline or HUD; no local light shadows (an atlas for
-    // each would cost too much); a linear tone curve, since the picture is tone mapped again in the main view
+    // each would cost too much); the picture kept linear, since it is tone mapped again in the main view
     auto configuration = _renderEngine->getConfiguration();
     for (int slot = 0; slot < Mirrors::SLOT_COUNT; ++slot) {
         std::string view = "RenderMirrors.MirrorView" + std::to_string(slot) + ".";
+        // the jobs both branches have, by their full paths: a bare name finds the deferred branch's only. Gamma22 is
+        // the linear curve (the sRGB write and read cancel); None raises the colour to 2.2 for debugging, which drew
+        // deferred mirrors darker, most of all where the ambient light alone lights them
+        for (const char* branch : { "DeferredForwardSwitch.RenderDeferredTask.", "DeferredForwardSwitch.RenderForwardTask." }) {
+            if (auto config = configuration->getConfig<ToneMapAndResample>(view + branch + "ToneMapping")) {
+                config->setCurve((int)ToneCurve::Gamma22);
+            }
+            if (auto config = configuration->getJobConfig(view + branch + "RenderHUDLayer")) {
+                config->setEnabled(false);
+            }
+        }
         if (auto config = configuration->getConfig<AmbientOcclusionEffect>(view + "AmbientOcclusion")) {
             config->setEnabled(false);
         }
@@ -119,12 +153,6 @@ void GraphicsEngine::initializeRender() {
         if (auto config = configuration->getConfig<DrawHighlightTask>(view + "DrawHighlightForward")) {
             config->setEnabled(false);
         }
-        if (auto config = configuration->getJobConfig(view + "RenderHUDLayer")) {
-            config->setEnabled(false);
-        }
-        if (auto config = configuration->getConfig<ToneMapAndResample>(view + "ToneMapping")) {
-            config->setCurve((int)ToneCurve::None);
-        }
         if (auto config = configuration->getConfig<RenderLocalShadowSetup>(view + "LocalShadowSetup")) {
             config->setLocalLights(false);
         }
@@ -135,10 +163,14 @@ void GraphicsEngine::initializeRender() {
         }
         Mirrors::instance().setSlotView(slot, configuration->getJobConfig("RenderMirrors.MirrorView" + std::to_string(slot)));
     }
+    StartupProfiler::end(mirrorsStep);
     _renderEngine->registerScene(_renderScene);
 
     // Now that OpenGL is initialized, we are sure we have a valid context and can create the various pipeline shaders with success.
-    DependencyManager::get<GeometryCache>()->initializeShapePipelines();
+    {
+        StartupProfiler::Scope step("initializeRender: the shape pipelines (GeometryCache)");
+        DependencyManager::get<GeometryCache>()->initializeShapePipelines();
+    }
 }
 
 void GraphicsEngine::startup() {
@@ -184,6 +216,7 @@ void GraphicsEngine::render_runRenderFrame(RenderArgs* renderArgs) {
     }
 
     {
+        MeshPartPayload::beginFrame();   // the draw dump's frame count (Test.dumpDraws), on the thread that draws
         _renderEngine->getRenderContext()->args = renderArgs;
         _renderEngine->run();
     }
@@ -228,10 +261,14 @@ bool GraphicsEngine::checkPendingRenderEvent() {
     return (_renderEventHandler && static_cast<RenderEventHandler*>(_renderEventHandler)->_pendingRenderEvent.compare_exchange_strong(expected, true));
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void GraphicsEngine::render_performFrame() {
     // Some plugins process message events, allowing paintGL to be called reentrantly.
 
     _renderFrameCount++;
+    if (_renderFrameCount == 1) {
+        StartupProfiler::instant("first frame rendered");
+    }
 
     auto lastPaintBegin = usecTimestampNow();
     PROFILE_RANGE_EX(render, __FUNCTION__, 0xff0000ff, (uint64_t)_renderFrameCount);
@@ -264,6 +301,8 @@ void GraphicsEngine::render_performFrame() {
     ViewFrustum viewFrustum;
 
     bool isStereo;
+    uint64_t traceFrame = 0;
+    uint64_t mainFrameUsecs = 0;
     glm::mat4  stereoEyeOffsets[2];
     glm::mat4  stereoEyeProjections[2];
 
@@ -280,6 +319,8 @@ void GraphicsEngine::render_performFrame() {
         eyeToWorld = _appRenderArgs._eyeToWorld;
         sensorToWorld = _appRenderArgs._sensorToWorld;
         isStereo = _appRenderArgs._isStereo;
+        traceFrame = _appRenderArgs._traceFrame;
+        mainFrameUsecs = _appRenderArgs._mainFrameUsecs;
         for_each_eye([&](Eye eye) {
             stereoEyeOffsets[eye] = _appRenderArgs._eyeOffsets[eye];
             stereoEyeProjections[eye] = _appRenderArgs._eyeProjections[eye];
@@ -316,7 +357,7 @@ void GraphicsEngine::render_performFrame() {
 
     // Until the viewer goes in (Application::isSignInPending), the window shows only Darkride's navy and the user
     // interface over it, where the sign-in screen is: no avatar in an empty world before that screen is up, at the start
-    // or after signing out. A headset still gets the 3D view, where its sign-in screen is (Application::createLoginDialog).
+    // or after signing out. A headset still gets the 3D view, where its sign-in screen is (SignInGate::createLoginDialog).
     const bool signInCover = qApp->isSignInPending() && !displayPlugin->isHmd();
     auto drawSignInNavy = [&](gpu::Batch& batch) {
         if (!_signInNavy) {
@@ -338,7 +379,7 @@ void GraphicsEngine::render_performFrame() {
         displayPlugin->getHUDOperator()(batch, _signInNavy);
     };
 
-    std::queue<Application::SnapshotOperator> snapshotOperators;
+    std::queue<SnapshotRequests::Operator> snapshotOperators;
     if (signInCover && !_programsCompiled.load()) {
         gpu::doInBatch("signInFrame", _gpuContext, drawSignInNavy);
     } else if (signInCover) {
@@ -383,10 +424,22 @@ void GraphicsEngine::render_performFrame() {
             PROFILE_RANGE(render, "/runRenderFrame");
             renderArgs._hudOperator = displayPlugin->getHUDOperator();
             renderArgs._hudTexture = qApp->getApplicationOverlay().getOverlayTexture();
-            renderArgs._takingSnapshot = qApp->takeSnapshotOperators(snapshotOperators);
+            renderArgs._takingSnapshot = qApp->getSnapshotRequests().take(snapshotOperators);
             renderArgs._blitFramebuffer = finalFramebuffer;
             FrameDiag::beginFrame();
             render_runRenderFrame(&renderArgs);
+            // the trace: this frame's camera against the traced item as it was just drawn
+            render::ItemID traced = _traceItem.load();
+            if (render::Item::isValidID(traced)) {
+                const auto& item = _renderScene->getItem(traced);
+                if (item.exist()) {
+                    glm::vec3 center = item.getBound().calcCenter();
+                    std::lock_guard<std::mutex> lock(_traceMutex);
+                    if (_traceSamples.size() < 200000) {
+                        _traceSamples.push_back({ usecTimestampNow(), viewFrustum.getPosition(), center, _renderFrameCount });
+                    }
+                }
+            }
         }
     }
 
@@ -403,6 +456,8 @@ void GraphicsEngine::render_performFrame() {
 
     auto frame = getGPUContext()->endFrame();
     frame->frameIndex = _renderFrameCount;
+    frame->traceFrame = traceFrame;
+    frame->mainTime = mainFrameUsecs;
     frame->framebuffer = finalFramebuffer;
     frame->framebufferRecycler = [](const gpu::FramebufferPointer& framebuffer) {
         auto frameBufferCache = DependencyManager::get<FramebufferCache>();
@@ -416,6 +471,7 @@ void GraphicsEngine::render_performFrame() {
         PROFILE_RANGE(render, "/pluginOutput");
         PerformanceTimer perfTimer("pluginOutput");
         _renderLoopCounter.increment();
+        frame->buildTime = usecTimestampNow() - lastPaintBegin;   // the render thread's build of this frame
         displayPlugin->submitFrame(frame);
     }
 
@@ -423,14 +479,12 @@ void GraphicsEngine::render_performFrame() {
     renderArgs._blitFramebuffer.reset();
     renderArgs._context->enableStereo(false);
 
-#if !defined(DISABLE_QML)
     {
         auto stats = Stats::getInstance();
         if (stats) {
             stats->setRenderDetails(renderArgs._details);
         }
     }
-#endif
 
     uint64_t lastPaintDuration = usecTimestampNow() - lastPaintBegin;
     _frameTimingsScriptingInterface.addValue(lastPaintDuration);
@@ -439,4 +493,17 @@ void GraphicsEngine::render_performFrame() {
 void GraphicsEngine::editRenderArgs(RenderArgsEditor editor) {
     QMutexLocker renderLocker(&_renderArgsMutex);
     editor(_appRenderArgs);
+}
+
+void GraphicsEngine::setRenderTraceItem(render::ItemID id) {
+    std::lock_guard<std::mutex> lock(_traceMutex);
+    _traceSamples.clear();
+    _traceItem = id;
+}
+
+std::vector<GraphicsEngine::TraceSample> GraphicsEngine::takeRenderTrace() {
+    std::lock_guard<std::mutex> lock(_traceMutex);
+    std::vector<TraceSample> samples;
+    samples.swap(_traceSamples);
+    return samples;
 }

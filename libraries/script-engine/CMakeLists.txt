@@ -7,7 +7,7 @@ if (NOT ANDROID)
   target_quazip()
 endif ()
 
-link_hifi_libraries(shared networking shaders material-networking model-networking recording avatars fbx entities controllers animation audio midi wasm-scripting)
+link_hifi_libraries(shared networking shaders material-networking model-networking recording avatars fbx entities controllers animation audio wasm-scripting)
 include_hifi_library_headers(gl)
 include_hifi_library_headers(hfm)
 include_hifi_library_headers(gpu)

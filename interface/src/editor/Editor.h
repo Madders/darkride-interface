@@ -14,6 +14,7 @@
 #define hifi_Editor_h
 
 #include <QtCore/QByteArray>
+#include <QtGui/QColor>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QHash>
 #include <QtCore/QList>
@@ -21,6 +22,7 @@
 #include <QtCore/QObject>
 #include <QtCore/QPoint>
 #include <QtCore/QRectF>
+#include <QtCore/QSet>
 #include <QtCore/QString>
 #include <QtCore/QTimer>
 #include <QtCore/QUuid>
@@ -39,15 +41,21 @@
 #include "EditorBounds.h"
 #include "EditorCamera.h"
 #include "EditorClipboard.h"
+#include <QtGui/QPixmap>
+
 #include "EditorGizmo.h"
 #include "EditorLightGizmos.h"
+#include "EditorTrackGizmos.h"
+#include "EditorVehicleGizmos.h"
 #include "EditorGrid.h"
 #include "EditorSelection.h"
 #include "EditorTerrain.h"
 #include "EditorUndo.h"
 #include "ui/EditorToolBar.h"
 
+class EditorEntityList;
 class QAction;
+class QDockWidget;
 class QDropEvent;
 class QKeyEvent;
 class QLabel;
@@ -120,14 +128,48 @@ public:
     QMenu* buildCreateMenu(QWidget* parent, const QPoint* viewportPos = nullptr);
     // a file or URL dropped on the viewport: models and images are placed where it landed
     bool handleDrop(QDropEvent* event);
+    // an entities file or URL (.json, .json.gz, .svo) into the world: placed under the cursor as a paste is (a whole
+    // world's file, 10 km or more across, where its positions say), selected, one undo step; build mode comes on for
+    // it. The menu's imports, and a file dropped on the window or opened by its address, come here
+    bool importEntities(const QString& url);
+    // the selection and its descendants to an entities file at this path (Build > Export Selected Entities… once a
+    // path is chosen); how many entities were written, -1 when nothing was
+    int exportSelectionTo(const QString& path);
+    // what the entity could not load, as its Hierarchy row says (refreshLoadProblems); empty when nothing has failed
+    QString loadProblem(const QUuid& id) const;
+    // the colour of the entity's Hierarchy row (EntityTreeModel::rowColor), invalid for the panel's own
+    QColor hierarchyRowColor(const QUuid& id) const;
     // a Build menu item that only works while build mode is on
     void addMenuAction(QAction* action);
 
     Q_INVOKABLE void viewFromAxis(int axis, int sign);
 
+    // the whole Inspector as drawn, scrolled or not (a scripted test's picture of it, Test.saveInspectorPicture)
+    QPixmap inspectorPicture() const;
+    // a gizmo drag of the selection driven by a scripted test (Test.editorDrag): begin captures the selection as a
+    // press on the gizmo would (a move handle, or a rotate ring when rotate), every call applies the delta or the
+    // rotation about the selection's centre as the pointer's motion would, final takes the undo step as the release would;
+    // with scaling, a scale handle's drag, by `scale` along the gizmo's axes (Test.editorScaleDrag)
+    void dragSelectionForTest(const glm::vec3& delta, const glm::quat& rotationDelta, bool rotate, bool begin, bool final,
+                              const glm::vec3& scale = glm::vec3(1.0f), bool scaling = false);
+    // files from this computer uploaded into the Assets panel's folder, as its Upload… does, and the status bar's text
+    // (Test.editorUploadFiles, Test.editorStatus)
+    void uploadFilesForTest(const QStringList& localPaths);
+    QString statusForTest() const;
+
 public slots:
     void setActive(bool active);
     void toggleActive() { setActive(!_active); }
+    // selects these entities, turning build mode on first (a scripted test, Test.selectInEditor)
+    void select(const QList<QUuid>& ids);
+    // a Track's control points, for scripted tests (Test.chooseTrackPoint and the others): what a click on a point's
+    // diamond, Shift+click on the curve and Delete do
+    void chooseTrackPoint(int index, bool fromInspector);
+    int chosenTrackPoint() const { return _trackPointChosen; }
+    // an Inspector edit of the selection, begun and committed as a list's + button does (Test.commitInspectorEdit)
+    void testInspectorEdit(const QString& key, const QVariant& value);
+    void insertTrackPoint(float arcLength);
+    void deleteTrackPoint();
     void setGridVisible(bool visible);
     void setTool(EditorToolBar::Tool tool);
     void setLocalSpace(bool local);
@@ -137,10 +179,52 @@ public slots:
     void redo();
     // docks the panels back where they started, for a panel that was torn off and lost
     void resetLayout();
+    // My Files (the Assets panel), made the first time it's asked for: Build mode's, and normal play's too
+    // (ui/Panels.h). Where the window's saved layout has it, open or closed as it was
+    QDockWidget* myFilesPanel();
+    // Build mode's toolbar rows, placed by the editor rather than left to a saved layout
+    void placeToolBars();
+    // after a named layout is put back (View > Layouts, one list for both modes): the Hierarchy, the Inspector and
+    // the rows follow the mode, not the layout, which may have been saved in the other one
+    void layoutApplied(bool savedInBuildMode);
+    // Build mode's own panels, once it has been on (null before)
+    QDockWidget* hierarchyPanel() const;
+    QDockWidget* inspectorPanel() const;
+    // the panels' style sheet (styles/editor.qss) on the window, its colours the skin's while one is on
+    // (PanelTheme::getSkin): called once the panels exist and again whenever the skin changes
+    void applyStyle();
     void frameSelection();
+    // flies the build camera to a Hierarchy row that is not loaded, so the stream brings it; it is selected when it
+    // arrives (NATIVE-EDITOR.md 8). A loaded entity is selected and framed
+    void goToListed(const QUuid& id);
+    // asks the entity server again for its list of every entity (the Hierarchy's Refresh)
+    void refreshEntityList();
+    // the Hierarchy's rows in all and loaded, and the list's state, for scripted tests (Test.getHierarchyCounts)
+    QVariantMap hierarchyCounts() const;
+    // what a click on the entity's row in the Hierarchy does (Test.clickHierarchyRow)
+    void clickHierarchyRow(const QUuid& id);
+    // what a click on a Hierarchy row's eye ("hide"), hand ("pick"), lock ("lock") or script mark ("scripts") does,
+    // Alt held for onlyThis (Test.hierarchyToggle); false when the row isn't there or nothing could change
+    bool clickHierarchyToggle(const QString& which, const QUuid& id, bool onlyThis);
+    // the row's toggles and what they amount to (Test.hierarchyToggles): hidden here (and whether the entity is
+    // drawn), unpickable, locked, scripts off, the Hierarchy's note and the last scripts-off reminder
+    QVariantMap hierarchyToggles(const QUuid& id) const;
+    // what a click in the viewport at the entity's middle selects, and what a marquee over the whole viewport would
+    // (Test.editorPickAt, Test.editorMarqueeIds)
+    QUuid pickAtEntityForTest(const QUuid& id) const;
+    QList<QUuid> marqueeAllForTest() const;
+    // the Hierarchy note's Show All, as a click on it
+    void showAllHere();
     void goToSelection();           // Shift+F: frame it and take the avatar there
     void bringSelectionHere();      // Option+Shift+F: move it to the avatar
     void create(const QString& key);
+    // the Terrain tool's Random tick set as a click on it does (Test.terrainRandomAngle): { found, angleEnabled }
+    QVariantMap setTerrainRandomAngleForTest(bool on);
+    // a stroke of the Terrain tool straight down onto the entity's middle, pressed and let go (Test.terrainStroke):
+    // the angle it turned the brush's picture by, or -1 when no terrain was there
+    float terrainStrokeForTest(const QUuid& id);
+    // the angle the next stroke will use, which the outline shows (Test.terrainNextAngle)
+    float terrainNextAngleForTest() const { return _terrain.angle(); }
     void createModel();             // asks for a URL
     void createFromMenu();          // the sender's data() is the catalogue key
     void deleteSelection();
@@ -149,6 +233,12 @@ public slots:
     void cutSelection();
     void paste();
     void selectAll();
+    // Build > Import Entities… / Import Entities from URL…: an entities file (.json, .json.gz, .svo, as Export writes
+    // and world backups are) placed under the cursor like a paste, selected, one undo step; Build > Export Selected
+    // Entities…: the selection with its descendants, to a .json file (the old Create app's Import and Export)
+    void importEntitiesFromFile();
+    void importEntitiesFromUrl();
+    void exportSelection();
     // Build > Use Stable Links: every link in the world to one of the user's own files by its path becomes the file's
     // stable link, read from a fresh listing of My Files; one undo step, and a report of what could not be matched
     // (NATIVE-EDITOR.md section 7.4)
@@ -167,11 +257,15 @@ signals:
     void marqueeChanged();
 
 private:
-    enum class DragKind { None, Move, Rotate, Scale };
+    enum class DragKind { None, Move, Rotate, Scale, TrackPoint };   // TrackPoint: a Track's chosen control point, by the Move gizmo
 
     void createPanels();
-    void placeToolBars();
+    void loadStyle();   // styles/editor.qss, once, for My Files or Build mode's panels, whichever comes first
     void showPanels(bool show);
+    // the docked panels on the window that aren't Build mode's (chat's), shown
+    QList<QDockWidget*> otherDockedPanels() const;
+    // one of Build mode's panels, new to a side where another panel is docked, goes above it with most of the height
+    void placeAbove(QDockWidget* ours, Qt::DockWidgetArea area);
     void focusViewport();
     void takeFocusUnlessTyping();
     void setMenuActionsEnabled(bool enabled);
@@ -190,6 +284,12 @@ private:
 
     // the Inspector: snapshots of the selection, and edits coming back from its fields
     void refreshInspector(bool selectionChanged);
+    // the Inspector header's toggle icons, for the selection (the Hierarchy rows' states)
+    void updateInspectorToggles();
+    // the Hierarchy's rows and the Inspector say what failed to load (EntityRenderer::loadFailures), once a second
+    void refreshLoadProblems();
+    // the selected entities' load failures, one line each (named when several are selected)
+    QString selectionLoadProblem() const;
     bool selectionSnapshots(QVector<EntityItemProperties>& snapshots, EntityTypes::EntityType& type, bool& multiple) const;
     void onInspectorEditBegan(const QString& key);
     void onInspectorLiveEdit(const QString& key, const QVariant& value);
@@ -205,8 +305,31 @@ private:
     EntityItemProperties inspectorEdit(const QString& key, const QVariant& value, const glm::vec3& naturalSize,
                                        const EntityItemProperties& before) const;
 
+    // Scaling an entity scales what is under it, as in Unity (Caity's bug batch, 10-29): each child's offset and its
+    // own size grow with it, all the way down. A child as it was when the scaling began; `parent` is the entry it hangs
+    // from, or -1 - i for the i-th entity scaled
+    struct ScaledChild {
+        QUuid id;
+        int parent;
+        glm::vec3 localPosition;
+        glm::vec3 dimensions;      // its own
+        glm::quat localRotation;
+        glm::quat frame;           // the axes its offset is in, in its parent's: a joint's, else the parent's own
+        float lineHeight { 0.0f }; // a Text's, which grows with it
+        float falloff { 0.0f };    // a Light's, which keeps its glow in proportion to its range, as Range does
+    };
+    // the children of the entities, parents first: not those among the entities (scaled in their own right), the
+    // locked ones (they take no edits: they and theirs stay as they were) or an avatar sitting on one
+    QVector<ScaledChild> childrenToScale(const QList<QUuid>& ids) const;
+    // the children's edits for each entity's new size over its old, along its own axes
+    static QVector<EntityItemProperties> childScaleEdits(const QVector<ScaledChild>& children,
+                                                         const QVector<glm::vec3>& ratios);
+    static EntityItemProperties childScaleBefore(const ScaledChild& child);
+    void sendChildScale(const QVector<ScaledChild>& children, const QVector<EntityItemProperties>& edits, bool final);
+
     PickRay pickRay(const QPoint& viewportPos) const;
     QUuid pickEntity(const QPoint& viewportPos) const;
+    QUuid pickEntityOnRay(const PickRay& ray) const;
     // where the cursor points in the world: a surface, or the grid plane; false when off the viewport
     bool cursorWorldPoint(glm::vec3& point) const;
     glm::vec3 selectionAnchor() const;
@@ -235,6 +358,12 @@ private:
     void createModelAt(const glm::vec3& point);
     void pasteAt(const glm::vec3& target);
     QList<QUuid> place(EntityItemProperties properties, const QString& text, const glm::vec3& point);
+    // reads an entity file as an add takes it (importEntities, createPreset)
+    bool readEntityFile(const QString& url, QVector<EntityItemProperties>& properties, QList<QUuid>& ids, AABox& bounds,
+                        int& count);
+    // one of the app's ready-made families of entities (Create > Special items > Vehicles): the file's ground (y 0)
+    // on the point, at least ahead metres from the camera, facing the way the camera looks; one undo step
+    bool createPreset(const QString& presetUrl, const QString& label, const glm::vec3& point, float ahead);
     void placeModel(const QUrl& url, const glm::vec3& point);
     void placeImage(const QUrl& url, const glm::vec3& point);
     void beginUpload(const QString& localPath, const glm::vec3& point, bool image);
@@ -262,9 +391,21 @@ private:
 
     // the lights' icons, and the handles of a light selected on its own (see EditorLightGizmos.h)
     void updateLightGizmos();
+    // a selected vehicle's wheels, seats and force points, the part chosen in the Inspector bright (EditorVehicleGizmos.h)
+    void updateVehicleGizmos();
+    // the tracks' curves, and the handles of a Track selected on its own (EditorTrackGizmos.h)
+    void updateTrackGizmos();
+    // the Track selected on its own, whose points can be chosen and moved; false when the selection is anything else
+    bool trackPointTrack(QUuid& id) const;
+    // (chooseTrackPoint, insertTrackPoint and deleteTrackPoint are public, above: a click chooses a point, bright in
+    // the viewport with the Move gizmo on it and the Inspector's Points list on its row; Shift+click on the curve
+    // inserts one at an arc length; Delete removes the chosen one)
+    // the Track's box grown or shrunk to hold its curve and guideway, as an edit of its dimensions
+    void fitTrackBox(const EntityItemPointer& track, const QVector<glm::vec3>& points, EntityItemProperties& properties) const;
     void setGizmosVisible(bool visible);
     // what a click there selects: a light's icon, or else the surface under it
     QUuid pickAt(const QPoint& viewportPos) const;
+    QUuid pickOnRay(const PickRay& ray) const;
     bool pointerOverHierarchy() const;
     void beginLightHandleDrag(const EditorLightHandle& handle, const PickRay& ray);
     void moveLightHandleDrag(const QPoint& viewportPos);
@@ -274,6 +415,11 @@ private:
 
     bool _ready { false };
     bool _active { false };
+    // a build mode toggle's timing, for its log line (Caity, 10-24: toggles took 0.5-2 s at times): when the Build
+    // Mode shortcut's key was made (the system's clock, ms since start-up) and reached the client (the steady clock)
+    int64_t _toggleKeyMadeMs { -1 };
+    int64_t _toggleKeyArrivedMs { -1 };
+    void reportToggleTiming(bool active, int64_t startMs, int64_t endMs);
     bool _gridVisible { true };
     EditorCamera _camera;
     EditorGrid _grid;
@@ -297,6 +443,7 @@ private:
     glm::quat _axesOrientation;
     bool _axesValid { false };
     int _frameCounter { 0 };
+    float _loadCheckSeconds { 0.0f };   // since the last refreshLoadProblems
 
     // a click or a marquee in the viewport
     bool _clickPending { false };
@@ -317,6 +464,7 @@ private:
     glm::vec3 _dragDelta;
     glm::quat _dragRotationDelta;
     glm::vec3 _dragScale { 1.0f };
+    QVector<ScaledChild> _dragChildren;   // under the entities a scale drag scales
     QPoint _lastDragPos;
     QElapsedTimer _editTimer;
 
@@ -354,6 +502,18 @@ private:
     EditorBounds _bounds;
     std::vector<EditorBoundsShape> _boundsShapes;
     EditorLightGizmos _lightGizmos;
+    EditorTrackGizmos _trackGizmos;
+    QVector<QUuid> _nearbyTracks;       // the tracks round the camera, looked for every so often
+    int _trackSearchFrame { -1 };
+    int _trackPointChosen { -1 };       // the control point chosen in the Track selected on its own, -1 for none
+    QUuid _trackPointTrack;             // that track
+    // a drag of the chosen point: the track's points and transform when it began
+    QVector<glm::vec3> _dragTrackPoints;
+    glm::vec3 _dragTrackPosition;
+    glm::quat _dragTrackRotation;
+    EditorVehicleGizmos _vehicleGizmos;
+    std::vector<EditorVehicleGizmoVehicle> _vehicleGizmoVehicles;
+    QHash<QString, int> _vehiclePartChosen;   // the row selected in each of the Inspector's vehicle lists, by key ("vehicle.wheels")
     EditorTerrain _terrain;             // the Terrain tool: its brushes, strokes and outline
     bool _stableLinksPending { false };  // Use Stable Links waits for the listing of My Files
     bool _gizmosVisible { true };       // every light's icon, not only the selected ones'
@@ -368,8 +528,12 @@ private:
     ulong _lastEscapeTime { 0 };        // the key event time of a first Escape, waiting for a second
     // per entity in an Inspector edit of Scale: its own size, to turn scale into dimensions
     QVector<glm::vec3> _inspectorNatural;
+    QVector<ScaledChild> _inspectorChildren;   // under the entities an Inspector edit of Scale or Size scales
 
     bool _panelsCreated { false };
+    // a panel of ours put above another (placeAbove), sized once both show: Qt doesn't size a hidden one
+    QList<QPair<QPointer<QDockWidget>, QPointer<QDockWidget>>> _sharesToSize;
+    QString _styleSource;     // styles/editor.qss as shipped (applyStyle)
     bool _syncingSelection { false };
     HierarchyPanel* _hierarchy { nullptr };
     InspectorPanel* _inspector { nullptr };
@@ -382,7 +546,39 @@ private:
     QStatusBar* _statusBar { nullptr };   // the bottom of the window, in build mode: notes go there
     QLabel* _statusLabel { nullptr };
     EntityTreeModel* _treeModel { nullptr };
-    Setting::Handle<QByteArray> _layoutSetting { "editor/layout3", QByteArray() };   // 2: the panels no longer float; 3: the Assets dock
+    // the entity server's list for the Hierarchy, and the rows chosen there that are on their way: they join the
+    // selection as they arrive
+    EditorEntityList* _entityList { nullptr };
+    QList<QUuid> _arrivalIds;
+    bool _selectingArrival { false };
+    QUuid _goingTo;                       // the row the camera flew to, for the status bar
+    QString _goingToName;
+    QTimer _arrivalTimer;
+    void onHierarchySelection(const QList<QUuid>& ids);
+    void onEntityLoaded(const QUuid& id);
+    // The Hierarchy's eye and hand (Caity, 2026-10-26: "do it like unity"): what this builder has hidden in their own
+    // view and made unpickable by their own clicks, as Unity's scene visibility and pickability are. Kept on this
+    // computer only, by entity id (unique across worlds), never sent to the world; the shared Visible and Ignore
+    // Picking are the Inspector's
+    QSet<QUuid> _hiddenHere;
+    QSet<QUuid> _noPick;
+    bool _localStatesLoaded { false };
+    Setting::Handle<QStringList> _hiddenHereSetting { "editor/hiddenHere", QStringList() };
+    Setting::Handle<QStringList> _noPickSetting { "editor/noPick", QStringList() };
+    QTimer _hiddenHereTimer;   // entities that arrive while build mode is on are hidden again in one pass
+    void loadLocalStates();
+    void saveLocalStates();
+    void onHierarchyToggle(int toggle, const QList<QUuid>& ids, bool on);
+    // what this builder hid, hidden in this view (EntityItem::setLocallyVisible) while build mode is on, and shown
+    // again as it goes off
+    void applyHiddenHere(bool hide);
+    void setLocallyHidden(const QList<QUuid>& ids, bool hidden);
+    bool excludedFromPicks(const QUuid& id) const { return _hiddenHere.contains(id) || _noPick.contains(id); }
+    // as build mode closes: a banner when entities here have their scripts off (shared, unlike the eye and hand);
+    // its text kept for Test.hierarchyToggles
+    void remindOfScriptsOff();
+    QString _scriptsOffReminder;
+    void updateListNote();
     // build mode narrows the field of view; the user's own is kept here so it survives a crash
     Setting::Handle<float> _fovBeforeBuild { "editor/fovBeforeBuild", 0.0f };
     float _savedFov { 0.0f };

@@ -5,8 +5,23 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: the present thread's loop (PresentThread::run, with the GL lock's handoff), the display link's start and
+// watch in activate, present, vsyncApplies and applyVsync (the Vsync setting inert while the display link paces),
+// getPresentPeriod (the paced clock physics steps by), the refresh-rate and cadence operators, and the rate counters.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 #include "OpenGLDisplayPlugin.h"
 
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <queue>
 
@@ -52,10 +67,45 @@
 #include "CompositorHelper.h"
 #include "Logging.h"
 #include "RefreshRateController.h"
+#include "DisplayLink.h"
+#include <FrameTrace.h>
+
+#include <QtGui/QScreen>
+#include <QtGui/QWindow>
+#include <QtWidgets/QWidget>
 
 using namespace shader::gpu::program;
 
 extern QThread* RENDER_THREAD;
+
+// Where the present loop is, for the report when presents stop (OpenGLDisplayPlugin::getPresentLoopStage): a relaxed
+// store at each of its branches, read once a second by Application's deadlock watchdog
+namespace {
+    enum PresentStage : int {
+        PresentStarting,
+        PresentLendingContext,      // the main thread has the context for an operation of its own
+        PresentNoPlugin,            // deactivated: minimized, quitting, or between plugins
+        PresentHeldForTest,         // OpenGLDisplayPlugin::holdPresents
+        PresentPaused,              // gl::isPresentationPaused (a change of the window's view, macOS)
+        PresentWaitingForLock,      // gl::globalLock (macOS)
+        PresentViewCatchUp,         // the main thread catches the context up with a changed view (macOS)
+        PresentPresenting,          // in the plugin's present(): the frame, the composite, the swap
+        PresentFinishing,           // the vsync setting, the lock's handoff
+        PresentPacingSleep          // RefreshRateController::sleepThreadIfNeeded
+    };
+    std::atomic<int> presentStage { PresentStarting };
+    std::atomic<uint64_t> presentsDone { 0 };
+    std::atomic<int64_t> presentHoldUntilMs { 0 };
+
+    void setPresentStage(PresentStage stage) {
+        presentStage.store(stage, std::memory_order_relaxed);
+    }
+
+    int64_t presentSteadyMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+}
 
 class PresentThread : public QThread, public Dependency {
     using Mutex = std::mutex;
@@ -107,6 +157,7 @@ public:
         _context->moveToThread(this);
     }
 
+    // FROZEN (vehicle path): see the note at the top of this file.
     virtual void run() override {
         PROFILE_SET_THREAD_NAME("Present Thread");
 
@@ -122,6 +173,7 @@ public:
         CHECK_GL_ERROR();
         while (!_shutdown) {
             if (_pendingOtherThreadOperation) {
+                setPresentStage(PresentLendingContext);
                 PROFILE_RANGE(render, "MainThreadOp")
                 {
                     Lock lock(_mutex);
@@ -159,7 +211,7 @@ public:
                         if (newPlugin) {
                             bool hasVsync = false;
                             QThread::setPriority(newPlugin->getPresentPriority());
-                            bool wantVsync = newPlugin->wantVsync();
+                            bool wantVsync = newPlugin->vsyncApplies();
 #if defined(Q_OS_MACOS)
                             newPlugin->swapBuffers();
 #endif
@@ -169,8 +221,12 @@ public:
 #endif
                             hasVsync = gl::getSwapInterval() != 0;
                             qCDebug(displayPlugins) << "Vsync enabled:" << hasVsync;
+                            if (newPlugin->wantVsync() && !wantVsync) {
+                                qCDebug(displayPlugins) << "Vsync: the setting is on, but the display link paces the presents in phase with the display: the swap does not wait";
+                            }
 
                             newPlugin->setVsyncEnabled(hasVsync);
+                            newPlugin->_vsyncApplied = wantVsync;
                             newPlugin->customizeContext();
                             CHECK_GL_ERROR();
                             // Force completion of all pending GL commands
@@ -185,23 +241,34 @@ public:
 
             // If there's no active plugin, just sleep
             if (currentPlugin == nullptr) {
+                setPresentStage(PresentNoPlugin);
                 // Minimum sleep ends up being about 2 ms anyway
                 QThread::msleep(1);
                 continue;
+            }
+            if (int64_t holdUntil = presentHoldUntilMs.load(std::memory_order_relaxed)) {
+                if (presentSteadyMs() < holdUntil) {
+                    setPresentStage(PresentHeldForTest);
+                    QThread::msleep(2);
+                    continue;
+                }
             }
 
             // While the main thread moves or resizes the window's view, and for a moment after, nothing is drawn to
             // it (see gl::ViewChangeGuard): a view changed under a frame crashed inside Apple's GL driver. The frames
             // queue meanwhile, and the next present shows the newest.
             if (gl::isPresentationPaused()) {
+                setPresentStage(PresentPaused);
                 QThread::msleep(2);
                 continue;
             }
             // The whole frame, making the context current included, is drawn under the lock a change of the view
             // takes: on macOS the context catches up with a changed view when it is made current.
+            setPresentStage(PresentWaitingForLock);
             gl::globalLock();
             if (gl::isPresentationPaused()) {
                 // a change began while this waited for the lock
+                setPresentStage(PresentPaused);
                 gl::globalRelease(false);
                 QThread::msleep(2);
                 continue;
@@ -213,6 +280,7 @@ public:
             // meanwhile crashed in Apple's GL driver (10-18). The lock is let go while the main thread runs it, and the
             // next pass draws.
             if (gl::takeViewChanged()) {
+                setPresentStage(PresentViewCatchUp);
                 _context->doneCurrent();
                 gl::globalRelease(false);
                 const int VIEW_UPDATE_WAIT_MS = 100;
@@ -223,15 +291,32 @@ public:
             // Execute the frame and present it to the display device.
             {
                 PROFILE_RANGE(render, "PluginPresent")
+                setPresentStage(PresentPresenting);
                 currentPlugin->present(_refreshRateController);
                 CHECK_GL_ERROR();
             }
+            presentsDone.fetch_add(1, std::memory_order_relaxed);
+            setPresentStage(PresentFinishing);
+            // the vsync setting, changed at run time, takes from the next present
+            currentPlugin->applyVsync();
 #if defined(Q_OS_MACOS)
             _context->doneCurrent();
 #endif
             gl::globalRelease(false);
+            // The global lock is not fair. With vsync on this thread holds it through the swap's wait and, with
+            // nothing to sleep for, took it straight back: the QML UI's renderer never got it, and the main thread,
+            // which waits on that renderer's sync, ran its game loop at a frame a second (10-19). A waiter gets a
+            // moment to take the lock; this thread then queues behind it as it should.
+            {
+                const int HANDOFF_WAIT_US = 100;
+                const int HANDOFF_TRIES = 30;   // up to 3 ms, a fraction of the UI's own render
+                for (int i = 0; i < HANDOFF_TRIES && gl::globalLockWanted(); ++i) {
+                    QThread::usleep(HANDOFF_WAIT_US);
+                }
+            }
 
-            _refreshRateController->sleepThreadIfNeeded(this, currentPlugin->isHmd());
+            setPresentStage(PresentPacingSleep);
+            _refreshRateController->sleepThreadIfNeeded(this, currentPlugin->isHmd(), currentPlugin->isVsyncEnabled());
         }
 
         _context->doneCurrent();
@@ -281,6 +366,7 @@ private:
     std::shared_ptr<RefreshRateController> _refreshRateController { nullptr };
 };
 
+// FROZEN (vehicle path): see the note at the top of this file.
 bool OpenGLDisplayPlugin::activate() {
     if (!_cursorsData.size()) {
         auto& cursorManager = Cursor::Manager::instance();
@@ -298,6 +384,8 @@ bool OpenGLDisplayPlugin::activate() {
     if (!_container) {
         return false;
     }
+    // the vsync setting (Render.vsyncEnabled; the present thread applies it when this plugin goes on)
+    _vsyncWanted = _container->getBoolSetting("vsyncEnabled", false);
 
     // Start the present thread if necessary
     QSharedPointer<PresentThread> presentThread;
@@ -329,6 +417,96 @@ bool OpenGLDisplayPlugin::activate() {
         return false;
     }
 
+    // the refresh signal of the display the window is on, for pacing the presents in phase with its refreshes
+    // (DisplayLink, RefreshRateController); it follows the window from screen to screen
+    if (!isHmd()) {
+        auto widget = _container->getPrimaryWidget();
+        QWindow* window = (widget && widget->window()) ? widget->window()->windowHandle() : nullptr;
+        if (window) {
+            // the link runs while the window can be seen: a minimized or hidden window has nothing to pace, and the
+            // link's thread would wake at every refresh for nothing (10-21 review). The display is the one under the
+            // window's own centre (its screen's centre when the window has no size yet): until 2026-10-31 it was the
+            // centre of the screen Qt reported, and Qt's screen-change signal was the only thing that moved the link,
+            // so one wrong answer at a window's change of state left the link on the wrong display for the rest of
+            // the run (a ride on the 144 Hz panel paced by the 120 Hz one's refreshes: the free schedule, unknowingly).
+            auto displayUnderWindow = [window]() -> uint32_t {
+                QRect frame = window->frameGeometry();
+                QPoint centre = frame.isValid() && !frame.isEmpty() ? frame.center()
+                    : (window->screen() ? window->screen()->geometry().center() : QPoint(0, 0));
+                uint32_t display = DisplayLink::displayAt(centre.x(), centre.y());
+                if (!display && window->screen()) {
+                    QPoint screenCentre = window->screen()->geometry().center();
+                    display = DisplayLink::displayAt(screenCentre.x(), screenCentre.y());
+                }
+                return display;
+            };
+            auto startLink = [window, displayUnderWindow] {
+                QWindow::Visibility visibility = window->visibility();
+                if (visibility == QWindow::Minimized || visibility == QWindow::Hidden) {
+                    DisplayLink::instance().stop();
+                    return;
+                }
+                DisplayLink::instance().start(displayUnderWindow());
+            };
+            startLink();
+            QObject::disconnect(_screenConnection);
+            QObject::disconnect(_visibilityConnection);
+            _screenConnection = connect(window, &QWindow::screenChanged, this, [startLink](QScreen*) { startLink(); });
+            _visibilityConnection = connect(window, &QWindow::visibilityChanged, this, [startLink](QWindow::Visibility) { startLink(); });
+            // the watchdog, every 2 s on the main thread: a link on another display than the window's, or one that has
+            // gone quiet while the window can be seen, is started again on the window's display, and said so
+            if (!_linkWatchdog) {
+                _linkWatchdog = new QTimer(this);
+                _linkWatchdog->setInterval(2000);
+                _linkWatchdog->setTimerType(Qt::VeryCoarseTimer);
+            }
+            _linkWatchdog->disconnect();
+            connect(_linkWatchdog, &QTimer::timeout, this, [this, window, displayUnderWindow] {
+                QWindow::Visibility visibility = window->visibility();
+                if (visibility == QWindow::Minimized || visibility == QWindow::Hidden) {
+                    return;
+                }
+                auto& link = DisplayLink::instance();
+                uint32_t wanted = displayUnderWindow();
+                int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                const char* reason = nullptr;
+                if (!link.isRunning()) {
+                    reason = "it was not running";
+                } else if (link.isQuiet(nowNs)) {
+                    reason = "it went quiet";
+                } else if (wanted && wanted != link.displayId()) {
+                    reason = "the window is on another display";
+                }
+                if (!reason) {
+                    _linkQuietRestarts = 0;   // running and refreshing on the window's display
+                    _linkNextRestartNs = 0;
+                    return;
+                }
+                // a display that is asleep, or a link that is stuck, stays quiet after a restart too: after the first
+                // restart that did not help, one more try a minute, said once (performance's review, 2026-10-31)
+                const bool quietAgain = link.isQuiet(nowNs) && _linkQuietRestarts > 0;
+                if (quietAgain) {
+                    if (nowNs < _linkNextRestartNs) {
+                        return;
+                    }
+                    _linkNextRestartNs = nowNs + 60 * 1000000000LL;
+                    if (_linkQuietRestarts == 1) {
+                        qCDebug(displayPlugins) << "Display link: still quiet after a restart on display" << wanted << "; trying again once a minute";
+                    }
+                    _linkQuietRestarts++;
+                } else {
+                    qCDebug(displayPlugins) << "Display link: restarted on display" << wanted << "(was" << link.displayId() << "):" << reason;
+                    _linkQuietRestarts = link.isQuiet(nowNs) ? 1 : 0;
+                    _linkNextRestartNs = 0;
+                }
+                link.stop();
+                link.start(wanted);
+            });
+            _linkWatchdog->start();
+        }
+    }
+
     // This should not return until the new context has been customized
     // and the old context (if any) has been uncustomized
     presentThread->setNewDisplayPlugin(this);
@@ -352,6 +530,15 @@ bool OpenGLDisplayPlugin::activate() {
 void OpenGLDisplayPlugin::deactivate() {
     auto compositorHelper = DependencyManager::get<CompositorHelper>();
     disconnect(compositorHelper.data());
+
+    // the display link paces this plugin's presents only: off with it (the next desktop plugin starts it again)
+    QObject::disconnect(_screenConnection);
+    QObject::disconnect(_visibilityConnection);
+    if (_linkWatchdog) {
+        _linkWatchdog->stop();
+        _linkWatchdog->disconnect();
+    }
+    DisplayLink::instance().stop();
 
     auto presentThread = DependencyManager::get<PresentThread>();
     // Does not return until the GL transition has completeed
@@ -502,6 +689,7 @@ bool OpenGLDisplayPlugin::eventFilter(QObject* receiver, QEvent* event) {
 }
 
 void OpenGLDisplayPlugin::submitFrame(const gpu::FramePointer& newFrame) {
+    newFrame->submitTime = usecTimestampNow();
     withNonPresentThreadLock([&] {
         _newFrameQueue.push(newFrame);
     });
@@ -536,8 +724,9 @@ ktx::StoragePointer textureToKtx(const gpu::Texture& texture) {
             auto& faceBytes = const_cast<gpu::Byte*&>(image._faceBytes[face]);
             if (texture.isStoredMipFaceAvailable(mip, face)) {
                 auto storedImage = texture.accessStoredMipFace(mip, face);
-                auto storedSize = storedImage->size();
-                memcpy(faceBytes, storedImage->data(), storedSize);
+                if (storedImage) {
+                    memcpy(faceBytes, storedImage->data(), storedImage->size());
+                }
             }
         }
     }
@@ -756,15 +945,113 @@ void OpenGLDisplayPlugin::internalPresent() {
     _presentRate.increment();
 }
 
+void OpenGLDisplayPlugin::tracePresent(uint64_t startPresent) {
+    if (!_presentTracing) {
+        return;
+    }
+    // the swap has returned: with vsync on, at the display's refresh (or at once, when the driver queued the frame)
+    uint64_t now = usecTimestampNow();
+    std::lock_guard<std::mutex> lock(_presentTraceMutex);
+    if (_presentTrace.size() < 200000) {
+        _presentTrace.push_back({ now, _currentFrame ? _currentFrame->frameIndex : 0u, _presentedNewFrame,
+                                  (uint32_t)(now - startPresent), _lastSwapUsecs,
+                                  _gpuContext ? (float)_gpuContext->getFrameTimerGPUAverage() : 0.0f });
+    }
+}
+
+// FROZEN (vehicle path): see the note at the top of this file.
+bool OpenGLDisplayPlugin::vsyncApplies() const {
+    static const bool forced = !qgetenv("TIVOLI_VSYNC").isEmpty();
+    return wantVsync() && (forced || !DisplayLink::instance().isRunning());
+}
+
+// FROZEN (vehicle path): see the note at the top of this file.
+void OpenGLDisplayPlugin::applyVsync() {
+    bool wanted = vsyncApplies();
+    if (wanted == _vsyncApplied) {
+        return;
+    }
+    _vsyncApplied = wanted;
+    gl::setSwapInterval(wanted ? 1 : 0);
+    bool hasVsync = gl::getSwapInterval() != 0;
+    if (wantVsync() && !wanted) {
+        qCDebug(displayPlugins) << "Vsync: the setting is on, but the display link paces the presents in phase with the display: the swap does not wait; enabled:" << hasVsync;
+    } else {
+        qCDebug(displayPlugins) << "Vsync" << (wanted ? "on" : "off") << "asked for at run time; enabled:" << hasVsync;
+    }
+    _vsyncEnabled = hasVsync;
+}
+
+void OpenGLDisplayPlugin::setPresentTracing(bool on) {
+    std::lock_guard<std::mutex> lock(_presentTraceMutex);
+    _presentTrace.clear();
+    _presentTracing = on;
+}
+
+std::vector<DisplayPlugin::PresentSample> OpenGLDisplayPlugin::takePresentTrace() {
+    std::lock_guard<std::mutex> lock(_presentTraceMutex);
+    std::vector<PresentSample> samples;
+    samples.swap(_presentTrace);
+    return samples;
+}
+
+static std::atomic<int>& presentLoadUs() {
+    static std::atomic<int> load { qgetenv("TIVOLI_PRESENT_LOAD_US").toInt() };
+    return load;
+}
+
+void OpenGLDisplayPlugin::setPresentLoad(int microseconds) {
+    presentLoadUs() = std::max(0, microseconds);
+}
+
+int OpenGLDisplayPlugin::getPresentLoad() {
+    return presentLoadUs();
+}
+
+uint64_t OpenGLDisplayPlugin::getPresentsDone() {
+    return presentsDone.load(std::memory_order_relaxed);
+}
+
+const char* OpenGLDisplayPlugin::getPresentLoopStage() {
+    switch (presentStage.load(std::memory_order_relaxed)) {
+        case PresentStarting: return "starting";
+        case PresentLendingContext: return "lending the context to the main thread";
+        case PresentNoPlugin: return "without a display plugin";
+        case PresentHeldForTest: return "held for a test";
+        case PresentPaused: return "paused for a change of the window's view";
+        case PresentWaitingForLock: return "waiting for the global GL lock";
+        case PresentViewCatchUp: return "waiting for the main thread to catch the context up with the view";
+        case PresentPresenting: return "presenting (the frame, the composite, the swap)";
+        case PresentFinishing: return "finishing a present (vsync, the lock's handoff)";
+        case PresentPacingSleep: return "in the pacing sleep";
+        default: return "unknown";
+    }
+}
+
+bool OpenGLDisplayPlugin::isPresentLoopIdle() {
+    return presentStage.load(std::memory_order_relaxed) == PresentNoPlugin;
+}
+
+void OpenGLDisplayPlugin::holdPresents(int milliseconds) {
+    presentHoldUntilMs.store(milliseconds > 0 ? presentSteadyMs() + milliseconds : 0, std::memory_order_relaxed);
+}
+
+// FROZEN (vehicle path): see the note at the top of this file.
 void OpenGLDisplayPlugin::present(const std::shared_ptr<RefreshRateController>& refreshRateController) {
     auto frameId = (uint64_t)presentCount();
     PROFILE_RANGE_EX(render, __FUNCTION__, 0xffffff00, frameId)
     uint64_t startPresent = usecTimestampNow();
     refreshRateController->clockStartTime();
+    if (int load = presentLoadUs()) {
+        // the test knob (setPresentLoad): a heavier present, busy-waited
+        while (usecTimestampNow() - startPresent < (uint64_t)load) {
+        }
+    }
     {
         PROFILE_RANGE_EX(render, "updateFrameData", 0xff00ff00, frameId)
         updateFrameData();
     }
+    _presentSlot = refreshRateController->getSlotIndex();
     incrementPresentCount();
 
     if (_currentFrame) {
@@ -774,14 +1061,41 @@ void OpenGLDisplayPlugin::present(const std::shared_ptr<RefreshRateController>& 
         {
             withPresentThreadLock([&] {
                 _renderRate.increment();
-                if (_currentFrame.get() != _lastFrame) {
+                _presentedNewFrame = _currentFrame.get() != _lastFrame;
+                if (_presentedNewFrame) {
                     _newFrameRate.increment();
                 }
                 _lastFrame = _currentFrame.get();
             });
-            // Execute the frame rendering commands
-            PROFILE_RANGE_EX(render, "execute", 0xff00ff00, frameId)
-            _gpuContext->executeFrame(_currentFrame);
+            refreshRateController->notePresentedFrame(_presentedNewFrame);
+            if (_presentedNewFrame) {
+                // the frame's own work, the main thread's frame and the render thread's build, stamped on it by the
+                // game loop and the graphics engine: the governor's measure of whether the frames would fit a refresh
+                // at the display's full rate (not a latency from the present before: with vsync that held the swap's
+                // wait for the refresh, and the governor never came back)
+                refreshRateController->noteNewFrame((int)_currentFrame->mainTime, (int)_currentFrame->buildTime);
+            }
+            if (FrameTrace::enabled()) {
+                // the frame trace's present columns, in the record of the game-loop frame this gpu frame came from:
+                // the gpu frame's index (the join with Test.takePresentTrace), the refreshes the frame has been shown
+                // for (summed over held presents), whether it was held, and how late this present came past its slot
+                const uint64_t traceFrame = _currentFrame->traceFrame;
+                const int refreshes = refreshRateController->getPresentRefreshes();
+                _tracePresentRefreshes = _presentedNewFrame ? refreshes : _tracePresentRefreshes + refreshes;
+                FrameTrace::set(traceFrame, "render.frame", (double)_currentFrame->frameIndex);
+                FrameTrace::set(traceFrame, "present.refreshes", (double)_tracePresentRefreshes);
+                FrameTrace::set(traceFrame, "present.repeat", _presentedNewFrame ? 0.0 : 1.0);
+                FrameTrace::set(traceFrame, "present.late_us", (double)refreshRateController->getPresentLateUs());
+            }
+            if (_presentedNewFrame || isHmd()) {
+                // Execute the frame rendering commands. A held present (the same frame shown again because no new one
+                // was ready) keeps the frame's framebuffer as it was drawn and only composites it again, instead of
+                // drawing the whole scene a second time for the same picture: until 2026-10-31 the GPU's time doubled
+                // on exactly the frames that were late already, which made the next one late too. An HMD re-executes
+                // with the newer pose: that is its reprojection.
+                PROFILE_RANGE_EX(render, "execute", 0xff00ff00, frameId)
+                _gpuContext->executeFrame(_currentFrame);
+            }
         }
 
         // Write all layers to a local framebuffer
@@ -837,48 +1151,92 @@ void OpenGLDisplayPlugin::present(const std::shared_ptr<RefreshRateController>& 
             PROFILE_RANGE_EX(render, "internalPresent", 0xff00ffff, frameId)
             internalPresent();
         }
+        tracePresent(startPresent);
 
         gpu::Backend::freeGPUMemSize.set(gpu::gl::getFreeDedicatedMemory());
     } else if (alwaysPresent()) {
         refreshRateController->clockEndTime();
         internalPresent();
+        tracePresent(startPresent);
     } else {
         refreshRateController->clockEndTime();
     }
-    _movingAveragePresent.addSample((float)(usecTimestampNow() - startPresent));
+    uint64_t presentUsecs = usecTimestampNow() - startPresent;
+    _movingAveragePresent.addSample((float)presentUsecs);
+    // the present's own work: the present less its swap (with vsync the swap waits for the refresh, which is not work)
+    refreshRateController->notePresentCost(presentUsecs > _lastSwapUsecs ? (int)(presentUsecs - _lastSwapUsecs) : 0,
+                                           _gpuContext ? (float)_gpuContext->getFrameTimerGPUAverage() : 0.0f);
+    _previousPresentStart = startPresent;
+    if (FrameTrace::enabled() && _currentFrame) {
+        // how long before the refresh this present's picture was due the present returned; negative when it missed
+        const int64_t deadlineNs = refreshRateController->getPresentDeadlineNs();
+        if (deadlineNs > 0) {
+            const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            FrameTrace::set(_currentFrame->traceFrame, "present.slack_us", (double)(deadlineNs - nowNs) / 1000.0);
+        }
+    }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 float OpenGLDisplayPlugin::newFramePresentRate() const {
     return _newFrameRate.rate();
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 float OpenGLDisplayPlugin::droppedFrameRate() const {
     return _droppedFrameRate.rate();
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 float OpenGLDisplayPlugin::presentRate() const {
     return _presentRate.rate();
 }
 
-std::function<void(int)> OpenGLDisplayPlugin::getRefreshRateOperator() {
-    return [](int targetRefreshRate) {
+// FROZEN (vehicle path): see the note at the top of this file.
+float OpenGLDisplayPlugin::getPresentPeriod() const {
+    // paced by the controller unless the swap paces (vsync, an HMD)
+    if (isHmd() || _vsyncEnabled || !DependencyManager::isSet<PresentThread>()) {
+        return 0.0f;
+    }
+    return DependencyManager::get<PresentThread>()->getRefreshRateController()->getPacedPeriodSeconds();
+}
+
+// FROZEN (vehicle path): see the note at the top of this file.
+std::function<void(int, int)> OpenGLDisplayPlugin::getRefreshRateOperator() {
+    return [](int targetRefreshRate, int displayRefreshRate) {
         auto refreshRateController = DependencyManager::get<PresentThread>()->getRefreshRateController();
         refreshRateController->setRefreshRateLimitPeriod(targetRefreshRate);
+        refreshRateController->setDisplayRefreshRate(displayRefreshRate);
     };
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
+std::function<RefreshRateController::CadenceCounters()> OpenGLDisplayPlugin::getCadenceCountersOperator() {
+    return []() -> RefreshRateController::CadenceCounters {
+        if (!DependencyManager::isSet<PresentThread>()) {
+            return RefreshRateController::CadenceCounters();
+        }
+        return DependencyManager::get<PresentThread>()->getRefreshRateController()->getCadenceCounters();
+    };
+}
+
+// FROZEN (vehicle path): see the note at the top of this file.
 void OpenGLDisplayPlugin::resetPresentRate() {
     // FIXME
     // _presentRate = RateCounter<100>();
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 float OpenGLDisplayPlugin::renderRate() const {
     return _renderRate.rate();
 }
 
 void OpenGLDisplayPlugin::swapBuffers() {
     static auto context = _container->getPrimaryWidget()->context();
+    uint64_t start = usecTimestampNow();
     context->swapBuffers();
+    _lastSwapUsecs = (uint32_t)(usecTimestampNow() - start);
 }
 
 void OpenGLDisplayPlugin::withOtherThreadContext(std::function<void()> f) const {
@@ -940,7 +1298,19 @@ glm::uvec2 OpenGLDisplayPlugin::getSurfacePixels() const {
     uvec2 result;
     auto window = _container->getPrimaryWidget();
     if (window) {
-        result = toGlm(window->geometry().size() * window->devicePixelRatio());
+        // the exact ratio: QWidget::devicePixelRatio() is a whole number, 1 at Windows' 125 % or 150 %, which drew the
+        // view at two-thirds of the window's pixels; the GL context already uses the exact one (gl/Context.cpp)
+        result = toGlm(window->geometry().size() * window->devicePixelRatioF());
+#if defined(Q_OS_WIN)
+        // the view's own window as Windows has it: just after a change of the display's scale it can differ from the
+        // widget's size until the size is put again (ViewportContainer), and a frame drawn at the widget's shape was
+        // stretched into it, squashed sideways. Drawn at the window's own pixels, the picture keeps its shape
+        RECT client;
+        HWND hwnd = (HWND)window->internalWinId();
+        if (hwnd && GetClientRect(hwnd, &client) && client.right > 0 && client.bottom > 0) {
+            result = uvec2(client.right, client.bottom);
+        }
+#endif
     }
     return result;
 }

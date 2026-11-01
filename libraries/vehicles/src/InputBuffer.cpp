@@ -17,6 +17,7 @@ void InputBuffer::align(uint32_t tick, uint32_t step) {
     _inputs.clear();
     _newestTick = tick;
     _overfullSteps = 0;
+    _lateRun = 0;
     for (int i = 0; i < SEEN_RING; ++i) {
         _seenValid[i] = false;
     }
@@ -28,13 +29,17 @@ InputBuffer::Push InputBuffer::push(const VehicleInput& input, uint32_t step) {
         align(tick, step);
     } else {
         // the driver's ticks started over (its counter went back by more than a lead's worth), or they come so late
-        // that no lead would do (a client that paused and resumed): the alignment is set again from this input
+        // that no lead would do (a client that paused and resumed), or after a gap of more than a lead's worth with
+        // nothing (the driver stood up and sat again, round 12): the alignment is set again from this input
         int32_t behindNewest = (int32_t)(_newestTick - tick);
         int32_t stepOffset = (int32_t)((tick + _offset) - (_taken ? _lastTakenStep : step));
-        if (behindNewest > MAX_LEAD || stepOffset < -MAX_LEAD) {
+        bool gap = _pushed && (int32_t)(step - _lastPushStep) > MAX_LEAD;
+        if (behindNewest > MAX_LEAD || stepOffset < -MAX_LEAD || gap) {
             align(tick, step);
         }
     }
+    _lastPushStep = step;
+    _pushed = true;
     uint32_t targetStep = tick + _offset;
     if ((int32_t)(tick - _newestTick) > 0) {
         _newestTick = tick;
@@ -45,9 +50,19 @@ InputBuffer::Push InputBuffer::push(const VehicleInput& input, uint32_t step) {
     }
     markSeen(tick);
     if (_taken && (int32_t)(targetStep - _lastTakenStep) <= 0) {
-        ++_counts.late;
-        return Push::Late;
+        // late for long: the driver lost a few ticks (a hitch on its side) and every input now comes after its substep
+        // by less than would align it again above, so each would be dropped for good while the last input is held
+        // (10-24: a flight on the assistant, mid-course, after the client stalled loading models). Set the alignment
+        // again from this input, as take() does for a driver far ahead for long.
+        if (++_lateRun < LATE_REALIGN_INPUTS) {
+            ++_counts.late;
+            return Push::Late;
+        }
+        align(tick, step);
+        markSeen(tick);
+        targetStep = tick + _offset;
     }
+    _lateRun = 0;
     if ((int32_t)(targetStep - step) > MAX_LEAD) {
         ++_counts.early;
         return Push::Early;
@@ -107,11 +122,13 @@ int InputBuffer::margin(uint32_t step) const {
 void InputBuffer::reset() {
     _inputs.clear();
     _aligned = false;
+    _pushed = false;
     _offset = 0;
     _newestTick = 0;
     _lastTakenStep = 0;
     _taken = false;
     _overfullSteps = 0;
+    _lateRun = 0;
     _counts = Counts();
     for (int i = 0; i < SEEN_RING; ++i) {
         _seenValid[i] = false;

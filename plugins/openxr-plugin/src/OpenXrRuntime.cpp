@@ -10,8 +10,10 @@
 
 #include "OpenXrRuntime.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 #include <QtCore/QCoreApplication>
@@ -50,11 +52,90 @@ OpenXrRuntime::OpenXrRuntime() {
 }
 
 OpenXrRuntime::~OpenXrRuntime() {
-    destroySession();
+    shutdown();
+}
+
+void OpenXrRuntime::shutdown() {
+    stopIdleFrames();
+    if (_session != XR_NULL_HANDLE) {
+        if (_sessionRunning) {
+            endRunningSession(false);
+        }
+        destroySession();
+    }
     if (_instance != XR_NULL_HANDLE) {
         xrDestroyInstance(_instance);
         _instance = XR_NULL_HANDLE;
+        _system = XR_NULL_SYSTEM_ID;
+        qCDebug(openxr) << "OpenXR instance destroyed";
     }
+}
+
+void OpenXrRuntime::setDisplayActive(bool active) {
+    // under the event lock, so a READY answered meanwhile (beginSession, which starts the idle frames while the display
+    // is off) sees the flag as it is now, never an idle thread started after the stop below
+    std::lock_guard<std::mutex> lock(_eventMutex);
+    _displayActive = active;
+    if (active) {
+        // the present thread's frame loop takes over from the idle frames
+        stopIdleFrames();
+        if (_session != XR_NULL_HANDLE && !_sessionRunning && _sessionState == XR_SESSION_STATE_READY) {
+            // offered while the display was off and not begun then (a refused begin): once more
+            beginSession();
+        }
+    } else if (_sessionRunning) {
+        startIdleFrames();
+    }
+}
+
+void OpenXrRuntime::beginSession() {
+    XrSessionBeginInfo beginInfo { XR_TYPE_SESSION_BEGIN_INFO };
+    beginInfo.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+    _sessionRunning = check(xrBeginSession(_session, &beginInfo), "xrBeginSession");
+    if (_sessionRunning && !_displayActive) {
+        qCDebug(openxr) << "Session begun while the display is off: fed empty frames until VR is entered";
+        startIdleFrames();
+    }
+}
+
+void OpenXrRuntime::startIdleFrames() {
+    stopIdleFrames();
+    _idleFramesStop = false;
+    _idleFrames = std::thread([this] {
+        // until VR is entered (stopIdleFrames) or the session ends (a headset taken off: STOPPING, answered by whoever
+        // polls the events); a frame the runtime refuses ends the feeding, and the runtime then stops the session itself
+        while (!_idleFramesStop && _sessionRunning && submitEmptyFrame()) {
+        }
+    });
+}
+
+void OpenXrRuntime::stopIdleFrames() {
+    _idleFramesStop = true;
+    if (_idleFrames.joinable()) {
+        _idleFrames.join();
+    }
+}
+
+bool OpenXrRuntime::submitEmptyFrame() {
+    std::lock_guard<std::mutex> lock(_frameMutex);
+    if (!_sessionRunning) {
+        return false;
+    }
+    XrFrameWaitInfo waitInfo { XR_TYPE_FRAME_WAIT_INFO };
+    XrFrameState frameState { XR_TYPE_FRAME_STATE };
+    if (!check(xrWaitFrame(_session, &waitInfo, &frameState), "xrWaitFrame (empty frame)")) {
+        return false;
+    }
+    setFrameTiming(frameState.predictedDisplayTime, frameState.predictedDisplayPeriod);
+    XrFrameBeginInfo beginInfo { XR_TYPE_FRAME_BEGIN_INFO };
+    if (!check(xrBeginFrame(_session, &beginInfo), "xrBeginFrame (empty frame)")) {
+        return false;
+    }
+    XrFrameEndInfo endInfo { XR_TYPE_FRAME_END_INFO };
+    endInfo.displayTime = frameState.predictedDisplayTime;
+    endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    endInfo.layerCount = 0;
+    return check(xrEndFrame(_session, &endInfo), "xrEndFrame (empty frame)");
 }
 
 bool OpenXrRuntime::check(XrResult result, const char* what) const {
@@ -184,6 +265,7 @@ bool OpenXrRuntime::findSystem() {
                   "xrGetInstanceProcAddr(xrLocateHandJointsEXT)");
     }
     qCInfo(openxr) << "Hand tracking:" << (_handTrackingSupported ? "available" : "not available");
+    qCInfo(openxr) << "Presence events (" XR_EXT_USER_PRESENCE_EXTENSION_NAME "):" << (_userPresenceExtension ? "offered" : "not offered");
     return true;
 }
 
@@ -216,6 +298,7 @@ bool OpenXrRuntime::createSession() {
         qCWarning(openxr) << "No OpenGL context is current, so no OpenXR session can be made";
         return false;
     }
+    qCDebug(openxr) << "Making a session with the GL context" << (void*)binding.hGLRC << "on device context" << (void*)binding.hDC;
     createInfo.next = &binding;
 #else
 #error "The OpenXR plugin has no graphics binding for this platform yet"
@@ -264,9 +347,9 @@ void OpenXrRuntime::destroySession() {
     if (_session == XR_NULL_HANDLE) {
         return;
     }
+    stopIdleFrames();
     if (_sessionRunning) {
-        xrEndSession(_session);
-        _sessionRunning = false;
+        endRunningSession(true);
     }
     // Destroying the session destroys its spaces, swapchains, action spaces and hand trackers.
     xrDestroySession(_session);
@@ -274,8 +357,43 @@ void OpenXrRuntime::destroySession() {
     _referenceSpace = XR_NULL_HANDLE;
     _viewSpace = XR_NULL_HANDLE;
     _sessionState = XR_SESSION_STATE_UNKNOWN;
+    _sessionRunning = false;
     _displayTime = 0;
     qCDebug(openxr) << "OpenXR session destroyed";
+}
+
+// A running session ends the way the spec's lifecycle has it before it is destroyed: the app asks to exit, keeps its
+// frame loop going (empty frames) until the runtime moves the session to STOPPING, and then ends it (updateSessionState).
+// Destroying a session that was still running left Meta's runtime refusing the next one with
+// XR_ERROR_GRAPHICS_DEVICE_INVALID, so a player who left VR couldn't come back without restarting (Caity's Quest 3 over
+// Link, 2026-10-28). Called on the present thread with no frame begun (uncustomizeContext ends one first).
+void OpenXrRuntime::endRunningSession(bool withFrames) {
+    stopIdleFrames();
+    // at quit (withFrames false) no frames: the GL context the session was made with may be gone, and the runtime moves
+    // to STOPPING on the exit request anyway, or is ended regardless after the shorter wait
+    const auto EXIT_TIMEOUT = std::chrono::milliseconds(withFrames ? 2000 : 1000);
+    const auto deadline = std::chrono::steady_clock::now() + EXIT_TIMEOUT;
+    if (check(xrRequestExitSession(_session), "xrRequestExitSession")) {
+        while (_sessionRunning && std::chrono::steady_clock::now() < deadline) {
+            XrSessionState state = _sessionState;
+            if (withFrames && (state == XR_SESSION_STATE_SYNCHRONIZED || state == XR_SESSION_STATE_VISIBLE ||
+                               state == XR_SESSION_STATE_FOCUSED)) {
+                if (!submitEmptyFrame()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            pollEvents();   // STOPPING calls xrEndSession and clears _sessionRunning
+        }
+    }
+    if (_sessionRunning) {
+        qCWarning(openxr) << "The session didn't reach STOPPING after the exit request; ending it anyway";
+        check(xrEndSession(_session), "xrEndSession");
+        _sessionRunning = false;
+    } else {
+        qCDebug(openxr) << "The session ended cleanly";
+    }
 }
 
 bool OpenXrRuntime::shouldRender() const {
@@ -284,27 +402,34 @@ bool OpenXrRuntime::shouldRender() const {
            (state == XR_SESSION_STATE_SYNCHRONIZED || state == XR_SESSION_STATE_VISIBLE || state == XR_SESSION_STATE_FOCUSED);
 }
 
+bool OpenXrRuntime::isHeadsetOff() const {
+    XrSessionState state = _sessionState;
+    return !_userPresent || state == XR_SESSION_STATE_IDLE || state == XR_SESSION_STATE_STOPPING;
+}
+
 void OpenXrRuntime::updateSessionState(XrSessionState state) {
     qCDebug(openxr) << "Session state" << (int)_sessionState.load() << "->" << (int)state;
     _sessionState = state;
 
     switch (state) {
-        case XR_SESSION_STATE_READY: {
-            XrSessionBeginInfo beginInfo { XR_TYPE_SESSION_BEGIN_INFO };
-            beginInfo.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
-            _sessionRunning = check(xrBeginSession(_session, &beginInfo), "xrBeginSession");
+        case XR_SESSION_STATE_READY:
+            // begun at once, whether or not the OpenXR display is the active one (off, it is fed empty frames)
+            beginSession();
             break;
-        }
-        case XR_SESSION_STATE_STOPPING:
+        case XR_SESSION_STATE_STOPPING: {
+            // between frames: whoever is feeding the session (the idle thread, or this one) is not inside one
+            std::lock_guard<std::mutex> lock(_frameMutex);
             check(xrEndSession(_session), "xrEndSession");
             _sessionRunning = false;
             break;
+        }
         default:
             break;
     }
 }
 
 bool OpenXrRuntime::pollEvents() {
+    std::lock_guard<std::mutex> lock(_eventMutex);
     if (_instance == XR_NULL_HANDLE) {
         return false;
     }

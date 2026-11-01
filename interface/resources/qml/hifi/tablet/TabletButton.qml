@@ -25,6 +25,8 @@ Item {
     property bool isEntered: false
     property double sortOrder: 100
     property int stableOrder: 0
+    property int badge: 0  // a count waiting (the Chat button's unread messages), as hifi/toolbars/ToolbarButton.qml
+    property bool muted: false   // the Audio button's microphone muted (the bar draws it red; the tablet, its own icon)
     property var tabletRoot;  // tablet only
     property var flickable: null  // tablet only
     property var gridView: null  // tablet only
@@ -121,6 +123,26 @@ Item {
         anchors.horizontalCenter: parent.horizontalCenter
         fillMode: Image.Stretch
         source: tabletButton.urlHelper(tabletButton.icon)
+    }
+
+    // the count waiting, over the icon's top right corner
+    Rectangle {
+        visible: tabletButton.badge > 0
+        z: 2
+        anchors.verticalCenter: icon.top
+        anchors.horizontalCenter: icon.right
+        height: 30
+        width: Math.max(height, badgeText.implicitWidth + 14)
+        radius: height / 2
+        color: "#ff3b30" // Apple's system red
+        Text {
+            id: badgeText
+            anchors.centerIn: parent
+            text: tabletButton.badge > 99 ? "99+" : tabletButton.badge
+            color: "#ffffff"
+            font.pixelSize: 18
+            font.bold: true
+        }
     }
 
     Text {

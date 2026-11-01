@@ -1,3 +1,15 @@
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: the "Frame trace" box (root.frameTraceLines, the frame trace's live columns) only; the values
+// behind the other lines are Stats.cpp's (see its note). The rest of this file is not frozen.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 import Hifi 1.0 as Hifi
 import QtQuick 2.3
 import '.'
@@ -33,6 +45,22 @@ Item {
 
         expanded: true
 
+        // The overlay is centred, so a box that narrowed as its numbers changed width would shift everything sideways
+        // (Caity 10-28: it "judders as it updates"). Each box keeps its widest width; showing fewer lines lets them
+        // narrow again, once the columns have laid out.
+        onExpandedChanged: narrowAgain.restart()
+        Timer {
+            id: narrowAgain
+            interval: 100
+            onTriggered: {
+                generalCol.widest = generalCol.width;
+                pingCol.widest = pingCol.width;
+                geoCol.widest = geoCol.width;
+                octreeCol.widest = octreeCol.width;
+                traceCol.widest = traceCol.width;
+            }
+        }
+
         anchors.horizontalCenter: parent.horizontalCenter
         readonly property string bgColor: "#AA111111"
 
@@ -40,7 +68,7 @@ Item {
             id: row
             spacing: 8
             Rectangle {
-                width: generalCol.width + 8;
+                width: generalCol.widest + 8;
                 height: generalCol.height + 8;
                 color: root.bgColor;
 
@@ -52,6 +80,8 @@ Item {
 
                 Column {
                     id: generalCol
+                    property real widest: 0   // see narrowAgain
+                    onWidthChanged: widest = Math.max(widest, width)
                     spacing: 4; x: 4; y: 4;
                     StatText {
                         text: "Servers: " + root.serverCount
@@ -69,6 +99,10 @@ Item {
                     }
                     StatText {                        
                         text: "Bypass Priority Sorting: " + root.bypassPrioritySorting;
+                    }
+                    StatText {
+                        visible: root.expanded
+                        text: "Camera vs vehicle: step in the car max " + root.cameraRideStepMaxMm.toFixed(1) + " mm (last second); world step min/max " + root.cameraStepMinMm.toFixed(1) + "/" + root.cameraStepMaxMm.toFixed(1) + " mm"
                     }
                     StatText {
                         text: "Game Loop Rate (CPU): " + root.gameLoopRate
@@ -164,7 +198,7 @@ Item {
             }
 
             Rectangle {
-                width: pingCol.width + 8
+                width: pingCol.widest + 8
                 height: pingCol.height + 8
                 color: root.bgColor;
                 visible: root.audioPing != -2
@@ -175,6 +209,8 @@ Item {
                 }
                 Column {
                     id: pingCol
+                    property real widest: 0   // see narrowAgain
+                    onWidthChanged: widest = Math.max(widest, width)
                     spacing: 4; x: 4; y: 4;
                     StatText {
                         text: "Audio ping/loss: " + root.audioPing + "/" + root.audioPacketLoss + "%"
@@ -196,7 +232,7 @@ Item {
             }
 
             Rectangle {
-                width: geoCol.width + 8
+                width: geoCol.widest + 8
                 height: geoCol.height + 8
                 color: root.bgColor;
                 MouseArea {
@@ -206,6 +242,8 @@ Item {
                 }
                 Column {
                     id: geoCol
+                    property real widest: 0   // see narrowAgain
+                    onWidthChanged: widest = Math.max(widest, width)
                     spacing: 4; x: 4; y: 4;
                     StatText {
                         text: "Position: " + root.position.x.toFixed(1) + ", " +
@@ -321,7 +359,7 @@ Item {
                 }
             }
             Rectangle {
-                width: octreeCol.width + 8
+                width: octreeCol.widest + 8
                 height: octreeCol.height + 8
                 color: root.bgColor;
                 MouseArea {
@@ -331,6 +369,8 @@ Item {
                 }
                 Column {
                     id: octreeCol
+                    property real widest: 0   // see narrowAgain
+                    onWidthChanged: widest = Math.max(widest, width)
                     spacing: 4; x: 4; y: 4;
                     StatText {
                         text: "Engine: " + root.engineFrameTime.toFixed(1) + " ms"
@@ -454,6 +494,35 @@ Item {
                     StatText {
                         visible: root.expanded
                         text: "Entity Updates: " + root.numEntityUpdates + " / " + root.numNeededEntityUpdates;
+                    }
+                }
+            }
+
+            // FROZEN (vehicle path): see the note at the top of this file.
+            // The frame trace's columns, live (team/performance/INSTRUMENTS-PLAN.md item 1): shown while the trace is
+            // on or holds records (Test.frameTrace, Developer > Recording Mode); an instrument's values appear here as
+            // soon as its owner writes them, before it has Stats lines of its own. Collapsed: the heading only.
+            Rectangle {
+                width: traceCol.widest + 8
+                height: traceCol.height + 8
+                color: root.bgColor;
+                visible: root.frameTraceLines.length > 0
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: { root.expanded = !root.expanded; }
+                    hoverEnabled: true
+                }
+                Column {
+                    id: traceCol
+                    property real widest: 0   // see narrowAgain
+                    onWidthChanged: widest = Math.max(widest, width)
+                    spacing: 4; x: 4; y: 4;
+                    Repeater {
+                        model: root.frameTraceLines
+                        StatText {
+                            visible: index === 0 || root.expanded
+                            text: modelData
+                        }
                     }
                 }
             }

@@ -7,6 +7,18 @@
 //  Modified by Caitlyn Meeks on 12/25/19
 //  Copyright 2019 Tivoli Cloud VR
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: updateChangedEntities, the render-update budget's counters and getters (getPrevNumEntityUpdates through
+// getLastMovingAssemblyInViewTime) and the members the budget keeps (_avgRenderableUpdateCost through
+// _priorityRenderablesToUpdate).
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
 
 #ifndef hifi_EntityTreeRenderer_h
 #define hifi_EntityTreeRenderer_h
@@ -125,6 +137,10 @@ public:
     void shutdown();
     void preUpdate();
     void update(bool simulate);
+    // after the avatars' update: the entities they just moved (a held tablet's screen, held things, avatar entities)
+    // updated in the scene now, so they're drawn this frame with their parents; only Model entities redraw as they're
+    // moved, the rest waited for the next frame's update and trailed (Caity's Quest test, 10-28)
+    void updateAvatarChildren();
 
     EntityTreePointer getTree() { return std::static_pointer_cast<EntityTree>(_tree); }
 
@@ -201,8 +217,32 @@ public:
     static bool addMaterialToAvatar(const QUuid& avatarID, graphics::MaterialLayer material, const std::string& parentMaterialName);
     static bool removeMaterialFromAvatar(const QUuid& avatarID, graphics::MaterialPointer material, const std::string& parentMaterialName);
 
+    // FROZEN (vehicle path): see the note at the top of this file.
     int getPrevNumEntityUpdates() const { return _prevNumEntityUpdates; }
     int getPrevTotalNeededEntityUpdates() const { return _prevTotalNeededEntityUpdates; }
+
+    // The render-update budget's counters (team/performance/INSTRUMENTS-PLAN.md, item 2), a few integers kept every
+    // frame: the last pass's values, and the maxima over the last whole second for a Stats line that holds still.
+    // "Needed" and "done" above are the budgeted lane (AUTOMATIC entities, with the last frame's leftovers); the
+    // carried lane (a moving entity's parts, refreshed with it outside the budget), the avatars' lane and the
+    // PRIORITIZED lane are counted apart. Main thread.
+    uint64_t getRenderUpdateFrame() const { return _renderUpdateFrame; }
+    int getPrevNumCarriedEntityUpdates() const { return _prevNumCarriedEntityUpdates; }
+    int getPrevNumAvatarChildUpdates() const { return _prevNumAvatarChildUpdates; }
+    int getPrevNumPriorityEntityUpdates() const { return _prevNumPriorityEntityUpdates; }
+    int getPrevNumDeferredEntityUpdates() const { return _prevNumDeferredEntityUpdates; }
+    int getPrevOldestDeferredFrames() const { return _prevOldestDeferredFrames; }
+    int getMaxDeferredEntityUpdatesLastSecond() const { return _maxDeferredLastSecond; }
+    int getMaxDeferredFramesLastSecond() const { return _maxDeferredFramesLastSecond; }
+    // An entity's staleness for the inspector: how many frames it has waited for its render update, 0 when it is
+    // drawn as its entity is, -1 when it has no renderable (not drawn); and how many frames late its last refresh
+    // came. Main thread, no lock (the map is the main thread's own); cheap enough to poll.
+    int getRenderUpdateFramesBehind(const EntityItemID& id) const;
+    int getRenderUpdateLastLateFrames(const EntityItemID& id) const;
+    // when a moving assembly (a vehicle, a train car, a frame, a platform: a moving entity with parts, the carried
+    // lane) was last refreshed inside the view, usecTimestampNow(); 0 when never. The refresh regime reads it: a ride
+    // in view keeps the full rate while the window is unfocused (Caity, 2026-10-31). Main thread.
+    uint64_t getLastMovingAssemblyInViewTime() const { return _lastMovingAssemblyInView; }
 
 signals:
     void enterEntity(const EntityItemID& entityItemID);
@@ -238,6 +278,7 @@ protected:
 
 private:
     void addPendingEntities(const render::ScenePointer& scene, render::Transaction& transaction);
+    // FROZEN (vehicle path): see the note at the top of this file.
     void updateChangedEntities(const render::ScenePointer& scene, render::Transaction& transaction);
     EntityRendererPointer renderableForEntity(const EntityItemPointer& entity) const { return renderableForEntityId(entity->getID()); }
     render::ItemID renderableIdForEntity(const EntityItemPointer& entity) const { return renderableIdForEntityId(entity->getID()); }
@@ -334,12 +375,26 @@ private:
     const uint64_t ZONE_CHECK_INTERVAL = USECS_PER_MSEC * 1000; // ~100hz
     const float ZONE_CHECK_DISTANCE = 0.001f;
 
+    // FROZEN (vehicle path): see the note at the top of this file.
     float _avgRenderableUpdateCost { 0.0f };
 
     ReadWriteLockable _changedEntitiesGuard;
     std::unordered_set<EntityItemID> _changedEntities;
     int _prevNumEntityUpdates { 0 };
     int _prevTotalNeededEntityUpdates { 0 };
+    uint64_t _renderUpdateFrame { 0 };   // one per updateChangedEntities pass (one a frame)
+    int _prevNumCarriedEntityUpdates { 0 };
+    int _prevNumAvatarChildUpdates { 0 };
+    int _prevNumPriorityEntityUpdates { 0 };
+    int _prevNumDeferredEntityUpdates { 0 };
+    int _prevOldestDeferredFrames { 0 };
+    int _maxDeferredThisSecond { 0 };
+    int _maxDeferredFramesThisSecond { 0 };
+    int _maxDeferredLastSecond { 0 };
+    int _maxDeferredFramesLastSecond { 0 };
+    uint64_t _countersSecondStart { 0 };
+    uint64_t _lastMovingAssemblyInView { 0 };
+    uint64_t _lastMovingAssemblyTest { 0 };
 
     std::unordered_set<EntityRendererPointer> _renderablesToUpdate;
     std::unordered_set<EntityRendererPointer> _priorityRenderablesToUpdate;

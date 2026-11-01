@@ -1,90 +1,39 @@
 import QtQuick 2.5
 import QtWebEngine 1.5
-import QtQuick.Layouts 1.3
-import controlsUit 1.0 as HifiControls
-import stylesUit 1.0 as HifiStyles
 
-Rectangle {
+import "../dialogs/alert"
+
+// A web page asks for the microphone, the camera, the location or the screen: the alert every popup uses, naming the
+// site that asks, over the page.
+AlertPanel {
     id: root
-    width: 750
-    height: 210
-    color: hifi.colors.white
-
     anchors.centerIn: parent
-    readonly property var permissionLanguage: ({
-        [WebEngineView.MediaAudioCapture]: "access an audio input device",
-        [WebEngineView.MediaVideoCapture]: "access a video device, like your webcam",
-        [WebEngineView.MediaAudioVideoCapture]: "access an audio input device and video device",
-        [WebEngineView.Geolocation]: "access your location",
-        [WebEngineView.DesktopVideoCapture]: "capture video from your desktop",
-        [WebEngineView.DesktopAudioVideoCapture]: "capture audio and video from your desktop",
-        "none": "Undefined permission being requested"
-    })
+    height: implicitHeight
+
     property string currentRequestedPermission
+    property string requestingOrigin
     signal permissionButtonPressed(int buttonNumber)
 
-    ColumnLayout {
-        anchors.fill: parent
-        Rectangle {
-            Layout.preferredHeight: 75
-            Layout.preferredWidth: parent.width
+    readonly property var permissionLanguage: ({
+        [WebEngineView.MediaAudioCapture]: "wants to use your microphone",
+        [WebEngineView.MediaVideoCapture]: "wants to use your camera",
+        [WebEngineView.MediaAudioVideoCapture]: "wants to use your microphone and camera",
+        [WebEngineView.Geolocation]: "wants to know your location",
+        [WebEngineView.DesktopVideoCapture]: "wants to share your screen",
+        [WebEngineView.DesktopAudioVideoCapture]: "wants to share your screen and its sound"
+    })
 
-            HifiStyles.RobotoBold {
-                text: "REQUEST FOR DEVICE ACCESS"
-
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.bottom: parent.bottom
-                wrapMode: Text.WordWrap
-                color: hifi.colors.black
-                size: 30
-            }
-        }
-
-        Rectangle {
-            Layout.preferredHeight: 35
-            Layout.preferredWidth: parent.width
-
-            HifiStyles.RobotoLight {
-                text: "This website is attempting to " + root.permissionLanguage[root.currentRequestedPermission] + "."
-
-                anchors.centerIn: parent
-                wrapMode: Text.Wrap
-                size: 20
-                color: hifi.colors.black
-            }
-        }
-        
-        Rectangle {
-            Layout.preferredHeight: 100
-            Layout.preferredWidth: parent.width
-            Layout.topMargin: 35
-            property int space: 8
-
-            HifiControls.Button {
-                text: "Don't Allow"
-
-                anchors.right: parent.horizontalCenter
-                anchors.rightMargin: parent.space
-                width: 125
-                color: hifi.buttons.red
-                height: 38
-                onClicked: {
-                    root.permissionButtonPressed(0);
-                }
-            }
-            HifiControls.Button {
-                text: "Yes allow access"
-
-                anchors.left: parent.horizontalCenter
-                anchors.leftMargin: parent.space
-                color: hifi.buttons.blue
-                width: 155
-                height: 38
-                onClicked: {
-                    root.permissionButtonPressed(1);
-                }
-            }
-        }
+    // the site's name, as "music.example.com", from its address
+    readonly property string site: {
+        var match = /^[a-z][a-z0-9+.-]*:\/\/([^\/:?#]+)/i.exec(requestingOrigin);
+        return match ? match[1] : "This page";
     }
 
+    title: site + " " + (permissionLanguage[currentRequestedPermission] || "wants to use a device on this computer")
+    text: "Allow it only if you trust this site."
+    buttons: [
+        { text: "Don't Allow", value: 0, role: "plain", cancel: true },
+        { text: "Allow", value: 1, role: "default" }
+    ]
+    onClicked: root.permissionButtonPressed(value)
 }

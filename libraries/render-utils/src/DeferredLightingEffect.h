@@ -73,6 +73,12 @@ public:
     // sampling). Bound again at every pipeline change, since a program drawn in between may keep its own maps and
     // buffers at the same slots (the terrain's arrays at the shadow texture units, its chunk at the parameters' slot)
     void setupFrameLightingBatch(gpu::Batch& batch, const RenderArgs* args) const;
+    // A procedural's draw sets a pipeline of its own (Procedural::prepare), which the forward pipelines' batch setter
+    // never sees: whether the view lights in place (the forward path, not its shadow pass), so that an opaque
+    // procedural draws its forward variant, and the lights that variant reads, the key light and the ambient with the
+    // frame's above
+    static bool isForwardLit(const RenderArgs* args);
+    void setupForwardLightingBatch(const RenderArgs* args, gpu::Batch& batch) const;
 
 private:
     static gpu::TexturePointer _frameProbeVolume;

@@ -82,8 +82,6 @@ private:
     void setProceduralUserData(const QString& userData);
 
 
-    void storeOldToneMappingMode();
-    bool toneMappingModeChanged();
 
     graphics::LightPointer editSunLight() {
         _needSunUpdate = true;
@@ -129,7 +127,6 @@ private:
     ZoneCullingComponentMode _zoneCullingMode{ ZONE_CULLING_INHERIT  };
 
     ToneMappingComponentMode _toneMappingMode{ TONE_MAPPING_INHERIT  };
-    ToneMappingComponentMode _prevToneMappingMode{ TONE_MAPPING_INHERIT };
     float _toneMappingExposure;
 
     indexed_container::Index _sunIndex{ LightStage::INVALID_INDEX };

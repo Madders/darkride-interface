@@ -80,11 +80,11 @@ QStringList HFMModel::getJointNames() const {
 }
 
 bool HFMModel::hasBlendedMeshes() const {
-    if (!meshes.empty()) {
-        foreach (const HFMMesh& mesh, meshes) {
-            if (!mesh.blendshapes.isEmpty()) {
-                return true;
-            }
+    // a range-for, not Qt's foreach: foreach copies its container, here every mesh with its vertices and shape keys,
+    // and Model::updateBlendshapes asks this every frame for every model in view
+    for (const HFMMesh& mesh : meshes) {
+        if (!mesh.blendshapes.isEmpty()) {
+            return true;
         }
     }
     return false;

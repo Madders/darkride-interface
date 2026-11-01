@@ -35,6 +35,10 @@ private slots:
     void testSmartPointers();
     void testDecodeArguments();
     void testMalformedInput();
+    void testDirectEncodingMatchesTheTree();
+    void benchmarkLargeMap();
+    void benchmarkLargeMapThroughTheTree();
+    void testGenericTypes();
 };
 
 #endif // hifi_ValueCodecTests_h

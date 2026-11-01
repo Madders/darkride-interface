@@ -25,6 +25,7 @@
 class AABox;
 
 namespace render {
+    class ShapePlumber;
     class RenderDetails {
     public:
         enum Type {
@@ -42,6 +43,9 @@ namespace render {
 
         int _materialSwitches = 0;
         int _trianglesRendered = 0;
+        // GPU instancing (INSTANCING.md): the draws that took an instance list, and the instances they drew
+        int _instancedDrawcalls = 0;
+        int _instancesDrawn = 0;
         // shadow maps given to spot and point lights this frame (one for a spot light, six for a point light), how
         // many of those maps were drawn again rather than kept, and how many of those had their static casters'
         // map drawn again too (the rest copied it and drew only the dynamic casters)
@@ -118,6 +122,9 @@ namespace render {
         std::shared_ptr<gpu::Context> _context;
         std::shared_ptr<gpu::Framebuffer> _blitFramebuffer;
         std::shared_ptr<render::ShapePipeline> _shapePipeline;
+        // while a shape item draws: the plumber its pass picks pipelines from, for an item whose own pipeline (a custom
+        // shader) can't draw and falls back to a plain one (MeshPartPayload::bindPlainPipeline)
+        const render::ShapePlumber* _shapePlumber { nullptr };
         std::stack<ViewFrustum> _viewFrustums;
         glm::ivec4 _viewport { 0.0f, 0.0f, 1.0f, 1.0f };
         glm::vec3 _boomOffset { 0.0f, 0.0f, 1.0f };
@@ -132,6 +139,10 @@ namespace render {
         // the impostor card's debug view (LODManager.impostorDebug, impostor.slf): 0 draws the card, other values paint
         // what the shader reads
         int _impostorDebug{ 0 };
+        // the impostor card's march (LODManager.impostorMarch, impostor.slf): 0 as first built, 1 with the exact
+        // savings, 2 also stepping by the screen's pixels, at least this many pixel footprints a step
+        int _impostorMarch{ 2 };
+        float _impostorMarchFootprints{ 0.25f };
         // the impostor cross-fade forced to a share (LODManager.impostorCrossfade, a test hook): below 0 the switch
         // times its own; 0 draws the model alone, 1 the card alone, between them both, dissolved
         float _impostorCrossfade{ -1.0f };
@@ -140,12 +151,22 @@ namespace render {
         float _meshLodErrorPixels{ 0.0f };
         // a level every mesh draws (LODManager.meshLodForceLevel, a test hook): below 0 the error decides; 0 is full
         int _meshLodForceLevel{ -1 };
+        // the camera a shadow map's casters choose their level from while a light's view is pushed (the shadow
+        // setups set it): its position and its pixels per radian at the view's centre; 0 for none yet
+        glm::vec3 _shadowLodEye;
+        float _shadowLodPixelsPerRadian{ 0.0f };
 
         RenderMode _renderMode { DEFAULT_RENDER_MODE };
         DisplayMode _displayMode { MONO };
         RenderMethod _renderMethod { DEFERRED };
         DebugFlags _debugFlags { RENDER_DEBUG_NONE };
         gpu::Batch* _batch = nullptr;
+
+        // the finished picture is shown flipped left to right, as a mirror shows you: the selfie view (Caity's design,
+        // 2026-10-28: like FaceTime's own picture) and the full-screen mirror camera. ToneMapAndResample flips the
+        // picture; the 2D UI, drawn after it, stays readable; the pick ray flips with it (ViewState::computePickRay).
+        // Never a stereo view
+        bool _mirrored { false };
 
         uint32_t _globalShapeKey { 0 };
         uint32_t _itemShapeKey { 0 };
@@ -154,6 +175,11 @@ namespace render {
         bool _enableSkinning { true };
 
         bool _enableFade { false };
+
+        // GPU instancing (INSTANCING.md 3): the draw jobs group the items that can share a draw (Developer > Render >
+        // GPU Instancing); each grouping pass is numbered, so an item knows the state it settled for it is still current
+        bool _enableInstancing { true };
+        uint32_t _instancingPass { 0 };
 
         RenderDetails _details;
         render::ScenePointer _scene;

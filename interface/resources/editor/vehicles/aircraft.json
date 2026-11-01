@@ -1,0 +1,301 @@
+{
+ "DataVersion": 0,
+ "Entities": [
+  {
+   "id": "{0e804b00-2576-436f-9935-5f21fb5eed6e}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Aircraft",
+   "position": {
+    "x": 0,
+    "y": 0.25,
+    "z": 0
+   },
+   "dimensions": {
+    "x": 2.4,
+    "y": 0.4,
+    "z": 5.0
+   },
+   "color": {
+    "red": 200,
+    "green": 200,
+    "blue": 210
+   },
+   "dynamic": true,
+   "collisionless": false,
+   "gravity": {
+    "x": 0,
+    "y": -9.8,
+    "z": 0
+   },
+   "damping": 0.0,
+   "angularDamping": 0.05,
+   "friction": 0.8,
+   "restitution": 0.0,
+   "frame": true,
+   "grab": {
+    "grabbable": false
+   },
+   "vehicle": {
+    "type": "aircraft",
+    "mass": 1200,
+    "centerOfMass": {
+     "x": 0,
+     "y": -0.1,
+     "z": 0
+    },
+    "seats": "[{\"name\": \"stick\", \"position\": [0, 0.2, -1.5], \"yaw\": 0, \"driver\": true}]",
+    "maxThrust": 20000,
+    "thrustPoint": {
+     "x": 0,
+     "y": 0.2,
+     "z": 0.5
+    },
+    "wingArea": 24,
+    "wingSpan": 11,
+    "wingPoint": {
+     "x": 0,
+     "y": 0.2,
+     "z": 0.3
+    },
+    "elevatorArea": 4,
+    "rudderArea": 2,
+    "finPoint": {
+     "x": 0,
+     "y": 0.5,
+     "z": 4.5
+    },
+    "maxFinAngle": 30,
+    "dragArea": {
+     "x": 3,
+     "y": 8,
+     "z": 0.8
+    },
+    "angularDragArea": {
+     "x": 800,
+     "y": 800,
+     "z": 600
+    },
+    "tilt": 1
+   }
+  },
+  {
+   "id": "{b15eac7f-d9fd-4256-97f2-dfaabfa96cf0}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Aircraft wing",
+   "parentID": "{0e804b00-2576-436f-9935-5f21fb5eed6e}",
+   "position": {
+    "x": 0,
+    "y": 0.25,
+    "z": 0.3
+   },
+   "dimensions": {
+    "x": 11,
+    "y": 0.1,
+    "z": 2.2
+   },
+   "color": {
+    "red": 180,
+    "green": 40,
+    "blue": 40
+   },
+   "dynamic": false,
+   "collisionless": true,
+   "grab": {
+    "grabbable": false
+   }
+  },
+  {
+   "id": "{b3f43dea-3ce1-4b64-9122-e304b88181a8}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Aircraft fin",
+   "parentID": "{0e804b00-2576-436f-9935-5f21fb5eed6e}",
+   "position": {
+    "x": 0,
+    "y": 0.9,
+    "z": 2.3
+   },
+   "dimensions": {
+    "x": 0.1,
+    "y": 1.4,
+    "z": 1.0
+   },
+   "color": {
+    "red": 180,
+    "green": 40,
+    "blue": 40
+   },
+   "dynamic": false,
+   "collisionless": true,
+   "grab": {
+    "grabbable": false
+   }
+  },
+  {
+   "id": "{9e9bfcb0-f67c-4d43-8c7d-a8b929920fd1}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Aircraft tailplane",
+   "parentID": "{0e804b00-2576-436f-9935-5f21fb5eed6e}",
+   "position": {
+    "x": 0,
+    "y": 0.5,
+    "z": 2.3
+   },
+   "dimensions": {
+    "x": 3.0,
+    "y": 0.1,
+    "z": 0.8
+   },
+   "color": {
+    "red": 180,
+    "green": 40,
+    "blue": 40
+   },
+   "dynamic": false,
+   "collisionless": true,
+   "grab": {
+    "grabbable": false
+   }
+  },
+  {
+   "id": "{44e341df-aa19-4071-85b4-bf0a643a32bc}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Aircraft rail",
+   "parentID": "{0e804b00-2576-436f-9935-5f21fb5eed6e}",
+   "position": {
+    "x": 1.15,
+    "y": 0.6,
+    "z": 0
+   },
+   "dimensions": {
+    "x": 0.1,
+    "y": 0.8,
+    "z": 5.0
+   },
+   "color": {
+    "red": 80,
+    "green": 80,
+    "blue": 90
+   },
+   "dynamic": false,
+   "collisionless": false,
+   "grab": {
+    "grabbable": false
+   }
+  },
+  {
+   "id": "{1f8d39df-e60b-40dc-b91b-4bffd4c15ae4}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Aircraft rail",
+   "parentID": "{0e804b00-2576-436f-9935-5f21fb5eed6e}",
+   "position": {
+    "x": -1.15,
+    "y": 0.6,
+    "z": 0
+   },
+   "dimensions": {
+    "x": 0.1,
+    "y": 0.8,
+    "z": 5.0
+   },
+   "color": {
+    "red": 80,
+    "green": 80,
+    "blue": 90
+   },
+   "dynamic": false,
+   "collisionless": false,
+   "grab": {
+    "grabbable": false
+   }
+  },
+  {
+   "id": "{6ed74c32-3e88-427f-924d-200e07162d0f}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Aircraft rail",
+   "parentID": "{0e804b00-2576-436f-9935-5f21fb5eed6e}",
+   "position": {
+    "x": 0,
+    "y": 0.6,
+    "z": -2.45
+   },
+   "dimensions": {
+    "x": 2.4,
+    "y": 0.8,
+    "z": 0.1
+   },
+   "color": {
+    "red": 80,
+    "green": 80,
+    "blue": 90
+   },
+   "dynamic": false,
+   "collisionless": false,
+   "grab": {
+    "grabbable": false
+   }
+  },
+  {
+   "id": "{f42f2b51-317b-46e2-bf66-a8cd439999b6}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Aircraft rail",
+   "parentID": "{0e804b00-2576-436f-9935-5f21fb5eed6e}",
+   "position": {
+    "x": 0,
+    "y": 0.6,
+    "z": 2.45
+   },
+   "dimensions": {
+    "x": 2.4,
+    "y": 0.8,
+    "z": 0.1
+   },
+   "color": {
+    "red": 80,
+    "green": 80,
+    "blue": 90
+   },
+   "dynamic": false,
+   "collisionless": false,
+   "grab": {
+    "grabbable": false
+   }
+  },
+  {
+   "id": "{3ce0aa3e-1636-4679-93df-04c164f35b00}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Aircraft helm",
+   "parentID": "{0e804b00-2576-436f-9935-5f21fb5eed6e}",
+   "position": {
+    "x": 0,
+    "y": 0.7,
+    "z": -2.3
+   },
+   "dimensions": {
+    "x": 0.3,
+    "y": 1.0,
+    "z": 0.3
+   },
+   "color": {
+    "red": 60,
+    "green": 60,
+    "blue": 70
+   },
+   "dynamic": false,
+   "collisionless": false,
+   "grab": {
+    "grabbable": false
+   }
+  }
+ ],
+ "Id": "{bdc3d0b1-2f5b-4119-a43e-eca392f9a35b}",
+ "Version": 141
+}

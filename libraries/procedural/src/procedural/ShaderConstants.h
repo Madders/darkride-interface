@@ -14,7 +14,11 @@
 #ifndef PROCEDURAL_SHADER_CONSTANTS_H
 #define PROCEDURAL_SHADER_CONSTANTS_H
 
-#define PROCEDURAL_BUFFER_INPUTS 7
+// 13, not 7 as it was: the forward path binds the haze's parameters at 7 for every item it draws (GRAPHICS_BUFFER_HAZE_PARAMS),
+// and a procedural lit in place reads both (simple_procedural.slf's forward variant). 13 is the subsurface scattering's
+// parameters, which only the deferred lighting passes read, binding them first, and the terrain's chunk, bound before
+// each chunk is drawn; a batch takes slots 0 to 13 only (gpu::Batch's MAX_NUM_UNIFORM_BUFFERS)
+#define PROCEDURAL_BUFFER_INPUTS 13
 
 #define PROCEDURAL_UNIFORM_CUSTOM 220
 

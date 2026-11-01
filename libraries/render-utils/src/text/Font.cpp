@@ -18,7 +18,7 @@
 
 static std::mutex fontMutex;
 
-std::map<std::tuple<bool, bool, bool>, gpu::PipelinePointer> Font::_pipelines;
+std::map<std::tuple<bool, bool, bool, bool>, gpu::PipelinePointer> Font::_pipelines;
 gpu::Stream::FormatPointer Font::_format;
 
 struct TextureVertex {
@@ -272,18 +272,23 @@ void Font::setupGPU() {
             std::make_tuple(false, true, true, sdf_text3D_translucent_unlit/*sdf_text3D_unlit_forward*/), std::make_tuple(true, true, true, sdf_text3D_translucent_unlit/*sdf_text3D_translucent_unlit_forward*/)
         };
         for (auto& key : keys) {
-            auto state = std::make_shared<gpu::State>();
-            state->setCullMode(gpu::State::CULL_BACK);
-            state->setDepthTest(true, true, gpu::GREATER_EQUAL);
-            state->setBlendFunction(std::get<0>(key),
-                gpu::State::SRC_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::INV_SRC_ALPHA,
-                gpu::State::FACTOR_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::ONE);
-            if (std::get<0>(key)) {
-                PrepareStencil::testMask(*state);
-            } else {
-                PrepareStencil::testMaskDrawShape(*state);
+            // two of each program: the glyph quads show their front (back faces culled), and text drawn mirrored (a
+            // negated X scale turns the quads inside out: EntityRenderer::applyBillboard) culls front faces instead
+            auto program = gpu::Shader::createProgram(std::get<3>(key));
+            for (bool mirrored : { false, true }) {
+                auto state = std::make_shared<gpu::State>();
+                state->setCullMode(mirrored ? gpu::State::CULL_FRONT : gpu::State::CULL_BACK);
+                state->setDepthTest(true, true, gpu::GREATER_EQUAL);
+                state->setBlendFunction(std::get<0>(key),
+                    gpu::State::SRC_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::INV_SRC_ALPHA,
+                    gpu::State::FACTOR_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::ONE);
+                if (std::get<0>(key)) {
+                    PrepareStencil::testMask(*state);
+                } else {
+                    PrepareStencil::testMaskDrawShape(*state);
+                }
+                _pipelines[std::make_tuple(std::get<0>(key), std::get<1>(key), std::get<2>(key), mirrored)] = gpu::Pipeline::create(program, state);
             }
-            _pipelines[std::make_tuple(std::get<0>(key), std::get<1>(key), std::get<2>(key))] = gpu::Pipeline::create(gpu::Shader::createProgram(std::get<3>(key)), state);
         }
 
         // Sanity checks
@@ -390,7 +395,7 @@ void Font::buildVertices(Font::DrawInfo& drawInfo, const QString& str, const glm
 
 void Font::drawString(gpu::Batch& batch, Font::DrawInfo& drawInfo, const QString& str, const glm::vec4& color,
                       const glm::vec3& effectColor, float effectThickness, TextEffect effect,
-                      const glm::vec2& origin, const glm::vec2& bounds, float scale, bool unlit, bool forward) {
+                      const glm::vec2& origin, const glm::vec2& bounds, float scale, bool unlit, bool forward, bool mirrored) {
     if (!_loaded || str == "") {
         return;
     }
@@ -427,7 +432,7 @@ void Font::drawString(gpu::Batch& batch, Font::DrawInfo& drawInfo, const QString
         drawInfo.paramsBuffer->setSubData(0, sizeof(DrawParams), (const gpu::Byte*)&gpuDrawParams);
     }
 
-    batch.setPipeline(_pipelines[std::make_tuple(color.a < 1.0f, unlit, forward)]);
+    batch.setPipeline(_pipelines[std::make_tuple(color.a < 1.0f, unlit, forward, mirrored)]);
     batch.setInputFormat(_format);
     batch.setInputBuffer(0, drawInfo.verticesBuffer, 0, _format->getChannels().at(0)._stride);
     batch.setResourceTexture(render_utils::slot::texture::TextFont, _texture);

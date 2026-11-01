@@ -19,14 +19,16 @@
 
 const float AmbientLightPropertyGroup::DEFAULT_AMBIENT_LIGHT_INTENSITY = 0.5f;
 
-void AmbientLightPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties,
-    QScriptEngine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
+template <typename Value, typename Engine>
+void AmbientLightPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties,
+    Engine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
     
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_AMBIENT_LIGHT_INTENSITY, AmbientLight, ambientLight, AmbientIntensity, ambientIntensity);
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_AMBIENT_LIGHT_URL, AmbientLight, ambientLight, AmbientURL, ambientURL);
 }
 
-void AmbientLightPropertyGroup::copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) {
+template <typename Value>
+void AmbientLightPropertyGroup::copyFromScriptValue(const Value& object, bool& _defaultSettings) {
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(ambientLight, ambientIntensity, float, setAmbientIntensity);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(ambientLight, ambientURL, QString, setAmbientURL);
     
@@ -69,14 +71,14 @@ bool AmbientLightPropertyGroup::appendToEditPacket(OctreePacketData* packetData,
 }
 
 bool AmbientLightPropertyGroup::decodeFromEditPacket(EntityPropertyFlags& propertyFlags, const unsigned char*& dataAt,
-    int& processedBytes) {
+    int& processedBytes, int bytesToRead) {
         
     int bytesRead = 0;
     bool overwriteLocalData = true;
     bool somethingChanged = false;
     
-    READ_ENTITY_PROPERTY(PROP_AMBIENT_LIGHT_INTENSITY, float, setAmbientIntensity);
-    READ_ENTITY_PROPERTY(PROP_AMBIENT_LIGHT_URL, QString, setAmbientURL);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_AMBIENT_LIGHT_INTENSITY, float, setAmbientIntensity);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_AMBIENT_LIGHT_URL, QString, setAmbientURL);
     
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_AMBIENT_LIGHT_INTENSITY, AmbientIntensity);
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_AMBIENT_LIGHT_URL, AmbientURL);
@@ -152,3 +154,5 @@ int AmbientLightPropertyGroup::readEntitySubclassDataFromBuffer(const unsigned c
 
     return bytesRead;
 }
+
+INSTANTIATE_PROPERTY_GROUP_CONVERSIONS(AmbientLightPropertyGroup)

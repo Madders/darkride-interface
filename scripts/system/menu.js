@@ -11,10 +11,10 @@
 
 /* jslint bitwise: true */
 
-/* global Script, HMD, Tablet, Entities */
+/* global Script, HMD, Tablet */
 
-var HOME_BUTTON_TEXTURE = "http://hifi-content.s3.amazonaws.com/alan/dev/tablet-with-home-button.fbx/tablet-with-home-button.fbm/button-root.png";
-// var HOME_BUTTON_TEXTURE = Script.resourcesPath() + "meshes/tablet-with-home-button.fbx/tablet-with-home-button.fbm/button-root.png";
+// (MENU no longer puts High Fidelity's home button picture on the tablet: its storage refuses it, 403, so the tablet's
+// close button lost its picture; the tablet keeps its own. Caity 10-29)
 
 (function() {
     var lastHMDStatus = false;
@@ -40,9 +40,6 @@ var HOME_BUTTON_TEXTURE = "http://hifi-content.s3.amazonaws.com/alan/dev/tablet-
             // for toolbar-mode: go back to home screen, this will close the window.
             tablet.gotoHomeScreen();
         } else {
-            if (HMD.tabletID) {
-                Entities.editEntity(HMD.tabletID, { textures: JSON.stringify({ "tex.close": HOME_BUTTON_TEXTURE }) });
-            }
             tablet.gotoMenuScreen();
         }
     }

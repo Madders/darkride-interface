@@ -261,6 +261,12 @@ bool Procedural::isReady() const {
     return true;
 }
 
+bool Procedural::compilationFailed(const ProceduralProgramKey& key) const {
+    auto pipeline = _proceduralPipelines.find(key);
+    return pipeline != _proceduralPipelines.end() && pipeline->second && pipeline->second->getProgram() &&
+           pipeline->second->getProgram()->compilationHasFailed();
+}
+
 void Procedural::prepare(gpu::Batch& batch,
                          const glm::vec3& position,
                          const glm::vec3& size,
@@ -317,7 +323,8 @@ void Procedural::prepare(gpu::Batch& batch,
         }
 
         gpu::Shader::Source& fragmentSource =
-            (key.isTransparent() && _transparentFragmentSource.valid()) ? _transparentFragmentSource : _opaqueFragmentSource;
+            (key.isTransparent() && _transparentFragmentSource.valid()) ? _transparentFragmentSource
+            : ((key.isForward() && _opaqueForwardFragmentSource.valid()) ? _opaqueForwardFragmentSource : _opaqueFragmentSource);
 
         // Build the fragment and vertex shaders
         auto versionDefine = "#define PROCEDURAL_V" + std::to_string(_data.version);
@@ -332,37 +339,48 @@ void Procedural::prepare(gpu::Batch& batch,
             vertexSource.replacements[PROCEDURAL_BLOCK] = _vertexShaderSource.toStdString();
         }
 
-        // Set any userdata specified uniforms (if any)
-        if (!_data.uniforms.empty()) {
-            // First grab all the possible dialect/variant/reflections
-            std::vector<shader::Reflection*> allFragmentReflections;
-            for (auto dialectIt = fragmentSource.dialectSources.begin(); dialectIt != fragmentSource.dialectSources.end();
-                 ++dialectIt) {
-                for (auto variantIt = (*dialectIt).second.variantSources.begin();
-                     variantIt != (*dialectIt).second.variantSources.end(); ++variantIt) {
-                    allFragmentReflections.push_back(&(*variantIt).second.reflection);
-                }
+        // First grab all the possible dialect/variant/reflections
+        std::vector<shader::Reflection*> allFragmentReflections;
+        for (auto dialectIt = fragmentSource.dialectSources.begin(); dialectIt != fragmentSource.dialectSources.end();
+             ++dialectIt) {
+            for (auto variantIt = (*dialectIt).second.variantSources.begin();
+                 variantIt != (*dialectIt).second.variantSources.end(); ++variantIt) {
+                allFragmentReflections.push_back(&(*variantIt).second.reflection);
             }
-            std::vector<shader::Reflection*> allVertexReflections;
-            for (auto dialectIt = vertexSource.dialectSources.begin(); dialectIt != vertexSource.dialectSources.end();
-                 ++dialectIt) {
-                for (auto variantIt = (*dialectIt).second.variantSources.begin();
-                     variantIt != (*dialectIt).second.variantSources.end(); ++variantIt) {
-                    allVertexReflections.push_back(&(*variantIt).second.reflection);
-                }
+        }
+        std::vector<shader::Reflection*> allVertexReflections;
+        for (auto dialectIt = vertexSource.dialectSources.begin(); dialectIt != vertexSource.dialectSources.end();
+             ++dialectIt) {
+            for (auto variantIt = (*dialectIt).second.variantSources.begin();
+                 variantIt != (*dialectIt).second.variantSources.end(); ++variantIt) {
+                allVertexReflections.push_back(&(*variantIt).second.reflection);
             }
-            // Then fill in every reflections the new custom bindings
-            int customSlot = procedural::slot::uniform::Custom;
-            for (const auto& key : _data.uniforms.keys()) {
-                std::string uniformName = key.toLocal8Bit().data();
-                for (auto reflection : allFragmentReflections) {
-                    reflection->uniforms[uniformName] = customSlot;
+        }
+
+        // The channels and the inputs: GL 4.1 (macOS) has no binding qualifiers, and binds a program's textures and
+        // uniform buffers by name from its reflection, which the template's own did not list (its default block uses
+        // neither, so they were optimized out of it): until 2026-10-21 every procedural on macOS read all four
+        // channels from texture unit 0, whatever was bound there, and its inputs from uniform buffer 0
+        for (auto reflections : { &allFragmentReflections, &allVertexReflections }) {
+            for (auto reflection : *reflections) {
+                for (int i = 0; i < (int)MAX_PROCEDURAL_TEXTURE_CHANNELS; ++i) {
+                    reflection->textures["iChannel" + std::to_string(i)] = procedural::slot::texture::Channel0 + i;
                 }
-                for (auto reflection : allVertexReflections) {
-                    reflection->uniforms[uniformName] = customSlot;
-                }
-                ++customSlot;
+                reflection->uniformBuffers["standardInputsBuffer"] = procedural::slot::buffer::Inputs;
             }
+        }
+
+        // Then fill in every reflections the custom bindings of any userdata specified uniforms
+        int customSlot = procedural::slot::uniform::Custom;
+        for (const auto& key : _data.uniforms.keys()) {
+            std::string uniformName = key.toLocal8Bit().data();
+            for (auto reflection : allFragmentReflections) {
+                reflection->uniforms[uniformName] = customSlot;
+            }
+            for (auto reflection : allVertexReflections) {
+                reflection->uniforms[uniformName] = customSlot;
+            }
+            ++customSlot;
         }
 
         // Leave this here for debugging
@@ -383,7 +401,6 @@ void Procedural::prepare(gpu::Batch& batch,
         recompiledShader = true;
     }
 
-    // FIXME: need to handle forward rendering
     batch.setPipeline(recompiledShader ? _proceduralPipelines[key] : pipeline->second);
 
     bool recreateUniforms = _shaderDirty || _uniformsDirty || recompiledShader || _prevKey != key;
@@ -407,7 +424,13 @@ void Procedural::prepare(gpu::Batch& batch,
             auto gpuTexture = _channels[i]->getGPUTexture();
             if (gpuTexture) {
                 gpuTexture->setSampler(sampler);
-                gpuTexture->setAutoGenerateMips(true);
+                // only a texture without mips of its own has them generated: one from the network comes with the
+                // whole chain, and on macOS (GL41ResourceTexture) asking for generated mips regenerated them as the
+                // GL texture was made, before its levels had streamed in, so its small mips stayed black (Tivoli
+                // Town's ground, its textures tiled 111 times, drew near black until 2026-10-21)
+                if (gpuTexture->getNumMips() <= 1) {
+                    gpuTexture->setAutoGenerateMips(true);
+                }
             }
             batch.setResourceTexture((gpu::uint32)(procedural::slot::texture::Channel0 + i), gpuTexture);
         }
@@ -479,18 +502,27 @@ void Procedural::setupUniforms() {
         _standardInputs.timeSinceFirstCompile = (float)((now - _firstCompile) / USECS_PER_MSEC) / MSECS_PER_SECOND;
         _standardInputs.timeSinceEntityCreation = (float)((now - _entityCreated) / USECS_PER_MSEC) / MSECS_PER_SECOND;
 
-        // Date
+        // Date (iDate), from the same clock as the times above: the calendar part is worked out once a second, shared
+        // by every procedural. QDateTime::currentDateTimeUtc() ran for every procedural draw of every pass (240 times a
+        // frame with 20 Lightlings' shadow cascades: performance's crowd run, 2026-10-28)
         {
-            QDateTime now = QDateTime::currentDateTimeUtc();
-            QDate date = now.date();
-            QTime time = now.time();
-            _standardInputs.date.x = date.year();
-            // Shadertoy month is 0 based
-            _standardInputs.date.y = date.month() - 1;
-            // But not the day... go figure
-            _standardInputs.date.z = date.day();
-            float fractSeconds = (time.msec() / 1000.0f);
-            _standardInputs.date.w = (time.hour() * 3600) + (time.minute() * 60) + time.second() + fractSeconds;
+            static std::mutex dateMutex;
+            static uint64_t dateSecond = 0;
+            static glm::vec3 dateYearMonthDay;
+            const uint64_t second = now / USECS_PER_SECOND;
+            std::lock_guard<std::mutex> dateLock(dateMutex);
+            if (second != dateSecond) {
+                QDate date = QDateTime::fromMSecsSinceEpoch((qint64)(second * MSECS_PER_SECOND), Qt::UTC).date();
+                // Shadertoy's month is 0 based; its day is not
+                dateYearMonthDay = glm::vec3(date.year(), date.month() - 1, date.day());
+                dateSecond = second;
+            }
+            _standardInputs.date.x = dateYearMonthDay.x;
+            _standardInputs.date.y = dateYearMonthDay.y;
+            _standardInputs.date.z = dateYearMonthDay.z;
+            // seconds into the UTC day, with the fraction
+            const uint64_t MSECS_PER_DAY = 24 * 3600 * (uint64_t)MSECS_PER_SECOND;
+            _standardInputs.date.w = (float)((now / USECS_PER_MSEC) % MSECS_PER_DAY) / MSECS_PER_SECOND;
         }
 
         _standardInputs.scale = vec4(_entityDimensions, 1.0f);
@@ -529,8 +561,12 @@ void graphics::ProceduralMaterial::initializeProcedural() {
     _procedural._vertexSourceSkinnedDQ =
         gpu::Shader::getVertexShaderSource(shader::render_utils::vertex::simple_procedural_deformeddq);
 
-    // FIXME: Setup proper uniform slots and use correct pipelines for forward rendering
+    // the opaque one writes the deferred path's buffers; in the forward path, which has only the colour, the forward one
+    // lights the fragment itself (before 2026-10-21 the forward path drew the deferred one: its albedo unlit, its emissive
+    // lost, so an emissive-only procedural such as Tivoli Town's ocean drew black)
     _procedural._opaqueFragmentSource = gpu::Shader::getFragmentShaderSource(shader::render_utils::fragment::simple_procedural);
+    _procedural._opaqueForwardFragmentSource =
+        gpu::Shader::getFragmentShaderSource(shader::render_utils::fragment::simple_procedural_forward);
     _procedural._transparentFragmentSource =
         gpu::Shader::getFragmentShaderSource(shader::render_utils::fragment::simple_procedural_translucent);
 }

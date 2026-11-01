@@ -14,10 +14,6 @@
 #ifndef ENTITIES_SHADER_CONSTANTS_H
 #define ENTITIES_SHADER_CONSTANTS_H
 
-// Polyvox
-#define ENTITIES_TEXTURE_POLYVOX_XMAP 0
-#define ENTITIES_TEXTURE_POLYVOX_YMAP 1
-#define ENTITIES_TEXTURE_POLYVOX_ZMAP 2
 
 // Mirror glass (mirror_screen.slf, a pipeline of its own): the picture, and the region of the screen it covers at
 // the material buffer slot, which the glass's draw has no material for (the next item binds its own there)
@@ -59,9 +55,6 @@ namespace entities_renderer { namespace slot {
 
 namespace texture {
 enum Texture {
-    PolyvoxXMap = ENTITIES_TEXTURE_POLYVOX_XMAP,
-    PolyvoxYMap = ENTITIES_TEXTURE_POLYVOX_YMAP,
-    PolyvoxZMap = ENTITIES_TEXTURE_POLYVOX_ZMAP,
     MirrorPicture = ENTITIES_TEXTURE_MIRROR_PICTURE,
     TerrainLayers = ENTITIES_TEXTURE_TERRAIN_LAYERS,
     TerrainPaint0 = ENTITIES_TEXTURE_TERRAIN_PAINT0,

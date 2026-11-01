@@ -9,9 +9,23 @@
 //  rides this track at trackOffset metres along the train; the physics moves it. The track has no body of its own.
 //  The train's state (round 5) lives here too: the physics server writes it as it drives, and every client runs the
 //  same follower on from the last state it received, so the train is a function of the domain's clock everywhere.
+//  The guideway (the monorail's beam and pylons, TrackGuideway in libraries/vehicles) is what the track draws and
+//  collides as: its settings are properties here, the mesh is the client renderer's and the physics server's.
 //
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: the train's state (trainDistance, trainSpeed, trainReversed, trainDwell, trainStation, trainTime) and
+//   TrainState.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
 //
 
 #ifndef hifi_TrackEntityItem_h
@@ -55,6 +69,14 @@ public:
     static const float MAX_SPEED;
     static const float MAX_ACCELERATION;
     static const quint16 NO_STATION;   // trainStation when the train stands at or heads for no station
+    static const QString DEFAULT_PROFILE;      // "beam"
+    static const float DEFAULT_WIDTH;          // m, the beam's
+    static const float DEFAULT_HEIGHT;         // m
+    static const float DEFAULT_CLEARANCE;      // m, ride line to the beam's top
+    static const float DEFAULT_PYLON_SPACING;  // m along the track
+    static const float DEFAULT_PYLON_FLOOR;    // m, the pylons' feet in the track's own space
+    static const float MAX_GUIDEWAY_SIZE;      // m, any of the above
+    static const float MAX_POINT_COORDINATE;   // m, a control point's coordinates either way (the domain's half extent)
 
     void setTrackPoints(const QVector<glm::vec3>& points);
     QVector<glm::vec3> getTrackPoints() const;
@@ -77,6 +99,25 @@ public:
     // counts every change to the properties above, so a curve built from them knows when to rebuild
     uint32_t getTrackVersion() const;
 
+    // the guideway: what the track draws and collides as along its curve
+    void setTrackProfile(const QString& profile);   // "beam" or "none"
+    QString getTrackProfile() const;
+    void setTrackWidth(float value);
+    float getTrackWidth() const;
+    void setTrackHeight(float value);
+    float getTrackHeight() const;
+    void setTrackClearance(float value);
+    float getTrackClearance() const;
+    void setTrackPylonSpacing(float value);
+    float getTrackPylonSpacing() const;
+    void setTrackPylonFloor(float value);
+    float getTrackPylonFloor() const;
+    void setColor(const glm::u8vec3& color);
+    glm::u8vec3 getColor() const;
+    // counts every change to the guideway's settings (not the curve's: those count in the track version)
+    uint32_t getGuidewayVersion() const;
+
+    // FROZEN (vehicle path): see the note at the top of this file.
     // the train's state, as the physics server last published it (TrackFollower::State plus the domain time it is
     // for; trainTime 0 means no server has driven this track)
     void setTrainDistance(float value);
@@ -114,6 +155,15 @@ protected:
     float _trackSpeed { DEFAULT_SPEED };
     float _trackAcceleration { DEFAULT_ACCELERATION };
     uint32_t _trackVersion { 1 };
+
+    QString _trackProfile { DEFAULT_PROFILE };
+    float _trackWidth { DEFAULT_WIDTH };
+    float _trackHeight { DEFAULT_HEIGHT };
+    float _trackClearance { DEFAULT_CLEARANCE };
+    float _trackPylonSpacing { DEFAULT_PYLON_SPACING };
+    float _trackPylonFloor { DEFAULT_PYLON_FLOOR };
+    glm::u8vec3 _color { 255, 255, 255 };
+    uint32_t _guidewayVersion { 1 };
 
     float _trainDistance { 0.0f };
     float _trainSpeed { 0.0f };

@@ -13,6 +13,7 @@
 #define hifi_AssignmentParentFinder_h
 
 #include <memory>
+#include <mutex>
 #include <QUuid>
 
 #include <EntityTree.h>
@@ -28,8 +29,13 @@ public:
     virtual SpatiallyNestableWeakPointer find(QUuid parentID, bool& success,
                                               SpatialParentTree* entityTree = nullptr) const override;
 
+    // an agent's own avatar, found for its session id and AVATAR_SELF_ID: the avatar list holds only the others
+    void setOwnAvatar(SpatiallyNestableWeakPointer avatar);
+
 protected:
     EntityTreePointer _tree;
+    mutable std::mutex _ownAvatarMutex;
+    SpatiallyNestableWeakPointer _ownAvatar;
 };
 
 #endif // hifi_AssignmentParentFinder_h

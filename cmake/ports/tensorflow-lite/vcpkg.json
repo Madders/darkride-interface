@@ -1,0 +1,7 @@
+{
+  "name": "tensorflow-lite",
+  "version-string": "2.21.0",
+  "description": "TensorFlow Lite (LiteRT): its C API with the XNNPACK delegate, built from TensorFlow's source as one static library, for webcam face tracking",
+  "homepage": "https://ai.google.dev/edge/litert",
+  "supports": "osx | windows"
+}

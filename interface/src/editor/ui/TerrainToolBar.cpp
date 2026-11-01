@@ -161,6 +161,7 @@ TerrainToolBar::TerrainToolBar(QWidget* parent) : QToolBar("Terrain", parent) {
     chooseShape("Round", QString(), roundThumbnail);
 
     _angle = new QDoubleSpinBox(this);
+    _angle->setObjectName("EditorTerrainAngle");
     _angle->setRange(0.0, 360.0);
     _angle->setWrapping(true);
     _angle->setDecimals(0);
@@ -168,6 +169,19 @@ TerrainToolBar::TerrainToolBar(QWidget* parent) : QToolBar("Terrain", parent) {
     _angle->setSuffix(QString::fromUtf8("°"));
     _angle->setValue(0.0);
     addField("Angle", _angle, 0.5, false, "Turns the shape picture about the brush's centre");
+    // a new angle at random for each stroke, so a stamped picture doesn't repeat itself (Piper's ask through Caity,
+    // 2026-10-26). Per stroke, not per step: a stroke applies a step every frame, and a new turn each time would blur
+    // the picture into a round smudge
+    _randomAngle = new QCheckBox("Random", this);
+    _randomAngle->setObjectName("EditorTerrainRandomAngle");
+    _randomAngle->setFocusPolicy(Qt::NoFocus);
+    _randomAngle->setToolTip("A new angle at random for each stroke: the shape picture lands turned a different way each "
+                             "time you press, and the outline shows the next one. For a shape picture, not Round");
+    addWidget(_randomAngle);
+    connect(_randomAngle, &QCheckBox::toggled, this, [this](bool on) {
+        _angle->setEnabled(!on);
+        emit brushChanged();
+    });
 
     auto layerName = new QLabel("Layer", this);
     layerName->setObjectName("EditorFieldName");
@@ -319,6 +333,7 @@ EditorTerrainBrush TerrainToolBar::brush() const {
     brush.material = _layer->count() > 0 ? _layer->currentData().toInt() : 0;
     brush.shape = _shapePath;
     brush.angle = (float)_angle->value();
+    brush.randomAngle = _randomAngle->isChecked();
     return brush;
 }
 

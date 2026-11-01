@@ -186,6 +186,15 @@ public:
     bool castRayClosest(const glm::vec3& start, const glm::vec3& end, int32_t group, int32_t mask,
                         const JPH::BodyFilter* bodyFilter, RayHit& result) const;
     void castRayAll(const glm::vec3& start, const glm::vec3& end, int32_t group, int32_t mask, std::vector<RayHit>& results) const;
+    // a sphere of the radius swept from start to end, filtered as castRayClosest is: the first body it meets on the way.
+    // A body the sphere is already inside at the start is skipped (it reports fraction 0); a ray from the same start
+    // finds that one.
+    bool castSphereClosest(const glm::vec3& start, const glm::vec3& end, float radius, int32_t group, int32_t mask,
+                           const JPH::BodyFilter* bodyFilter, RayHit& result) const;
+    // the way out for a sphere of the radius at the centre, filtered as the casts are: the sum, over the bodies it
+    // overlaps, of the push along each one's shortest way out (zero when it touches nothing)
+    glm::vec3 sphereOverlapPush(const glm::vec3& center, float radius, int32_t group, int32_t mask,
+                                const JPH::BodyFilter* bodyFilter) const;
 
     void debugDraw(uint32_t mode, PhysicsDebugDraw* renderer);
 

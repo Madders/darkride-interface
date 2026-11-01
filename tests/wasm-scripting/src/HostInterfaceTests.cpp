@@ -20,7 +20,7 @@
 
 #include "TestObjects.h"
 
-QTEST_MAIN(HostInterfaceTests)
+QTEST_GUILESS_MAIN(HostInterfaceTests)
 
 namespace {
 
@@ -299,17 +299,22 @@ void HostInterfaceTests::testCallErrors() {
     QVariant result = f.call(probe, "noSuchMethod", {});
     QVERIFY(HostInterface::isErrorRecord(result));
     QVERIFY(errorMessage(result).contains("no method noSuchMethod"));
-    QCOMPARE(result.toMap().value(HostInterface::ERROR_KEY).toMap().value("type").toString(), QString("CallError"));
+    // the error types QtScript gave the same failures: a missing method a TypeError, too few arguments for every
+    // candidate a SyntaxError, an argument that will not convert a TypeError
+    auto typeOf = [](const QVariant& record) { return record.toMap().value(HostInterface::ERROR_KEY).toMap().value("type").toString(); };
+    QCOMPARE(typeOf(result), QString("TypeError"));
     // too few arguments
     result = f.call(probe, "add", { 1 });
     QVERIFY(HostInterface::isErrorRecord(result));
     QVERIFY(errorMessage(result).contains("arguments"));
+    QCOMPARE(typeOf(result), QString("SyntaxError"));
     // an argument that will not convert (a string parameter takes anything, as toString does in JavaScript,
     // so add's overloads always match two arguments; scale's vec3 and float do not take a bool and a map)
     QCOMPARE(f.call(probe, "add", { QVariantMap(), QVariantList() }), QVariant("{}[]"));
     result = f.call(probe, "scale", { true, QVariantMap() });
     QVERIFY(HostInterface::isErrorRecord(result));
     QVERIFY(errorMessage(result).contains("converted"));
+    QCOMPARE(typeOf(result), QString("TypeError"));
     // a wrong signature, a bad index, an unknown handle, a signal is not callable, a private invokable is hidden;
     // a protected one is callable, as on QtScript
     QVERIFY(HostInterface::isErrorRecord(f.call(probe, "add(float)", { 1 })));
@@ -317,6 +322,28 @@ void HostInterfaceTests::testCallErrors() {
     QVERIFY(errorMessage(f.call(12345, "add", { 1, 2 })).contains("unknown object"));
     QVERIFY(HostInterface::isErrorRecord(f.call(probe, "countChanged", { 1 })));
     QVERIFY(HostInterface::isErrorRecord(f.call(probe, "hidden", {})));
+    // the rules describe() gives the guest hold for every form of a call, as a module that bypasses the shim uses
+    // them: deleteLater (a public slot of QObject) by name, by index and by signature; a private invokable and a
+    // signal by index or signature; a protected invokable stays callable
+    const int deleteLaterIndex = f.probe.metaObject()->indexOfMethod("deleteLater()");
+    QVERIFY(deleteLaterIndex >= 0);
+    QVERIFY(HostInterface::isErrorRecord(f.call(probe, "deleteLater", {})));
+    QVERIFY(HostInterface::isErrorRecord(f.call(probe, QString("#%1").arg(deleteLaterIndex), {})));
+    QVERIFY(HostInterface::isErrorRecord(f.call(probe, "deleteLater()", {})));
+    const int hiddenIndex = f.probe.metaObject()->indexOfMethod("hidden()");
+    QVERIFY(hiddenIndex >= 0);
+    QVERIFY(HostInterface::isErrorRecord(f.call(probe, QString("#%1").arg(hiddenIndex), {})));
+    QVERIFY(HostInterface::isErrorRecord(f.call(probe, "hidden()", {})));
+    const int bareIndex = f.probe.metaObject()->indexOfMethod("bare()");
+    QVERIFY(bareIndex >= 0);
+    QVERIFY(HostInterface::isErrorRecord(f.call(probe, QString("#%1").arg(bareIndex), {})));
+    QVERIFY(HostInterface::isErrorRecord(f.call(probe, "bare()", {})));
+    QCOMPARE(f.call(probe, "guarded", {}), QVariant(9));
+    QCOMPARE(f.call(probe, "guarded()", {}), QVariant(9));
+    // a registered global is not released by a module: the handle stays and keeps working
+    f.host->release(probe);
+    QVERIFY(f.objects.contains(probe));
+    QCOMPARE(f.call(probe, "add", { 1, 2 }), QVariant(3));
     QCOMPARE(f.call(probe, "guarded", {}).toInt(), 9);
     // a QScriptValue parameter: only the QtScript engine has such values (a QtScript engine registers the type, as
     // the client's do)
@@ -340,6 +367,19 @@ void HostInterfaceTests::testCallErrors() {
     QVERIFY(error.contains("bad pointer"));
 }
 
+void HostInterfaceTests::testEnumResults() {
+    Fixture f;
+    QString error;
+    QVERIFY2(f.start(error), qPrintable(error));
+    const int32_t probe = f.probeHandle();
+    f.probe.setMode(Probe::Stopped);
+    QCOMPARE(f.call(probe, "currentMode", {}).toInt(), 10);
+    f.call(probe, "useMode", { 1 });
+    QCOMPARE(f.probe.mode(), Probe::Running);
+    // as QtScript, which throws for it too (QtScriptOverloadTests::testEnumResults)
+    QVERIFY(HostInterface::isErrorRecord(f.call(probe, "plainLevel", {})));
+}
+
 void HostInterfaceTests::testProperties() {
     Fixture f;
     QString error;
@@ -347,20 +387,21 @@ void HostInterfaceTests::testProperties() {
     const int32_t probe = f.probeHandle();
     QCOMPARE(f.get(probe, "count"), QVariant(0));
     QCOMPARE(f.get(probe, "label"), QVariant("probe"));
-    QCOMPARE(f.set(probe, "count", 7).userType(), int(QMetaType::Nullptr));
+    // a write that worked returns nothing: no bytes cross back
+    QCOMPARE(f.set(probe, "count", 7).userType(), int(QMetaType::UnknownType));
     QCOMPARE(f.probe.count(), 7);
     QCOMPARE(f.get(probe, "count"), QVariant(7));
     // the value is converted to the property's type
-    QCOMPARE(f.set(probe, "count", "12").userType(), int(QMetaType::Nullptr));
+    QCOMPARE(f.set(probe, "count", "12").userType(), int(QMetaType::UnknownType));
     QCOMPARE(f.probe.count(), 12);
     QVariantMap position;
     position["x"] = 1.5;
     position["y"] = 2.5;
     position["z"] = 3.5;
-    QCOMPARE(f.set(probe, "position", position).userType(), int(QMetaType::Nullptr));
+    QCOMPARE(f.set(probe, "position", position).userType(), int(QMetaType::UnknownType));
     QCOMPARE(f.probe.position(), glm::vec3(1.5f, 2.5f, 3.5f));
     QCOMPARE(f.get(probe, "position").toMap().value("y").toDouble(), 2.5);
-    QCOMPARE(f.set(probe, "mode", "Stopped").userType(), int(QMetaType::Nullptr));
+    QCOMPARE(f.set(probe, "mode", "Stopped").userType(), int(QMetaType::UnknownType));
     QCOMPARE(f.probe.mode(), Probe::Stopped);
     QCOMPARE(f.get(probe, "mode"), QVariant(10));
     // errors
@@ -473,3 +514,78 @@ void HostInterfaceTests::testLog() {
 
 // TestObjects.h has no source file of its own, so its moc output is pulled in here.
 #include "moc_TestObjects.cpp"
+
+// The member gate (the script API policy for a world's scripts) holds at the host boundary itself: the module's
+// exports, reached exactly as a guest reaches them, with no shim in between. Nothing a guest does on its side can
+// reach a denied member.
+void HostInterfaceTests::testMemberGate() {
+    Fixture f;
+    QString error;
+    QVERIFY2(f.start(error), qPrintable(error));
+    Other other;
+    f.objects.registerGlobal("Other", &other);
+
+    HostInterface::MemberGate gate;
+    gate.allowsClass = [](const QMetaObject* meta) { return QByteArray(meta->className()) == "Probe"; };   // default-deny: Other is not listed
+    gate.deniesMethod = [](const QMetaObject* meta, const QByteArray& name) { return QByteArray(meta->className()) == "Probe" && name == "scale"; };
+    gate.deniesPropertyWrite = [](const QMetaObject* meta, const QByteArray& name) { return QByteArray(meta->className()) == "Probe" && name == "count"; };
+    gate.deniesPropertyRead = [](const QMetaObject* meta, const QByteArray& name) { return QByteArray(meta->className()) == "Probe" && name == "label"; };
+    gate.refusalLine = [](const QString& object, const QString& member) { return object + "." + member + " is for the visitor's own scripts"; };
+    f.host->setMemberGate(gate);
+
+    const int32_t probe = f.probeHandle();
+    const int32_t otherHandle = f.objects.global("Other");
+
+    // describe: the denied method and the unreadable property are not shown; the unwritable one says so
+    auto name = f.place(QVariant("Probe"));
+    QVariantMap description = f.unpack(f.i64("describe", { name.first, name.second })).toMap();
+    QStringList methodNames;
+    for (const QVariant& entry : description.value("methods").toList()) {
+        methodNames << entry.toMap().value("name").toString();
+    }
+    QVERIFY(methodNames.contains("add"));
+    QVERIFY(!methodNames.contains("scale"));
+    bool sawCount = false, sawLabel = false;
+    for (const QVariant& entry : description.value("properties").toList()) {
+        QVariantMap property = entry.toMap();
+        if (property.value("name") == "count") { sawCount = true; QCOMPARE(property.value("writable").toBool(), false); }
+        if (property.value("name") == "label") { sawLabel = true; }
+    }
+    QVERIFY(sawCount);
+    QVERIFY(!sawLabel);
+    auto otherName = f.place(QVariant("Other"));
+    QVariantMap otherDescription = f.unpack(f.i64("describe", { otherName.first, otherName.second })).toMap();
+    QCOMPARE(otherDescription.value("class").toString(), QString("Other"));
+    QVERIFY(otherDescription.value("methods").toList().isEmpty());
+    QVERIFY(otherDescription.value("properties").toList().isEmpty());
+
+    // calls, in every form the boundary takes: by name, by index, by signature
+    QCOMPARE(f.call(probe, "add", { 2, 3 }), QVariant(5));
+    QVariantMap v { { "x", 1.0 }, { "y", 2.0 }, { "z", 3.0 } };
+    QVERIFY(errorMessage(f.call(probe, "scale", { v, 2 })).contains("Probe.scale is for the visitor's own scripts"));
+    const int scaleIndex = Probe::staticMetaObject.indexOfMethod("scale(glm::vec3,float)");
+    QVERIFY(scaleIndex >= 0);
+    QVERIFY(errorMessage(f.call(probe, QString("#%1").arg(scaleIndex), { v, 2 })).contains("is for the visitor's own scripts"));
+    QVERIFY(errorMessage(f.call(probe, "scale(glm::vec3,float)", { v, 2 })).contains("is for the visitor's own scripts"));
+
+    // properties: the unreadable one and the unwritable one
+    QVERIFY(errorMessage(f.get(probe, "label")).contains("Probe.label is for the visitor's own scripts"));
+    f.probe.setCount(7);
+    QCOMPARE(f.get(probe, "count"), QVariant(7));
+    QVERIFY(errorMessage(f.set(probe, "count", 9)).contains("Probe.count is for the visitor's own scripts"));
+    QCOMPARE(f.probe.count(), 7);
+
+    // a denied class: nothing to call, read or connect, whatever the name
+    QVERIFY(errorMessage(f.call(otherHandle, "objectName", {})).contains("is for the visitor's own scripts"));
+    QVERIFY(errorMessage(f.get(otherHandle, "objectName")).contains("is for the visitor's own scripts"));
+    QCOMPARE(f.connect(otherHandle, "destroyed"), 0);
+
+    // each refusal was logged as a warning
+    int warnings = 0;
+    for (const QString& line : f.logged) {
+        if (line.startsWith("2:") && line.contains("is for the visitor's own scripts")) {
+            warnings++;
+        }
+    }
+    QVERIFY(warnings >= 7);
+}

@@ -21,7 +21,6 @@
 #include "Application.h"
 #include "AudioClient.h"
 #include "Audio.h"
-#include "UserActivityLogger.h"
 
 using namespace scripting;
 
@@ -450,35 +449,9 @@ void AudioDevices::onDeviceSelected(QAudio::Mode mode, const HifiAudioDeviceInfo
 
     auto& setting = getSetting(isHMD, mode);
 
-    // check for a previous device
-    auto wasDefault = setting.get().isNull();
-
     // store the selected device
     setting.set(deviceName);
 
-    // log the selected device
-    if (!device.getDevice().isNull()) {
-        QJsonObject data;
-
-        const QString MODE = "audio_mode";
-        const QString INPUT = "INPUT";
-        const QString OUTPUT = "OUTPUT"; data[MODE] = mode == QAudio::AudioInput ? INPUT : OUTPUT;
-
-        const QString CONTEXT = "display_mode";
-        data[CONTEXT] = _contextIsHMD ? Audio::HMD : Audio::DESKTOP;
-
-        const QString DISPLAY = "display_device";
-        data[DISPLAY] = qApp->getActiveDisplayPlugin()->getName();
-
-        const QString DEVICE = "device";
-        const QString PREVIOUS_DEVICE = "previous_device";
-        const QString WAS_DEFAULT = "was_default";
-        data[DEVICE] = deviceName;
-        data[PREVIOUS_DEVICE] = previousDevice.deviceName();
-        data[WAS_DEFAULT] = wasDefault;
-
-        UserActivityLogger::getInstance().logAction("selected_audio_device", data);
-    }
 }
 
 void AudioDevices::onDeviceChanged(QAudio::Mode mode, const HifiAudioDeviceInfo& device) {

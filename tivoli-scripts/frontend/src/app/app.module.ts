@@ -6,16 +6,6 @@ import { RouterModule, Routes } from "@angular/router";
 import { AppComponent } from "./app.component";
 
 const routes: Routes = [
-	{
-		path: "explore",
-		loadChildren: () =>
-			import("./explore/explore.module").then(m => m.ExploreModule),
-	},
-	{
-		path: "avatar",
-		loadChildren: () =>
-			import("./avatar/avatar.module").then(m => m.AvatarModule),
-	},
 	// {
 	// 	path: "market",
 	// 	loadChildren: () =>
@@ -27,19 +17,9 @@ const routes: Routes = [
 			import("./things/things.module").then(m => m.ThingsModule),
 	},
 	{
-		path: "chat",
-		loadChildren: () =>
-			import("./chat/chat.module").then(m => m.ChatModule),
-	},
-	{
 		path: "overview",
 		loadChildren: () =>
 			import("./overview/overview.module").then(m => m.OverviewModule),
-	},
-	{
-		path: "settings",
-		loadChildren: () =>
-			import("./settings/settings.module").then(m => m.SettingsModule),
 	},
 ];
 

@@ -195,6 +195,10 @@ bool CompositorHelper::shouldCaptureMouse() const {
         return false;
     }
 
+    // a player who took the headset off is at the desktop: the mouse must reach the window's menus (Display > Desktop)
+    if (_currentDisplayPlugin->isHeadsetOff()) {
+        return false;
+    }
 
     if (!isWindowActive()) {
         return false;

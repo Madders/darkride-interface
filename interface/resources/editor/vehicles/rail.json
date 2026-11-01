@@ -1,0 +1,399 @@
+{
+ "DataVersion": 0,
+ "Entities": [
+  {
+   "id": "{cf5cf823-f97f-4126-b0e8-deebe406a077}",
+   "type": "Track",
+   "name": "Monorail loop",
+   "position": {
+    "x": 0,
+    "y": 4.0,
+    "z": 0
+   },
+   "dimensions": {
+    "x": 22.9,
+    "y": 10.0,
+    "z": 32.9
+   },
+   "trackPoints": [
+    {
+     "x": 10.0,
+     "y": 0,
+     "z": 0.0
+    },
+    {
+     "x": 10.0,
+     "y": 0,
+     "z": -5.0
+    },
+    {
+     "x": 7.071,
+     "y": 0,
+     "z": -12.071
+    },
+    {
+     "x": 0.0,
+     "y": 0,
+     "z": -15.0
+    },
+    {
+     "x": -7.071,
+     "y": 0,
+     "z": -12.071
+    },
+    {
+     "x": -10.0,
+     "y": 0,
+     "z": -5.0
+    },
+    {
+     "x": -10.0,
+     "y": 0,
+     "z": 5.0
+    },
+    {
+     "x": -7.071,
+     "y": 0,
+     "z": 12.071
+    },
+    {
+     "x": -0.0,
+     "y": 0,
+     "z": 15.0
+    },
+    {
+     "x": 7.071,
+     "y": 0,
+     "z": 12.071
+    },
+    {
+     "x": 10.0,
+     "y": 0,
+     "z": 5.0
+    }
+   ],
+   "trackBank": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "trackDwell": [
+    8.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "trackClosed": true,
+   "trackSpeed": 6,
+   "trackAcceleration": 1.2,
+   "trackProfile": "beam",
+   "trackWidth": 0.9,
+   "trackHeight": 1.1,
+   "trackClearance": 0.7,
+   "trackPylonSpacing": 12,
+   "trackPylonFloor": -4.0,
+   "color": {
+    "red": 215,
+    "green": 215,
+    "blue": 222
+   }
+  },
+  {
+   "id": "{6584a47a-aad5-4425-8fc3-e3f0b12aeb5e}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Monorail car",
+   "position": {
+    "x": 10.0,
+    "y": 4.0,
+    "z": 0.0
+   },
+   "dimensions": {
+    "x": 2.4,
+    "y": 1.4,
+    "z": 6.8
+   },
+   "color": {
+    "red": 32,
+    "green": 52,
+    "blue": 124
+   },
+   "frame": true,
+   "trackID": "{cf5cf823-f97f-4126-b0e8-deebe406a077}",
+   "trackOffset": 0,
+   "dynamic": false,
+   "collisionless": false,
+   "grab": {
+    "grabbable": false
+   }
+  },
+  {
+   "id": "{61e17532-697a-48e8-a0ac-1c8d632ea11d}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Monorail car wall",
+   "parentID": "{6584a47a-aad5-4425-8fc3-e3f0b12aeb5e}",
+   "position": {
+    "x": -1.18,
+    "y": 1.65,
+    "z": -2.2
+   },
+   "dimensions": {
+    "x": 0.04,
+    "y": 1.9,
+    "z": 2.4
+   },
+   "color": {
+    "red": 190,
+    "green": 215,
+    "blue": 235
+   },
+   "dynamic": false,
+   "collisionless": false,
+   "grab": {
+    "grabbable": false
+   },
+   "alpha": 0.32
+  },
+  {
+   "id": "{d5639025-d1e8-4d52-8b59-3d39b57a248a}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Monorail car wall",
+   "parentID": "{6584a47a-aad5-4425-8fc3-e3f0b12aeb5e}",
+   "position": {
+    "x": -1.18,
+    "y": 1.65,
+    "z": 2.2
+   },
+   "dimensions": {
+    "x": 0.04,
+    "y": 1.9,
+    "z": 2.4
+   },
+   "color": {
+    "red": 190,
+    "green": 215,
+    "blue": 235
+   },
+   "dynamic": false,
+   "collisionless": false,
+   "grab": {
+    "grabbable": false
+   },
+   "alpha": 0.32
+  },
+  {
+   "id": "{8bd4f2e4-a661-4628-bc61-d483ee1b9db4}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Monorail car wall",
+   "parentID": "{6584a47a-aad5-4425-8fc3-e3f0b12aeb5e}",
+   "position": {
+    "x": 1.18,
+    "y": 1.65,
+    "z": -2.2
+   },
+   "dimensions": {
+    "x": 0.04,
+    "y": 1.9,
+    "z": 2.4
+   },
+   "color": {
+    "red": 190,
+    "green": 215,
+    "blue": 235
+   },
+   "dynamic": false,
+   "collisionless": false,
+   "grab": {
+    "grabbable": false
+   },
+   "alpha": 0.32
+  },
+  {
+   "id": "{4bce9bdb-9077-4ed2-8248-59c7b3ec8326}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Monorail car wall",
+   "parentID": "{6584a47a-aad5-4425-8fc3-e3f0b12aeb5e}",
+   "position": {
+    "x": 1.18,
+    "y": 1.65,
+    "z": 2.2
+   },
+   "dimensions": {
+    "x": 0.04,
+    "y": 1.9,
+    "z": 2.4
+   },
+   "color": {
+    "red": 190,
+    "green": 215,
+    "blue": 235
+   },
+   "dynamic": false,
+   "collisionless": false,
+   "grab": {
+    "grabbable": false
+   },
+   "alpha": 0.32
+  },
+  {
+   "id": "{597fbdae-1ae5-4a2a-b3b8-e0c7ecf11588}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Monorail car wall",
+   "parentID": "{6584a47a-aad5-4425-8fc3-e3f0b12aeb5e}",
+   "position": {
+    "x": 0,
+    "y": 1.65,
+    "z": -3.38
+   },
+   "dimensions": {
+    "x": 2.4,
+    "y": 1.9,
+    "z": 0.04
+   },
+   "color": {
+    "red": 190,
+    "green": 215,
+    "blue": 235
+   },
+   "dynamic": false,
+   "collisionless": false,
+   "grab": {
+    "grabbable": false
+   },
+   "alpha": 0.32
+  },
+  {
+   "id": "{993b2d2e-fa40-4532-a85a-ae03fbe58340}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Monorail car wall",
+   "parentID": "{6584a47a-aad5-4425-8fc3-e3f0b12aeb5e}",
+   "position": {
+    "x": 0,
+    "y": 1.65,
+    "z": 3.38
+   },
+   "dimensions": {
+    "x": 2.4,
+    "y": 1.9,
+    "z": 0.04
+   },
+   "color": {
+    "red": 190,
+    "green": 215,
+    "blue": 235
+   },
+   "dynamic": false,
+   "collisionless": false,
+   "grab": {
+    "grabbable": false
+   },
+   "alpha": 0.32
+  },
+  {
+   "id": "{102df508-d153-4f98-80cf-357d26dc1346}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Monorail car roof",
+   "parentID": "{6584a47a-aad5-4425-8fc3-e3f0b12aeb5e}",
+   "position": {
+    "x": 0,
+    "y": 2.6299999999999994,
+    "z": 0
+   },
+   "dimensions": {
+    "x": 2.4,
+    "y": 0.06,
+    "z": 6.8
+   },
+   "color": {
+    "red": 40,
+    "green": 44,
+    "blue": 52
+   },
+   "dynamic": false,
+   "collisionless": false,
+   "grab": {
+    "grabbable": false
+   }
+  },
+  {
+   "id": "{54924d51-8c72-49d0-b719-7af44001ca28}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Monorail platform",
+   "position": {
+    "x": 12.75,
+    "y": 4.5,
+    "z": 0.0
+   },
+   "dimensions": {
+    "x": 3.0,
+    "y": 0.4,
+    "z": 10.0
+   },
+   "color": {
+    "red": 72,
+    "green": 74,
+    "blue": 80
+   },
+   "collisionless": false,
+   "grab": {
+    "grabbable": false
+   }
+  },
+  {
+   "id": "{faa7fd83-a1c0-4ced-9963-9022a4172c9d}",
+   "type": "Box",
+   "shape": "Cube",
+   "name": "Monorail ramp",
+   "position": {
+    "x": 12.75,
+    "y": 2.25,
+    "z": 11.5
+   },
+   "rotation": {
+    "x": 0.172589908786703,
+    "y": 0.0,
+    "z": 0.0,
+    "w": 0.9849937681960214
+   },
+   "dimensions": {
+    "x": 3.0,
+    "y": 0.2,
+    "z": 13.823530663329105
+   },
+   "color": {
+    "red": 64,
+    "green": 66,
+    "blue": 72
+   },
+   "collisionless": false,
+   "grab": {
+    "grabbable": false
+   }
+  }
+ ],
+ "Id": "{6075cea3-33ab-4ed6-9b0f-9342031d697a}",
+ "Version": 141
+}

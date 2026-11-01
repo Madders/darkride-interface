@@ -393,6 +393,9 @@ protected:
 
 private:
     void fetchTerrain(const QString& url, uint32_t version);
+    // A fetch that failed, or brought a file that cannot be read, is made again a while later, for as long as the
+    // entity points at the same file: 1 s, 2 s, 4 s ... then every 30 s
+    void fetchTerrainLater(const QString& url, uint32_t version);
     void dropRequest();
     // The tile a chunk or node draws with: its level-0 column's for a chunk of the grid, its own column's for a
     // coarser node; made from the map if there is none yet, null while the map is empty.
@@ -436,6 +439,7 @@ private:
     ResourceRequest* _request { nullptr };
     QString _requestURL;
     uint32_t _requestVersion { 0 };
+    int _fetchFailures { 0 };   // of the file asked for now, in a row
 };
 
 } }

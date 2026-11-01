@@ -21,6 +21,7 @@
 #include <EntityScriptingInterface.h>
 #include <LogHandler.h>
 #include <MessagesClient.h>
+#include <NetworkingConstants.h>
 #include <plugins/CodecPlugin.h>
 #include <plugins/PluginManager.h>
 #include <ResourceManager.h>
@@ -314,6 +315,8 @@ void EntityScriptServer::run() {
     auto tree = treePtr.get();
     connect(tree, &EntityTree::deletingEntity, this, &EntityScriptServer::deletingEntity, Qt::QueuedConnection);
     connect(tree, &EntityTree::addingEntity, this, &EntityScriptServer::addingEntity, Qt::QueuedConnection);
+    // queued, never direct: a server script's own edit (turning its entity's scripts off, a new serverScripts URL)
+    // signals this under the tree's write lock, from inside the script's call; the unload must come after both
     connect(tree, &EntityTree::entityServerScriptChanging, this, &EntityScriptServer::entityServerScriptChanging, Qt::QueuedConnection);
 }
 
@@ -340,6 +343,19 @@ void EntityScriptServer::nodeActivated(SharedNodePointer activatedNode) {
             if (it != std::end(_killedListeners)) {
                 _killedListeners.erase(it);
                 _logListeners.insert(activatedNodeUUID);
+            }
+            break;
+        }
+        case NodeType::AssetServer: {
+            // the atp: server scripts checkAndCallPreload held back until the asset server's link was live
+            auto waiting = std::move(_preloadsWaitingForAssetServer);
+            _preloadsWaitingForAssetServer.clear();
+            if (!waiting.empty()) {
+                qCDebug(entity_script_server) << "Asset server active: loading" << waiting.size()
+                                              << "server script(s) that waited for it";
+            }
+            for (const auto& entityID : waiting) {
+                checkAndCallPreload(EntityItemID(entityID), true);
             }
             break;
         }
@@ -489,6 +505,7 @@ void EntityScriptServer::clear() {
     }
 
     _entityViewer.clear();
+    _preloadsWaitingForAssetServer.clear();
 
     // reset the engine
     if (!_shuttingDown) {
@@ -542,14 +559,27 @@ void EntityScriptServer::checkAndCallPreload(const EntityItemID& entityID, bool 
         EntityItemPointer entity = _entityViewer.getTree()->findEntityByEntityItemID(entityID);
         EntityScriptDetails details;
         bool isRunning = _entitiesScriptEngine->getEntityScriptDetails(entityID, details);
-        if (entity && (forceRedownload || !isRunning || details.scriptText != entity->getServerScripts())) {
+        // the server scripts to run: "" while the entity's scripts are off, so turning them off unloads them
+        if (entity && (forceRedownload || !isRunning || details.scriptText != entity->getServerScriptsToRun())) {
             if (isRunning) {
                 _entitiesScriptEngine->unloadEntityScript(entityID, true);
             }
 
-            QString scriptUrl = entity->getServerScripts();
+            QString scriptUrl = entity->getServerScriptsToRun();
             if (!scriptUrl.isEmpty()) {
                 scriptUrl = DependencyManager::get<ResourceManager>()->normalizeURL(scriptUrl);
+                if (QUrl(scriptUrl).scheme() == URL_SCHEME_ATP) {
+                    // an atp: script needs the asset server's link live: a mapping request sent before then goes
+                    // nowhere and is never answered (nor timed out), so the script would stay unloaded. Hold it;
+                    // nodeActivated loads it once the asset server is in (the Agent does the same for its script).
+                    auto assetServer = DependencyManager::get<NodeList>()->soloNodeOfType(NodeType::AssetServer);
+                    if (!assetServer || !assetServer->getActiveSocket()) {
+                        qCDebug(entity_script_server) << "Waiting for the asset server before loading" << scriptUrl
+                                                      << "for" << entityID;
+                        _preloadsWaitingForAssetServer.insert(entityID);
+                        return;
+                    }
+                }
                 _entitiesScriptEngine->loadEntityScript(entityID, scriptUrl, forceRedownload);
             }
         }
@@ -610,7 +640,7 @@ void EntityScriptServer::handleOctreePacket(QSharedPointer<ReceivedMessage> mess
     if (packetType == PacketType::OctreeStats) {
 
         int statsMessageLength = OctreeHeadlessViewer::parseOctreeStats(message, senderNode);
-        if (message->getSize() > statsMessageLength) {
+        if (statsMessageLength >= 0 && message->getSize() > statsMessageLength) {
             // pull out the piggybacked packet and create a new QSharedPointer<NLPacket> for it
             int piggyBackedSizeWithHeader = message->getSize() - statsMessageLength;
 
@@ -618,6 +648,9 @@ void EntityScriptServer::handleOctreePacket(QSharedPointer<ReceivedMessage> mess
             memcpy(buffer.get(), message->getRawMessage() + statsMessageLength, piggyBackedSizeWithHeader);
 
             auto newPacket = NLPacket::fromReceivedPacket(std::move(buffer), piggyBackedSizeWithHeader, message->getSenderSockAddr());
+            if (!newPacket) {
+                return; // too short for a packet's header: nothing to read
+            }
             message = QSharedPointer<ReceivedMessage>::create(*newPacket);
         } else {
             return; // bail since no piggyback data

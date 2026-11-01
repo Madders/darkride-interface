@@ -21,10 +21,12 @@
 #pragma comment(lib, "dxgi.lib")
 
 #elif defined(Q_OS_MACOS)
+#include <string>
+#include <sys/sysctl.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOKitLib.h>
 #include <OpenGL/OpenGL.h>
-#include <sstream>
 #include <QString>
-#include <qstringlist.h>
 
 #endif
 
@@ -33,6 +35,60 @@
 #include "SharedLogging.h"
 
 GPUIdent GPUIdent::_instance {};
+
+#if defined(Q_OS_MACOS)
+namespace {
+
+// "Apple M3 Ultra" on Apple Silicon, where the GPU is the chip; empty on an Intel Mac.
+QString appleSiliconChipName() {
+    size_t length = 0;
+    if (sysctlbyname("machdep.cpu.brand_string", nullptr, &length, nullptr, 0) != 0 || length == 0) {
+        return QString();
+    }
+    std::string brand(length, '\0');
+    if (sysctlbyname("machdep.cpu.brand_string", &brand[0], &length, nullptr, 0) != 0) {
+        return QString();
+    }
+    QString name = QString::fromUtf8(brand.c_str()).trimmed();
+    return name.startsWith("Apple ") ? name : QString();
+}
+
+// The model of the first display-class PCI device in the I/O registry: the GPU of an Intel Mac.
+QString pciDisplayDeviceModel() {
+    QString model;
+    io_iterator_t iterator = 0;
+    if (IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOPCIDevice"), &iterator) != KERN_SUCCESS) {
+        return model;
+    }
+    io_registry_entry_t entry = 0;
+    while (model.isEmpty() && (entry = IOIteratorNext(iterator)) != 0) {
+        CFTypeRef classCode = IORegistryEntryCreateCFProperty(entry, CFSTR("class-code"), kCFAllocatorDefault, 0);
+        CFTypeRef modelData = IORegistryEntryCreateCFProperty(entry, CFSTR("model"), kCFAllocatorDefault, 0);
+        if (classCode && CFGetTypeID(classCode) == CFDataGetTypeID() && CFDataGetLength((CFDataRef)classCode) >= 4 &&
+            modelData && CFGetTypeID(modelData) == CFDataGetTypeID()) {
+            // the PCI class code, little-endian: 0x03 in the third byte is a display controller
+            const UInt8* code = CFDataGetBytePtr((CFDataRef)classCode);
+            if (code[2] == 0x03) {
+                model = QString::fromUtf8((const char*)CFDataGetBytePtr((CFDataRef)modelData),
+                                          (int)CFDataGetLength((CFDataRef)modelData));
+                model.remove(QChar('\0'));
+                model = model.trimmed();
+            }
+        }
+        if (classCode) {
+            CFRelease(classCode);
+        }
+        if (modelData) {
+            CFRelease(modelData);
+        }
+        IOObjectRelease(entry);
+    }
+    IOObjectRelease(iterator);
+    return model;
+}
+
+}   // namespace
+#endif
 
 GPUIdent* GPUIdent::ensureQuery(const QString& vendor, const QString& renderer) {
     // Expects vendor and render to be supplied on first call. Results are cached and the arguments can then be dropped.
@@ -47,7 +103,6 @@ GPUIdent* GPUIdent::ensureQuery(const QString& vendor, const QString& renderer) 
     GLint rendererInfoCount;
     CGLError err = CGLQueryRendererInfo(cglDisplayMask, &rendererInfo, &rendererInfoCount);
     GLint j, numRenderers = 0, deviceVRAM, bestVRAM = 0;
-    int bestGPUid = 0;
     err = CGLQueryRendererInfo(cglDisplayMask, &rendererInfo, &numRenderers);
     if (0 == err) {
         // Iterate over all of them and use the figure for the one with the most VRAM,
@@ -56,40 +111,24 @@ GPUIdent* GPUIdent::ensureQuery(const QString& vendor, const QString& renderer) 
         for (j = 0; j < numRenderers; j++) {
             CGLDescribeRenderer(rendererInfo, j, kCGLRPVideoMemoryMegabytes, &deviceVRAM);
             if (deviceVRAM > bestVRAM) {
-                bestGPUid = j;
                 bestVRAM = deviceVRAM;
                 _isValid = true;
             }
         }
     }
 
-    // TODO: should return all names
-
-    //get gpu name
-    FILE* stream = popen("system_profiler SPDisplaysDataType | grep Chipset", "r");
-    
-    std::ostringstream hostStream;
-    while (!feof(stream) && !ferror(stream)) {
-        char buf[128];
-        int bytesRead = fread(buf, 1, 128, stream);
-        hostStream.write(buf, bytesRead);
+    // The name: GL's own renderer string when the caller has one; else the chip's brand string on Apple
+    // Silicon, where the GPU is the chip; else the display-class PCI device's model on an Intel Mac. (This was
+    // popen("system_profiler SPDisplaysDataType"): 0.4 s on the main thread at every start, before GL.)
+    QString name = renderer.trimmed();
+    name.remove(" OpenGL Engine");
+    if (name.isEmpty()) {
+        name = appleSiliconChipName();
     }
-    
-    QString result = QString::fromStdString(hostStream.str());
-    QStringList parts = result.split('\n');
-    
-    for (int i = 0; i < parts.size(); ++i) {
-        if (parts[i].toLower().contains("radeon") || parts[i].toLower().contains("nvidia")) {
-            _name = parts[i];
-        } else if (i == bestGPUid) {
-            _name = parts[i];
-        }
+    if (name.isEmpty()) {
+        name = pciDisplayDeviceModel();
     }
-
-    if (!_name.isEmpty()) {
-        _name = _name.trimmed().replace("Chipset Model: ", "");
-    }
-
+    _name = name;
     _dedicatedMemoryMB = bestVRAM;
     CGLDestroyRendererInfo(rendererInfo);
 

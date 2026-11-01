@@ -1759,10 +1759,16 @@ bool AudioClient::mixLocalAudioInjectors(float* mixBuffer) {
 void AudioClient::processReceivedSamples(const QByteArray& decodedBuffer, QByteArray& outputBuffer) {
 
     const int16_t* decodedSamples = reinterpret_cast<const int16_t*>(decodedBuffer.data());
-    assert(decodedBuffer.size() == AudioConstants::NETWORK_FRAME_BYTES_STEREO);
 
     outputBuffer.resize(_outputFrameSize * AudioConstants::SAMPLE_SIZE);
     int16_t* outputSamples = reinterpret_cast<int16_t*>(outputBuffer.data());
+
+    // the reverb, the resampler and the copy below all read one whole network frame; a frame of any other size (the
+    // mixer chooses its codec and payload) plays as silence
+    if (decodedBuffer.size() != AudioConstants::NETWORK_FRAME_BYTES_STEREO) {
+        memset(outputSamples, 0, outputBuffer.size());
+        return;
+    }
 
     bool hasReverb = _reverb || _receivedAudioStream.hasReverb();
 
@@ -1808,9 +1814,64 @@ void AudioClient::sendMuteEnvironmentPacket() {
     }
 }
 
+#ifdef __APPLE__
+// whether the audio device of this name is a Bluetooth one (by name, as Qt names devices)
+static bool isBluetoothDevice(const QString& name) {
+    AudioObjectPropertyAddress address = { kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal,
+                                           kAudioObjectPropertyElementMaster };
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &address, 0, nullptr, &size) != noErr) {
+        return false;
+    }
+    std::vector<AudioDeviceID> devices(size / sizeof(AudioDeviceID));
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, nullptr, &size, devices.data()) != noErr) {
+        return false;
+    }
+    for (AudioDeviceID device : devices) {
+        CFStringRef deviceName = nullptr;
+        UInt32 nameSize = sizeof(deviceName);
+        address.mSelector = kAudioObjectPropertyName;
+        if (AudioObjectGetPropertyData(device, &address, 0, nullptr, &nameSize, &deviceName) != noErr || !deviceName) {
+            continue;
+        }
+        bool sameName = QString::fromCFString(deviceName).trimmed() == name.trimmed();
+        CFRelease(deviceName);
+        if (!sameName) {
+            continue;
+        }
+        UInt32 transport = 0;
+        UInt32 transportSize = sizeof(transport);
+        address.mSelector = kAudioDevicePropertyTransportType;
+        if (AudioObjectGetPropertyData(device, &address, 0, nullptr, &transportSize, &transport) == noErr &&
+            (transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE)) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
+// Muted, a Bluetooth microphone isn't kept open: an open one holds the headset in its call mode (mono, narrow band), so
+// other apps' music goes thin. A built-in, USB or wired one stays open, for the "you're muted" warning and the level
+// meter. Only on macOS for now; elsewhere every microphone stays open, as before.
+static bool releaseInputWhileMuted(const HifiAudioDeviceInfo& inputDeviceInfo) {
+#ifdef __APPLE__
+    return !inputDeviceInfo.getDevice().isNull() && isBluetoothDevice(inputDeviceInfo.getDevice().deviceName());
+#else
+    return false;
+#endif
+}
+
 void AudioClient::setMuted(bool muted, bool emitSignal) {
     if (_muted != muted) {
         _muted = muted;
+        // a Bluetooth microphone is open only while unmuted (switchInputToAudioDevice): open or release it, on the audio
+        // thread
+        QMetaObject::invokeMethod(this, [this] {
+            if (!_noAudioInput && releaseInputWhileMuted(_inputDeviceInfo) && (_audioInput == nullptr) != _muted) {
+                switchInputToAudioDevice(_inputDeviceInfo);
+            }
+        }, Qt::QueuedConnection);
         if (emitSignal) {
             emit muteToggled(_muted);
         }
@@ -1965,7 +2026,13 @@ bool AudioClient::switchInputToAudioDevice(const HifiAudioDeviceInfo inputDevice
         return true;
     }
 
-    if (!inputDeviceInfo.getDevice().isNull()) {
+    // Muted, a chosen Bluetooth microphone isn't opened (the dummy input stands in), so nothing holds it: the headset
+    // keeps its stereo music mode, and macOS shows no microphone in use. setMuted opens it. With --noAudioInput, no
+    // microphone is ever opened.
+    const bool releaseMicrophone = !inputDeviceInfo.getDevice().isNull() &&
+        (_noAudioInput || (_muted && releaseInputWhileMuted(inputDeviceInfo)));
+
+    if (!inputDeviceInfo.getDevice().isNull() && !releaseMicrophone) {
         qCDebug(audioclient) << "The audio input device" << inputDeviceInfo.deviceName() << ":" << inputDeviceInfo.getDevice().deviceName() << "is available.";
       
         //do not update UI that we're changing devices if default or same device
@@ -2031,8 +2098,16 @@ bool AudioClient::switchInputToAudioDevice(const HifiAudioDeviceInfo inputDevice
     // It generates audio callbacks on a timer to simulate a mic stream of silent packets.
     // This enables clients without a mic to still receive an audio stream from the mixer.
     if (!_audioInput) {
-        qCDebug(audioclient) << "Audio input device is not available, using dummy input.";
-        _inputDeviceInfo.setDevice(QAudioDeviceInfo());
+        if (releaseMicrophone) {
+            // still the chosen device, for the audio settings and for unmuting
+            qCDebug(audioclient) << (_noAudioInput ? "--noAudioInput:" : "Muted:") << "the audio input device"
+                << inputDeviceInfo.deviceName() << "is not opened, using dummy input.";
+            _inputDeviceInfo = inputDeviceInfo;
+            supportedFormat = true;
+        } else {
+            qCDebug(audioclient) << "Audio input device is not available, using dummy input.";
+            _inputDeviceInfo.setDevice(QAudioDeviceInfo());
+        }
         emit deviceChanged(QAudio::AudioInput, _inputDeviceInfo);
 
         _inputFormat = _desiredInputFormat;
@@ -2129,7 +2204,8 @@ void AudioClient::outputNotify() {
                 _outputStarveDetectionCount += recentUnfulfilled;
                 if (_outputStarveDetectionCount > STARVE_DETECTION_THRESHOLD) {
                     int oldOutputBufferSizeFrames = _sessionOutputBufferSizeFrames;
-                    int newOutputBufferSizeFrames = setOutputBufferSize(oldOutputBufferSizeFrames + 1, false);
+                    // doubled, as each new size restarts the output: from 4 frames, 3 restarts at most
+                    int newOutputBufferSizeFrames = setOutputBufferSize(oldOutputBufferSizeFrames * 2, false);
 
                     if (newOutputBufferSizeFrames > oldOutputBufferSizeFrames) {
                         qCDebug(audioclient,
@@ -2374,6 +2450,14 @@ int AudioClient::setOutputBufferSize(int numFrames, bool persist) {
         if (persist) {
             _outputBufferSizeFrames.set(numFrames);
         }
+
+        // Qt takes a buffer size only when the output starts, so restart it on the device it's on then; queued, as
+        // this can be called from the output's own notify() or from the main thread
+        QMetaObject::invokeMethod(this, [this] {
+            if (_audioOutput) {
+                switchOutputToAudioDevice(_outputDeviceInfo);
+            }
+        }, Qt::QueuedConnection);
     }
     return numFrames;
 }

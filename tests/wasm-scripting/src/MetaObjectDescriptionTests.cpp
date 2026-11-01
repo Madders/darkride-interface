@@ -15,7 +15,7 @@
 
 #include "TestObjects.h"
 
-QTEST_MAIN(MetaObjectDescriptionTests)
+QTEST_GUILESS_MAIN(MetaObjectDescriptionTests)
 
 namespace {
 

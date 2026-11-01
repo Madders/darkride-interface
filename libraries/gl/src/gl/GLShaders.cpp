@@ -435,14 +435,14 @@ const QString& getShaderCacheFile() {
     return SHADER_CACHE_FILE;
 }
 
-#if !defined(DISABLE_QML) && !defined(DISABLE_SHADER_CACHE)
+#if !defined(DISABLE_SHADER_CACHE)
 static const char* SHADER_JSON_TYPE_KEY = "type";
 static const char* SHADER_JSON_SOURCE_KEY = "source";
 static const char* SHADER_JSON_DATA_KEY = "data";
 #endif
 
 void gl::loadShaderCache(ShaderCache& cache) {
-#if !defined(DISABLE_QML) && !defined(DISABLE_SHADER_CACHE)
+#if !defined(DISABLE_SHADER_CACHE)
     QString shaderCacheFile = getShaderCacheFile();
     if (QFileInfo(shaderCacheFile).exists()) {
         QString json = FileUtils::readFile(shaderCacheFile);

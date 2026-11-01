@@ -118,7 +118,7 @@ private:
     int _partCounter { 0 };
 };
 
-// What are these utilities doing here? One is used by fbx loading code in VHACD Utils, and the other a general debugging utility.
+// What are these utilities doing here? One is used by fbx loading code, and the other a general debugging utility.
 void setMeshPartDefaults(HFMMeshPart& meshPart, QString materialID);
 
 #endif // hifi_OBJSerializer_h

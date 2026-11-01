@@ -113,7 +113,7 @@ Windows.ScrollingWindow {
         username = newUsername;
     }
 
-    // Hook up callback for clara.io download from the marketplace.
+    // Hook up the callback for a clara.io download.
     Connections {
         id: eventBridgeConnection
         target: eventBridge

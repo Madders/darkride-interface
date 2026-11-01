@@ -65,7 +65,8 @@ bool operator!=(const AnimationPropertyGroup& a, const AnimationPropertyGroup& b
  * @property {boolean} hold=false - <code>true</code> if the rotations and translations of the last frame played are 
  *     maintained when the animation stops playing, <code>false</code> if they aren't.
  */
-void AnimationPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties, QScriptEngine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
+template <typename Value, typename Engine>
+void AnimationPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties, Engine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_ANIMATION_URL, Animation, animation, URL, url);
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_ANIMATION_ALLOW_TRANSLATION, Animation, animation, AllowTranslation, allowTranslation);
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_ANIMATION_FPS, Animation, animation, FPS, fps);
@@ -78,7 +79,8 @@ void AnimationPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desire
 }
 
 
-void AnimationPropertyGroup::copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) {
+template <typename Value>
+void AnimationPropertyGroup::copyFromScriptValue(const Value& object, bool& _defaultSettings) {
 
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(animation, url, QString, setURL);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(animation, allowTranslation, bool, setAllowTranslation);
@@ -237,20 +239,20 @@ bool AnimationPropertyGroup::appendToEditPacket(OctreePacketData* packetData,
 }
 
 
-bool AnimationPropertyGroup::decodeFromEditPacket(EntityPropertyFlags& propertyFlags, const unsigned char*& dataAt , int& processedBytes) {
+bool AnimationPropertyGroup::decodeFromEditPacket(EntityPropertyFlags& propertyFlags, const unsigned char*& dataAt , int& processedBytes, int bytesToRead) {
     int bytesRead = 0;
     bool overwriteLocalData = true;
     bool somethingChanged = false;
 
-    READ_ENTITY_PROPERTY(PROP_ANIMATION_URL, QString, setURL);
-    READ_ENTITY_PROPERTY(PROP_ANIMATION_ALLOW_TRANSLATION, bool, setAllowTranslation);
-    READ_ENTITY_PROPERTY(PROP_ANIMATION_FPS, float, setFPS);
-    READ_ENTITY_PROPERTY(PROP_ANIMATION_FRAME_INDEX, float, setCurrentFrame);
-    READ_ENTITY_PROPERTY(PROP_ANIMATION_PLAYING, bool, setRunning);
-    READ_ENTITY_PROPERTY(PROP_ANIMATION_LOOP, bool, setLoop);
-    READ_ENTITY_PROPERTY(PROP_ANIMATION_FIRST_FRAME, float, setFirstFrame);
-    READ_ENTITY_PROPERTY(PROP_ANIMATION_LAST_FRAME, float, setLastFrame);
-    READ_ENTITY_PROPERTY(PROP_ANIMATION_HOLD, bool, setHold);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_ANIMATION_URL, QString, setURL);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_ANIMATION_ALLOW_TRANSLATION, bool, setAllowTranslation);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_ANIMATION_FPS, float, setFPS);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_ANIMATION_FRAME_INDEX, float, setCurrentFrame);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_ANIMATION_PLAYING, bool, setRunning);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_ANIMATION_LOOP, bool, setLoop);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_ANIMATION_FIRST_FRAME, float, setFirstFrame);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_ANIMATION_LAST_FRAME, float, setLastFrame);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_ANIMATION_HOLD, bool, setHold);
 
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_ANIMATION_URL, URL);
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_ANIMATION_ALLOW_TRANSLATION, AllowTranslation);
@@ -398,3 +400,5 @@ float AnimationPropertyGroup::computeLoopedFrame(float frame) const {
 bool AnimationPropertyGroup::isValidAndRunning() const {
     return getRunning() && (getFPS() > 0.0f) && (getNumFrames() > 1.0f) && !(getURL().isEmpty());
 }
+
+INSTANTIATE_PROPERTY_GROUP_CONVERSIONS(AnimationPropertyGroup)

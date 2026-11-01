@@ -86,6 +86,7 @@ protected:
     Q_INVOKABLE void loadTextureContent(const QByteArray& content);
 
     Q_INVOKABLE void setImage(gpu::TexturePointer texture, int originalWidth, int originalHeight);
+    Q_INVOKABLE void finishLoadFromIndex(gpu::TexturePointer texture, ktx::KTXDescriptor* descriptor);
 
     Q_INVOKABLE void startRequestForNextMipLevel();
 

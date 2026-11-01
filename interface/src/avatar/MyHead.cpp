@@ -148,6 +148,7 @@ void MyHead::simulate(float deltaTime) {
             anyInputTracked = anyInputTracked || userInputMapper->getActionStateValid(blendshapeActions[i]);
         }
 
+        const bool wasInputTracked = getHasInputDrivenBlendshapes();
         setHasInputDrivenBlendshapes(anyInputTracked);
 
         // suppress any procedural blendshape animation if they overlap with driven input.
@@ -160,6 +161,9 @@ void MyHead::simulate(float deltaTime) {
             for (int i = 0; i < (int)Blendshapes::BlendshapeCount; i++) {
                 _blendshapeCoefficients[i] = userInputMapper->getActionState(blendshapeActions[i]);
             }
+        } else if (wasInputTracked && !getHasScriptedBlendshapes()) {
+            // the tracker stopped (the face went out of view, or it was switched off): its last weights don't stay
+            clearBlendshapeCoefficients();
         }
     }
     Parent::simulate(deltaTime);

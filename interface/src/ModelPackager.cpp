@@ -79,10 +79,8 @@ bool ModelPackager::loadModel() {
     if (_modelFile.completeSuffix().contains("fst")) {
         QFile fst(_modelFile.filePath());
         if (!fst.open(QFile::ReadOnly | QFile::Text)) {
-            OffscreenUi::asyncWarning(NULL,
-                                 QString("ModelPackager::loadModel()"),
-                                 QString("Could not open FST file %1").arg(_modelFile.filePath()),
-                                 QMessageBox::Ok);
+            OffscreenUi::asyncWarning(NULL, "Couldn't open " + _modelFile.fileName(), "The file can't be read.",
+                                      QMessageBox::Ok);
             qWarning() << QString("ModelPackager::loadModel(): Could not open FST file %1").arg(_modelFile.filePath());
             return false;
         }
@@ -98,10 +96,8 @@ bool ModelPackager::loadModel() {
     // open the fbx file
     QFile fbx(_fbxInfo.filePath());
     if (!_fbxInfo.exists() || !_fbxInfo.isFile() || !fbx.open(QIODevice::ReadOnly)) {
-        OffscreenUi::asyncWarning(NULL,
-                             QString("ModelPackager::loadModel()"),
-                             QString("Could not open FBX file %1").arg(_fbxInfo.filePath()),
-                             QMessageBox::Ok);
+        OffscreenUi::asyncWarning(NULL, "Couldn't open " + _fbxInfo.fileName(),
+                                  _fbxInfo.exists() ? "The file can't be read." : "The file isn't there.", QMessageBox::Ok);
         qWarning() << "ModelPackager::loadModel(): Could not open FBX file";
         return false;
     }
@@ -417,8 +413,10 @@ bool ModelPackager::copyTextures(const QString& oldDir, const QDir& newDir) {
     }
     
     if (!errors.isEmpty()) {
-        OffscreenUi::asyncWarning(nullptr, "ModelPackager::copyTextures()",
-                             "Missing textures:" + errors);
+        ModalDialogListener* dlg = OffscreenUi::asyncWarning(nullptr, "Some textures are missing", "The avatar packs without them.");
+        if (QQuickItem* box = dlg->getDialogItem()) {
+            box->setProperty("detailedText", errors.trimmed());
+        }
         qCDebug(interfaceapp) << "ModelPackager::copyTextures():" << errors;
         return false;
     }

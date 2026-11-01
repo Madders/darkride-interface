@@ -17,22 +17,30 @@
 
 #include "JSConsole.h"
 
-class QDialog;
+class QDockWidget;
 
+// The scripting console in a dock panel ("Console" in View > Panels, ui/Panels.h): it floats the first time, docks or
+// tabs where it's dragged, and comes back where the window's layout has it (dockable panels, step 2)
 class StandAloneJSConsole : public QObject, public Dependency {
     Q_OBJECT
     SINGLETON_DEPENDENCY
 
 public slots:
-    void toggleConsole();
+    void toggleConsole();   // opened in front, or closed when it's in front (Panels' toggle)
 
 public:
+    // the keyboard is in the console (its window active), so keys don't go to the avatar
     bool getActive();
+    // the console's panel, made the first time it's asked for (cheap: the console itself is made as it first shows);
+    // none while the sign-in dialog is up
+    QDockWidget* dock();
+    // the console in it, made now if it hasn't shown yet (for tests)
+    JSConsole* console();
 
 private:
     StandAloneJSConsole() {}
-    
-    QPointer<QDialog> _jsConsole;
+
+    QPointer<QDockWidget> _dock;
 };
 
 #endif // hifi_StandAloneJSConsole_h

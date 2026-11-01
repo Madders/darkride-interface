@@ -19,7 +19,8 @@ Script.include("/~/system/libraries/controllers.js");
 Script.include("/~/system/libraries/cloneEntityUtils.js");
 
 
-var DEFAULT_SPHERE_MODEL_URL = "http://hifi-content.s3.amazonaws.com/alan/dev/equip-Fresnel-3.fbx";
+// our own copy of High Fidelity's equip sphere, once on its storage (Caity 10-29)
+var DEFAULT_SPHERE_MODEL_URL = Script.resourcesPath() + "meshes/equip-sphere.fbx";
 var EQUIP_SPHERE_SCALE_FACTOR = 0.65;
 
 

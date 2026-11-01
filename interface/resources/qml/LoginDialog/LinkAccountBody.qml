@@ -36,10 +36,6 @@ Item {
     property bool keyboardRaised: false
     property bool punctuationMode: false
 
-    property bool withSteam: withSteam
-    property bool linkSteam: linkSteam
-    property bool withOculus: withOculus
-    property bool linkOculus: linkOculus
     property string errorString: errorString
     property bool lostFocus: false
 
@@ -53,8 +49,22 @@ Item {
         readonly property int minHeight: 120
         readonly property int minHeightButton: 36
         property int maxHeight: root.height
+        property bool resizing: false
 
         function resize() {
+            // The desktop's page fills the window (LoginDialog.qml binds root's size to it): nothing to fit. And the size
+            // this works out is root's own plus a step (mainContainer follows root), so every call grew it: called a
+            // moment later (Qt.callLater, 10-25 morning), each call set off the next, at every pass of the event loop,
+            // the form slid off the bottom and the main thread never rested (Caity's MacBook, 10-25: only the navy
+            // showed, and nothing could be clicked). The headset's page (OverlayLoginDialog.qml) fills its surface the
+            // same way, and fitting it cut it short: the form loads before the page has a size, so the fit made it
+            // 480 x 134 and the surface's own size then only stretched it to ~218 tall, the rest of the surface left
+            // white over the password and Log In (Caity's VR sitting, 10-29). Only the tablet's dialog fits its content,
+            // at once and once: root's change calls back here, and is let go.
+            if (!root.isTablet || resizing) {
+                return;
+            }
+            resizing = true;
             maxWidth = root.width;
             maxHeight = root.height;
             var targetWidth = Math.max(titleWidth, mainContainer.width);
@@ -66,26 +76,13 @@ Item {
             }
 
             parent.height = root.height = Math.max(d.minHeight, Math.min(d.maxHeight, targetHeight)) + hifi.dimensions.contentSpacing.y;
+            resizing = false;
         }
     }
 
     function login() {
         loginDialog.login(emailField.text, passwordField.text);
-        if (linkAccountBody.loginDialogPoppedUp) {
-            var data;
-            if (linkAccountBody.linkSteam) {
-                data = {
-                    "action": "user linking hifi account with Steam"
-                };
-            } else {
-                data = {
-                    "action": "user logging in"
-                };
-            }
-            UserActivityLogger.logAction("encourageLoginDialog", data);
-        }
-        bodyLoader.setSource("LoggingInBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader, "withSteam": linkAccountBody.withSteam,
-            "withOculus": linkAccountBody.withOculus, "linkSteam": linkAccountBody.linkSteam, "linkOculus": linkAccountBody.linkOculus });
+        bodyLoader.setSource("LoggingInBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader });
     }
 
     function init() {
@@ -96,17 +93,12 @@ Item {
             loginErrorMessage.wrapMode = Text.WordWrap;
             errorContainer.height = (loginErrorMessageTextMetrics.width / emailField.width) * loginErrorMessageTextMetrics.height;
         }
-        loginButton.text = (!linkAccountBody.linkSteam && !linkAccountBody.linkOculus) ? "Log In" : "Link Account";
+        loginButton.text = "Log In";
         loginButton.color = hifi.buttons.blue;
         emailField.placeholderText = "Username or Email";
         var savedUsername = Settings.getValue("keepMeLoggedIn/savedUsername", "");
         emailField.text = keepMeLoggedInCheckbox.checked ? savedUsername === "Unknown user" ? "" : savedUsername : "";
-        if (linkAccountBody.linkSteam || linkAccountBody.linkOculus) {
-            loginButton.width = (passwordField.width - hifi.dimensions.contentSpacing.x) / 2;
-            loginButton.anchors.right = emailField.right;
-        } else {
-            loginButton.anchors.left = emailField.left;
-        }
+        loginButton.anchors.left = emailField.left;
         loginContainer.visible = true;
     }
 
@@ -126,8 +118,8 @@ Item {
         Item {
             id: loginContainer
             width: emailField.width
-            height: errorContainer.height + emailField.height + passwordField.height + 4 * hifi.dimensions.contentSpacing.y +
-                keepMeLoggedInCheckbox.height + loginButton.height + cantAccessTextMetrics.height + continueButton.height
+            height: errorContainer.height + emailField.height + passwordField.height + 5 * hifi.dimensions.contentSpacing.y +
+                keepMeLoggedInCheckbox.height + loginButton.height + createAccountButton.height + cantAccessTextMetrics.height
             anchors {
                 top: parent.top
                 topMargin: root.bannerHeight + 0.25 * parent.height
@@ -303,31 +295,6 @@ Item {
                 }
             }
             HifiControlsUit.Button {
-                id: cancelButton
-                width: (passwordField.width - hifi.dimensions.contentSpacing.x) / 2;
-                height: d.minHeightButton
-                text: qsTr("Cancel")
-                fontFamily: linkAccountBody.fontFamily
-                fontSize: linkAccountBody.fontSize
-                fontBold: linkAccountBody.fontBold
-                color: hifi.buttons.noneBorderlessWhite;
-                visible: linkAccountBody.linkSteam || linkAccountBody.linkOculus
-                anchors {
-                    top: keepMeLoggedInCheckbox.bottom
-                    topMargin: hifi.dimensions.contentSpacing.y
-                }
-                onClicked: {
-                    if (linkAccountBody.loginDialogPoppedUp) {
-                        var data = {
-                            "action": "user clicked cancel at link account screen"
-                        };
-                        UserActivityLogger.logAction("encourageLoginDialog", data);
-                    }
-                    bodyLoader.setSource("CompleteProfileBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader, "withSteam": linkAccountBody.withSteam,
-                        "withOculus": linkAccountBody.withOculus, "errorString": "" });
-                }
-            }
-            HifiControlsUit.Button {
                 id: loginButton
                 width: passwordField.width
                 height: d.minHeightButton
@@ -343,6 +310,27 @@ Item {
                     linkAccountBody.login();
                 }
             }
+            // making an account is on the website, in the browser. Right under Log In, so it shows wherever Log In does:
+            // a row of its own further down fell off the bottom of a short window (on the desktop the tablet's window,
+            // where a world's sign-in request opens this, is taller than a 600 px app window; 10-30)
+            HifiControlsUit.Button {
+                id: createAccountButton
+                width: passwordField.width
+                height: d.minHeightButton
+                text: qsTr("Create an Account")
+                color: hifi.buttons.none
+                fontFamily: linkAccountBody.fontFamily
+                fontSize: linkAccountBody.fontSize
+                fontBold: linkAccountBody.fontBold
+                anchors {
+                    top: loginButton.bottom
+                    topMargin: hifi.dimensions.contentSpacing.y
+                }
+                onClicked: {
+                    Tablet.playSound(TabletEnums.ButtonClick);
+                    Window.openUrl("https://darkride.ai/?signUp");
+                }
+            }
             TextMetrics {
                 id: cantAccessTextMetrics
                 font: cantAccessText.font
@@ -351,9 +339,8 @@ Item {
             HifiStylesUit.ShortcutText {
                 id: cantAccessText
                 z: 10
-                visible: !linkAccountBody.linkSteam && !linkAccountBody.linkOculus
                 anchors {
-                    top: loginButton.bottom
+                    top: createAccountButton.bottom
                     topMargin: hifi.dimensions.contentSpacing.y
                     left: emailField.left
                 }
@@ -377,118 +364,6 @@ Item {
                         lightboxPopup.visible = false;
                     }
                     lightboxPopup.visible = true;
-                    if (linkAccountBody.loginDialogPoppedUp) {
-                        var data = {
-                            "action": "user clicked can't access account"
-                        };
-                        UserActivityLogger.logAction("encourageLoginDialog", data);
-                    }
-                }
-            }
-            HifiControlsUit.Button {
-                id: continueButton;
-                width: emailField.width;
-                height: d.minHeightButton
-                color: hifi.buttons.none;
-                anchors {
-                    top: cantAccessText.bottom
-                    topMargin: hifi.dimensions.contentSpacing.y
-                    left: emailField.left
-                }
-                text: qsTr("CONTINUE WITH STEAM")
-                fontFamily: linkAccountBody.fontFamily
-                fontSize: linkAccountBody.fontSize
-                fontBold: linkAccountBody.fontBold
-                buttonGlyph: hifi.glyphs.steamSquare
-                buttonGlyphSize: 24
-                buttonGlyphRightMargin: 10
-                onClicked: {
-                    if (loginDialog.isOculusRunning()) {
-                        linkAccountBody.withOculus = true;
-                        loginDialog.loginThroughOculus();
-                    } else
-                    if (loginDialog.isSteamRunning()) {
-                        linkAccountBody.withSteam = true;
-                        loginDialog.loginThroughSteam();
-                    }
-                    if (linkAccountBody.loginDialogPoppedUp) {
-                        var data;
-                        if (linkAccountBody.withOculus) {
-                            data = {
-                                "action": "user clicked login through Oculus"
-                            };
-                        } else if (linkAccountBody.withSteam) {
-                            data = {
-                                "action": "user clicked login through Steam"
-                            };
-                        }
-                        UserActivityLogger.logAction("encourageLoginDialog", data);
-                    }
-
-                    bodyLoader.setSource("LoggingInBody.qml", { "loginDialog": loginDialog, "root": root, "bodyLoader": bodyLoader,
-                        "withSteam": linkAccountBody.withSteam, "withOculus": linkAccountBody.withOculus, "linkSteam": linkAccountBody.linkSteam, "linkOculus": linkAccountBody.linkOculus});
-                }
-                Component.onCompleted: {
-                    // Darkride's accounts have no Steam or Oculus sign-in, so this button never shows, even with
-                    // Steam running; its screens (CompleteProfileBody, UsernameCollisionBody) are High Fidelity's
-                    continueButton.visible = false;
-                }
-            }
-        }
-        Item {
-            id: signUpContainer
-            width: loginContainer.width
-            height: signUpTextMetrics.height
-            visible: !linkAccountBody.linkSteam && !linkAccountBody.linkOculus
-            anchors {
-                left: loginContainer.left
-                top: loginContainer.bottom
-                topMargin: 0.15 * parent.height
-            }
-            TextMetrics {
-                id: signUpTextMetrics
-                font: signUpText.font
-                text: signUpText.text
-            }
-            Text {
-                id: signUpText
-                text: qsTr("Don't have an account?")
-                anchors {
-                    left: parent.left
-                }
-                lineHeight: 1
-                color: "white"
-                font.family: linkAccountBody.fontFamily
-                font.pixelSize: linkAccountBody.textFieldFontSize
-                font.bold: linkAccountBody.fontBold
-                verticalAlignment: Text.AlignVCenter
-                horizontalAlignment: Text.AlignHCenter
-            }
-
-            HifiStylesUit.ShortcutText {
-                id: signUpShortcutText
-                z: 10
-                font.family: linkAccountBody.fontFamily
-                font.pixelSize: linkAccountBody.textFieldFontSize
-                font.bold: linkAccountBody.fontBold
-                anchors {
-                     left: signUpText.right
-                     leftMargin: hifi.dimensions.contentSpacing.x
-                }
-
-                // signing up is on the website, in the browser (High Fidelity's form, SignUpBody.qml, isn't used)
-                text: "<a href='https://darkride.ai/?signUp'>Sign Up</a>"
-
-                linkColor: hifi.colors.blueAccent
-                onLinkActivated: {
-                    Tablet.playSound(TabletEnums.ButtonClick);
-                    if (linkAccountBody.loginDialogPoppedUp) {
-                        var data = {
-                            "action": "user clicked sign up button"
-                        };
-                        UserActivityLogger.logAction("encourageLoginDialog", data);
-                    }
-                    Window.openUrl(link);
                 }
             }
         }

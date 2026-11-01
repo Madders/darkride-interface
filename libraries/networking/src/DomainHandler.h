@@ -12,6 +12,8 @@
 #ifndef hifi_DomainHandler_h
 #define hifi_DomainHandler_h
 
+#include <atomic>
+
 #include <QProcessEnvironment>
 
 #include <QtCore/QJsonObject>
@@ -144,6 +146,11 @@ public:
     bool checkInPacketTimeout();
     void clearPendingCheckins() { _checkInPacketsSinceLastReply = 0; }
 
+    // a world that lets in signed-in visitors only refused us while we're signed out: we check in only now and then
+    // (SIGNED_OUT_CHECK_IN_MSECS) until the visitor signs in, the domain changes or the connection is reset
+    bool holdCheckInForSignIn();
+    bool signedIn();
+
     /**jsdoc
      * <p>The reasons that you may be refused connection to a domain are defined by numeric values:</p>
      * <table>
@@ -199,6 +206,11 @@ public:
     };
 
 public slots:
+    /// leaves the domain and stops trying it, as before a first connection: disconnected, its address forgotten (no
+    /// more check-ins), and no refresh of the last lookup. The next lookup connects afresh. The sign-in screen after a
+    /// logout holds the client here, out of the world, until someone signs in (#34): with a plain disconnect the
+    /// check-ins went on, and the refresh timer went back to the last world every 2.5 s
+    void leave(QString reason);
     void setURLAndID(QUrl domainURL, QUuid id);
     void setIceServerHostnameAndID(const QString& iceServerHostname, const QUuid& id);
 
@@ -239,6 +251,8 @@ signals:
     void redirectErrorStateChanged(bool isInErrorState);
 
     void limitOfSilentDomainCheckInsReached();
+    /// leave() is done: out of the domain on purpose, with nothing to time out (ConnectionMonitor)
+    void left();
 
 private:
     bool reasonSuggestsLogin(ConnectionRefusedReason reasonCode);
@@ -275,6 +289,9 @@ private:
     bool _hasCheckedForAccessToken { false };
     int _connectionDenialsSinceKeypairRegen { 0 };
     int _checkInPacketsSinceLastReply { 0 };
+    // atomic: on assignment clients the check-in runs on its timer's thread, refusals on the NodeList's
+    std::atomic<bool> _waitingForSignIn { false };
+    std::atomic<quint64> _lastSignedOutCheckIn { 0 };
 
     QTimer _apiRefreshTimer;
 

@@ -31,6 +31,11 @@ Item {
 
     property bool transparentBackground: false
 
+    // the colour under the page until its first load has finished (the tablet's is Darkride's navy, so a dark page
+    // doesn't open white in the headset); after it, the web's usual white under a page that sets no colour of its own
+    property color loadingBackground: "white"
+    property bool firstLoadDone: false
+
     onUrlChanged: {
         permissionPopupBackground.visible = false;
     }
@@ -102,14 +107,14 @@ Item {
         height: parent.height
 
         profile: TivoliWebEngineProfile;
-        settings.pluginsEnabled: true
+        settings.pluginsEnabled: false
         settings.touchIconsEnabled: true
-        settings.allowRunningInsecureContent: true
+        settings.allowRunningInsecureContent: false
         // pages loaded from file:// (the tablet apps) call the metaverse API; Qt blocks that unless this is on
         settings.localContentCanAccessRemoteUrls: true
 
         // https://doc.qt.io/qt-5/qml-qtwebengine-webengineview.html#backgroundColor-prop
-        backgroundColor: flick.transparentBackground ? "transparent" : "white"
+        backgroundColor: flick.transparentBackground ? "transparent" : flick.firstLoadDone ? "white" : flick.loadingBackground
 
         // creates a global EventBridge object.
         WebEngineScript {
@@ -184,6 +189,9 @@ Item {
             webViewCore.loadingRequest = loadRequest;
             webViewCore.safeLoading = webViewCore.loading && !loadingLatched;
             webViewCore.loadingLatched |= webViewCore.loading;
+            if (!webViewCore.loading && webViewCore.loadingLatched) {
+                flick.firstLoadDone = true;
+            }
          }
         onSafeLoadingChanged: {
             flick.onLoadingChanged(webViewCore.loadingRequest)

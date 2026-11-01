@@ -63,6 +63,7 @@ public:
         IS_TRANSPARENT = 0,
         IS_SKINNED,
         IS_SKINNED_DQ,
+        IS_FORWARD,
 
         NUM_FLAGS
     };
@@ -73,11 +74,15 @@ public:
     bool isTransparent() const { return _flags[IS_TRANSPARENT]; }
     bool isSkinned() const { return _flags[IS_SKINNED]; }
     bool isSkinnedDQ() const { return _flags[IS_SKINNED_DQ]; }
+    bool isForward() const { return _flags[IS_FORWARD]; }
 
-    ProceduralProgramKey(bool transparent = false, bool isSkinned = false, bool isSkinnedDQ = false) {
+    // forward: the view lights in place (the forward path), so an opaque procedural draws the variant that lights itself;
+    // a transparent one lights itself in either path
+    ProceduralProgramKey(bool transparent = false, bool isSkinned = false, bool isSkinnedDQ = false, bool forward = false) {
         _flags.set(IS_TRANSPARENT, transparent);
         _flags.set(IS_SKINNED, isSkinned);
         _flags.set(IS_SKINNED_DQ, isSkinnedDQ);
+        _flags.set(IS_FORWARD, forward && !transparent);
     }
 };
 namespace std {
@@ -104,6 +109,9 @@ public:
 
     bool isReady() const;
     bool isEnabled() const { return _enabled; }
+    // this variant's program failed to compile on this GPU: known from the frame after its first prepare (the backend
+    // compiles when it first draws with it, and draws nothing then)
+    bool compilationFailed(const ProceduralProgramKey& key) const;
     void prepare(gpu::Batch& batch,
                  const glm::vec3& position,
                  const glm::vec3& size,
@@ -126,6 +134,7 @@ public:
     gpu::Shader::Source _vertexSourceSkinned;
     gpu::Shader::Source _vertexSourceSkinnedDQ;
     gpu::Shader::Source _opaqueFragmentSource;
+    gpu::Shader::Source _opaqueForwardFragmentSource;   // lit in place, for the forward path (empty: the opaque one)
     gpu::Shader::Source _transparentFragmentSource;
 
     gpu::StatePointer _opaqueState{ std::make_shared<gpu::State>() };
@@ -219,6 +228,7 @@ public:
     bool isProcedural() const override { return true; }
     bool isEnabled() const override { return _procedural.isEnabled(); }
     bool isReady() const override { return _procedural.isReady(); }
+    bool compilationFailed(const ProceduralProgramKey& key) const { return _procedural.compilationFailed(key); }
     QString getProceduralString() const override { return _proceduralString; }
 
     void setProceduralData(const QString& data) {

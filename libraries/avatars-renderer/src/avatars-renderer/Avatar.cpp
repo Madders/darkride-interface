@@ -2126,10 +2126,7 @@ void Avatar::updateAvatarMenu(float deltaTime) {
     if (url != _avatarMenuModelURL) {
         // a newly loaded avatar: set its menu up, or clear the last one's
         _avatarMenuModelURL = url;
-        if (!_avatarMenuHiddenParts.empty()) {
-            removeMaterial(_avatarMenuHideMaterial, _avatarMenuHiddenParts);
-            _avatarMenuHiddenParts.clear();
-        }
+        _skeletonModel->setShapesHidden({}, AbstractViewStateInterface::instance()->getMain3DScene());
         const HFMModel& model = _skeletonModel->getHFMModel();
         _avatarMenu.setLocal(isMyAvatar());
         _avatarMenu.setup(model.humanoid.avatarMenu, model, *_skeletonModel->getRig().getAnimSkeleton());
@@ -2151,30 +2148,15 @@ void Avatar::updateAvatarMenu(float deltaTime) {
     if (!_avatarMenu.isActive() || !_avatarMenu.update(deltaTime)) {
         return;
     }
-    QList<int> hidden = _avatarMenu.getHiddenParts().values();
-    std::sort(hidden.begin(), hidden.end());
-    std::string parts;
-    for (int part : hidden) {
-        parts += (parts.empty() ? "[" : ",") + std::to_string(part);
-    }
-    if (!parts.empty()) {
-        parts += "]";
-    }
-    if (parts != _avatarMenuHiddenParts) {
-        if (!_avatarMenuHiddenParts.empty()) {
-            removeMaterial(_avatarMenuHideMaterial, _avatarMenuHiddenParts);
+    // the parts the menu hides are left out of the drawing altogether, shadows too, not drawn invisible: a hidden
+    // hairstyle or outfit costs nothing (it did a draw a frame in the translucent pass, skinned)
+    std::set<unsigned int> hidden;
+    for (int part : _avatarMenu.getHiddenParts()) {
+        if (part >= 0) {
+            hidden.insert((unsigned int)part);
         }
-        if (!parts.empty()) {
-            if (!_avatarMenuHideMaterial) {
-                _avatarMenuHideMaterial = std::make_shared<graphics::Material>();
-                _avatarMenuHideMaterial->setOpacity(0.0f);
-                _avatarMenuHideMaterial->setOpacityMapMode(graphics::MaterialKey::OPACITY_MAP_BLEND);
-            }
-            const quint16 AVATAR_MENU_MATERIAL_PRIORITY = 1000;  // above the model's own and the usual material entities
-            addMaterial(graphics::MaterialLayer(_avatarMenuHideMaterial, AVATAR_MENU_MATERIAL_PRIORITY), parts);
-        }
-        _avatarMenuHiddenParts = parts;
     }
+    _skeletonModel->setShapesHidden(hidden, AbstractViewStateInterface::instance()->getMain3DScene());
     _skeletonModel->setOwnBlendshapeOverrides(_avatarMenu.getOwnBlendshapes());
     std::vector<std::pair<int, Rig::AvatarMenuPose>> poses;
     const QHash<int, AvatarMenu::JointPose> joints = _avatarMenu.getJointPoses();

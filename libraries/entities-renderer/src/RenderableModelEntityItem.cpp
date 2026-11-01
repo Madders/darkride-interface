@@ -51,6 +51,15 @@ void ModelEntityWrapper::setModel(const ModelPointer& model) {
     });
 }
 
+// a renderer leaving the scene clears its own model only, never the one a newer renderer of the entity has set
+void ModelEntityWrapper::clearModel(const ModelPointer& model) {
+    withWriteLock([&] {
+        if (_model == model) {
+            _model.reset();
+        }
+    });
+}
+
 ModelPointer ModelEntityWrapper::getModel() const {
     return resultWithReadLock<ModelPointer>([&] {
         return _model;
@@ -61,6 +70,21 @@ bool ModelEntityWrapper::isModelLoaded() const {
     return resultWithReadLock<bool>([&] {
         return _model.operator bool() && _model->isLoaded();
     });
+}
+
+bool RenderableModelEntityItem::isModelLoadedWithTextures() const {
+    ModelPointer model = getModel();
+    return model && model->isLoaded() && model->getNetworkModel() && model->getNetworkModel()->areTexturesLoaded();
+}
+
+QString RenderableModelEntityItem::loadStateForLog() const {
+    ModelPointer model = getModel();
+    if (!model) {
+        return "no model yet";
+    }
+    bool texturesLoaded = model->getNetworkModel() && model->getNetworkModel()->areTexturesLoaded();
+    return QString("url %1, geometry %2, textures %3").arg(model->getURL().isEmpty() ? "none" : "set",
+        model->isLoaded() ? "in" : "loading", texturesLoaded ? "in" : "loading");
 }
 
 EntityItemPointer RenderableModelEntityItem::factory(const EntityItemID& entityID, const EntityItemProperties& properties) {
@@ -237,6 +261,8 @@ EntityItemProperties RenderableModelEntityItem::getProperties(const EntityProper
         properties.setTextureNames(_originalTextures);
     }
 
+    // scripts call this on their own threads while the main thread changes the model: read only what the model keeps for
+    // any thread (its materials and geometry are the main thread's)
     ModelPointer model = getModel();
     if (model) {
         properties.setRenderInfoVertexCount(model->getRenderInfoVertexCount());
@@ -245,10 +271,10 @@ EntityItemProperties RenderableModelEntityItem::getProperties(const EntityProper
         properties.setRenderInfoDrawCalls(model->getRenderInfoDrawCalls());
         properties.setRenderInfoHasTransparent(model->getRenderInfoHasTransparent());
 
-        if (model->isLoaded()) {
+        Extents meshExtents;
+        if (model->getCachedUnscaledMeshExtents(meshExtents)) {
             // TODO: improve naturalDimensions in the future,
             //       for now we've added this hack for setting natural dimensions of models
-            Extents meshExtents = model->getHFMModel().getUnscaledMeshExtents();
             properties.setNaturalDimensions(meshExtents.maximum - meshExtents.minimum);
             properties.calculateNaturalPosition(meshExtents.minimum, meshExtents.maximum);
         }
@@ -920,6 +946,18 @@ QStringList RenderableModelEntityItem::getJointNames() const {
     return result;
 }
 
+QVariantMap RenderableModelEntityItem::getModelExtras() const {
+    // scripts call this on their own threads (Entities.getModelExtras): the model keeps a copy of the extras, made on
+    // the main thread as its geometry arrives, since a reload or a new modelURL can free the geometry under a script
+    // walking it (getProperties had the same race)
+    QVariantMap result;
+    auto model = getModel();
+    if (model) {
+        model->getCachedExtras(result);
+    }
+    return result;
+}
+
 scriptable::ScriptableModelBase render::entities::ModelEntityRenderer::getScriptableModel() {
     auto model = resultWithReadLock<ModelPointer>([this]{ return _model; });
 
@@ -1058,7 +1096,9 @@ void ModelEntityRenderer::removeFromScene(const ScenePointer& scene, Transaction
 }
 
 void ModelEntityRenderer::onRemoveFromSceneTyped(const TypedEntityPointer& entity) {
-    entity->setModel({});
+    ModelPointer model;
+    withReadLock([&] { model = _model; });
+    entity->clearModel(model);
     auto entityTreeRenderer = DependencyManager::get<EntityTreeRenderer>();
     if (entityTreeRenderer) {
         entityTreeRenderer->undeferModelMesh(entity->getID());
@@ -1301,22 +1341,7 @@ void ModelEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& sce
     ImpostorStandIn standIn;
     const bool deferMesh = _hasModel && shouldDeferMesh(entity, standIn);
 
-    withWriteLock([&] {
-        bool visuallyReady = true;
-        if (_hasModel) {
-            if (deferMesh) {
-                // what it draws now is its card: ready once the card's atlases are
-                visuallyReady = standIn.atlasesLoaded;
-            } else if (!model) {
-                // the model is made below, on this first update: nothing is drawn yet (until 2026-10-19 this read as
-                // drawn, and the arrival's landing let a cold model through before its download had begun)
-                visuallyReady = false;
-            } else if (_didLastVisualGeometryRequestSucceed) {
-                visuallyReady = (_prevModelLoaded && _texturesLoaded);
-            }
-        }
-        entity->setVisuallyReady(visuallyReady);
-    });
+    updateVisuallyReady(entity, deferMesh, standIn.atlasesLoaded);
 
     // Check for removal
     if (!_hasModel) {
@@ -1387,6 +1412,7 @@ void ModelEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& sce
         withWriteLock([&] {
             _prevModelLoaded = false;
         });
+        updateVisuallyReady(entity, deferMesh, standIn.atlasesLoaded);
         reportImpostorStandIn(entity);
         emit requestRenderUpdate();
         return;
@@ -1492,6 +1518,9 @@ void ModelEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& sce
     } else if (!_texturesLoaded) {
         emit requestRenderUpdate();
     }
+    // the update that sees the model and its textures load is often the last one a loaded model gets: the flag set at
+    // the top, from before it, stayed false for good (far models on arrival, 2026-10-21)
+    updateVisuallyReady(entity, deferMesh, standIn.atlasesLoaded);
     reportImpostorStandIn(entity);
 
     if (!_allProceduralMaterialsLoaded) {
@@ -1602,6 +1631,27 @@ bool ModelEntityRenderer::shouldDeferMesh(const TypedEntityPointer& entity, Impo
         }
     }
     return reason == nullptr;
+}
+
+// What the entity draws now has loaded (the arrival's landing waits for it, WORLD-LOADING.md): the card's atlases while
+// the card stands in for a waiting mesh, else the model and its textures
+void ModelEntityRenderer::updateVisuallyReady(const TypedEntityPointer& entity, bool deferMesh, bool atlasesLoaded) {
+    withWriteLock([&] {
+        bool visuallyReady = true;
+        if (_hasModel) {
+            if (deferMesh) {
+                // what it draws now is its card: ready once the card's atlases are
+                visuallyReady = atlasesLoaded;
+            } else if (!_model) {
+                // the model is made on this first update: nothing is drawn yet (until 2026-10-19 this read as drawn,
+                // and the arrival's landing let a cold model through before its download had begun)
+                visuallyReady = false;
+            } else if (_didLastVisualGeometryRequestSucceed) {
+                visuallyReady = (_prevModelLoaded && _texturesLoaded);
+            }
+        }
+        entity->setVisuallyReady(visuallyReady);
+    });
 }
 
 bool ModelEntityRenderer::needsImpostorStandIn() const {

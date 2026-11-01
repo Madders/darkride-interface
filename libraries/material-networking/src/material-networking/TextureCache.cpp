@@ -46,6 +46,7 @@
 #include "NetworkLogging.h"
 #include "MaterialNetworkingLogging.h"
 #include "NetworkingConstants.h"
+#include "TextureIndex.h"
 #include <Trace.h>
 #include <StatTracker.h>
 
@@ -112,6 +113,7 @@ TextureCache::TextureCache() {
 }
 
 TextureCache::~TextureCache() {
+    TextureIndex::save();
 }
 
 // use fixed table of permutations. Could also make ordered list programmatically
@@ -558,6 +560,61 @@ void NetworkTexture::makeRequest() {
     PROFILE_ASYNC_BEGIN(resource, "Resource:" + getType(), QString::number(_requestID), { { "url", _url.toString() }, { "activeURL", _activeUrl.toString() } });
 
     if (_ktxResourceState == PENDING_INITIAL_LOAD) {
+        // a texture this client loaded before: the index remembers the source hash the KTX cache holds it under, so
+        // the texture is built from the cached file with no request (finishLoadFromIndex); an entry whose file is
+        // gone is forgotten and the texture loads from the network as before (TextureIndex.h)
+        auto remembered = TextureIndex::lookup(_activeUrl);
+        if (!remembered.hash.empty()) {
+            auto textureCache = DependencyManager::get<TextureCache>();
+            auto ktxFile = textureCache->_ktxCache->getFile(remembered.hash);
+            if (ktxFile) {
+                _ktxResourceState = LOADING_INITIAL_DATA;
+                emit loading();
+                auto self = _self;
+                auto url = _url;
+                auto hash = remembered.hash;
+                auto keyValueBytes = remembered.keyValueBytes;
+                DependencyManager::get<StatTracker>()->incrementStat("PendingProcessing");
+                QtConcurrent::run(QThreadPool::globalInstance(), [self, url, ktxFile, hash, keyValueBytes] {
+                    PROFILE_RANGE_EX(resource_parse_image, "NetworkTexture - From the texture index", 0xffff0000, 0, { { "url", url.toString() } });
+                    DependencyManager::get<StatTracker>()->decrementStat("PendingProcessing");
+                    CounterStat counter("Processing");
+                    auto resource = self.lock();
+                    if (!resource) {
+                        return;
+                    }
+                    auto textureCache = DependencyManager::get<TextureCache>();
+                    gpu::TexturePointer texture = textureCache->getTextureByHash(hash);
+                    if (!texture) {
+                        texture = gpu::Texture::unserialize(ktxFile);
+                        if (texture) {
+                            texture = textureCache->cacheTextureByHash(hash, texture);
+                            if (texture->source().empty()) {
+                                texture->setSource(url.toString().toStdString());
+                            }
+                        }
+                    }
+                    // the original file's descriptor, for the byte ranges of the mips still to come: the cached file's
+                    // header with the original's key-value size (the cache adds key-values; the images are the same)
+                    ktx::KTXDescriptor* descriptor = nullptr;
+                    if (texture) {
+                        auto storage = std::make_shared<storage::FileStorage>(ktxFile->getFilepath().c_str());
+                        auto cached = ktx::KTX::create(storage);
+                        if (cached) {
+                            ktx::Header header = cached->getHeader();
+                            header.bytesOfKeyValueData = keyValueBytes;
+                            descriptor = new ktx::KTXDescriptor(header, cached->_keyValues, header.generateImageDescriptors());
+                        }
+                    }
+                    QMetaObject::invokeMethod(resource.data(), "finishLoadFromIndex",
+                        Q_ARG(gpu::TexturePointer, texture),
+                        Q_ARG(ktx::KTXDescriptor*, descriptor));
+                });
+                return;
+            }
+            TextureIndex::forget(_activeUrl);
+        }
+
         _ktxResourceState = LOADING_INITIAL_DATA;
 
         // Add a fragment to the base url so we can identify the section of the ktx being requested when debugging
@@ -892,6 +949,31 @@ void NetworkTexture::ktxMipRequestFinished() {
     _ktxMipRequest = nullptr;
 }
 
+// The texture came from the KTX cache by way of the index, with no request (makeRequest): the same end as a network
+// load, or the network load itself when the cached file could not be read
+void NetworkTexture::finishLoadFromIndex(gpu::TexturePointer texture, ktx::KTXDescriptor* descriptor) {
+    if (!texture || !descriptor) {
+        delete descriptor;
+        qCDebug(materialnetworking) << "The texture index named a cached KTX that could not be read; loading" << _url.toDisplayString();
+        TextureIndex::forget(_activeUrl);
+        PROFILE_ASYNC_END(resource, "Resource:" + getType(), QString::number(_requestID));
+        _ktxResourceState = PENDING_INITIAL_LOAD;
+        makeRequest();
+        return;
+    }
+    PROFILE_ASYNC_END(resource, "Resource:" + getType(), QString::number(_requestID), {
+        { "from_cache", true },
+        { "from_index", true },
+        { "size_mb", texture->getStoredSize() / 1000000.0 }
+    });
+    _originalKtxDescriptor.reset(descriptor);
+    _ktxResourceState = WAITING_FOR_MIP_REQUEST;
+    _lowestKnownPopulatedMip = texture->minAvailableMipLevel();
+    TextureCache::requestCompleted(_self);
+    setImage(texture, texture->getWidth(), texture->getHeight());
+    startRequestForNextMipLevel();
+}
+
 // This is called when the header and top mips have been loaded
 void NetworkTexture::handleFinishedInitialLoad() {
     Q_ASSERT(_ktxResourceState == LOADING_INITIAL_DATA);
@@ -907,8 +989,9 @@ void NetworkTexture::handleFinishedInitialLoad() {
 
     auto self = _self;
     auto url = _url;
+    auto activeUrl = _activeUrl;
     DependencyManager::get<StatTracker>()->incrementStat("PendingProcessing");
-    QtConcurrent::run(QThreadPool::globalInstance(), [self, ktxHeaderData, ktxHighMipData, url] {
+    QtConcurrent::run(QThreadPool::globalInstance(), [self, ktxHeaderData, ktxHighMipData, url, activeUrl] {
         PROFILE_RANGE_EX(resource_parse_image, "NetworkTexture - Processing Initial Data", 0xffff0000, 0, { { "url", url.toString() } });
         DependencyManager::get<StatTracker>()->decrementStat("PendingProcessing");
         CounterStat counter("Processing");
@@ -978,6 +1061,7 @@ void NetworkTexture::handleFinishedInitialLoad() {
             auto binaryHash = QByteArray(reinterpret_cast<char*>(found->_value.data()), gpu::SOURCE_HASH_BYTES);
             hash = filename = binaryHash.toHex().toStdString();
         }
+        TextureIndex::remember(activeUrl, hash, header->bytesOfKeyValueData);
 
         auto textureCache = DependencyManager::get<TextureCache>();
 
@@ -1143,7 +1227,8 @@ void NetworkTexture::loadTextureContent(const QByteArray& content) {
         return;
     }
 
-    QThreadPool::globalInstance()->start(new ImageReader(_self, _url, content, _extraHash, _maxNumPixels, _sourceChannel));
+    QThreadPool::globalInstance()->start(new ImageReader(_self, _url, content, _extraHash, _maxNumPixels, _sourceChannel),
+                                         getThreadPoolPriority());
 }
 
 void NetworkTexture::refresh() {
@@ -1165,6 +1250,7 @@ void NetworkTexture::refresh() {
     }
 
     _ktxResourceState = PENDING_INITIAL_LOAD;
+    TextureIndex::forget(_activeUrl);   // Reload Content asks the network again
     Resource::refresh();
 }
 

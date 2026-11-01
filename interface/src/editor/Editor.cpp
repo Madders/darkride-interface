@@ -10,17 +10,22 @@
 #include "ImpostorBaker.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <functional>
 
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QHash>
 #include <QtCore/QMimeData>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QSet>
+#include <QtCore/QStandardPaths>
 #include <QtCore/QUrl>
+#include <QtGui/QClipboard>
+#include <QtGui/QColor>
 #include <QtGui/QCursor>
 #include <QtGui/QImage>
 #include <QtGui/QDropEvent>
@@ -29,15 +34,15 @@
 #include <QtGui/QMouseEvent>
 #include <QtGui/QWheelEvent>
 #include <QtCore/QEvent>
+#include <QtWidgets/QCheckBox>
 #include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QAbstractSpinBox>
 #include <QtWidgets/QAction>
 #include <QtWidgets/QApplication>
-#include <QtWidgets/QInputDialog>
+#include <QtWidgets/QFileDialog>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QMenu>
-#include <QtWidgets/QMessageBox>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QStatusBar>
 #include <QtWidgets/QTextEdit>
@@ -50,9 +55,14 @@
 #include <EntityItem.h>
 #include <EntityScriptingInterface.h>
 #include <EntityTree.h>
+#include <EntityTreeElement.h>
 #include <EntityTreeRenderer.h>
+#include <RenderableEntityItem.h>
 #include <LightEntityItem.h>
+#include <TextEntityItem.h>
 #include <ParticleEffectEntityItem.h>
+#include <VehiclePropertyGroup.h>
+#include <WheeledVehicleSpec.h>
 #include <gl/GLWidget.h>
 #include <GLMHelpers.h>
 #include <MainWindow.h>
@@ -64,22 +74,32 @@
 #include <SimulationFlags.h>
 #include <ViewFrustum.h>
 
+#include <TrackCurve.h>
+#include <TrackEntityItem.h>
+
+#include <plugins/DisplayPlugin.h>
 #include "Application.h"
+#include "EntityClipboard.h"
 #include "avatar/AvatarManager.h"
 #include "avatar/MyAvatar.h"
 #include "EditorCreate.h"
 #include "EditorWorld.h"
+#include "EditorEntityList.h"
 #include "EntityTreeModel.h"
 #include "InterfaceLogging.h"
 #include "Menu.h"
 #include "scripting/RenderScriptingInterface.h"
 #include "PropertySpec.h"
 #include "ui/AssetsPanel.h"
+#include "ui/PanelTheme.h"
+#include "ui/Popup.h"
 #include "ui/HierarchyPanel.h"
 #include "ui/InspectorPanel.h"
 #include "ui/PropertyEditors.h"
 #include "ui/TerrainToolBar.h"
 #include "ui/ViewportContainer.h"
+#include "ui/WindowLayout.h"
+#include "chat/ChatWindow.h"
 #include <gl/GLHelpers.h>
 
 namespace {
@@ -90,6 +110,7 @@ namespace {
     const int EDIT_INTERVAL_MS = 33;        // while dragging, edits go out at most this often
     const int SCALE_EDIT_INTERVAL_MS = 100; // scale edits are heavier for the server
     const int PRUNE_EVERY_FRAMES = 30;      // how often the selection drops entities that are gone
+    const float LOAD_CHECK_SECONDS = 1.0f;  // how often the Hierarchy and Inspector look for what failed to load
     const float PASTE_FALLBACK_DISTANCE = 3.0f;   // in front of the camera, when the cursor points at nothing
     const float MAX_PLACEMENT_DISTANCE = 200.0f;  // a grid-plane hit farther than this is not a useful spot
     const float GO_TO_STANDOFF = 1.5f;            // the gap between the avatar and what it went to
@@ -108,6 +129,13 @@ namespace {
     const int STATUS_CLEAR_MS = 6000;             // how long a note on the status bar stays
     const QString SCALE_KEY = QStringLiteral("scale");
     const QString LOCKED_KEY = QStringLiteral("locked");
+    // a lock without the right is refused by the world with nothing on the screen: Locked (the Inspector's and the
+    // Hierarchy's) greys out and says why
+    const QString NO_LOCK_RIGHT = "You can't lock or unlock things in this world. That takes the world's "
+        "Lock / Unlock right, which its owner can give.";
+    const QString SCRIPTS_ENABLED_KEY = QStringLiteral("scriptsEnabled");
+    const int SCRIPTS_OFF_REMINDER_MS = 7000;   // the reminder, as build mode closes, that scripts are still off
+    const int HIDDEN_HERE_PASS_MS = 150;   // entities that arrived are hidden again this long after the last
     const QString RANGE_KEY = QStringLiteral("range");
     const QString VOXEL_SIZE_KEY = QStringLiteral("voxelSize");
     const QString CUTOFF_KEY = QStringLiteral("cutoff");
@@ -115,6 +143,10 @@ namespace {
     // the lights round the camera, for their icons: looked for this often, this far out
     const int LIGHT_SEARCH_FRAMES = 15;
     const float LIGHT_SEARCH_RADIUS = 150.0f;
+    const int TRACK_SEARCH_FRAMES = 15;
+    const QString TRACK_POINTS_KEY = QStringLiteral("trackPoints");
+    const float TRACK_SEARCH_RADIUS = 600.0f;   // a track runs far; its gizmo is wanted from afar
+    const float TRACK_BOX_MARGIN = 0.5f;        // m round the curve and guideway in a fitted Track box
     // what the light handles can drag to: the Inspector's own limits, and no narrower a cone than this
     const float MIN_LIGHT_RANGE = 0.01f;
     const float MIN_SPOT_CUTOFF = 1.0f;
@@ -212,6 +244,16 @@ Editor::Editor() : _selection(this), _undo(this), _terrain(&_undo, this) {
     });
     _statusTimer.setSingleShot(true);
     connect(&_statusTimer, &QTimer::timeout, this, [this] { setStatus(QString()); });
+    const int ARRIVAL_WAIT_MS = 10000;
+    _arrivalTimer.setSingleShot(true);
+    _arrivalTimer.setInterval(ARRIVAL_WAIT_MS);
+    connect(&_arrivalTimer, &QTimer::timeout, this, [this] {
+        if (!_goingTo.isNull() && _treeModel && !_treeModel->isLoaded(_goingTo)) {
+            setStatus(QString("%1 hasn't arrived. It may have been deleted since the list was made: "
+                              "Refresh the Entities list.").arg(_goingToName), STATUS_CLEAR_MS);
+        }
+        _goingTo = QUuid();
+    });
 }
 
 // --- build mode on and off ----------------------------------------------------------------------
@@ -237,6 +279,12 @@ void Editor::setReady() {
             updateReadOnly();
         }
     });
+    // the Lock / Unlock right: the Inspector's Locked follows it
+    connect(nodeList.data(), &NodeList::isAllowedEditorChanged, this, [this] {
+        if (_active) {
+            updateReadOnly();
+        }
+    });
     // the graphics settings can switch to forward rendering while build mode is on (the Low and Potato presets do)
     connect(RenderScriptingInterface::getInstance(), &RenderScriptingInterface::settingsChanged, this, [this] {
         if (_active) {
@@ -251,6 +299,10 @@ void Editor::setReady() {
     }
 }
 
+static int64_t steadyNowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 void Editor::setActive(bool active) {
     if (active == _active) {
         return;
@@ -259,6 +311,14 @@ void Editor::setActive(bool active) {
         // the menu's saved state, restored at startup: build mode always starts off
         Menu::getInstance()->setIsOptionChecked(MenuOption::BuildMode, false);
         return;
+    }
+    const int64_t toggleStartMs = steadyNowMs();
+    // the GL view keeps its size while the panels come or go, and takes the final one once, below: coming on, the
+    // panels arrived one by one, and the view and the overlay were resized five times over (10-24: a toggle's jank)
+    if (auto viewport = qApp->getPrimaryWidget()) {
+        if (auto container = qobject_cast<ViewportContainer*>(viewport->parentWidget())) {
+            container->setDeferResizes(true);
+        }
     }
     _active = active;
     if (active) {
@@ -279,6 +339,9 @@ void Editor::setActive(bool active) {
         if (_treeModel) {
             _treeModel->attach();
         }
+        refreshEntityList();
+        // what this builder hid is hidden in their view again
+        applyHiddenHere(true);
         _axesValid = false;
         updateAxes();
         refreshInspector(true);
@@ -287,24 +350,36 @@ void Editor::setActive(bool active) {
         setStatus(QString());
         _world->refresh();
     } else {
+        // everything shows again as everyone sees it
+        _hiddenHereTimer.stop();
+        applyHiddenHere(false);
+        remindOfScriptsOff();
         _boundsShapes.clear();
         _bounds.setShapes(_boundsShapes);
         endLightHandleDrag(false);
         _terrain.clear();
         _terrain.flushSaves();   // sculpting that was waiting to be saved goes up now
         _lightGizmos.clear();
+        _vehicleGizmoVehicles.clear();
+        _vehicleGizmos.setVehicles(_vehicleGizmoVehicles);
         _nearbyLights.clear();
         _lightSearchFrame = -1;
+        // the tracks' curves too: update() stops once build mode is off, so the overlay would stay, into the next world
+        _trackGizmos.clear();
+        _nearbyTracks.clear();
+        _trackSearchFrame = -1;
+        _trackPointChosen = -1;
+        _trackPointTrack = QUuid();
+        _arrivalIds.clear();
+        _goingTo = QUuid();
+        _arrivalTimer.stop();
         _inspectorRefresh.stop();
         if (_gizmo.isDragging()) {
             applyDrag(true);
             _gizmo.endDrag();
             _dragKind = DragKind::None;
         }
-        if (auto window = qApp->getWindow()) {
-            _layoutSetting.set(window->saveState());
-        }
-        showPanels(false);
+        showPanels(false);   // the window's layout saves itself as they go (ui/WindowLayout.h)
         // the keyboard goes back to the world: a field that had it would keep it, hidden, and the avatar's keys
         // with it
         focusViewport();
@@ -327,13 +402,17 @@ void Editor::setActive(bool active) {
     // The panels take their places now, and the GL view its new size with them: left to the next layout pass, with
     // resizes held for the splitters, the view kept its old size for a moment (a stretched picture as build mode came
     // and went). Then, while the panels can be dragged, the view takes a new size only once the dragging stops.
+    // The layout settles with the view's resizes still held (from the top of setActive), and the view then takes
+    // its final size once, inside the guard.
     if (auto viewport = qApp->getPrimaryWidget()) {
         if (auto container = qobject_cast<ViewportContainer*>(viewport->parentWidget())) {
-            container->setDeferResizes(false);
             auto window = qApp->getWindow();
-            if (window && window->layout()) {
+            {
                 gl::ViewChangeGuard guard;
-                window->layout()->activate();
+                if (window && window->layout()) {
+                    window->layout()->activate();
+                }
+                container->setDeferResizes(false);
             }
             container->setDeferResizes(active);
         }
@@ -344,6 +423,42 @@ void Editor::setActive(bool active) {
     }
     Menu::getInstance()->setIsOptionChecked(MenuOption::BuildMode, active);
     emit activeChanged(active);
+    reportToggleTiming(active, toggleStartMs, steadyNowMs());
+}
+
+// One line a toggle: how long the shortcut's key waited before the client got it (its queue time), from then to
+// the toggle, the toggle's own work, and when the next frame begun after it was shown. The frame is watched for from
+// a short timer, so the line comes a moment after the toggle.
+void Editor::reportToggleTiming(bool active, int64_t startMs, int64_t endMs) {
+    auto plugin = qApp->getActiveDisplayPlugin();
+    if (!plugin) {
+        return;
+    }
+    QString key = "no key";
+    if (_toggleKeyArrivedMs >= 0 && startMs - _toggleKeyArrivedMs < 5000) {
+        // the key's own time is the system's uptime, the steady clock's base on macOS; a figure that makes no sense
+        // (another base) is left out
+        int64_t queued = _toggleKeyArrivedMs - _toggleKeyMadeMs;
+        key = (queued >= 0 && queued < 60000 ? QString("the key waited %1 ms to reach the client, ").arg(queued) : QString())
+            + QString("%1 ms from there to the toggle").arg(startMs - _toggleKeyArrivedMs);
+    }
+    _toggleKeyArrivedMs = -1;
+    const uint32_t presentsAtEnd = plugin->presentCount();
+    auto timer = new QTimer(this);
+    timer->setInterval(5);
+    connect(timer, &QTimer::timeout, this, [timer, plugin, presentsAtEnd, active, key, startMs, endMs] {
+        const int64_t now = steadyNowMs();
+        // the second present after the toggle: the first may be a frame begun before it
+        if (plugin->presentCount() >= presentsAtEnd + 2 || now - endMs > 5000) {
+            qCDebug(interfaceapp).noquote() << QString("Build mode %1: %2; the toggle took %3 ms; the next new frame was "
+                                                      "shown %4 ms after it")
+                .arg(active ? "on" : "off").arg(key).arg(endMs - startMs)
+                .arg(plugin->presentCount() >= presentsAtEnd + 2 ? QString::number(now - endMs) : QString("more than 5000"));
+            timer->stop();
+            timer->deleteLater();
+        }
+    });
+    timer->start();
 }
 
 void Editor::updateRenderMethod() {
@@ -451,10 +566,13 @@ void Editor::updateReadOnly() {
     QString reason = readOnlyReason();
     if (_inspector) {
         _inspector->setReadOnly(_readOnly, reason);
+        _inspector->setCanLock(entities->canAdjustLocks(), NO_LOCK_RIGHT);
     }
     if (_hierarchy) {
         _hierarchy->setReadOnly(_readOnly, reason);
+        _hierarchy->setCanLock(!_readOnly && entities->canAdjustLocks(), _readOnly ? reason : NO_LOCK_RIGHT);
     }
+    updateInspectorToggles();
     if (_toolBar) {
         _toolBar->setCreateEnabled(!_readOnly);
     }
@@ -494,48 +612,74 @@ void Editor::createPanels() {
     }
     _panelsCreated = true;
 
-    // one dark stylesheet for the panels; scoped by object name so the rest of the window is untouched
-    QFile styleSheet(PathUtils::resourcesPath() + "styles/editor.qss");
-    if (styleSheet.open(QIODevice::ReadOnly)) {
-        window->setStyleSheet(window->styleSheet() + "\n" + styleSheet.readAll());
-    }
-
     _treeModel = new EntityTreeModel(this);
+    // the style (and the Hierarchy's red and grey rows) from the skin, now and whenever it changes
+    loadStyle();
+    applyStyle();
     connect(_treeModel, &EntityTreeModel::renameRequested, this, &Editor::rename);
     connect(_treeModel, &EntityTreeModel::reparentRequested, this, &Editor::reparent);
 
+    connect(_treeModel, &EntityTreeModel::entityLoaded, this, &Editor::onEntityLoaded);
+    // a domain change empties the tree and the list with it: ask the new server
+    connect(_treeModel, &EntityTreeModel::listCleared, this, &Editor::refreshEntityList);
+
+    _entityList = new EditorEntityList(this);
+    connect(_entityList, &EditorEntityList::received, this, [this](const QVector<EntityListMessage::Record>& records) {
+        _treeModel->setListed(records);
+    });
+    connect(_entityList, &EditorEntityList::stateChanged, this, &Editor::updateListNote);
+
     _hierarchy = new HierarchyPanel(window);
     _hierarchy->setModel(_treeModel);
-    connect(_hierarchy, &HierarchyPanel::selectionChangedByUser, this, [this](const QList<QUuid>& ids) {
-        if (_syncingSelection) {
+    connect(_hierarchy, &HierarchyPanel::selectionChangedByUser, this, &Editor::onHierarchySelection);
+    connect(_hierarchy, &HierarchyPanel::frameRequested, this, [this](const QUuid& id) {
+        if (_treeModel && !_treeModel->isLoaded(id)) {
+            goToListed(id);
             return;
         }
-        _syncingSelection = true;
-        _selection.set(ids);
-        _syncingSelection = false;
-    });
-    connect(_hierarchy, &HierarchyPanel::frameRequested, this, [this](const QUuid& id) {
         _selection.set({ id });
         frameSelection();
     });
+    connect(_hierarchy, &HierarchyPanel::goToRequested, this, &Editor::goToListed);
+    connect(_hierarchy, &HierarchyPanel::refreshRequested, this, &Editor::refreshEntityList);
     connect(_hierarchy, &HierarchyPanel::contextMenuRequested, this, &Editor::showHierarchyMenu);
+    // the rows' eye, hand and lock
+    loadLocalStates();
+    _hierarchy->setLocalStates(_hiddenHere, _noPick);
+    connect(_hierarchy, &HierarchyPanel::toggleRequested, this,
+            [this](HierarchyPanel::Toggle toggle, const QList<QUuid>& ids, bool on) { onHierarchyToggle(toggle, ids, on); });
+    connect(_hierarchy, &HierarchyPanel::showAllRequested, this, &Editor::showAllHere);
+    _hiddenHereTimer.setSingleShot(true);
+    _hiddenHereTimer.setInterval(HIDDEN_HERE_PASS_MS);
+    connect(&_hiddenHereTimer, &QTimer::timeout, this, [this] {
+        if (_active) {
+            applyHiddenHere(true);
+        }
+    });
+    // an entity this builder hid comes back from the server as a new item, shown: hidden again as it arrives
+    auto hideArrivals = [this] {
+        if (_active && !_hiddenHere.isEmpty() && !_hiddenHereTimer.isActive()) {
+            _hiddenHereTimer.start();
+        }
+    };
+    connect(_treeModel, &QAbstractItemModel::rowsInserted, this, hideArrivals);
+    connect(_treeModel, &EntityTreeModel::entityLoaded, this, hideArrivals);
 
     _inspector = new InspectorPanel(window);
     connect(_inspector, &InspectorPanel::editBegan, this, &Editor::onInspectorEditBegan);
     connect(_inspector, &InspectorPanel::liveEdit, this, &Editor::onInspectorLiveEdit);
     connect(_inspector, &InspectorPanel::committed, this, &Editor::onInspectorCommitted);
+    // the header's toggle icons: the Hierarchy rows' rules, for the selection alone
+    connect(_inspector, &InspectorPanel::toggleClicked, this, [this](int toggle) {
+        if (_hierarchy) {
+            _hierarchy->toggleIds((HierarchyPanel::Toggle)toggle, _selection.ids());
+        }
+    });
     connect(_inspector, &InspectorPanel::editCancelled, this, &Editor::onInspectorEditCancelled);
     connect(_inspector, &InspectorPanel::uploadRequested, this, &Editor::onInspectorUpload);
 
-    // My Files along the bottom: its notes (a link copied, an upload's progress) go to the status bar
-    _assets = new AssetsPanel(window);
-    connect(_assets, &AssetsPanel::status, this, [this](const QString& text, int clearAfterMs) {
-        setStatus(text, clearAfterMs);
-    });
-    // the tools, the handle space, Frame and V work from the panel too
-    _assets->setKeyFallback([this](QKeyEvent* event) {
-        return event->type() == QEvent::KeyPress ? handleKeyPress(event) : handleKeyRelease(event);
-    });
+    // My Files along the bottom, made already if normal play opened it
+    myFilesPanel();
 
     _toolBar = new EditorToolBar(window);
     _toolBar->setGridChecked(_gridVisible);
@@ -574,6 +718,12 @@ void Editor::createPanels() {
     connect(_inspector, &InspectorPanel::terrainLayerChosen, this, [this](int slot) { _terrainBar->setLayer(slot); });
     _terrainBar->setLayerNameSource([this] { return _terrain.layerNamesForTool(_selection.ids()); });
     connect(_inspector, &InspectorPanel::terrainLayersShown, _terrainBar, &TerrainToolBar::refreshLayerNames);
+    // a vehicle's Wheels or Seats list: the selected row is drawn bright in the viewport
+    connect(_inspector, &InspectorPanel::vehiclePartChosen, this, [this](const QString& key, int index) {
+        _vehiclePartChosen[key] = index;
+    });
+    // a Track's Points list: the selected row is the point the viewport draws bright and the Move gizmo stands on
+    connect(_inspector, &InspectorPanel::trackPointChosen, this, [this](int index) { chooseTrackPoint(index, true); });
     connect(&_terrain, &EditorTerrain::terrainUnderPointerChanged, _terrainBar, &TerrainToolBar::refreshLayerNames);
 
     // notes ("Terrain saved", an upload's progress, a refusal) in a status bar along the bottom, where the
@@ -586,31 +736,100 @@ void Editor::createPanels() {
     _statusLabel->setTextFormat(Qt::PlainText);
     _statusBar->addWidget(_statusLabel, 1);
 
-    window->addDockWidget(Qt::LeftDockWidgetArea, _hierarchy);
-    window->addDockWidget(Qt::RightDockWidgetArea, _inspector);
-    // the Assets panel runs under the Hierarchy and the viewport, as Unity's Project window does; the Inspector
-    // keeps the right side whole
-    window->setCorner(Qt::BottomLeftCorner, Qt::BottomDockWidgetArea);
-    window->addDockWidget(Qt::BottomDockWidgetArea, _assets);
+    // each panel where the window's saved layout has it (ui/WindowLayout.h, restored after sign-in), else where it
+    // starts
+    auto layout = WindowLayout::instance();
+    QList<QDockWidget*> across;
+    QList<int> widths;
+    if (!layout->restoreDock(_hierarchy)) {
+        window->addDockWidget(Qt::LeftDockWidgetArea, _hierarchy);
+        placeAbove(_hierarchy, Qt::LeftDockWidgetArea);
+        across << _hierarchy;
+        widths << 260;
+    }
+    if (!layout->restoreDock(_inspector)) {
+        window->addDockWidget(Qt::RightDockWidgetArea, _inspector);
+        placeAbove(_inspector, Qt::RightDockWidgetArea);
+        across << _inspector;
+        widths << 430;
+    }
+    layout->watch(_hierarchy);
+    layout->watch(_inspector);
     placeToolBars();
     _terrainBar->setVisible(false);
     window->setStatusBar(_statusBar);
     _statusBar->setVisible(false);
-    window->resizeDocks({ _hierarchy, _inspector }, { 260, 430 }, Qt::Horizontal);
-    window->resizeDocks({ _assets }, { 240 }, Qt::Vertical);
+    if (!across.isEmpty()) {
+        window->resizeDocks(across, widths, Qt::Horizontal);
+    }
+    // hidden until showPanels: normal play's layout from before Build mode had its own could show them (My Files is
+    // normal play's too, as that layout has it)
+    _hierarchy->hide();
+    _inspector->hide();
     qApp->installEventFilter(this);
 
-    QByteArray layout = _layoutSetting.get();
-    if (!layout.isEmpty()) {
-        window->restoreState(layout);
-    }
-    // a saved layout from before the panels were fixed can still float them, and one saved with both toolbars on
-    // one row would keep them there
-    _hierarchy->setFloating(false);
-    _inspector->setFloating(false);
-    _assets->setFloating(false);
+    // a layout saved with both toolbars on one row would keep them there
     placeToolBars();
     updateTerrainBar();   // the saved layout knows nothing of the tool
+}
+
+void Editor::loadStyle() {
+    if (!_styleSource.isEmpty()) {
+        return;
+    }
+    // one dark stylesheet for the panels; scoped by object name so the rest of the window is untouched. Under a skin
+    // (ui/Skins.h) its colours become the skin's, and they follow the skin as it changes
+    QFile styleSheet(PathUtils::resourcesPath() + "styles/editor.qss");
+    if (styleSheet.open(QIODevice::ReadOnly)) {
+        _styleSource = QString::fromUtf8(styleSheet.readAll());
+    }
+    applyStyle();
+    connect(DependencyManager::get<PanelTheme>().data(), &PanelTheme::changed, this, &Editor::applyStyle,
+            Qt::UniqueConnection);
+}
+
+QDockWidget* Editor::myFilesPanel() {
+    if (_assets) {
+        return _assets;
+    }
+    auto window = qApp->getWindow();
+    if (!window) {
+        return nullptr;
+    }
+    loadStyle();
+    gl::ViewChangeGuard guard;   // a panel coming back docked changes the GL view
+    _assets = new AssetsPanel(window);
+    // its notes (a link copied, an upload's progress) go to Build mode's status bar, or to its own foot in normal play
+    connect(_assets, &AssetsPanel::status, this, [this](const QString& text, int clearAfterMs) {
+        setStatus(text, clearAfterMs);
+    });
+    // the tools, the handle space, Frame and V work from the panel too, in Build mode
+    _assets->setKeyFallback([this](QKeyEvent* event) {
+        return event->type() == QEvent::KeyPress ? handleKeyPress(event) : handleKeyRelease(event);
+    });
+    // its listing is fetched as it shows (not tabbed behind another panel)
+    connect(_assets, &QDockWidget::visibilityChanged, _assets, &AssetsPanel::setActive);
+    // it runs under the Hierarchy and the viewport, as Unity's Project window does; the Inspector keeps the right side
+    // whole
+    window->setCorner(Qt::BottomLeftCorner, Qt::BottomDockWidgetArea);
+    // where the window's saved layout has it, open or closed as it was; asked before it's added anywhere, as adding it
+    // drops the layout's place for it
+    _assets->hide();
+    if (!WindowLayout::instance()->restoreDock(_assets)) {
+        window->addDockWidget(Qt::BottomDockWidgetArea, _assets);
+        window->resizeDocks({ _assets }, { 240 }, Qt::Vertical);
+        _assets->hide();
+    }
+    WindowLayout::instance()->watch(_assets);
+    return _assets;
+}
+
+QDockWidget* Editor::hierarchyPanel() const {
+    return _hierarchy;
+}
+
+QDockWidget* Editor::inspectorPanel() const {
+    return _inspector;
 }
 
 void Editor::placeToolBars() {
@@ -628,6 +847,10 @@ void Editor::placeToolBars() {
 }
 
 void Editor::focusViewport() {
+    // and from a web entity clicked before (the Cinema's remote): it keeps the keyboard otherwise, every key going to
+    // its page first (KeyboardFocus::deliverKeyEvent), since build mode's clicks never reach the app's own focus change;
+    // F, Delete and the rest did nothing (Caity's desk test, 10-29)
+    qApp->getKeyboardFocus().setFocusedEntity(UNKNOWN_ENTITY_ID);
     if (auto viewport = qApp->getPrimaryWidget()) {
         if (!viewport->hasFocus()) {
             viewport->setFocus(Qt::MouseFocusReason);
@@ -648,32 +871,192 @@ void Editor::showPanels(bool show) {
     if (!_panelsCreated) {
         return;
     }
+    // An open popup (a dropdown's list in the Inspector) closes first, outside the guard: a combo box closing its
+    // list runs an event loop of its own on macOS (the chosen item's flash), and a QML surface rendered in that loop
+    // waits for its render thread, which waits for the GL lock the guard holds. Hiding the panels with the list open
+    // did that and froze the client (10-24: the Render Layer list open, Cmd+B).
+    for (int i = 0; i < 4 && QApplication::activePopupWidget(); i++) {
+        QApplication::activePopupWidget()->close();
+    }
     gl::ViewChangeGuard guard;   // panels coming and going change the window round the GL view
-    _hierarchy->setVisible(show);
-    _inspector->setVisible(show);
-    _assets->setVisible(show);
-    _assets->setActive(show);   // fetches the listing when shown
+    auto window = qApp->getWindow();
+    auto layout = WindowLayout::instance();
+    if (show) {
+        // Build mode's own arrangement, as it was left (normal play keeps its own: ui/WindowLayout.h); the first
+        // time, its panels where they start and the others as they are
+        if (!layout->enterBuildMode()) {
+            _hierarchy->show();
+            _inspector->show();
+            _assets->show();
+            for (const auto& share : _sharesToSize) {
+                if (share.first && share.second && !share.second->isHidden() && !share.second->isFloating()) {
+                    window->resizeDocks({ share.first, share.second }, { 3000, 2000 }, Qt::Vertical);
+                }
+            }
+        }
+        _sharesToSize.clear();
+        placeToolBars();   // the rows are placed here rather than left to a saved layout
+    } else {
+        layout->leaveBuildMode();
+        // the Hierarchy and the Inspector are Build mode's only, whatever normal play's arrangement says
+        _hierarchy->hide();
+        _inspector->hide();
+    }
     _toolBar->setVisible(show);
     _statusBar->setVisible(show);
     updateTerrainBar();
 }
 
-void Editor::resetLayout() {
+QList<QDockWidget*> Editor::otherDockedPanels() const {
+    QList<QDockWidget*> found;
     auto window = qApp->getWindow();
-    if (!_panelsCreated || !window) {
+    if (!window) {
+        return found;
+    }
+    for (QDockWidget* dock : window->findChildren<QDockWidget*>()) {
+        if (dock != _hierarchy && dock != _inspector && dock != _assets && !dock->isHidden() && !dock->isFloating() &&
+            window->dockWidgetArea(dock) != Qt::NoDockWidgetArea) {
+            found << dock;
+        }
+    }
+    return found;
+}
+
+void Editor::placeAbove(QDockWidget* ours, Qt::DockWidgetArea area) {
+    auto window = qApp->getWindow();
+    for (QDockWidget* other : otherDockedPanels()) {
+        if (window->dockWidgetArea(other) == area) {
+            // added after it, ours would sit under it with only what it asks for (the Inspector came out 86 px tall
+            // under chat, 10-25); the sizes given later are shares, which Qt fits to the side
+            window->splitDockWidget(ours, other, Qt::Vertical);
+            // 3 to 2, once ours shows (showPanels)
+            _sharesToSize.append(qMakePair(QPointer<QDockWidget>(ours), QPointer<QDockWidget>(other)));
+            return;
+        }
+    }
+}
+
+namespace {
+    // Darkride's own panel colours (styles/editor.qss) and the skin colour each one becomes under a skin (SKINS.md
+    // "colors"): backgrounds, fields, headers, hovers, lines, text and the selection blue. The orange World Edit button,
+    // the read-only banner, white text on the selection and the terrain drop target's light blues keep their own.
+    const QHash<QString, QString>& skinRoleForColor() {
+        static const QHash<QString, QString> ROLES {
+            { "#383838", "background" },
+            { "#2a2a2a", "fill" }, { "#2f2f2f", "fill" }, { "#323232", "fill" },
+            { "#3c3c3c", "card" }, { "#454545", "card" }, { "#3a3a3a", "card" },
+            { "#404040", "cardPressed" }, { "#474747", "cardPressed" }, { "#505050", "cardPressed" },
+            { "#1f1f1f", "separator" }, { "#232323", "separator" }, { "#262626", "separator" }, { "#2b2b2b", "separator" },
+            { "#5a5a5a", "segmentThumb" }, { "#555555", "segmentThumb" },
+            { "#d2d2d2", "text" }, { "#c4c4c4", "text" }, { "#f0f0f0", "text" },
+            { "#b8b8b8", "secondaryText" }, { "#9a9a9a", "secondaryText" }, { "#8f8f8f", "secondaryText" },
+            { "#8a8a8a", "secondaryText" },
+            { "#7a7a7a", "tertiaryText" }, { "#6a6a6a", "tertiaryText" },
+            { "#2c5d87", "tint" }, { "#3a6f9c", "tint" },
+            { "#ff6b6b", "destructive" }
+        };
+        return ROLES;
+    }
+    const QString STYLE_BEGIN = "/* build mode panels: begin */";
+    const QString STYLE_END = "/* build mode panels: end */";
+}
+
+void Editor::applyStyle() {
+    auto window = qApp->getWindow();
+    if (!window || _styleSource.isEmpty()) {
         return;
     }
-    _hierarchy->setFloating(false);
-    _inspector->setFloating(false);
-    _assets->setFloating(false);
-    window->addDockWidget(Qt::LeftDockWidgetArea, _hierarchy);
-    window->addDockWidget(Qt::RightDockWidgetArea, _inspector);
-    window->addDockWidget(Qt::BottomDockWidgetArea, _assets);
-    window->resizeDocks({ _hierarchy, _inspector }, { 260, 430 }, Qt::Horizontal);
-    window->resizeDocks({ _assets }, { 240 }, Qt::Vertical);
-    placeToolBars();
-    showPanels(_active);
-    _layoutSetting.set(QByteArray());
+    // the skin's colours over Darkride's own, where the skin gives that role a colour (a skin may set only some)
+    QString themed = _styleSource;
+    QVariantMap colors = DependencyManager::get<PanelTheme>()->getSkin().value("colors").toMap();
+    if (!colors.isEmpty()) {
+        static const QRegularExpression HEX("#[0-9a-fA-F]{6}\\b");
+        QString out;
+        int last = 0;
+        auto matches = HEX.globalMatch(_styleSource);
+        while (matches.hasNext()) {
+            auto match = matches.next();
+            QString role = skinRoleForColor().value(match.captured(0).toLower());
+            QColor skinColor(colors.value(role).toString());
+            out += _styleSource.mid(last, match.capturedStart() - last);
+            out += (!role.isEmpty() && skinColor.isValid()) ? skinColor.name(QColor::HexArgb) : match.captured(0);
+            last = match.capturedEnd();
+        }
+        out += _styleSource.mid(last);
+        themed = out;
+    }
+    // the Hierarchy's rows that take their own colour: red, couldn't load (destructive); grey, not loaded yet
+    // (tertiaryText)
+    if (_treeModel) {
+        QColor failed(colors.value("destructive").toString());
+        QColor unloaded(colors.value("tertiaryText").toString());
+        _treeModel->setRowColors(failed.isValid() ? failed : QColor(255, 107, 107),
+                                 unloaded.isValid() ? unloaded : QColor(0x7a, 0x7a, 0x7a));
+    }
+    // the window's sheet holds other parts too: ours goes between its markers, in place
+    QString sheet = window->styleSheet();
+    int begin = sheet.indexOf(STYLE_BEGIN);
+    int end = sheet.indexOf(STYLE_END);
+    QString block = STYLE_BEGIN + "\n" + themed + "\n" + STYLE_END;
+    if (begin >= 0 && end > begin) {
+        sheet.replace(begin, end + STYLE_END.size() - begin, block);
+    } else {
+        sheet += "\n" + block;
+    }
+    window->setStyleSheet(sheet);
+}
+
+void Editor::resetLayout() {
+    // every panel back where it started (as Caity was told, 10-25), chat's too: floating at its first size and place,
+    // open or closed as it was. My Files docks along the bottom, closed in normal play (ui/WindowLayout::resetToDefault
+    // closes the bar's panels)
+    ChatWindow::resetDock();
+    WindowLayout::instance()->saveSoon();
+    auto window = qApp->getWindow();
+    if (!window) {
+        return;
+    }
+    {
+        gl::ViewChangeGuard guard;   // the panels moving resize the GL view
+        if (_assets) {
+            _assets->setFloating(false);
+            window->addDockWidget(Qt::BottomDockWidgetArea, _assets);
+            window->resizeDocks({ _assets }, { 240 }, Qt::Vertical);
+            _assets->setVisible(_active);
+        }
+        if (_panelsCreated) {
+            _hierarchy->setFloating(false);
+            _inspector->setFloating(false);
+            window->addDockWidget(Qt::LeftDockWidgetArea, _hierarchy);
+            window->addDockWidget(Qt::RightDockWidgetArea, _inspector);
+            window->resizeDocks({ _hierarchy, _inspector }, { 260, 430 }, Qt::Horizontal);
+        }
+    }
+    if (_panelsCreated) {
+        placeToolBars();
+        showPanels(_active);
+    }
+}
+
+void Editor::layoutApplied(bool savedInBuildMode) {
+    if (!_panelsCreated) {
+        return;   // Build mode's panels take their places from the layout when they're made
+    }
+    gl::ViewChangeGuard guard;   // panels coming and going change the window round the GL view
+    if (_active) {
+        // a layout from normal play has Build mode's panels closed
+        if (!savedInBuildMode) {
+            _hierarchy->show();
+            _inspector->show();
+        }
+        placeToolBars();
+    } else {
+        _hierarchy->hide();
+        _inspector->hide();
+    }
+    _toolBar->setVisible(_active);
+    _statusBar->setVisible(_active);
+    updateTerrainBar();
 }
 
 // --- every frame --------------------------------------------------------------------------------
@@ -699,11 +1082,18 @@ void Editor::update(float deltaTime) {
     if (++_frameCounter % PRUNE_EVERY_FRAMES == 0 && !_gizmo.isDragging()) {
         _selection.prune();
     }
+    _loadCheckSeconds += deltaTime;
+    if (_loadCheckSeconds >= LOAD_CHECK_SECONDS) {
+        _loadCheckSeconds = 0.0f;
+        refreshLoadProblems();
+    }
     // the grid's lines are a set width in points, not pixels, so they don't thin to a hair on a Retina display
     _grid.setPixelsPerPoint((float)qApp->getDevicePixelRatio() * RenderScriptingInterface::getInstance()->getViewportResolutionScale());
     updateGizmo();
     updateBounds();
     updateLightGizmos();
+    updateVehicleGizmos();
+    updateTrackGizmos();
     _terrain.setView(_camera.position(), 2.0f * tanHalfFov() / viewportHeight());
     if (_tool == EditorToolBar::Tool::Terrain) {
         _terrain.update(deltaTime);
@@ -855,14 +1245,357 @@ void Editor::updateLightGizmos() {
     _lightGizmos.update(lights, handlesFor, cameraPosition, viewDirection(), pixelSize);
 }
 
+void Editor::updateVehicleGizmos() {
+    // the points the physics acts at: the centre of mass in orange, an airship's or aircraft's others in white
+    static const glm::vec4 MASS_COLOR(1.0f, 0.6f, 0.2f, 1.0f);
+    static const glm::vec4 POINT_COLOR(0.92f, 0.92f, 0.92f, 1.0f);
+    static const float MASS_CROSS = 0.3f;
+    static const float POINT_CROSS = 0.2f;
+    std::vector<EditorVehicleGizmoVehicle> vehicles;
+    auto tree = entityTree();
+    if (tree && !_selection.isEmpty()) {
+        tree->withReadLock([&] {
+            QSet<QUuid> shown;
+            for (const auto& id : _selection.ids()) {
+                auto entity = tree->findEntityByEntityItemID(id);
+                if (!entity) {
+                    continue;
+                }
+                // a wheel entity selected shows its parent's gizmo, with that wheel bright
+                QString chosenWheel;
+                if (entity->isWheel()) {
+                    chosenWheel = entity->getVehicleProperties().getWheel();
+                    entity = tree->findEntityByEntityItemID(entity->getParentID());
+                    if (!entity) {
+                        continue;
+                    }
+                }
+                if (!entity->isVehicle() || shown.contains(entity->getID())) {
+                    continue;
+                }
+                shown.insert(entity->getID());
+                const VehiclePropertyGroup& group = entity->getVehicleProperties();
+                EditorVehicleGizmoVehicle vehicle;
+                vehicle.position = entity->getWorldPosition();
+                vehicle.rotation = entity->getWorldOrientation();
+                // the Inspector's chosen rows are on the first vehicle selected (the one the Inspector shows)
+                bool first = vehicles.empty() && chosenWheel.isEmpty();
+                int chosenWheelRow = first ? _vehiclePartChosen.value(QStringLiteral("vehicle.wheels"), -1) : -1;
+                int chosenSeatRow = first ? _vehiclePartChosen.value(QStringLiteral("vehicle.seats"), -1) : -1;
+                std::vector<WheelSpec> wheels;
+                WheeledVehicleSpec::parseWheels(group.getWheels(), wheels);
+                for (size_t i = 0; i < wheels.size(); ++i) {
+                    const WheelSpec& wheel = wheels[i];
+                    EditorVehicleGizmoWheel gizmo;
+                    gizmo.center = wheel.center;
+                    gizmo.radius = wheel.radius;
+                    gizmo.width = wheel.width;
+                    gizmo.travel = wheel.suspensionDistance;
+                    gizmo.rest = 1.0f - wheel.targetPosition;
+                    gizmo.chosen = (int)i == chosenWheelRow || (!chosenWheel.isEmpty() && wheel.name == chosenWheel);
+                    vehicle.wheels.push_back(gizmo);
+                }
+                std::vector<SeatSpec> seats;
+                WheeledVehicleSpec::parseSeats(group.getSeats(), seats);
+                for (size_t i = 0; i < seats.size(); ++i) {
+                    const SeatSpec& seat = seats[i];
+                    EditorVehicleGizmoSeat gizmo;
+                    gizmo.position = seat.position;
+                    gizmo.yaw = seat.yaw;
+                    gizmo.driver = seat.driver;
+                    gizmo.chosen = (int)i == chosenSeatRow;
+                    vehicle.seats.push_back(gizmo);
+                }
+                auto point = [&](const glm::vec3& position, float size, const glm::vec4& color) {
+                    EditorVehicleGizmoPoint gizmo;
+                    gizmo.position = position;
+                    gizmo.size = size;
+                    gizmo.color = color;
+                    vehicle.points.push_back(gizmo);
+                };
+                point(group.getCenterOfMass(), MASS_CROSS, MASS_COLOR);
+                if (entity->isAirship()) {
+                    point(group.getCenterOfBuoyancy(), POINT_CROSS, POINT_COLOR);
+                    point(group.getThrustPoint(), POINT_CROSS, POINT_COLOR);
+                    point(group.getFinPoint(), POINT_CROSS, POINT_COLOR);
+                } else if (entity->isAircraft()) {
+                    point(group.getWingPoint(), POINT_CROSS, POINT_COLOR);
+                    point(group.getThrustPoint(), POINT_CROSS, POINT_COLOR);
+                    point(group.getFinPoint(), POINT_CROSS, POINT_COLOR);
+                }
+                vehicles.push_back(vehicle);
+            }
+        });
+    }
+    if (vehicles != _vehicleGizmoVehicles) {
+        _vehicleGizmoVehicles = vehicles;
+        _vehicleGizmos.setVehicles(vehicles);
+    }
+}
+
+void Editor::updateTrackGizmos() {
+    auto tree = entityTree();
+    if (!tree) {
+        _trackGizmos.clear();
+        return;
+    }
+    glm::vec3 cameraPosition = _camera.position();
+    // the tracks round the camera, looked for now and then, as the lights are
+    if (_gizmosVisible && (_trackSearchFrame < 0 || _frameCounter - _trackSearchFrame >= TRACK_SEARCH_FRAMES)) {
+        _trackSearchFrame = _frameCounter;
+        QVector<QUuid> found;
+        tree->withReadLock([&] {
+            tree->evalEntitiesInSphereWithType(cameraPosition, TRACK_SEARCH_RADIUS, EntityTypes::Track, lightSearchFilter(), found);
+        });
+        _nearbyTracks = found;
+    }
+
+    std::vector<EditorTrackGizmoTrack> tracks;
+    QSet<QUuid> shown;
+    const auto& selected = _selection.ids();
+    tree->withReadLock([&] {
+        auto show = [&](const QUuid& id) {
+            if (shown.contains(id)) {
+                return;
+            }
+            auto entity = tree->findEntityByEntityItemID(id);
+            auto track = std::dynamic_pointer_cast<TrackEntityItem>(entity);
+            if (!track) {
+                return;
+            }
+            shown.insert(id);
+            EditorTrackGizmoTrack gizmo;
+            gizmo.id = id;
+            gizmo.position = track->getWorldPosition();
+            gizmo.rotation = track->getWorldOrientation();
+            QVector<glm::vec3> points = track->getTrackPoints();
+            QVector<float> bank = track->getTrackBank();
+            QVector<float> dwell = track->getTrackDwell();
+            gizmo.points.assign(points.begin(), points.end());
+            gizmo.bank.assign(bank.begin(), bank.end());
+            gizmo.dwell.assign(dwell.begin(), dwell.end());
+            gizmo.closed = track->getTrackClosed();
+            gizmo.selected = selected.contains(id);
+            tracks.push_back(gizmo);
+        };
+        for (const auto& id : selected) {
+            show(id);
+        }
+        if (_gizmosVisible) {
+            for (const auto& id : _nearbyTracks) {
+                show(id);
+            }
+        }
+    });
+
+    // a track selected on its own gets handles on its points, unless the world can't be changed
+    QUuid handlesFor;
+    if (!_readOnly && trackPointTrack(handlesFor) && !shown.contains(handlesFor)) {
+        handlesFor = QUuid();
+    }
+    int chosen = handlesFor.isNull() || handlesFor != _trackPointTrack ? -1 : _trackPointChosen;
+    float pixelSize = 2.0f * tanHalfFov() / viewportHeight();
+    _trackGizmos.update(tracks, handlesFor, chosen, cameraPosition, viewDirection(), pixelSize);
+}
+
+bool Editor::trackPointTrack(QUuid& id) const {
+    if (_selection.count() != 1) {
+        return false;
+    }
+    auto tree = entityTree();
+    if (!tree) {
+        return false;
+    }
+    QUuid only = _selection.ids().first();
+    bool track = false;
+    tree->withReadLock([&] {
+        auto entity = tree->findEntityByEntityItemID(only);
+        track = entity && entity->getType() == EntityTypes::Track;
+    });
+    if (track) {
+        id = only;
+    }
+    return track;
+}
+
+void Editor::chooseTrackPoint(int index, bool fromInspector) {
+    QUuid trackId;
+    if (index < 0 || !trackPointTrack(trackId)) {
+        index = -1;
+        trackId = QUuid();
+    }
+    bool changed = index != _trackPointChosen || trackId != _trackPointTrack;
+    _trackPointChosen = index;
+    _trackPointTrack = trackId;
+    if (changed && !fromInspector && _inspector) {
+        _inspector->chooseTrackPoint(index);
+    }
+    if (index >= 0 && _tool != EditorToolBar::Tool::Move && !fromInspector) {
+        setTool(EditorToolBar::Tool::Move);   // the point is moved with the Move gizmo
+    }
+    updateTrackGizmos();
+    updateGizmo();
+}
+
+void Editor::fitTrackBox(const EntityItemPointer& track, const QVector<glm::vec3>& points, EntityItemProperties& properties) const {
+    auto item = std::dynamic_pointer_cast<TrackEntityItem>(track);
+    if (!item || points.isEmpty()) {
+        return;
+    }
+    // the curve's points, with the guideway hanging below them (its beam, and the pylons down to their floor) and
+    // a margin round it all; the curve can bow a little past its points, which the margin covers
+    glm::vec3 low = points.first();
+    glm::vec3 high = points.first();
+    for (const glm::vec3& point : points) {
+        low = glm::min(low, point);
+        high = glm::max(high, point);
+    }
+    bool beam = item->getTrackProfile() != QStringLiteral("none");
+    float side = beam ? 0.5f * item->getTrackWidth() : 0.0f;
+    float drop = beam ? item->getTrackClearance() + item->getTrackHeight() : 0.0f;
+    low -= glm::vec3(side, drop, side);
+    high += glm::vec3(side, 0.0f, side);
+    if (beam && item->getTrackPylonSpacing() > 0.0f) {
+        low.y = std::min(low.y, item->getTrackPylonFloor());
+    }
+    low -= glm::vec3(TRACK_BOX_MARGIN);
+    high += glm::vec3(TRACK_BOX_MARGIN);
+    // the box sits at the entity's registration point: each axis reaches as far as the farther side needs
+    glm::vec3 registration = glm::clamp(item->getRegistrationPoint(), glm::vec3(0.01f), glm::vec3(0.99f));
+    glm::vec3 dimensions;
+    for (int axis = 0; axis < 3; ++axis) {
+        dimensions[axis] = std::max(std::max(-low[axis], 0.0f) / registration[axis], std::max(high[axis], 0.0f) / (1.0f - registration[axis]));
+        dimensions[axis] = std::max(dimensions[axis], 2.0f * TRACK_BOX_MARGIN);
+    }
+    properties.setDimensions(dimensions);
+}
+
+void Editor::insertTrackPoint(float arcLength) {
+    QUuid trackId;
+    if (!editable() || !trackPointTrack(trackId)) {
+        return;
+    }
+    auto tree = entityTree();
+    if (!tree) {
+        return;
+    }
+    EntityItemProperties before;
+    EntityItemProperties after;
+    int inserted = -1;
+    tree->withReadLock([&] {
+        auto entity = tree->findEntityByEntityItemID(trackId);
+        auto track = std::dynamic_pointer_cast<TrackEntityItem>(entity);
+        if (!track || track->getLocked()) {
+            return;
+        }
+        QVector<glm::vec3> points = track->getTrackPoints();
+        QVector<float> bank = track->getTrackBank();
+        QVector<float> dwell = track->getTrackDwell();
+        if (points.size() >= TrackEntityItem::MAX_POINTS) {
+            return;
+        }
+        bank.resize(points.size());
+        dwell.resize(points.size());
+        TrackCurve curve;
+        curve.build(std::vector<glm::vec3>(points.begin(), points.end()), std::vector<float>(bank.begin(), bank.end()), track->getTrackClosed());
+        if (!curve.isValid()) {
+            return;
+        }
+        arcLength = curve.normalize(arcLength);
+        // the segment the spot is in: after the last point whose arc length it has passed (on a loop, the segment
+        // back to the first point comes after the last)
+        int segment = 0;
+        for (int i = 0; i < points.size(); ++i) {
+            if (curve.arcLengthAtPoint(i) <= arcLength) {
+                segment = i;
+            }
+        }
+        int next = (segment + 1) % points.size();
+        float from = curve.arcLengthAtPoint(segment);
+        float to = next == 0 ? curve.length() : curve.arcLengthAtPoint(next);
+        float fraction = to > from ? glm::clamp((arcLength - from) / (to - from), 0.0f, 1.0f) : 0.0f;
+        before.setTrackPoints(points);
+        before.setTrackBank(bank);
+        before.setTrackDwell(dwell);
+        before.setDimensions(track->getScaledDimensions());
+        inserted = segment + 1;
+        points.insert(inserted, curve.positionAt(arcLength));
+        bank.insert(inserted, glm::mix(bank[segment], bank[next], fraction));
+        dwell.insert(inserted, 0.0f);
+        after.setTrackPoints(points);
+        after.setTrackBank(bank);
+        after.setTrackDwell(dwell);
+        fitTrackBox(entity, points, after);
+    });
+    if (inserted < 0) {
+        return;
+    }
+    _undo.pushPropertyEdit("Insert Point", { trackId }, { before }, { after }, false);
+    chooseTrackPoint(inserted, false);
+    refreshInspector(false);
+}
+
+void Editor::deleteTrackPoint() {
+    QUuid trackId;
+    if (!editable() || _trackPointChosen < 0 || !trackPointTrack(trackId) || _gizmo.isDragging()) {
+        return;
+    }
+    auto tree = entityTree();
+    if (!tree) {
+        return;
+    }
+    EntityItemProperties before;
+    EntityItemProperties after;
+    int remaining = -1;
+    int index = _trackPointChosen;
+    tree->withReadLock([&] {
+        auto entity = tree->findEntityByEntityItemID(trackId);
+        auto track = std::dynamic_pointer_cast<TrackEntityItem>(entity);
+        if (!track || track->getLocked()) {
+            return;
+        }
+        QVector<glm::vec3> points = track->getTrackPoints();
+        QVector<float> bank = track->getTrackBank();
+        QVector<float> dwell = track->getTrackDwell();
+        if (index >= points.size() || points.size() <= (int)TrackCurve::MIN_POINTS) {
+            return;   // a track keeps two points at least
+        }
+        bank.resize(points.size());
+        dwell.resize(points.size());
+        before.setTrackPoints(points);
+        before.setTrackBank(bank);
+        before.setTrackDwell(dwell);
+        before.setDimensions(track->getScaledDimensions());
+        points.removeAt(index);
+        bank.removeAt(index);
+        dwell.removeAt(index);
+        after.setTrackPoints(points);
+        after.setTrackBank(bank);
+        after.setTrackDwell(dwell);
+        fitTrackBox(entity, points, after);
+        remaining = points.size();
+    });
+    if (remaining < 0) {
+        setStatus("A track keeps two points at least", STATUS_CLEAR_MS);
+        return;
+    }
+    _undo.pushPropertyEdit("Delete Point", { trackId }, { before }, { after }, false);
+    chooseTrackPoint(std::min(index, remaining - 1), false);
+    refreshInspector(false);
+}
+
 bool Editor::pointerOverHierarchy() const {
     return _hierarchy && _hierarchy->isVisible() && _hierarchy->rect().contains(_hierarchy->mapFromGlobal(QCursor::pos()));
 }
 
 QUuid Editor::pickAt(const QPoint& viewportPos) const {
+    return pickOnRay(pickRay(viewportPos));
+}
+
+QUuid Editor::pickOnRay(const PickRay& ray) const {
     // icons are drawn over everything, so they are picked first, as in Unity
-    QUuid icon = _lightGizmos.iconAt(pickRay(viewportPos));
-    return icon.isNull() ? pickEntity(viewportPos) : icon;
+    QUuid icon = _lightGizmos.iconAt(ray);
+    return icon.isNull() || excludedFromPicks(icon) ? pickEntityOnRay(ray) : icon;
 }
 
 float Editor::lightHandleValue(const PickRay& ray) const {
@@ -966,6 +1699,14 @@ bool Editor::primaryTransform(glm::vec3& position, glm::quat& rotation) const {
 }
 
 glm::vec3 Editor::gizmoPosition() const {
+    // a Track's chosen control point: the Move gizmo stands on it
+    QUuid trackId;
+    if (_trackPointChosen >= 0 && _tool == EditorToolBar::Tool::Move && trackPointTrack(trackId)) {
+        EditorTrackGizmoTrack track;
+        if (_trackGizmos.handleTrack(track) && track.id == trackId && _trackPointChosen < (int)track.points.size()) {
+            return _trackGizmos.pointInWorld(_trackPointChosen);
+        }
+    }
     glm::vec3 position;
     glm::quat rotation;
     if (_pivotMode && primaryTransform(position, rotation)) {
@@ -995,7 +1736,7 @@ void Editor::updateGizmo() {
         glm::vec3 position;
         glm::quat rotation;
         if (_gizmo.isDragging()) {
-            position = _dragPivot + (_dragKind == DragKind::Move ? _dragDelta : glm::vec3(0.0f));
+            position = _dragPivot + ((_dragKind == DragKind::Move || _dragKind == DragKind::TrackPoint) ? _dragDelta : glm::vec3(0.0f));
             rotation = _dragGizmoRotation;
         } else {
             position = gizmoPosition();
@@ -1037,9 +1778,18 @@ void Editor::onSelectionChanged() {
     if (_selectionBatch == 0) {
         recordSelection();
     }
+    QUuid trackId;
+    if (_trackPointChosen >= 0 && (!trackPointTrack(trackId) || trackId != _trackPointTrack)) {
+        _trackPointChosen = -1;
+        _trackPointTrack = QUuid();
+    }
+    // rows chosen in the Hierarchy that have not arrived are given up when the selection is made elsewhere
+    if (!_syncingSelection && !_selectingArrival) {
+        _arrivalIds.clear();
+    }
     if (_hierarchy && !_syncingSelection) {
         _syncingSelection = true;
-        _hierarchy->selectIds(_selection.ids());
+        _hierarchy->selectIds(_selection.ids() + _arrivalIds);
         _syncingSelection = false;
     }
     refreshInspector(true);
@@ -1077,6 +1827,59 @@ bool Editor::selectionSnapshots(QVector<EntityItemProperties>& snapshots, Entity
     return !snapshots.isEmpty();
 }
 
+// --- what failed to load (Caity, 10-24: an Image whose picture never came, and nothing said so) --------------------
+
+void Editor::refreshLoadProblems() {
+    // every entity the Hierarchy lists: its row goes red while its model, image or a texture has failed, with the
+    // reasons in its tooltip; asked of the renderers (EntityRenderer::loadFailures), so an entity too far away to have
+    // been loaded says nothing yet
+    auto treeRenderer = DependencyManager::get<EntityTreeRenderer>();
+    if (!_treeModel || !treeRenderer) {
+        return;
+    }
+    for (const auto& id : _treeModel->allIds()) {
+        auto renderer = treeRenderer->renderableForEntityId(id);
+        _treeModel->setLoadProblem(id, renderer ? renderer->loadFailures().join("\n") : QString());
+    }
+    if (_inspector && !_selection.isEmpty()) {
+        _inspector->setLoadProblem(selectionLoadProblem());
+    }
+}
+
+QColor Editor::hierarchyRowColor(const QUuid& id) const {
+    return _treeModel ? _treeModel->rowColor(id) : QColor();
+}
+
+QString Editor::loadProblem(const QUuid& id) const {
+    return _treeModel ? _treeModel->loadProblem(id) : QString();
+}
+
+QString Editor::selectionLoadProblem() const {
+    if (!_treeModel) {
+        return QString();
+    }
+    const int MAX_LINES = 6;
+    QStringList lines;
+    bool several = _selection.ids().size() > 1;
+    for (const auto& id : _selection.ids()) {
+        QString problem = _treeModel->loadProblem(id);
+        if (problem.isEmpty()) {
+            continue;
+        }
+        if (several) {
+            // which of the selected it is: its row's name in the Hierarchy
+            QString name = _treeModel->data(_treeModel->indexForId(id), Qt::DisplayRole).toString();
+            problem = name + ": " + problem;
+        }
+        lines << problem;
+        if (lines.size() >= MAX_LINES) {
+            lines << "…";
+            break;
+        }
+    }
+    return lines.join("\n");
+}
+
 void Editor::refreshInspector(bool selectionChanged) {
     if (!_inspector || !_active) {
         return;
@@ -1099,9 +1902,17 @@ void Editor::refreshInspector(bool selectionChanged) {
             title = QString("%1 entities selected").arg(snapshots.size());
         }
         _inspector->showEntities(snapshots, type, multiple, title);
+        _inspector->setLoadProblem(selectionLoadProblem());
     } else if (_inspectorEditKey.isEmpty() || !_lightHandleDrag.isNone()) {
         // a light handle's drag is an edit no field is making: the fields follow it
         _inspector->refreshValues(snapshots);
+    }
+    updateInspectorToggles();
+}
+
+void Editor::updateInspectorToggles() {
+    if (_inspector && _hierarchy) {
+        _inspector->setToggleStates(_hierarchy->statesFor(_selection.ids()));
     }
 }
 
@@ -1135,6 +1946,134 @@ EntityItemProperties Editor::inspectorEdit(const QString& key, const QVariant& v
     return properties;
 }
 
+// an Inspector edit that scales what it changes, and so its children
+static bool scalesChildren(const QString& key) {
+    return key == SCALE_KEY || key == QStringLiteral("dimensions");
+}
+
+// an entity's new size over its old, along each of its axes (1 along one it had no size on)
+static glm::vec3 sizeRatio(const glm::vec3& before, const glm::vec3& after) {
+    glm::vec3 ratio(1.0f);
+    for (int i = 0; i < 3; ++i) {
+        if (before[i] > 0.0f) {
+            ratio[i] = after[i] / before[i];
+        }
+    }
+    return ratio;
+}
+
+// a scale along a parent's x, y and z, seen along each axis of something turned by `rotation` in it: exact for a scale
+// the same along all three and for a turn by right angles; otherwise the nearest without a skew, which entities can't
+// have (Unity's children skew)
+static glm::vec3 scaleAlong(const glm::vec3& ratio, const glm::quat& rotation) {
+    return glm::vec3(glm::length(ratio * (rotation * Vectors::UNIT_X)), glm::length(ratio * (rotation * Vectors::UNIT_Y)),
+                     glm::length(ratio * (rotation * Vectors::UNIT_Z)));
+}
+
+QVector<Editor::ScaledChild> Editor::childrenToScale(const QList<QUuid>& ids) const {
+    QVector<ScaledChild> children;
+    auto tree = entityTree();
+    if (!tree) {
+        return children;
+    }
+    tree->withReadLock([&] {
+        auto add = [&](const EntityItemPointer& parent, int parentIndex) {
+            parent->forEachChild([&](const SpatiallyNestablePointer& nestable) {
+                if (nestable->getNestableType() != NestableType::Entity || ids.contains(nestable->getID())) {
+                    return;
+                }
+                auto child = std::static_pointer_cast<EntityItem>(nestable);
+                if (child->getLocked()) {
+                    return;
+                }
+                ScaledChild entry;
+                entry.id = child->getID();
+                entry.parent = parentIndex;
+                entry.localPosition = child->getLocalPosition();
+                entry.dimensions = child->getUnscaledDimensions();
+                entry.localRotation = child->getLocalOrientation();
+                quint16 joint = child->getParentJointIndex();
+                if (joint != INVALID_JOINT_INDEX) {
+                    entry.frame = parent->getAbsoluteJointRotationInObjectFrame(joint);
+                }
+                if (child->getType() == EntityTypes::Text) {
+                    entry.lineHeight = std::static_pointer_cast<TextEntityItem>(child)->getLineHeight();
+                } else if (child->getType() == EntityTypes::Light) {
+                    entry.falloff = std::static_pointer_cast<LightEntityItem>(child)->getFalloffRadius();
+                }
+                children << entry;
+            });
+        };
+        for (int i = 0; i < ids.size(); ++i) {
+            int first = children.size();
+            if (auto entity = tree->findEntityByEntityItemID(ids[i])) {
+                add(entity, -1 - i);
+            }
+            for (int j = first; j < children.size(); ++j) {
+                if (auto child = tree->findEntityByEntityItemID(children[j].id)) {
+                    add(child, j);
+                }
+            }
+        }
+    });
+    return children;
+}
+
+QVector<EntityItemProperties> Editor::childScaleEdits(const QVector<ScaledChild>& children,
+                                                      const QVector<glm::vec3>& ratios) {
+    QVector<EntityItemProperties> edits;
+    QVector<glm::vec3> own;   // each child's scale along its own axes, which its own children grow by
+    for (const auto& child : children) {
+        glm::vec3 ratio = child.parent < 0 ? ratios.value(-1 - child.parent, glm::vec3(1.0f)) : own[child.parent];
+        // its offset grows along its parent's axes (a joint's offset along the joint's)
+        glm::vec3 offset = glm::inverse(child.frame) * (ratio * (child.frame * child.localPosition));
+        own << scaleAlong(ratio, child.frame * child.localRotation);
+        glm::vec3 scale = own.last();
+        EntityItemProperties properties;
+        properties.setLocalPosition(offset);
+        if (child.falloff > 0.0f) {
+            // a light's range is a sphere: it grows by its mean, its glow with it
+            scale = glm::vec3((scale.x + scale.y + scale.z) / 3.0f);
+            properties.setFalloffRadius(child.falloff * scale.x);
+        }
+        properties.setLocalDimensions(glm::max(child.dimensions * scale, glm::vec3(MIN_DIMENSION)));
+        if (child.lineHeight > 0.0f) {
+            properties.setLineHeight(child.lineHeight * scale.y);
+        }
+        edits << properties;
+    }
+    return edits;
+}
+
+EntityItemProperties Editor::childScaleBefore(const ScaledChild& child) {
+    EntityItemProperties properties;
+    properties.setLocalPosition(child.localPosition);
+    properties.setLocalDimensions(child.dimensions);
+    if (child.falloff > 0.0f) {
+        properties.setFalloffRadius(child.falloff);
+    }
+    if (child.lineHeight > 0.0f) {
+        properties.setLineHeight(child.lineHeight);
+    }
+    return properties;
+}
+
+void Editor::sendChildScale(const QVector<ScaledChild>& children, const QVector<EntityItemProperties>& edits, bool final) {
+    auto entities = DependencyManager::get<EntityScriptingInterface>();
+    auto tree = entityTree();
+    for (int i = 0; i < children.size() && i < edits.size(); ++i) {
+        entities->editEntity(children[i].id, edits[i]);
+        if (!final && tree) {
+            // as for the entity scaled: while the drag lasts, the old collision shape is good enough
+            tree->withWriteLock([&] {
+                if (auto entity = tree->findEntityByEntityItemID(children[i].id)) {
+                    entity->clearDirtyFlags(Simulation::DIRTY_SHAPE | Simulation::DIRTY_MASS);
+                }
+            });
+        }
+    }
+}
+
 void Editor::onInspectorEditBegan(const QString& key) {
     // a scrub starts (or a colour picker opens): what the entities hold now is the undo point
     _inspectorEditKey = key;
@@ -1163,6 +2102,7 @@ void Editor::onInspectorEditBegan(const QString& key) {
         _inspectorBefore << before;
         _inspectorNatural << naturalSize;
     }
+    _inspectorChildren = scalesChildren(key) ? childrenToScale(_inspectorEditIds) : QVector<ScaledChild>();
 }
 
 void Editor::onInspectorLiveEdit(const QString& key, const QVariant& value) {
@@ -1189,8 +2129,14 @@ void Editor::applyLiveEdit(const QString& key, QVariant value) {
     _liveEditClock.restart();
     _liveEditValue = QVariant();
     auto entities = DependencyManager::get<EntityScriptingInterface>();
+    QVector<glm::vec3> ratios;
     for (int i = 0; i < _inspectorEditIds.size(); ++i) {
-        entities->editEntity(_inspectorEditIds[i], inspectorEdit(key, value, _inspectorNatural[i], _inspectorBefore[i]));
+        EntityItemProperties edit = inspectorEdit(key, value, _inspectorNatural[i], _inspectorBefore[i]);
+        entities->editEntity(_inspectorEditIds[i], edit);
+        ratios << sizeRatio(_inspectorBefore[i].getDimensions(), edit.getDimensions());
+    }
+    if (!_inspectorChildren.isEmpty()) {
+        sendChildScale(_inspectorChildren, childScaleEdits(_inspectorChildren, ratios), true);
     }
 }
 
@@ -1205,11 +2151,23 @@ void Editor::onInspectorEditCancelled(const QString& key) {
     for (int i = 0; i < _inspectorEditIds.size(); ++i) {
         entities->editEntity(_inspectorEditIds[i], _inspectorBefore[i]);
     }
+    QVector<EntityItemProperties> childrenBefore;
+    for (const auto& child : _inspectorChildren) {
+        childrenBefore << childScaleBefore(child);
+    }
+    sendChildScale(_inspectorChildren, childrenBefore, true);
     _inspectorEditKey.clear();
     _inspectorEditIds.clear();
     _inspectorBefore.clear();
     _inspectorNatural.clear();
+    _inspectorChildren.clear();
     refreshInspector(false);
+}
+
+void Editor::testInspectorEdit(const QString& key, const QVariant& value) {
+    onInspectorEditBegan(key);
+    onInspectorLiveEdit(key, value);
+    onInspectorCommitted(key, value);
 }
 
 void Editor::onInspectorCommitted(const QString& key, const QVariant& value) {
@@ -1232,6 +2190,7 @@ void Editor::commitInspectorEdit(const QString& key, const QVariant& value, cons
     QList<QUuid> ids;
     QVector<EntityItemProperties> before;
     QVector<glm::vec3> naturalSizes;
+    QVector<ScaledChild> children;
     bool alreadyApplied = key == _inspectorEditKey && !_inspectorEditIds.isEmpty();
     bool entryRefused = false;   // an entry of a JSON property, on an entity whose property can't hold it
     if (alreadyApplied) {
@@ -1239,6 +2198,7 @@ void Editor::commitInspectorEdit(const QString& key, const QVariant& value, cons
         ids = _inspectorEditIds;
         before = _inspectorBefore;
         naturalSizes = _inspectorNatural;
+        children = _inspectorChildren;
         _liveEditTimer.stop();
         applyLiveEdit(key, value);
     } else {
@@ -1269,11 +2229,15 @@ void Editor::commitInspectorEdit(const QString& key, const QVariant& value, cons
             before << properties;
             naturalSizes << naturalSize;
         }
+        if (scalesChildren(key)) {
+            children = childrenToScale(ids);
+        }
     }
     _inspectorEditKey.clear();
     _inspectorEditIds.clear();
     _inspectorBefore.clear();
     _inspectorNatural.clear();
+    _inspectorChildren.clear();
     if (ids.isEmpty() || (!alreadyApplied && !editable())) {
         if (entryRefused) {
             auto spec = PropertySpecs::find(key);
@@ -1286,8 +2250,33 @@ void Editor::commitInspectorEdit(const QString& key, const QVariant& value, cons
         return;
     }
     QVector<EntityItemProperties> after;
+    QVector<glm::vec3> ratios;
     for (int i = 0; i < ids.size(); ++i) {
         after << inspectorEdit(key, value, naturalSizes[i], before[i]);
+        ratios << sizeRatio(before[i].getDimensions(), after[i].getDimensions());
+    }
+    // the children in the same undo step (sent already when the value went out live)
+    QVector<EntityItemProperties> childEdits = childScaleEdits(children, ratios);
+    for (int i = 0; i < children.size(); ++i) {
+        ids << children[i].id;
+        before << childScaleBefore(children[i]);
+        after << childEdits[i];
+    }
+    if (key == TRACK_POINTS_KEY) {
+        // the box follows the curve, as after a drag, an insert or a delete in the viewport; a scrub's points went out
+        // live without it, so the box goes now (the undo point holds the dimensions: storedKeys)
+        auto tree = entityTree();
+        auto entities = DependencyManager::get<EntityScriptingInterface>();
+        for (int i = 0; i < ids.size() && tree; ++i) {
+            tree->withReadLock([&] {
+                if (auto entity = tree->findEntityByEntityItemID(ids[i])) {
+                    fitTrackBox(entity, after[i].getTrackPoints(), after[i]);
+                }
+            });
+            if (alreadyApplied) {
+                entities->editEntity(ids[i], after[i]);
+            }
+        }
     }
     auto spec = PropertySpecs::find(key);
     _undo.pushPropertyEdit(spec ? spec->label : key, ids, before, after, alreadyApplied);
@@ -1302,9 +2291,20 @@ PickRay Editor::pickRay(const QPoint& viewportPos) const {
 }
 
 QUuid Editor::pickEntity(const QPoint& viewportPos) const {
+    return pickEntityOnRay(pickRay(viewportPos));
+}
+
+QUuid Editor::pickEntityOnRay(const PickRay& ray) const {
+    // what this builder hid or made unpickable (the Hierarchy's eye and hand) lets the click through, to what's behind
+    QVector<EntityItemID> passedBy;
+    for (const auto& id : _hiddenHere) {
+        passedBy << id;
+    }
+    for (const auto& id : _noPick) {
+        passedBy << id;
+    }
     auto entities = DependencyManager::get<EntityScriptingInterface>();
-    auto result = entities->evalRayIntersectionVector(pickRay(viewportPos), worldPickFilter(),
-        QVector<EntityItemID>(), QVector<EntityItemID>());
+    auto result = entities->evalRayIntersectionVector(ray, worldPickFilter(), QVector<EntityItemID>(), passedBy);
     return result.intersects ? result.entityID : QUuid();
 }
 
@@ -1377,7 +2377,7 @@ QList<QUuid> Editor::entitiesInRect(const QRectF& rect) const {
         return ids;
     }
     ViewFrustum frustum;
-    qApp->copyViewFrustum(frustum);
+    qApp->getViewState().copyViewFrustum(frustum);
     glm::mat4 viewProjection = frustum.getProjection() * frustum.getView();
     float width = (float)std::max(1, viewport->width());
     float height = (float)std::max(1, viewport->height());
@@ -1385,7 +2385,7 @@ QList<QUuid> Editor::entitiesInRect(const QRectF& rect) const {
     tree->withReadLock([&] {
         for (const auto& id : all) {
             auto entity = tree->findEntityByEntityItemID(id);
-            if (!entity || !entity->getVisible()) {
+            if (!entity || !entity->getVisible() || excludedFromPicks(id)) {
                 continue;
             }
             glm::vec4 clip = viewProjection * glm::vec4(entity->getWorldPosition(), 1.0f);
@@ -1422,6 +2422,85 @@ void Editor::finishMarquee(Qt::KeyboardModifiers modifiers) {
     }
     --_selectionBatch;
     recordSelection();
+}
+
+void Editor::select(const QList<QUuid>& ids) {
+    if (!_active) {
+        setActive(true);
+    }
+    _selection.set(ids);
+}
+
+QPixmap Editor::inspectorPicture() const {
+    return _inspector ? _inspector->contentPicture() : QPixmap();
+}
+
+void Editor::uploadFilesForTest(const QStringList& localPaths) {
+    if (_assets) {
+        _assets->uploadFilesForTest(localPaths);
+    }
+}
+
+QString Editor::statusForTest() const {
+    return _statusLabel ? _statusLabel->text() : QString();
+}
+
+void Editor::dragSelectionForTest(const glm::vec3& delta, const glm::quat& rotationDelta, bool rotate, bool begin, bool final,
+                                  const glm::vec3& scale, bool scaling) {
+    if (!_active) {
+        setActive(true);
+    }
+    if (begin || _dragKind == DragKind::None) {
+        _dragIds.clear();
+        _dragPositions.clear();
+        _dragRotations.clear();
+        _dragDimensions.clear();
+        _dragBefore.clear();
+        auto tree = entityTree();
+        if (!tree) {
+            return;
+        }
+        DragKind kind = rotate ? DragKind::Rotate : scaling ? DragKind::Scale : DragKind::Move;
+        tree->withReadLock([&] {
+            for (const auto& id : _selection.topLevel()) {
+                auto entity = tree->findEntityByEntityItemID(id);
+                if (!entity || entity->getLocked()) {
+                    continue;
+                }
+                glm::vec3 position = entity->getWorldPosition();
+                glm::quat rotation = entity->getWorldOrientation();
+                EntityItemProperties before;
+                before.setPosition(position);
+                if (kind == DragKind::Rotate) {
+                    before.setRotation(rotation);
+                } else if (kind == DragKind::Scale) {
+                    before.setDimensions(entity->getScaledDimensions());
+                }
+                _dragIds << id;
+                _dragPositions << position;
+                _dragRotations << rotation;
+                _dragDimensions << entity->getScaledDimensions();
+                _dragBefore << before;
+            }
+        });
+        if (_dragIds.isEmpty()) {
+            return;
+        }
+        _dragChildren = kind == DragKind::Scale ? childrenToScale(_dragIds) : QVector<ScaledChild>();
+        _dragKind = kind;
+        _dragPivot = _dragPositions.first();
+        _dragGizmoRotation = _gizmo.rotation();
+        _dragScale = glm::vec3(1.0f);
+        _editTimer.start();
+    }
+    _dragDelta = delta;
+    _dragRotationDelta = rotationDelta;
+    _dragScale = scale;
+    applyDrag(final);
+    if (final) {
+        _dragKind = DragKind::None;
+        _dragIds.clear();
+    }
 }
 
 void Editor::selectAll() {
@@ -1582,18 +2661,8 @@ void Editor::rewriteStableLinks(const UserFiles& files) {
     qCDebug(interfaceapp) << "Use Stable Links:" << rewritten << "links in" << changed.size() << "entities;" << missing.size()
                           << "not in My Files;" << lockedLinks << "on locked entities";
 
-    // the report
-    QString summary;
-    if (rewritten > 0) {
-        summary = QString("%1 %2 to your files in %3 %4 now %5 the stable form, which keeps working when a file is moved or "
-                          "renamed. Undo puts them back.")
-                      .arg(rewritten).arg(rewritten == 1 ? "link" : "links").arg(changed.size())
-                      .arg(changed.size() == 1 ? "entity" : "entities").arg(rewritten == 1 ? "uses" : "use");
-    } else if (missing.isEmpty() && lockedLinks == 0) {
-        summary = "Nothing to change: no link in this world names one of your files by its path.";
-    } else {
-        summary = "No links were changed.";
-    }
+    // the report, in Darkride's popups (ui/Popup.h): a banner when every link it could change was changed, an alert
+    // with the reasons behind Details when some were left as they were
     QStringList notes;
     if (scriptsRestarting > 0) {
         notes << QString("%1 %2 with the new links.").arg(scriptsRestarting)
@@ -1612,21 +2681,34 @@ void Editor::rewriteStableLinks(const UserFiles& files) {
     }
     setStatus(rewritten > 0 ? QString("Use Stable Links: %1 %2 changed").arg(rewritten).arg(rewritten == 1 ? "link" : "links")
                             : QString("Use Stable Links: nothing changed"), STATUS_CLEAR_MS);
-    QMessageBox box(qApp->getWindow());
-    box.setWindowTitle(undoText);
-    box.setIcon(QMessageBox::Information);
-    box.setText(summary);
-    if (!notes.isEmpty()) {
-        box.setInformativeText(notes.join("\n\n"));
+    const int leftAlone = missing.size() + lockedLinks;
+    const QString title = QString("%1 %2 now stable").arg(rewritten).arg(rewritten == 1 ? "link" : "links");
+    const QString changedLine = QString("In %1 %2: %3 working when a file is moved or renamed. Undo puts %4 back.")
+                                    .arg(changed.size()).arg(changed.size() == 1 ? "entity" : "entities")
+                                    .arg(rewritten == 1 ? "it keeps" : "they keep").arg(rewritten == 1 ? "it" : "them");
+    if (leftAlone == 0) {
+        if (rewritten > 0) {
+            new popup::Banner(popup::appIcon(), title,
+                              changedLine + (scriptsRestarting > 0 ? " " + notes.first() : QString()), qApp->getWindow());
+        } else {
+            new popup::Banner(popup::appIcon(), "Nothing to change",
+                              "No link in this world names one of your files by its path.", qApp->getWindow());
+        }
+        return;
     }
+    QString details = (rewritten > 0 ? QStringList(changedLine) + notes : notes).join("\n\n");
     if (!missing.isEmpty()) {
         QStringList shown = missing.mid(0, MISSING_SHOWN);
         if (missing.size() > MISSING_SHOWN) {
             shown << QString("… and %1 more").arg(missing.size() - MISSING_SHOWN);
         }
-        box.setDetailedText(shown.join('\n'));
+        details += "\n\nNot in My Files:\n" + shown.join('\n');
     }
-    box.exec();
+    popup::Alert alert(popup::appIcon(), rewritten > 0 ? title : QString("No links were changed"),
+                       QString("%1 %2 left as %3 %4.").arg(leftAlone).arg(leftAlone == 1 ? "link was" : "links were")
+                           .arg(leftAlone == 1 ? "it" : "they").arg(leftAlone == 1 ? "was" : "were"),
+                       details, { { "OK", popup::Role::Default } }, qApp->getWindow());
+    alert.exec();
 }
 
 void Editor::frameSelection() {
@@ -1634,6 +2716,332 @@ void Editor::frameSelection() {
     if (_active && _selection.bounds(box)) {
         _camera.frame(box);
         updateAxes();
+    }
+}
+
+// --- the Hierarchy's rows that are not loaded (NATIVE-EDITOR.md 8) -----------------------------
+
+void Editor::onHierarchySelection(const QList<QUuid>& ids) {
+    if (_syncingSelection) {
+        return;
+    }
+    // the gizmo, the outline and the Inspector need the entity: rows that are not loaded wait for it
+    QList<QUuid> loaded;
+    QList<QUuid> waiting;
+    for (const auto& id : ids) {
+        if (!_treeModel || _treeModel->isLoaded(id)) {
+            loaded << id;
+        } else {
+            waiting << id;
+        }
+    }
+    _arrivalIds = waiting;
+    _syncingSelection = true;
+    _selection.set(loaded);
+    _syncingSelection = false;
+}
+
+void Editor::goToListed(const QUuid& id) {
+    if (!_active || !_treeModel) {
+        return;
+    }
+    AACube cube;
+    QString name;
+    if (!_treeModel->listedPlace(id, cube, name)) {
+        if (_treeModel->isLoaded(id)) {
+            _selection.set({ id });
+            frameSelection();
+        }
+        return;
+    }
+    if (!_arrivalIds.contains(id)) {
+        _arrivalIds << id;
+    }
+    // the stream follows the build camera: once the entity looks big enough from here, the server sends it
+    _goingTo = id;
+    _goingToName = name;
+    _camera.frame(AABox(cube));
+    updateAxes();
+    setStatus(QString("Going to %1. It shows when the server sends it.").arg(name));
+    _arrivalTimer.start();
+}
+
+void Editor::onEntityLoaded(const QUuid& id) {
+    if (id == _goingTo) {
+        _arrivalTimer.stop();
+        setStatus(QString("%1 is here.").arg(_goingToName), STATUS_CLEAR_MS);
+        _goingTo = QUuid();
+    }
+    if (_arrivalIds.removeOne(id)) {
+        _selectingArrival = true;
+        _selection.add(id);
+        _selectingArrival = false;
+    }
+}
+
+void Editor::refreshEntityList() {
+    if (_active && _entityList) {
+        _entityList->request();
+    }
+}
+
+void Editor::updateListNote() {
+    if (!_hierarchy || !_entityList) {
+        return;
+    }
+    QString note;
+    switch (_entityList->state()) {
+        case EditorEntityList::State::Waiting:
+            note = "Asking the server for everything in the world…";
+            break;
+        case EditorEntityList::State::Unanswered:
+            note = "The server did not send its list: only what has loaded is shown.";
+            break;
+        default:
+            break;
+    }
+    _hierarchy->setListNote(note);
+}
+
+QVariantMap Editor::setTerrainRandomAngleForTest(bool on) {
+    QVariantMap result;
+    auto random = _terrainBar ? _terrainBar->findChild<QCheckBox*>("EditorTerrainRandomAngle") : nullptr;
+    auto angle = _terrainBar ? _terrainBar->findChild<QWidget*>("EditorTerrainAngle") : nullptr;
+    result["found"] = random && angle;
+    if (random && angle) {
+        random->setChecked(on);
+        result["angleEnabled"] = angle->isEnabled();
+    }
+    return result;
+}
+
+float Editor::terrainStrokeForTest(const QUuid& id) {
+    auto tree = entityTree();
+    glm::vec3 position;
+    bool found = false;
+    if (tree) {
+        tree->withReadLock([&] {
+            if (auto entity = tree->findEntityByEntityItemID(id)) {
+                position = entity->getWorldPosition();
+                found = true;
+            }
+        });
+    }
+    if (!found) {
+        return -1.0f;
+    }
+    const float used = _terrain.angle();
+    QString refusal;
+    if (!_terrain.beginStroke(PickRay(position + glm::vec3(0.0f, 30.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f)), false, refusal)) {
+        return -1.0f;
+    }
+    _terrain.endStroke(false);
+    return used;
+}
+
+void Editor::loadLocalStates() {
+    if (_localStatesLoaded) {
+        return;
+    }
+    _localStatesLoaded = true;
+    for (const auto& text : _hiddenHereSetting.get()) {
+        _hiddenHere.insert(QUuid(text));
+    }
+    for (const auto& text : _noPickSetting.get()) {
+        _noPick.insert(QUuid(text));
+    }
+    _hiddenHere.remove(QUuid());
+    _noPick.remove(QUuid());
+}
+
+void Editor::saveLocalStates() {
+    auto texts = [](const QSet<QUuid>& ids) {
+        QStringList list;
+        for (const auto& id : ids) {
+            list << id.toString(QUuid::WithoutBraces);
+        }
+        list.sort();
+        return list;
+    };
+    _hiddenHereSetting.set(texts(_hiddenHere));
+    _noPickSetting.set(texts(_noPick));
+}
+
+void Editor::onHierarchyToggle(int toggle, const QList<QUuid>& ids, bool on) {
+    if (toggle == HierarchyPanel::Lock || toggle == HierarchyPanel::Scripts) {
+        // the entity's own Locked, or whether its scripts run, for everyone: one undo step for the row and what's
+        // under it (on is locked, or scripts off)
+        if (toggle == HierarchyPanel::Lock) {
+            commitInspectorEdit(LOCKED_KEY, on, ids);
+        } else {
+            commitInspectorEdit(SCRIPTS_ENABLED_KEY, !on, ids);
+        }
+        refreshInspector(false);
+        return;
+    }
+    QSet<QUuid>& states = toggle == HierarchyPanel::Hide ? _hiddenHere : _noPick;
+    for (const auto& id : ids) {
+        if (on) {
+            states.insert(id);
+        } else {
+            states.remove(id);
+        }
+    }
+    if (toggle == HierarchyPanel::Hide && _active) {
+        setLocallyHidden(ids, on);
+    }
+    saveLocalStates();
+    if (_hierarchy) {
+        _hierarchy->setLocalStates(_hiddenHere, _noPick);
+    }
+    updateInspectorToggles();   // the header's eye and pointer: no property changed to refresh it
+}
+
+void Editor::remindOfScriptsOff() {
+    // scripts turned off here stay off for everyone after build mode: said once as it closes, so a door left not
+    // opening isn't a surprise later (only to someone who can turn them on again)
+    int off = (_treeModel && !_readOnly) ? _treeModel->scriptsOffCount() : 0;
+    if (off == 0) {
+        _scriptsOffReminder.clear();
+        return;
+    }
+    QString title = off == 1 ? QString("1 entity has its scripts off")
+                             : QString("%1 entities have their scripts off").arg(off);
+    QString text = "They stay off for everyone until they're turned on again in Build mode, in the Entities list or the "
+                   "Inspector.";
+    _scriptsOffReminder = title + "\n" + text;
+    new popup::Banner(popup::appIcon(), title, text, qApp->getWindow(), SCRIPTS_OFF_REMINDER_MS);
+}
+
+void Editor::showAllHere() {
+    // this world's: what's hidden in other worlds stays as it was left there
+    QList<QUuid> here;
+    for (const auto& id : _hiddenHere) {
+        if (_treeModel && _treeModel->indexForId(id).isValid()) {
+            here << id;
+        }
+    }
+    onHierarchyToggle(HierarchyPanel::Hide, here, false);
+}
+
+void Editor::applyHiddenHere(bool hide) {
+    setLocallyHidden(_hiddenHere.values(), hide);
+}
+
+void Editor::setLocallyHidden(const QList<QUuid>& ids, bool hidden) {
+    auto tree = entityTree();
+    if (!tree) {
+        return;
+    }
+    QList<QUuid> changed;
+    tree->withReadLock([&] {
+        for (const auto& id : ids) {
+            auto entity = tree->findEntityByEntityItemID(id);
+            if (entity && entity->getLocallyVisible() == hidden) {
+                entity->setLocallyVisible(!hidden);
+                changed << id;
+            }
+        }
+    });
+    // the renderer takes the change on its next update, as it does an edit's
+    if (auto renderer = qApp->getEntities()) {
+        for (const auto& id : changed) {
+            renderer->onEntityChanged(id);
+        }
+    }
+}
+
+bool Editor::clickHierarchyToggle(const QString& which, const QUuid& id, bool onlyThis) {
+    if (!_hierarchy) {
+        return false;
+    }
+    auto toggle = which == "hide" ? HierarchyPanel::Hide : which == "pick" ? HierarchyPanel::NoPick
+                : which == "scripts" ? HierarchyPanel::Scripts : HierarchyPanel::Lock;
+    return _hierarchy->clickToggle(toggle, id, onlyThis);
+}
+
+QVariantMap Editor::hierarchyToggles(const QUuid& id) const {
+    QVariantMap result;
+    if (!_hierarchy) {
+        return result;
+    }
+    result["hidden"] = _hierarchy->isOn(HierarchyPanel::Hide, id);
+    result["noPick"] = _hierarchy->isOn(HierarchyPanel::NoPick, id);
+    result["locked"] = _hierarchy->isOn(HierarchyPanel::Lock, id);
+    result["scriptsOff"] = _hierarchy->isOn(HierarchyPanel::Scripts, id);
+    result["scriptsOffReminder"] = _scriptsOffReminder;
+    result["hiddenCount"] = _hierarchy->hiddenCount();
+    if (auto counts = _hierarchy->findChild<QLabel*>("EditorHierarchyCounts")) {
+        result["note"] = counts->text();
+    }
+    if (auto tree = qApp->getEntities() ? qApp->getEntities()->getTree() : nullptr) {
+        tree->withReadLock([&] {
+            if (auto entity = tree->findEntityByEntityItemID(id)) {
+                result["drawn"] = entity->getVisible() && entity->getLocallyVisible();
+            }
+        });
+    }
+    return result;
+}
+
+QUuid Editor::pickAtEntityForTest(const QUuid& id) const {
+    auto tree = qApp->getEntities() ? qApp->getEntities()->getTree() : nullptr;
+    glm::vec3 position;
+    bool found = false;
+    if (tree) {
+        tree->withReadLock([&] {
+            if (auto entity = tree->findEntityByEntityItemID(id)) {
+                position = entity->getWorldPosition();
+                found = true;
+            }
+        });
+    }
+    if (!found) {
+        return QUuid();
+    }
+    // the click's ray, from the camera through the entity's middle
+    glm::vec3 eye = _camera.position();
+    return pickOnRay(PickRay(eye, glm::normalize(position - eye)));
+}
+
+QList<QUuid> Editor::marqueeAllForTest() const {
+    auto viewport = qApp->getPrimaryWidget();
+    return viewport ? entitiesInRect(QRectF(viewport->rect())) : QList<QUuid>();
+}
+
+QVariantMap Editor::hierarchyCounts() const {
+    QVariantMap counts;
+    counts["entities"] = _treeModel ? _treeModel->count() : 0;
+    counts["loaded"] = _treeModel ? _treeModel->loadedCount() : 0;
+    counts["listed"] = _treeModel && _treeModel->hasList();
+    QString state = "none";
+    if (_entityList) {
+        switch (_entityList->state()) {
+            case EditorEntityList::State::Waiting: state = "waiting"; break;
+            case EditorEntityList::State::Answered: state = "answered"; break;
+            case EditorEntityList::State::Unanswered: state = "unanswered"; break;
+            default: break;
+        }
+    }
+    counts["state"] = state;
+    QVariantList selected;
+    for (const auto& id : _selection.ids()) {
+        selected << id.toString(QUuid::WithoutBraces);
+    }
+    counts["selected"] = selected;
+    return counts;
+}
+
+void Editor::clickHierarchyRow(const QUuid& id) {
+    if (!_active || !_hierarchy) {
+        return;
+    }
+    _syncingSelection = true;
+    _hierarchy->selectIds({ id });
+    _syncingSelection = false;
+    onHierarchySelection({ id });
+    if (_treeModel && !_treeModel->isLoaded(id)) {
+        goToListed(id);
     }
 }
 
@@ -1655,6 +3063,51 @@ void Editor::beginGizmoDrag(GizmoHandle handle, const PickRay& ray) {
     }
     DragKind kind = EditorGizmo::isRing(handle) ? DragKind::Rotate
                   : EditorGizmo::isScale(handle) ? DragKind::Scale : DragKind::Move;
+    // the Move gizmo on a Track's chosen control point moves that point, in the track's own space
+    QUuid trackId;
+    if (kind == DragKind::Move && _trackPointChosen >= 0 && trackPointTrack(trackId)) {
+        bool ready = false;
+        tree->withReadLock([&] {
+            auto entity = tree->findEntityByEntityItemID(trackId);
+            auto track = std::dynamic_pointer_cast<TrackEntityItem>(entity);
+            if (!track || track->getLocked()) {
+                return;
+            }
+            _dragTrackPoints = track->getTrackPoints();
+            if (_trackPointChosen >= _dragTrackPoints.size()) {
+                return;
+            }
+            _dragTrackPosition = track->getWorldPosition();
+            _dragTrackRotation = track->getWorldOrientation();
+            EntityItemProperties before;
+            before.setTrackPoints(_dragTrackPoints);
+            before.setDimensions(track->getScaledDimensions());
+            _dragIds << trackId;
+            _dragPositions << _dragTrackPosition;
+            _dragRotations << _dragTrackRotation;
+            _dragDimensions << track->getScaledDimensions();
+            _dragBefore << before;
+            ready = true;
+        });
+        if (!ready) {
+            return;
+        }
+        _dragKind = DragKind::TrackPoint;
+        _dragPivot = _gizmo.position();
+        _dragGizmoRotation = _gizmo.rotation();
+        _dragDelta = glm::vec3(0.0f);
+        _dragRotationDelta = glm::quat();
+        _dragScale = glm::vec3(1.0f);
+        _lastDragPos = _pressPos;
+        _editTimer.start();
+        _gizmo.beginDrag(handle, ray);
+        if (!_gizmo.isDragging()) {
+            _dragKind = DragKind::None;
+        } else {
+            _trackGizmos.setActive(_trackPointChosen);
+        }
+        return;
+    }
     tree->withReadLock([&] {
         for (const auto& id : _selection.topLevel()) {
             auto entity = tree->findEntityByEntityItemID(id);
@@ -1681,6 +3134,7 @@ void Editor::beginGizmoDrag(GizmoHandle handle, const PickRay& ray) {
     if (_dragIds.isEmpty()) {
         return;
     }
+    _dragChildren = kind == DragKind::Scale ? childrenToScale(_dragIds) : QVector<ScaledChild>();
     _dragKind = kind;
     _dragPivot = _gizmo.position();
     _dragGizmoRotation = _gizmo.rotation();
@@ -1728,7 +3182,8 @@ void Editor::moveGizmoDrag(const QPoint& viewportPos) {
     QPoint mouseDelta = viewportPos - _lastDragPos;
     _lastDragPos = viewportPos;
     switch (_dragKind) {
-        case DragKind::Move: {
+        case DragKind::Move:
+        case DragKind::TrackPoint: {
             glm::vec3 target;
             if (_vertexSnap && vertexSnapTarget(viewportPos, target)) {
                 _dragDelta = target - _dragPivot;   // the pivot lands on the vertex
@@ -1784,6 +3239,23 @@ void Editor::applyDrag(bool final) {
                 text = "Move";
                 properties.setPosition(_dragPositions[i] + _dragDelta);
                 break;
+            case DragKind::TrackPoint: {
+                text = "Move Point";
+                QVector<glm::vec3> points = _dragTrackPoints;
+                if (_trackPointChosen >= 0 && _trackPointChosen < points.size()) {
+                    glm::vec3 world = _dragTrackPosition + _dragTrackRotation * points[_trackPointChosen] + _dragDelta;
+                    points[_trackPointChosen] = glm::inverse(_dragTrackRotation) * (world - _dragTrackPosition);
+                }
+                properties.setTrackPoints(points);
+                if (final && tree) {
+                    tree->withReadLock([&] {
+                        if (auto entity = tree->findEntityByEntityItemID(_dragIds[i])) {
+                            fitTrackBox(entity, points, properties);
+                        }
+                    });
+                }
+                break;
+            }
             case DragKind::Rotate:
                 text = "Rotate";
                 properties.setRotation(_dragRotationDelta * _dragRotations[i]);
@@ -1818,11 +3290,26 @@ void Editor::applyDrag(bool final) {
         }
         after << properties;
     }
-    bool changed = _dragKind == DragKind::Move ? _dragDelta != glm::vec3(0.0f)
+    QList<QUuid> ids = _dragIds;
+    QVector<EntityItemProperties> before = _dragBefore;
+    if (_dragKind == DragKind::Scale && !_dragChildren.isEmpty()) {
+        QVector<glm::vec3> ratios;
+        for (int i = 0; i < _dragIds.size(); ++i) {
+            ratios << sizeRatio(_dragDimensions[i], glm::max(_dragDimensions[i] * _dragScale, glm::vec3(MIN_DIMENSION)));
+        }
+        QVector<EntityItemProperties> childEdits = childScaleEdits(_dragChildren, ratios);
+        sendChildScale(_dragChildren, childEdits, final);
+        for (int i = 0; i < _dragChildren.size(); ++i) {
+            ids << _dragChildren[i].id;
+            before << childScaleBefore(_dragChildren[i]);
+            after << childEdits[i];
+        }
+    }
+    bool changed = (_dragKind == DragKind::Move || _dragKind == DragKind::TrackPoint) ? _dragDelta != glm::vec3(0.0f)
                  : _dragKind == DragKind::Rotate ? _dragRotationDelta != glm::quat()
                  : _dragScale != glm::vec3(1.0f);
     if (final && changed) {
-        _undo.pushPropertyEdit(text, _dragIds, _dragBefore, after, true);
+        _undo.pushPropertyEdit(text, ids, before, after, true);
     }
 }
 
@@ -1971,6 +3458,208 @@ void Editor::pasteAt(const glm::vec3& target) {
     stack->endMacro();
 }
 
+// --- entity files: import and export -------------------------------------------------------------
+
+namespace {
+    // where the file dialogs open: the last folder used this session, Documents at first
+    QString& entityFilesFolder() {
+        static QString folder = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        return folder;
+    }
+}
+
+void Editor::importEntitiesFromFile() {
+    if (!_active || !editable()) {
+        return;
+    }
+    QString path = QFileDialog::getOpenFileName(qApp->getWindow(), "Import Entities", entityFilesFolder(),
+        "Entities (*.json *.json.gz *.svo);;All files (*)");
+    if (path.isEmpty()) {
+        return;
+    }
+    entityFilesFolder() = QFileInfo(path).absolutePath();
+    importEntities(QUrl::fromLocalFile(path).toString());
+}
+
+void Editor::importEntitiesFromUrl() {
+    if (!_active || !editable()) {
+        return;
+    }
+    const popup::Field field { "https://…", QString() };
+    popup::Alert alert(popup::appIcon(), "Import Entities from URL", "A link to a .json, .json.gz or .svo file.",
+                       QString(), { { "Cancel", popup::Role::Cancel }, { "Import", popup::Role::Default } },
+                       qApp->getWindow(), &field);
+    alert.exec();
+    if (alert.answer() == 1) {
+        importEntities(alert.fieldText());
+    }
+}
+
+// reads an entity file (an export, the old Create app's, one of the app's presets) as an add takes it: every property
+// set, parents before children, a child in its parent's frame; bounds is the top level's footprint. false when it can't
+// be read (count -1) or holds none it can place; count is how many it holds (more than ids when a parent loop left
+// some out)
+bool Editor::readEntityFile(const QString& url, QVector<EntityItemProperties>& properties, QList<QUuid>& ids,
+                            AABox& bounds, int& count) {
+    count = 0;
+    // the entities' clipboard reads the file, of any of the formats the old Create app took, with model links
+    // relative to the file resolved; the scripts' Clipboard.importEntities reads into the same tree
+    auto& clipboard = qApp->getEntityClipboard();
+    if (!clipboard.importEntities(url)) {
+        count = -1;
+        return false;
+    }
+    auto tree = clipboard.tree();
+    QHash<QUuid, EntityItemProperties> byId;
+    QList<QUuid> found;
+    tree->withReadLock([&] {
+        tree->recurseTreeWithOperation([&](const OctreeElementPointer& element, void*) {
+            std::static_pointer_cast<EntityTreeElement>(element)->forEachEntity([&](const EntityItemPointer& entity) {
+                byId.insert(entity->getID(), entity->getProperties());
+                found << entity->getID();
+            });
+            return true;
+        });
+    });
+    count = found.size();
+    if (found.isEmpty()) {
+        return false;
+    }
+
+    // as an add takes them (EditorUndo::capture's marking): every property set, a child placed in its parent's
+    // frame; parents first, so the add can put each child on its new parent. An entity attached to a parent the
+    // file lacks (an avatar's, or one outside an export) comes in at the top level
+    properties.clear();
+    ids.clear();
+    QSet<QUuid> placed;
+    bool hasBounds = false;
+    while (ids.size() < found.size()) {
+        int before = ids.size();
+        for (const auto& id : found) {
+            if (placed.contains(id)) {
+                continue;
+            }
+            EntityItemProperties entry = byId.value(id);
+            QUuid parentID = entry.getParentID();
+            if (!parentID.isNull() && !byId.contains(parentID)) {
+                entry.setParentID(QUuid());
+                parentID = QUuid();
+            }
+            if (!parentID.isNull() && !placed.contains(parentID)) {
+                continue;   // after its parent
+            }
+            entry.markAllChanged();
+            entry.setLocalPositionChanged(true);
+            entry.setLocalRotationChanged(true);
+            entry.setQueryAACubeChanged(false);
+            if (parentID.isNull()) {
+                // the file's top level: positions in the world, relative to the export's lowest corner
+                glm::vec3 dimensions = entry.getDimensions();
+                AABox box(entry.getPosition() - 0.5f * dimensions, dimensions);
+                if (hasBounds) {
+                    bounds += box;
+                } else {
+                    bounds = box;
+                    hasBounds = true;
+                }
+            }
+            properties << entry;
+            ids << id;
+            placed.insert(id);
+        }
+        if (ids.size() == before) {
+            break;   // a parent loop: what is left cannot be placed
+        }
+    }
+
+    return !ids.isEmpty();
+}
+
+bool Editor::importEntities(const QString& url) {
+    if (!_active) {
+        setActive(true);
+    }
+    if (!_active || _gizmo.isDragging() || !editable()) {
+        return false;
+    }
+    QString name = QUrl(url).fileName();
+    if (name.isEmpty()) {
+        name = url;
+    }
+    setStatus("Importing " + name + "…");
+    QVector<EntityItemProperties> properties;
+    QList<QUuid> ids;
+    AABox bounds;
+    int found = 0;
+    if (!readEntityFile(url, properties, ids, bounds, found)) {
+        setStatus(found < 0 ? "Could not read " + name + " as entities"
+                  : found == 0 ? name + " holds no entities"
+                  : "Could not place " + name + "'s entities: their parents make a loop", STATUS_CLEAR_MS);
+        return false;
+    }
+
+    // the footprint's middle lands under the cursor, as a paste's does; a whole world (the old Create app's 10 km
+    // rule) stays where its positions put it
+    const float WHOLE_WORLD_SIZE = 10000.0f;
+    glm::vec3 center = bounds.calcCenter();
+    glm::vec3 anchor(center.x, bounds.getMinimumPoint().y, center.z);
+    glm::vec3 extent = bounds.getDimensions();
+    bool wholeWorld = glm::max(extent.x, glm::max(extent.y, extent.z)) >= WHOLE_WORLD_SIZE;
+    glm::vec3 target = anchor;
+    if (!wholeWorld && !cursorWorldPoint(target)) {
+        target = _camera.position() + viewDirection() * PASTE_FALLBACK_DISTANCE;
+    }
+
+    EditorClipboard imported;
+    imported.set(properties, ids, anchor);
+    auto stack = _undo.stack();
+    stack->beginMacro("Import " + name);   // the entities and their selection are one step
+    QList<QUuid> created = imported.paste(_undo, "Import " + name, target - anchor);
+    if (!created.isEmpty()) {
+        _selection.set(created);
+    }
+    stack->endMacro();
+    int skipped = found - ids.size();
+    setStatus(QString("Imported %1 entit%2 from %3%4").arg(ids.size()).arg(ids.size() == 1 ? "y" : "ies").arg(name)
+        .arg(skipped > 0 ? QString(" (%1 in a parent loop left out)").arg(skipped) : QString()), STATUS_CLEAR_MS);
+    return !created.isEmpty();
+}
+
+void Editor::exportSelection() {
+    if (!_active) {
+        return;
+    }
+    if (_selection.isEmpty()) {
+        setStatus("Select what to export first", STATUS_CLEAR_MS);
+        return;
+    }
+    QString path = QFileDialog::getSaveFileName(qApp->getWindow(), "Export Selected Entities",
+        QDir(entityFilesFolder()).filePath("entities.json"), "Entities (*.json)");
+    if (path.isEmpty()) {
+        return;
+    }
+    if (!path.endsWith(".json", Qt::CaseInsensitive)) {
+        path += ".json";
+    }
+    entityFilesFolder() = QFileInfo(path).absolutePath();
+    exportSelectionTo(path);
+}
+
+int Editor::exportSelectionTo(const QString& path) {
+    if (_selection.isEmpty()) {
+        return -1;
+    }
+    // the selection with everything under it; positions relative to the lowest corner of the top level, as the
+    // old Create app's Export wrote them, so an import can place them anywhere
+    QList<QUuid> all = EditorUndo::withDescendants(_selection.topLevel());
+    QVector<QUuid> ids(all.begin(), all.end());
+    bool ok = qApp->getEntityClipboard().exportEntities(path, ids);
+    setStatus(ok ? QString("Exported %1 entit%2 to %3").arg(ids.size()).arg(ids.size() == 1 ? "y" : "ies")
+                       .arg(QFileInfo(path).fileName())
+                 : "Could not write " + QFileInfo(path).fileName(), STATUS_CLEAR_MS);
+    return ok ? ids.size() : -1;
+}
+
 // --- go to, bring here --------------------------------------------------------------------------
 
 void Editor::goToSelection() {
@@ -2058,27 +3747,36 @@ QMenu* Editor::buildCreateMenu(QWidget* parent, const QPoint* viewportPos) {
     bool atClick = viewportPos != nullptr;
     glm::vec3 clickPoint = atClick ? placementPoint(viewportPos) : glm::vec3(0.0f);
     QHash<QString, QMenu*> groups;
+    // a group's submenu, made the first time it's named, inside its parent's ("Special items/Vehicles")
+    std::function<QMenu*(const QString&, bool)> groupMenu = [&](const QString& path, bool separator) {
+        if (!groups.contains(path)) {
+            int slash = path.lastIndexOf('/');
+            QMenu* parent = slash < 0 ? menu : groupMenu(path.left(slash), separator);
+            if (slash < 0 && separator) {
+                menu->addSeparator();
+            }
+            groups[path] = parent->addMenu(path.mid(slash + 1));
+            groups[path]->setToolTipsVisible(true);
+        }
+        return groups[path];
+    };
     for (const auto& item : EditorCreate::items()) {
         QMenu* target = menu;
         if (!item.group.isEmpty()) {
-            if (!groups.contains(item.group)) {
-                if (item.separatorBefore) {
-                    menu->addSeparator();
-                }
-                groups[item.group] = menu->addMenu(item.group);
-            }
-            target = groups[item.group];
+            target = groupMenu(item.group, item.separatorBefore);
         } else if (item.separatorBefore) {
             menu->addSeparator();
         }
         QString key = item.key;
-        target->addAction(item.label, this, [this, key, atClick, clickPoint] {
+        QAction* action = target->addAction(item.label, this, [this, key, atClick, clickPoint] {
             if (atClick) {
                 createAt(key, clickPoint);
             } else {
                 create(key);
             }
         });
+        action->setToolTip(item.tooltip);
+        action->setEnabled(!item.disabled);
     }
     return menu;
 }
@@ -2103,7 +3801,11 @@ void Editor::createAt(const QString& key, const glm::vec3& point) {
         return;
     }
     auto item = EditorCreate::item(key);
-    if (!item) {
+    if (!item || item->disabled) {
+        return;
+    }
+    if (!item->preset.isEmpty()) {
+        createPreset(PathUtils::resourcesUrl(item->preset).toString(), item->label, point, item->ahead);
         return;
     }
     EntityItemProperties properties = EditorCreate::properties(key, point, cameraYaw());
@@ -2111,6 +3813,16 @@ void Editor::createAt(const QString& key, const glm::vec3& point) {
         // a material applies to its parent: the first selected entity
         properties.setParentID(_selection.topLevel().first());
         properties.setPosition(glm::vec3(0.0f));
+    }
+    if (key == "trackcar") {
+        // the car rides the Track selected when it is made: the physics takes it onto the curve from wherever it
+        // was placed (the nearest point of the track)
+        QUuid trackId;
+        if (trackPointTrack(trackId)) {
+            properties.setTrackID(trackId);
+        } else {
+            setStatus("Select a Track first and the car rides it; set Track in its Moving Frame section otherwise", STATUS_CLEAR_MS * 2);
+        }
     }
     place(properties, "Create " + item->label, point);
 }
@@ -2123,10 +3835,12 @@ void Editor::createModelAt(const glm::vec3& point) {
     if (!_active || !editable()) {
         return;
     }
-    bool ok = false;
-    QString text = QInputDialog::getText(qApp->getWindow(), "Create Model", "Model URL (.glb, .gltf, .fbx or .obj):",
-        QLineEdit::Normal, QString(), &ok).trimmed();
-    if (!ok || text.isEmpty()) {
+    const popup::Field field { "https://…", QString() };
+    popup::Alert alert(popup::appIcon(), "Create Model", "A link to a .glb, .gltf, .fbx or .obj file.", QString(),
+                       { { "Cancel", popup::Role::Cancel }, { "Create", popup::Role::Default } }, qApp->getWindow(), &field);
+    alert.exec();
+    const QString text = alert.fieldText();
+    if (alert.answer() != 1 || text.isEmpty()) {
         return;
     }
     QUrl url(text);
@@ -2160,6 +3874,82 @@ glm::vec3 Editor::placementPoint(const QPoint* viewportPos) const {
 float Editor::cameraYaw() const {
     glm::vec3 forward = _camera.orientation() * Vectors::FRONT;
     return std::atan2(-forward.x, -forward.z);
+}
+
+bool Editor::createPreset(const QString& presetUrl, const QString& label, const glm::vec3& point, float ahead) {
+    if (!editable()) {
+        qCWarning(interfaceapp) << "editor: no rez rights here, not creating" << label;
+        return false;
+    }
+    QVector<EntityItemProperties> properties;
+    QList<QUuid> ids;
+    AABox bounds;
+    int count = 0;
+    if (!readEntityFile(presetUrl, properties, ids, bounds, count)) {
+        qCWarning(interfaceapp) << "editor: could not read the preset" << presetUrl << count;
+        setStatus("Could not make the " + label, STATUS_CLEAR_MS);
+        return false;
+    }
+    // the file's ground is its y 0, and its front -z (as the Track's rigs face): turned to face the way the camera
+    // looks, about the footprint's middle, so you see it from behind, ready to get in
+    glm::vec3 center = bounds.calcCenter();
+    glm::vec3 anchor(center.x, 0.0f, center.z);
+    glm::quat turn = glm::angleAxis(cameraYaw(), Vectors::UP);
+    QSet<QUuid> inFile(ids.begin(), ids.end());
+    for (auto& entry : properties) {
+        if (entry.getParentID().isNull() || !inFile.contains(entry.getParentID())) {
+            glm::vec3 position = anchor + turn * (entry.getPosition() - anchor);
+            glm::quat rotation = turn * entry.getRotation();
+            entry.setPosition(position);
+            entry.setLocalPosition(position);
+            entry.setRotation(rotation);
+            entry.setLocalRotation(rotation);
+            entry.setLocalRotationChanged(false);
+        }
+    }
+    // a big one far enough out that it doesn't swallow the camera: along the view, on the level of the point
+    glm::vec3 target = point;
+    if (ahead > 0.0f) {
+        glm::vec3 flat = target - _camera.position();
+        flat.y = 0.0f;
+        glm::vec3 forward = viewDirection();
+        forward.y = 0.0f;
+        if (glm::length(forward) > EPSILON && glm::length(flat) < ahead) {
+            glm::vec3 out = _camera.position() + glm::normalize(forward) * ahead;
+            target = glm::vec3(out.x, point.y, out.z);
+        }
+    }
+    // on the surface under it: the view's middle can miss every surface (a level view hits nothing), and a vehicle
+    // made in the air drops onto whatever is below
+    const float GROUND_SEARCH_ABOVE = 0.5f;
+    PickRay down(target + Vectors::UP * GROUND_SEARCH_ABOVE, -Vectors::UP);
+    auto ground = DependencyManager::get<EntityScriptingInterface>()->evalRayIntersectionVector(down, worldPickFilter(),
+        QVector<EntityItemID>(), QVector<EntityItemID>());
+    if (ground.intersects && ground.distance < MAX_PLACEMENT_DISTANCE) {
+        target = ground.intersection;
+    }
+    if (snapActive()) {
+        // on the grid across, staying on the ground
+        glm::vec3 snapped = snapVector(target, _moveSnap);
+        target.x = snapped.x;
+        target.z = snapped.z;
+    }
+    EditorClipboard family;
+    family.set(properties, ids, anchor);
+    const QString text = "Create " + label;
+    auto stack = _undo.stack();
+    stack->beginMacro(text);   // every entity of it and its selection are one step
+    QList<QUuid> created = family.paste(_undo, text, target - anchor);
+    if (!created.isEmpty()) {
+        _selection.set(created);
+    }
+    stack->endMacro();
+    if (created.isEmpty()) {
+        setStatus("Could not make the " + label, STATUS_CLEAR_MS);
+        return false;
+    }
+    setTool(EditorToolBar::Tool::Move);
+    return true;
 }
 
 QList<QUuid> Editor::place(EntityItemProperties properties, const QString& text, const glm::vec3& point) {
@@ -2469,15 +4259,15 @@ void Editor::beginUpload(const QString& localPath, const glm::vec3& point, bool 
 
 void Editor::showUploadProgress(EditorUpload* upload) {
     ++_uploadsActive;
-    setStatus("Uploading " + upload->fileName() + " 0%");
+    setStatus(EditorUpload::uploadingStatus(upload->fileName(), 0, QString(), true));
     connect(upload, &EditorUpload::progress, this, [this, upload](qint64 sent, qint64 total) {
         if (total <= 0) {
             return;
         }
         if (sent >= total) {
-            setStatus("Processing " + upload->fileName() + "…");   // sent; the server is storing it
+            setStatus(EditorUpload::uploadingStatus(upload->fileName(), 100, QString(), true));
         } else {
-            setStatus(QString("Uploading %1 %2%").arg(upload->fileName()).arg((int)(sent * 100 / total)));
+            setStatus(EditorUpload::uploadingStatus(upload->fileName(), (int)(sent * 100 / total), QString(), true));
         }
     });
     connect(upload, &EditorUpload::failed, this, [this, upload](const QString& error) {
@@ -2543,6 +4333,20 @@ void Editor::addSelectionActions(QMenu& menu, const glm::vec3* pasteTarget) {
 }
 
 void Editor::showHierarchyMenu(const QPoint& globalPos) {
+    // a row that is not loaded: there is nothing to edit yet
+    if (_hierarchy && _treeModel) {
+        auto tree = _hierarchy->treeView();
+        QUuid id = tree->indexAt(tree->viewport()->mapFromGlobal(globalPos)).data(EntityTreeModel::IdRole).toUuid();
+        if (!id.isNull() && !_treeModel->isLoaded(id)) {
+            QMenu menu;
+            menu.addAction("Go There", this, [this, id] { goToListed(id); });
+            menu.addAction("Copy ID", this, [id] {
+                QGuiApplication::clipboard()->setText(id.toString(QUuid::WithoutBraces));
+            });
+            menu.exec(globalPos);
+            return;
+        }
+    }
     QMenu menu;
     QMenu* create = buildCreateMenu(&menu);
     create->setEnabled(!_readOnly);
@@ -2583,6 +4387,10 @@ void Editor::setStatus(const QString& text, int clearAfterMs) {
     if (_statusLabel) {
         _statusLabel->setText(text);
         _statusLabel->setToolTip(text);   // the whole message, should the bar have had to cut it
+    }
+    // in normal play there's no status bar: My Files shows the note at its foot (an upload's progress, a link copied)
+    if (_assets) {
+        _assets->setNote(_active ? QString() : text);
     }
     if (clearAfterMs > 0 && !text.isEmpty()) {
         _statusTimer.start(clearAfterMs);
@@ -2628,6 +4436,21 @@ bool Editor::handleMousePress(QMouseEvent* event) {
     if (!lightHandle.isNone()) {
         beginLightHandleDrag(lightHandle, ray);
         return true;
+    }
+    // a Track's control point: a click chooses it (the Move gizmo then stands on it); Shift+click on the curve
+    // between the points puts a new one there
+    int trackPoint = _trackGizmos.pointAt(ray);
+    if (trackPoint >= 0) {
+        chooseTrackPoint(trackPoint, false);
+        return true;
+    }
+    if (event->modifiers().testFlag(Qt::ShiftModifier) && _tool != EditorToolBar::Tool::Terrain) {
+        float arcLength;
+        glm::vec3 onCurve;
+        if (_trackGizmos.curveAt(ray, arcLength, onCurve)) {
+            insertTrackPoint(arcLength);
+            return true;
+        }
     }
     // the Terrain tool: a press on the ground begins a stroke; elsewhere it is a click like any other
     if (_tool == EditorToolBar::Tool::Terrain && _terrain.pointsAtTerrain(ray)) {
@@ -2685,7 +4508,9 @@ bool Editor::handleMouseMove(QMouseEvent* event) {
             _gizmo.setHover(gizmoHover);
         }
         // the transform gizmo is picked first: only one of them lights up
-        _lightGizmos.setHover(gizmoHover == GizmoHandle::None ? _lightGizmos.handleAt(ray) : EditorLightHandle());
+        EditorLightHandle lightHover = gizmoHover == GizmoHandle::None ? _lightGizmos.handleAt(ray) : EditorLightHandle();
+        _lightGizmos.setHover(lightHover);
+        _trackGizmos.setHover(gizmoHover == GizmoHandle::None && lightHover.isNone() ? _trackGizmos.pointAt(ray) : -1);
         if (_tool == EditorToolBar::Tool::Terrain) {
             _terrain.hover(ray);
         }
@@ -2714,6 +4539,7 @@ bool Editor::handleMouseRelease(QMouseEvent* event) {
         applyDrag(true);
         _gizmo.endDrag();
         _dragKind = DragKind::None;
+        _trackGizmos.setActive(-1);
         updateGizmo();
         return true;
     }
@@ -2780,11 +4606,19 @@ bool Editor::handleKeyPress(QKeyEvent* event) {
     switch (event->key()) {
         case Qt::Key_Delete:
         case Qt::Key_Backspace:
-            deleteSelection();
+            if (_trackPointChosen >= 0) {
+                deleteTrackPoint();   // the chosen control point, not the track
+            } else {
+                deleteSelection();
+            }
             return true;
         case Qt::Key_Escape:
             if (_terrain.isStroking()) {
                 _terrain.endStroke(true);   // the ground goes back as it was
+                return true;
+            }
+            if (_trackPointChosen >= 0) {
+                chooseTrackPoint(-1, false);   // the point first, the track on a second Escape
                 return true;
             }
             _selection.clear();
@@ -2884,6 +4718,19 @@ bool Editor::eventFilter(QObject* watched, QEvent* event) {
             return true;
         }
         return false;
+    }
+    // the Build Mode shortcut (Cmd+B): when it was made and when it got here, for the toggle's log line. The first
+    // sight of it only: Qt offers a shortcut to more than one receiver.
+    if (event->type() == QEvent::ShortcutOverride) {
+        auto keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_B && (keyEvent->modifiers() & Qt::ControlModifier) && !keyEvent->isAutoRepeat()) {
+            int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (_toggleKeyArrivedMs < 0 || now - _toggleKeyArrivedMs > 100) {
+                _toggleKeyMadeMs = (int64_t)keyEvent->timestamp();
+                _toggleKeyArrivedMs = now;
+            }
+        }
     }
     // the camera keys (1 first person, 2 selfie, 3 look at) do nothing in build mode, which has its own camera:
     // a stray one (a number meant for a field) quietly changed the camera you came back to

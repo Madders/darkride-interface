@@ -40,6 +40,7 @@ public:
 
     float getTargetFrameRate() const override;
     bool hasAsyncReprojection() const override { return true; }
+    bool isHeadsetOff() const override;
 
     void customizeContext() override;
     void uncustomizeContext() override;

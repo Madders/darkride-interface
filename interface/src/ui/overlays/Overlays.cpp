@@ -12,8 +12,6 @@
 
 #include <limits>
 
-#include <QtScript/QScriptValueIterator>
-
 #include <shared/QtHelpers.h>
 #include <OffscreenUi.h>
 #include <render/Scene.h>
@@ -32,7 +30,8 @@
 #include <PickManager.h>
 
 #include <RenderableWebEntityItem.h>
-#include "VariantMapToScriptValue.h"
+#include <PlainScriptValue.h>
+#include <PlainScriptValueConversions.h>
 
 #include "ui/Keyboard.h"
 #include <QtQuick/QQuickWindow>
@@ -632,16 +631,14 @@ EntityItemProperties Overlays::convertOverlayToEntityProperties(QVariantMap& ove
         }
     }
 
-    QScriptEngine scriptEngine;
-    QScriptValue props = variantMapToScriptValue(overlayProps, scriptEngine);
     EntityItemProperties toReturn;
-    EntityItemPropertiesFromScriptValueHonorReadOnly(props, toReturn);
+    toReturn.copyFromScriptValue(PlainScriptValue::fromVariant(overlayProps), true);
     return toReturn;
 }
 
 QVariantMap Overlays::convertEntityToOverlayProperties(const EntityItemProperties& properties) {
-    QScriptEngine scriptEngine;
-    QVariantMap overlayProps = EntityItemPropertiesToScriptValue(&scriptEngine, properties).toVariant().toMap();
+    PlainScriptEngine scriptEngine;
+    QVariantMap overlayProps = properties.copyToScriptValue(&scriptEngine, false).toVariant().toMap();
 
     QString type = overlayProps["type"].toString();
     overlayProps["type"] = entityToOverlayType(type);
@@ -740,7 +737,7 @@ QVariantMap Overlays::convertEntityToOverlayProperties(const EntityItemPropertie
         GROUP_ENTITY_TO_OVERLAY_PROP(ring, majorTickMarksColor, majorTickMarksColor);
         GROUP_ENTITY_TO_OVERLAY_PROP(ring, minorTickMarksColor, minorTickMarksColor);
     } else if (type == "PolyLine") {
-        QVector<glm::vec3> points = qVectorVec3FromScriptValue(scriptEngine.newVariant(overlayProps["linePoints"]));
+        QVector<glm::vec3> points = qVectorVec3FromScriptValue(PlainScriptValue::fromVariant(overlayProps["linePoints"]));
         glm::vec3 position = vec3FromVariant(overlayProps["position"]);
         if (points.length() > 1) {
             overlayProps["p1"] = vec3toVariant(points[0] + position);
@@ -755,7 +752,7 @@ QVariantMap Overlays::convertEntityToOverlayProperties(const EntityItemPropertie
         RENAME_PROP(p2, endPoint);
         RENAME_PROP(p2, end);
 
-        QVector<float> widths = qVectorFloatFromScriptValue(scriptEngine.newVariant(overlayProps["strokeWidths"]));
+        QVector<float> widths = qVectorFloatFromScriptValue(PlainScriptValue::fromVariant(overlayProps["strokeWidths"]));
         if (widths.length() > 0) {
             overlayProps["lineWidth"] = widths[0];
         }
@@ -776,7 +773,6 @@ QUuid Overlays::addOverlay(const QString& type, const QVariant& properties) {
     }
 
     if (type == ImageOverlay::TYPE || type == TextOverlay::TYPE || type == RectangleOverlay::TYPE) {
-#if !defined(DISABLE_QML)
         if (QThread::currentThread() != thread()) {
             QUuid result;
             PROFILE_RANGE(script, __FUNCTION__);
@@ -796,7 +792,6 @@ QUuid Overlays::addOverlay(const QString& type, const QVariant& properties) {
             overlay->setProperties(properties.toMap());
             return add2DOverlay(overlay);
         }
-#endif
         return QUuid();
     }
 

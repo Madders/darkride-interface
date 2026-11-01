@@ -109,6 +109,9 @@ public:
     SharedNodePointer sourceNode;
     int elementsPerPacket = 0;
     int entitiesPerPacket = 0;
+    // set by an entity reader when a field claims more bytes than the packet holds: the rest of the packet is
+    // abandoned (EntityItemPropertiesMacros.h, EntityTree::readEntityDataFromBuffer)
+    bool readFailed = false;
 
     ReadBitstreamToTreeParams(
         bool includeExistsBits = WANT_EXISTS_BITS,
@@ -138,9 +141,6 @@ public:
     virtual bool handlesEditPacketType(PacketType packetType) const { return false; }
     virtual int processEditPacketData(ReceivedMessage& message, const unsigned char* editData, int maxLength,
                                       const SharedNodePointer& sourceNode) { return 0; }
-    virtual void processChallengeOwnershipRequestPacket(ReceivedMessage& message, const SharedNodePointer& sourceNode) { return; }
-    virtual void processChallengeOwnershipReplyPacket(ReceivedMessage& message, const SharedNodePointer& sourceNode) { return; }
-    virtual void processChallengeOwnershipPacket(ReceivedMessage& message, const SharedNodePointer& sourceNode) { return; }
 
     virtual bool rootElementHasData() const { return false; }
     virtual void releaseSceneEncodeData(OctreeElementExtraEncodeData* extraEncodeData) const { }

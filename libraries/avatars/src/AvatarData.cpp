@@ -145,7 +145,6 @@ void AvatarData::randomizeDefaultFullAvatarModelUrl() {
 
 const QUrl& AvatarData::defaultFullAvatarModelUrl() {
     if (_defaultFullAvatarModelUrl.isEmpty()) {
-        // _defaultFullAvatarModelUrl = PathUtils::resourcesUrl("/meshes/lynden/lynden.fst");
         randomizeDefaultFullAvatarModelUrl();
     }
 
@@ -391,7 +390,7 @@ QByteArray AvatarData::toByteArray(AvatarDataDetail dataDetail, quint64 lastSent
             hasSensorToWorldMatrix = sendAll || sensorToWorldMatrixChangedSince(lastSentTime);
             hasAdditionalFlags = sendAll || additionalFlagsChangedSince(lastSentTime);
             hasParentInfo = sendAll || parentInfoChangedSince(lastSentTime);
-            hasAvatarLocalPosition = hasParent() && (sendAll ||
+            hasAvatarLocalPosition = hasParentForLocalPosition() && (sendAll ||
                 tranlationChangedSince(lastSentTime) ||
                 parentInfoChangedSince(lastSentTime));
             hasHandControllers = _controllerLeftHandMatrixCache.isValid() || _controllerRightHandMatrixCache.isValid();
@@ -1056,7 +1055,7 @@ int AvatarData::parseDataFromBuffer(const QByteArray& buffer) {
                 _globalPosition = _serverPosition;
                 _globalPositionChanged = now;
             }
-            if (!hasParent()) {
+            if (!hasParentForLocalPosition()) {
                 setLocalPosition(_serverPosition);
             }
         }
@@ -1301,7 +1300,10 @@ int AvatarData::parseDataFromBuffer(const QByteArray& buffer) {
             setLocalPosition(position);
             _globalPosition = getWorldPosition();
             _globalPositionChanged = now;
-        } else {
+        } else if (hasParentForLocalPosition()) {
+            // the mixer, which can't find the parent: kept to pass on; the world position stays the one the avatar sent
+            setLocalPosition(position);
+        } else if (shouldLogError(now)) {
             qCWarning(avatars) << "received localPosition for avatar with no parent";
         }
         sourceBuffer += sizeof(AvatarDataPacket::AvatarLocalPosition);
@@ -1343,9 +1345,11 @@ int AvatarData::parseDataFromBuffer(const QByteArray& buffer) {
         sourceBuffer += sizeof(AvatarDataPacket::FaceTrackerInfo);
 
         PACKET_READ_CHECK(FaceTrackerCoefficients, coefficientsSize);
-        _headData->_blendshapeCoefficients.resize(std::min(numCoefficients, (int)Blendshapes::BlendshapeCount));  // make sure there's room for the copy!
+        // the head holds at most BlendshapeCount; any coefficients after those are skipped
+        const int numKept = std::min(numCoefficients, (int)Blendshapes::BlendshapeCount);
+        _headData->_blendshapeCoefficients.resize(numKept);
         //only copy the blendshapes to headData, not the procedural face info
-        memcpy(_headData->_blendshapeCoefficients.data(), sourceBuffer, coefficientsSize);
+        memcpy(_headData->_blendshapeCoefficients.data(), sourceBuffer, numKept * sizeof(float));
         sourceBuffer += coefficientsSize;
 
         int numBytesRead = sourceBuffer - startSection;
@@ -2098,16 +2102,6 @@ void AvatarData::processAvatarIdentity(
             identityChanged = true;
         }
 
-        flagValue = identity.identityFlags.testFlag(AvatarDataPacket::IdentityFlag::verificationFailed);
-        if (flagValue != _verificationFailed) {
-            _verificationFailed = flagValue;
-            identityChanged = true;
-            setSkeletonModelURL(_skeletonModelURL);
-            if (_verificationFailed) {
-                qCDebug(avatars) << "Avatar" << getSessionDisplayName() << "marked as VERIFY-FAILED";
-            }
-        };
-
         if (identity.attachmentData != _attachmentData) {
             setAttachmentData(identity.attachmentData);
             identityChanged = true;
@@ -2136,15 +2130,8 @@ QUrl AvatarData::getWireSafeSkeletonModelURL() const {
     }
 }
 
-static const QString VERIFY_FAIL_MODEL { "/meshes/verifyFailed.fst" };
-
 const QUrl& AvatarData::getSkeletonModelURL() const {
-    if (_verificationFailed) {
-        static QUrl VERIFY_FAIL_MODEL_URL = PathUtils::resourcesUrl(VERIFY_FAIL_MODEL);
-        return VERIFY_FAIL_MODEL_URL;
-    } else {
-        return _skeletonModelURL;
-    }
+    return _skeletonModelURL;
 }
 
 QByteArray AvatarData::packSkeletonData() const {
@@ -2447,9 +2434,6 @@ QByteArray AvatarData::identityByteArray(bool setIsReplicated) const {
     }
     if (_lookAtSnappingEnabled) {
         identityFlags.setFlag(IdentityFlag::lookAtSnapping);
-    }
-    if (isCertifyFailed()) {
-        identityFlags.setFlag(IdentityFlag::verificationFailed);
     }
 
     identityStream << getSessionUUID()

@@ -22,6 +22,9 @@ public:
     ImageEntityRenderer(const EntityItemPointer& entity);
     ~ImageEntityRenderer();
 
+    // its picture, when that failed to load ("image <file>: 404 not found")
+    QStringList loadFailures() const override;
+
 protected:
     Item::Bound getBound() override;
     ShapeKey getShapeKey() override;

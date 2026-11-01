@@ -20,6 +20,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
+#include <QImageReader>
 #include <QRegularExpression>
 #include <QTextStream>
 #include <QVector>
@@ -468,8 +469,17 @@ WrittenAvatar autorig::writeAvatar(const hfm::Model& model, const Body& body, co
         }
         QString fileName = QFileInfo(path).fileName();
         if (!texture.content.isEmpty()) {
-            if (fileName.isEmpty()) {
-                fileName = QString("texture%1.png").arg(placed.size());
+            // a picture inside the model without a picture's file name (a .glb's are named after the .glb): the
+            // avatar's name and its format's extension
+            QByteArray content = texture.content;
+            QBuffer buffer(&content);
+            buffer.open(QIODevice::ReadOnly);
+            const QByteArray format = QImageReader::imageFormat(&buffer);
+            const bool pictureName =
+                QImageReader::supportedImageFormats().contains(QFileInfo(fileName).suffix().toLower().toUtf8());
+            if (fileName.isEmpty() || (!format.isEmpty() && !pictureName)) {
+                const QString extension = format == "jpeg" ? "jpg" : format.isEmpty() ? "png" : QString(format);
+                fileName = QString("%1_%2.%3").arg(name).arg(placed.size()).arg(extension);
             }
             QFile file(out.filePath(fileName));
             if (!file.open(QIODevice::WriteOnly) || file.write(texture.content) != texture.content.size()) {

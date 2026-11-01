@@ -5,6 +5,19 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: these functions, the physics server's train: run, step, publishTrainStates, handleOctreePacket (its
+//   query: tracks, vehicles, collidable things, Terrain), measureStreamAge, handleVehicleInput, each with everything
+//   it calls on the vehicle's path.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 
 #include "PhysicsServer.h"
 
@@ -27,6 +40,7 @@
 #include "../AssignmentDynamicFactory.h"
 #include "../entities/AssignmentParentFinder.h"
 #include "ServerTerrainEntityItem.h"
+#include "ServerTrackEntityItem.h"
 
 namespace {
     const QString PHYSICS_SERVER_LOGGING_NAME = "physics-server";
@@ -60,13 +74,15 @@ PhysicsServer::PhysicsServer(ReceivedMessage& message) : ThreadedAssignment(mess
 PhysicsServer::~PhysicsServer() {
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void PhysicsServer::run() {
     ThreadedAssignment::commonInit(PHYSICS_SERVER_LOGGING_NAME, NodeType::PhysicsServer);
 
     auto nodeList = DependencyManager::get<NodeList>();
     // the entity server for the tree; the clients (agents) so that the domain introduces them and the hole punch
-    // completes: a driver's VehicleInput packets come straight from its client (round 6)
-    nodeList->addSetOfNodeTypesToNodeInterestSet({ NodeType::EntityServer, NodeType::Agent });
+    // completes: a driver's VehicleInput packets come straight from its client (round 6); the asset server for the
+    // world's own files, such as a terrain at an atp: URL (without it every atp: fetch fails "Server Unavailable")
+    nodeList->addSetOfNodeTypesToNodeInterestSet({ NodeType::EntityServer, NodeType::Agent, NodeType::AssetServer });
     connect(nodeList.data(), &LimitedNodeList::nodeActivated, this, &PhysicsServer::nodeActivated);
     connect(nodeList.data(), &LimitedNodeList::nodeKilled, this, &PhysicsServer::nodeKilled);
     connect(nodeList.data(), &LimitedNodeList::uuidChanged, this, [](const QUuid& sessionUUID, const QUuid&) {
@@ -77,8 +93,10 @@ void PhysicsServer::run() {
 
     _entityEditSender.setPacketsPerSecond(EDIT_PACKETS_PER_SECOND);
 
-    // this server's Terrain entities hold the ground's collision mesh (round 6); the plain one is only its properties
+    // this server's Terrain entities hold the ground's collision mesh (round 6); the plain one is only its properties.
+    // Its Track entities hold their guideway's (the beam and pylons) the same way.
     EntityTypes::registerEntityType(EntityTypes::Terrain, "Terrain", ServerTerrainEntityItem::factory);
+    EntityTypes::registerEntityType(EntityTypes::Track, "Track", ServerTrackEntityItem::factory);
 
     _entityViewer.init();
     EntityTreePointer tree = _entityViewer.getTree();
@@ -126,6 +144,7 @@ void PhysicsServer::run() {
     qCInfo(physics) << "physics-server running: the trains on the tracks are driven from here (PHYSICS.md round 5)";
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void PhysicsServer::step() {
     if (!_running) {
         return;
@@ -222,6 +241,7 @@ void PhysicsServer::step() {
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 // The trains' states go out as ordinary edits of their Track entities, stamped with the domain time of the substep
 // they describe; the entity server relays them to every client, which runs the follower on from there.
 void PhysicsServer::publishTrainStates() {
@@ -251,15 +271,18 @@ void PhysicsServer::publishTrainStates() {
     }
 }
 
-// The Terrain entities fetch their files and build their meshes from here, once a second.
+// The Terrain entities fetch their files and build their meshes from here, once a second; the Track entities build
+// their guideways' the same way.
 void PhysicsServer::updateTerrains() {
     EntityTreePointer tree = _entityViewer.getTree();
     if (!tree) {
         return;
     }
     QVector<QUuid> terrainIDs;
+    QVector<QUuid> trackIDs;
     unsigned int searchFilter = PickFilter::getBitMask(PickFilter::FlagBit::DOMAIN_ENTITIES);
     std::vector<std::shared_ptr<ServerTerrainEntityItem>> terrains;
+    std::vector<std::shared_ptr<ServerTrackEntityItem>> tracks;
     tree->withReadLock([&] {
         tree->evalEntitiesInSphereWithType(Vectors::ZERO, (float)TREE_SCALE, EntityTypes::Terrain, PickFilter(searchFilter), terrainIDs);
         for (const QUuid& id : terrainIDs) {
@@ -267,12 +290,22 @@ void PhysicsServer::updateTerrains() {
                 terrains.push_back(terrain);
             }
         }
+        tree->evalEntitiesInSphereWithType(Vectors::ZERO, (float)TREE_SCALE, EntityTypes::Track, PickFilter(searchFilter), trackIDs);
+        for (const QUuid& id : trackIDs) {
+            if (auto track = std::dynamic_pointer_cast<ServerTrackEntityItem>(tree->findEntityByID(id))) {
+                tracks.push_back(track);
+            }
+        }
     });
     for (auto& terrain : terrains) {
         terrain->update();
     }
+    for (auto& track : tracks) {
+        track->update();
+    }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 // A driver's inputs for a vehicle, to apply one per substep; only the one in the driver's seat is heard.
 void PhysicsServer::handleVehicleInput(QSharedPointer<ReceivedMessage> message, SharedNodePointer senderNode) {
     if (!senderNode || !_entitySimulation) {
@@ -373,18 +406,22 @@ void PhysicsServer::sendStatsPacket() {
     addPacketStatsAndSendStatsPacket(statsObject);
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void PhysicsServer::handleOctreePacket(QSharedPointer<ReceivedMessage> message, SharedNodePointer senderNode) {
     auto packetType = message->getType();
     qint64 receiveTime = message->getFirstPacketReceiveTime();
 
     if (packetType == PacketType::OctreeStats) {
         int statsMessageLength = OctreeHeadlessViewer::parseOctreeStats(message, senderNode);
-        if (message->getSize() > statsMessageLength) {
+        if (statsMessageLength >= 0 && message->getSize() > statsMessageLength) {
             // pull out the piggybacked packet and create a new QSharedPointer<NLPacket> for it
             int piggyBackedSizeWithHeader = message->getSize() - statsMessageLength;
             auto buffer = std::unique_ptr<char[]>(new char[piggyBackedSizeWithHeader]);
             memcpy(buffer.get(), message->getRawMessage() + statsMessageLength, piggyBackedSizeWithHeader);
             auto newPacket = NLPacket::fromReceivedPacket(std::move(buffer), piggyBackedSizeWithHeader, message->getSenderSockAddr());
+            if (!newPacket) {
+                return;   // too short for a packet's header: nothing to read
+            }
             message = QSharedPointer<ReceivedMessage>::create(*newPacket);
         } else {
             return;   // no piggyback data
@@ -424,6 +461,7 @@ QString PhysicsServer::describeEntityServerConnection() {
     return "udt: no connection sampled";
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 // How late the entity server's stream is when this server reads it: the flight by the packet's stamp (the entity
 // server's clock, skew-corrected) and the wait in this process's queue by the socket's receive time. A packet a second
 // late is logged at once (one line a second); the ten-second line carries the window's maxima.

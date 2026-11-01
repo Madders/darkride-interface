@@ -90,9 +90,12 @@ void CallbackEndpoint::updatePose() {
 }
 
 void CallbackEndpoint::apply(const Pose& newPose, const Pointer& source) {
-    if (newPose == _lastPoseWritten) {
+    // two invalid poses never compare equal (Pose::operator==), so an untracked hand would call the script every frame;
+    // once is enough
+    if (newPose == _lastPoseWritten || (!newPose.isValid() && !_lastPoseWritten.isValid() && _poseWritten)) {
         return;
     }
+    _poseWritten = true;
     _lastPoseWritten = newPose;
     internalApplyPose(poseToVariant(newPose), source->getInput().getID());
 }

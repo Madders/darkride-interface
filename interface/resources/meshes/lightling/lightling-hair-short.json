@@ -1,0 +1,17 @@
+{
+  "materialVersion": 1,
+  "materials": [
+    {
+      "name": "lightling-hair-short",
+      "model": "hifi_shader_simple",
+      "defaultFallthrough": true,
+      "procedural": {
+        "version": 3,
+        "fragmentShaderURL": "https://cdn.darkride.ai/avatars/lightling-1/lightling-hair.fs",
+        "channels": [
+          "https://cdn.darkride.ai/avatars/lightling-1/hair.png"
+        ]
+      }
+    }
+  ]
+}

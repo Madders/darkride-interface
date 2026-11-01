@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<!--
+//  SnapCamera.html
+//
+//  Snap's camera on desktop. Three windows show this page, each a part of it (?part=frame|bar|dock): the frame over
+//  the world (click-through), the switch bar and the shutter bar. snapshot.js sends each the camera's state.
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Snap</title>
+<link rel="stylesheet" type="text/css" href="css/SnapCamera.css">
+<script type="text/javascript" src="js/eventBridgeLoader.js"></script>
+<script type="text/javascript" src="js/SnapCamera.js"></script>
+</head>
+<body>
+
+<div id="frame-part" class="part" hidden>
+    <div class="band" id="band-top"></div>
+    <div class="band" id="band-bottom"></div>
+    <div class="band" id="band-left"></div>
+    <div class="band" id="band-right"></div>
+    <div class="corner tl" id="corner-tl"></div>
+    <div class="corner tr" id="corner-tr"></div>
+    <div class="corner bl" id="corner-bl"></div>
+    <div class="corner br" id="corner-br"></div>
+    <div id="flash"></div>
+    <div id="countdown" hidden>
+        <span id="countdown-number" role="timer"></span>
+        <svg id="countdown-rabbit" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <ellipse cx="13.6" cy="5.4" rx="1.35" ry="4" transform="rotate(-38 13.6 5.4)"></ellipse>
+            <ellipse cx="15.6" cy="4.9" rx="1.25" ry="3.7" transform="rotate(-22 15.6 4.9)"></ellipse>
+            <ellipse cx="17.4" cy="9.6" rx="3.1" ry="2.6" transform="rotate(-18 17.4 9.6)"></ellipse>
+            <ellipse cx="11" cy="13" rx="6.8" ry="3.9" transform="rotate(-14 11 13)"></ellipse>
+            <circle cx="3.9" cy="13.4" r="1.7"></circle>
+            <ellipse cx="6.3" cy="17.2" rx="4.2" ry="1.35" transform="rotate(22 6.3 17.2)"></ellipse>
+            <ellipse cx="18.6" cy="14.6" rx="2.9" ry="0.95" transform="rotate(38 18.6 14.6)"></ellipse>
+        </svg>
+    </div>
+    <div id="toast" class="glass" role="status" hidden>
+        <svg id="toast-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"></path></svg>
+        <span id="toast-text"></span>
+        <span id="toast-detail" class="detail"></span>
+    </div>
+    <div id="review" hidden>
+        <div class="card" role="dialog" aria-label="Snap">
+            <div class="card-head">
+                <div><h2 style="display: inline">Snap</h2><span class="when" id="review-when"></span></div>
+                <button type="button" class="round glass" id="review-close" aria-label="Close">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+                </button>
+            </div>
+            <div class="picture" id="review-picture">
+                <img id="review-image" alt="The Snap">
+                <div class="gif-badge" id="review-gif" hidden>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l13-7.5z"></path></svg>
+                    <span>GIF · point here to play</span>
+                </div>
+            </div>
+            <div class="strip" id="review-strip" role="list" aria-label="This session's Snaps"></div>
+            <div class="actions">
+                <button type="button" class="action primary" id="review-copy">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"></path><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"></path></svg>
+                    <span id="review-copy-label">Copy link</span>
+                </button>
+                <button type="button" class="action" id="review-files">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+                    <span>Show in My Files</span>
+                </button>
+                <button type="button" class="action danger" id="review-delete">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13"></path></svg>
+                    <span id="review-delete-label">Delete</span>
+                </button>
+            </div>
+            <div class="where">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#00afff" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.6-3.2 8.2-7.5 9.5-4.3-1.3-7.5-4.9-7.5-9.5V6z"></path></svg>
+                <span id="review-where"></span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="bar-part" class="part" hidden>
+    <button type="button" class="round glass" id="close" aria-label="Close Snap">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+    </button>
+    <div class="chips glass">
+        <button type="button" class="chip" id="gif" aria-label="A GIF with each Snap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="4" width="13" height="11" rx="2.5"></rect><path d="M4.5 8.5v8a3 3 0 0 0 3 3h9"></path></svg>
+            <span>GIF</span>
+        </button>
+        <button type="button" class="chip" id="nametags" aria-label="Show nametags in Snaps">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5V5a2 2 0 0 1 2-2h6.5L21 12.5 12.5 21z"></path><circle cx="8" cy="8" r="1.6"></circle></svg>
+            <span>Nametags</span>
+        </button>
+        <button type="button" class="chip" id="timer" aria-label="Self-timer">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="13.5" r="7.5"></circle><path d="M12 10v3.8l2.6 1.6M9.5 2.5h5"></path></svg>
+            <span id="timer-label">Off</span>
+        </button>
+    </div>
+    <button type="button" class="round glass" id="settings" aria-label="Snap settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5.5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="18.5" cy="12" r="1.8"></circle></svg>
+    </button>
+</div>
+
+<div id="dock-part" class="part" hidden>
+    <div class="dock glass">
+        <button type="button" class="thumb" id="thumb" aria-label="Your last Snap">
+            <img id="thumb-image" alt="" hidden>
+            <span class="empty" id="thumb-empty">
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <ellipse cx="13.6" cy="5.4" rx="1.35" ry="4" transform="rotate(-38 13.6 5.4)"></ellipse>
+                    <ellipse cx="15.6" cy="4.9" rx="1.25" ry="3.7" transform="rotate(-22 15.6 4.9)"></ellipse>
+                    <ellipse cx="17.4" cy="9.6" rx="3.1" ry="2.6" transform="rotate(-18 17.4 9.6)"></ellipse>
+                    <ellipse cx="11" cy="13" rx="6.8" ry="3.9" transform="rotate(-14 11 13)"></ellipse>
+                    <circle cx="3.9" cy="13.4" r="1.7"></circle>
+                    <ellipse cx="6.3" cy="17.2" rx="4.2" ry="1.35" transform="rotate(22 6.3 17.2)"></ellipse>
+                    <ellipse cx="18.6" cy="14.6" rx="2.9" ry="0.95" transform="rotate(38 18.6 14.6)"></ellipse>
+                </svg>
+            </span>
+            <span class="badge" id="thumb-badge" hidden>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#091023" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"></path></svg>
+            </span>
+        </button>
+        <button type="button" class="shutter" id="shutter" aria-label="Take a Snap">
+            <svg class="ring" viewBox="0 0 96 96" aria-hidden="true">
+                <circle id="ring-progress" cx="48" cy="48" r="45" fill="none" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="0 282.7"></circle>
+            </svg>
+            <span class="core"></span>
+        </button>
+        <button type="button" class="round glass flip" id="flip" aria-label="Turn the camera to face you">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.5 11A7.5 7.5 0 0 0 6.2 6.6M4.5 13a7.5 7.5 0 0 0 13.3 4.4"></path><path d="M5.5 3v4h4M18.5 21v-4h-4"></path></svg>
+        </button>
+    </div>
+</div>
+
+</body>
+</html>

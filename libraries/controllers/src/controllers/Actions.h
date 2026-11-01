@@ -248,6 +248,10 @@ enum class Action {
     USERBLENDSHAPE8,
     USERBLENDSHAPE9,
 
+    // how far the head is turned from straight ahead (a rotation in the avatar's frame, no position), from face
+    // tracking: desktop mode turns the head joint by it, on top of the animation
+    HEAD_TURN,
+
     NUM_ACTIONS
 };
 

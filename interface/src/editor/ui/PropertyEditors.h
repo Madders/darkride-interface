@@ -168,6 +168,8 @@ public:
     void setValue(const QVariant& value, bool mixed) override;
     QVariant currentValue() const override { return QVariant(_check->isChecked()); }
     bool isMixed() const override { return _check->checkState() == Qt::PartiallyChecked; }
+    // the name beside the box, a Mac checkbox's, where it has no label of its own (the Inspector's header)
+    void setText(const QString& text) { _check->setText(text); }
 private:
     QCheckBox* _check { nullptr };
 };

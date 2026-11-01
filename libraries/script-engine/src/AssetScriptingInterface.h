@@ -149,22 +149,6 @@ public:
      */
     Q_INVOKABLE void getMapping(QString path, QScriptValue callback);
 
-    /**jsdoc
-     * Called when an {@link Assets.setBakingEnabled} call is complete.
-     * @callback Assets~setBakingEnabledCallback
-     * @param {string} error - <code>null</code> if baking was successfully enabled or disabled, otherwise a description of the 
-     * error.
-     */
-    /**jsdoc
-     * Sets whether or not to bake an asset in the asset server.
-     * @function Assets.setBakingEnabled
-     * @param {string} path - The path to a file in the asset server.
-     * @param {boolean} enabled - <code>true</code> to enable baking of the asset, <code>false</code> to disable.
-     * @param {Assets~setBakingEnabledCallback} callback - The function to call upon completion.
-     */
-    // Note: Second callback parameter not documented because it's always {}.
-    Q_INVOKABLE void setBakingEnabled(QString path, bool enabled, QScriptValue callback);
-
 #if (PR_BUILD || DEV_BUILD)
     /**
      * This function is purely for development purposes, and not meant for use in a
@@ -545,7 +529,6 @@ public:
     Q_INVOKABLE QVariant downloadData(const QString& url, const ScriptCallback& callback);
     Q_INVOKABLE QVariant setMapping(const QString& path, const QString& hash, const ScriptCallback& callback);
     Q_INVOKABLE QVariant getMapping(const QString& path, const ScriptCallback& callback);
-    Q_INVOKABLE QVariant setBakingEnabled(const QString& path, bool enabled, const ScriptCallback& callback);
     Q_INVOKABLE QVariant getAsset(const QVariant& options, const ScriptCallback& callback);
     Q_INVOKABLE QVariant putAsset(const QVariant& options, const ScriptCallback& callback);
     Q_INVOKABLE QVariant deleteAsset(const QVariant& options, const ScriptCallback& callback);

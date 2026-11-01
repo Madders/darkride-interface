@@ -25,6 +25,14 @@ ImageEntityRenderer::~ImageEntityRenderer() {
     }
 }
 
+QStringList ImageEntityRenderer::loadFailures() const {
+    if (_texture && _texture->isFailed()) {
+        QString reason = _texture->getFailureReason();
+        return { "image " + _texture->getURL().fileName() + ": " + (reason.isEmpty() ? QString("could not be loaded") : reason) };
+    }
+    return QStringList();
+}
+
 bool ImageEntityRenderer::isTransparent() const {
     return Parent::isTransparent() || (_textureIsLoaded && _texture->getGPUTexture() && _texture->getGPUTexture()->getUsage().isAlpha()) || _alpha < 1.0f || _pulseProperties.getAlphaMode() != PulseMode::NONE;
 }
@@ -128,7 +136,7 @@ void ImageEntityRenderer::doRender(RenderArgs* args) {
     Q_ASSERT(args->_batch);
     gpu::Batch* batch = args->_batch;
 
-    transform.setRotation(EntityItem::getBillboardRotation(transform.getTranslation(), transform.getRotation(), _billboardMode, args->getViewFrustum().getPosition()));
+    applyBillboard(transform, _billboardMode, args);   // turned to the camera; mirrored with the selfie picture
 
     batch->setModelTransform(transform);
     batch->setResourceTexture(0, texture->getGPUTexture());

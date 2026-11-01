@@ -8,9 +8,20 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: the LightStage::Shadow and Shadow::Cascade functions (the cascades' frusta and matrices).
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
 
 #include "LightStage.h"
 
+#include <array>
 #include <cmath>
 
 #include "ViewFrustum.h"
@@ -74,20 +85,24 @@ LightStage::Shadow::Schema::Schema() {
     maxDistance = 20.0f;
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 LightStage::Shadow::Cascade::Cascade() : 
     _frustum{ std::make_shared<ViewFrustum>() },
     _minDistance{ 0.0f },
     _maxDistance{ 20.0f } {
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 const glm::mat4& LightStage::Shadow::Cascade::getView() const {
     return _frustum->getView();
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 const glm::mat4& LightStage::Shadow::Cascade::getProjection() const {
     return _frustum->getProjection();
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 float LightStage::Shadow::Cascade::computeFarDistance(const ViewFrustum& viewFrustum, const Transform& shadowViewInverse,
                                                       float left, float right, float bottom, float top, float viewMaxShadowDistance) const {
     // Far distance should be extended to the intersection of the infinitely extruded shadow frustum 
@@ -123,6 +138,7 @@ float LightStage::Shadow::Cascade::computeFarDistance(const ViewFrustum& viewFru
     return far;
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 LightStage::Shadow::Shadow(graphics::LightPointer light, unsigned int cascadeCount) : 
     _light{ light } {
     cascadeCount = std::min(cascadeCount, (unsigned int)SHADOW_CASCADE_MAX_COUNT);
@@ -157,6 +173,7 @@ LightStage::Shadow::Shadow(graphics::LightPointer light, unsigned int cascadeCou
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void LightStage::Shadow::setLight(graphics::LightPointer light) {
     _light = light;
     if (light) {
@@ -164,6 +181,7 @@ void LightStage::Shadow::setLight(graphics::LightPointer light) {
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void LightStage::Shadow::setMaxDistance(float value) {
     static const auto MINIMUM_MAXDISTANCE = 1e-3f;
 
@@ -227,6 +245,7 @@ void LightStage::Shadow::setMaxDistance(float value) {
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void LightStage::Shadow::setKeylightFrustum(const ViewFrustum& viewFrustum,
                                             float nearDepth, float farDepth) {
     assert(nearDepth < farDepth);
@@ -243,14 +262,18 @@ void LightStage::Shadow::setKeylightFrustum(const ViewFrustum& viewFrustum,
         orientation = glm::quat_cast(glm::mat3(side, up, -lightDirection));
     }
 
-    // Position the keylight frustum
+    // Position the keylight frustum (a held cascade keeps the view it was drawn from)
     auto position = viewFrustum.getPosition() - (nearDepth + farDepth)*lightDirection;
     for (auto& cascade : _cascades) {
+        if (cascade.isHeld()) {
+            continue;
+        }
         cascade._frustum->setOrientation(orientation);
         cascade._frustum->setPosition(position);
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void LightStage::Shadow::setKeylightCascadeFrustum(unsigned int cascadeIndex, const ViewFrustum& viewFrustum,
                                             float nearDepth, float farDepth) {
     assert(nearDepth < farDepth);
@@ -261,11 +284,44 @@ void LightStage::Shadow::setKeylightCascadeFrustum(unsigned int cascadeIndex, co
     const auto viewMaxCascadeShadowDistance = std::min(viewFrustum.getFarClip(), cascade.getMaxDistance());
     const auto viewMaxShadowDistance = _cascades.back().getMaxDistance();
 
-    const Transform shadowView{ cascade._frustum->getView()};
-    const Transform shadowViewInverse{ shadowView.getInverseMatrix() };
-
     auto nearCorners = viewFrustum.getCorners(viewMinCascadeShadowDistance);
     auto farCorners = viewFrustum.getCorners(viewMaxCascadeShadowDistance);
+    const std::array<glm::vec3, 8> sliceCorners {{ nearCorners.bottomLeft, nearCorners.bottomRight, nearCorners.topLeft,
+        nearCorners.topRight, farCorners.bottomLeft, farCorners.bottomRight, farCorners.topLeft, farCorners.topRight }};
+
+    // the stable fit: the sphere around the slice, centred on the view's axis where its near and far corners are
+    // about as far, its radius kept in steps so that rounding doesn't change it as the camera turns, and its centre
+    // snapped to the cascade's texels in the light's plane, the view placed back from it along the light
+    float sphereRadius = 0.0f;
+    if (_stableCascades) {
+        const float near = viewMinCascadeShadowDistance;
+        const float far = viewMaxCascadeShadowDistance;
+        const glm::vec3 eye = viewFrustum.getPosition();
+        const glm::vec3 axis = viewFrustum.getDirection();
+        // the slice's half-width per metre of depth, at its widest corner
+        float spread = 0.0f;
+        for (int i = 0; i < 8; ++i) {
+            float depth = i < 4 ? near : far;
+            spread = glm::max(spread, glm::distance(sliceCorners[i], eye + axis * depth) / depth);
+        }
+        const glm::vec3 center = eye + axis * glm::clamp(0.5f * (near + far) * (1.0f + spread * spread), near, far);
+        for (const auto& corner : sliceCorners) {
+            sphereRadius = glm::max(sphereRadius, glm::distance(center, corner));
+        }
+        const float RADIUS_STEP = 1.0f / 64.0f;
+        sphereRadius = ceilf(sphereRadius / RADIUS_STEP) * RADIUS_STEP;
+
+        const glm::quat orientation = cascade._frustum->getOrientation();
+        glm::vec3 lightCenter = glm::inverse(orientation) * center;
+        const float texel = 2.0f * sphereRadius / MAP_SIZE;
+        lightCenter.x = floorf(lightCenter.x / texel) * texel;
+        lightCenter.y = floorf(lightCenter.y / texel) * texel;
+        const glm::vec3 lightDirection = glm::normalize(_light->getDirection());
+        cascade._frustum->setPosition(orientation * lightCenter - (nearDepth + farDepth) * lightDirection);
+    }
+
+    const Transform shadowView{ cascade._frustum->getView()};
+    const Transform shadowViewInverse{ shadowView.getInverseMatrix() };
 
     vec3 min{ shadowViewInverse.transform(nearCorners.bottomLeft) };
     vec3 max{ min };
@@ -288,6 +344,11 @@ void LightStage::Shadow::setKeylightCascadeFrustum(unsigned int cascadeIndex, co
     fitFrustum(farCorners.bottomRight);
     fitFrustum(farCorners.topLeft);
     fitFrustum(farCorners.topRight);
+    if (_stableCascades) {
+        // the sphere's square around the snapped centre, which the view's position is on
+        min.x = min.y = -sphereRadius;
+        max.x = max.y = sphereRadius;
+    }
 
     // Re-adjust near and far shadow distance
     auto near = glm::min(-max.z, nearDepth);
@@ -298,6 +359,7 @@ void LightStage::Shadow::setKeylightCascadeFrustum(unsigned int cascadeIndex, co
 
     // Calculate the frustum's internal state
     cascade._frustum->calculate();
+    cascade._fitted = true;
 
     // Update the buffer
     auto& schema = _schemaBuffer.edit<Schema>();
@@ -305,6 +367,7 @@ void LightStage::Shadow::setKeylightCascadeFrustum(unsigned int cascadeIndex, co
     schemaCascade.reprojection = _biasMatrix * ortho * shadowViewInverse.getMatrix();
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void LightStage::Shadow::setKeylightCascadeBias(unsigned int cascadeIndex, float constantBias, float slopeBias) {
     auto& schema = _schemaBuffer.edit<Schema>();
     auto& schemaCascade = schema.cascades[cascadeIndex];
@@ -312,6 +375,7 @@ void LightStage::Shadow::setKeylightCascadeBias(unsigned int cascadeIndex, float
     schemaCascade.slopeBias = slopeBias;
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void LightStage::Shadow::setCascadeFrustum(unsigned int cascadeIndex, const ViewFrustum& shadowFrustum) {
     assert(cascadeIndex < _cascades.size());
     const Transform view{ shadowFrustum.getView() };

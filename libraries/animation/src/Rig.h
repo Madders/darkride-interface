@@ -100,6 +100,9 @@ public:
         HFMJointShapeInfo spineShapeInfo;
         HFMJointShapeInfo spine1ShapeInfo;
         HFMJointShapeInfo spine2ShapeInfo;
+        // face tracking's head turn (controller::Action::HEAD_TURN) in rig space, put on top of the animation while
+        // the head has no IK target (desktop mode); none is the identity
+        glm::quat headTurn;
     };
 
     struct EyeParameters {
@@ -292,6 +295,7 @@ protected:
     void applyOverridePoses();
 
     void updateHead(bool headEnabled, bool hipsEnabled, const AnimPose& headMatrix);
+    void applyHeadTurn(AnimPoseVec& relativePoses) const;
     void updateHands(bool leftHandEnabled, bool rightHandEnabled, bool hipsEnabled, bool hipsEstimated,
                      bool leftArmEnabled, bool rightArmEnabled, bool headEnabled, float dt,
                      const AnimPose& leftHandPose, const AnimPose& rightHandPose,
@@ -495,6 +499,7 @@ protected:
 
     int _rigId;
     bool _headEnabled { false };
+    glm::quat _headTurn;  // ControllerParameters::headTurn, while the head has no IK target
     bool _computeNetworkAnimation { false };
     bool _sendNetworkNode { false };
 

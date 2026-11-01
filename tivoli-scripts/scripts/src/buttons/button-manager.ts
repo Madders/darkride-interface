@@ -18,6 +18,8 @@ export class ButtonManager {
 	private buttons: ButtonData[] = [];
 	private handlers: WebEventHandler[] = [];
 	private panels: PanelPair[] = [];
+	// the windows of the QML panels (addQmlButton), closed when another panel opens
+	private qmlWindows: OverlayWindow[] = [];
 
 	private readonly panelDistance = 0.75;
 	private readonly panelRotation = 20;
@@ -243,6 +245,9 @@ export class ButtonManager {
 					for (const panel of this.panels) {
 						panel.window.setVisible(false);
 					}
+					for (const qmlWindow of this.qmlWindows) {
+						qmlWindow.setVisible(false);
+					}
 
 					panel.window.setSize(
 						this.getOptimalWindowSize(isPanel == "small") as Vec2,
@@ -387,11 +392,160 @@ export class ButtonManager {
 				},
 			);
 
+			// the tablet's events come from whatever page it shows: only this button's own page is heard
 			this.signalManager.connect(
 				this.tablet.webEventReceived,
-				handler.webEventReceived,
+				(message: string) => {
+					if (visible) handler.webEventReceived(message);
+				},
 			);
 		}
+
+		this.buttons.push(buttonData);
+		return buttonData;
+	}
+
+	// A button whose panel is Darkride's own QML (ARCHITECTURE.md §5.2.1), not a web page: on the desktop the panel's
+	// dock (Panels, interface/src/ui/Panels.h), which floats, docks beside the 3D view or tabs with another panel, or a
+	// window placed and sized as the web panels are for a panel without one; in a headset the tablet's screen. The page
+	// reads and sets the engine's values itself through its context properties, so there is no event handler between
+	// them.
+	addQmlButton(
+		name: string,
+		icon: string,
+		backgroundColor: string,
+		sortOrder: number,
+		qmlUrl: string,
+		isPanel: "big" | "small" = "small",
+	) {
+		const button = this.tablet.addButton({
+			text: name,
+			icon,
+			backgroundColor: backgroundColor == null ? "transparent" : backgroundColor,
+			iconPadding: backgroundColor == null ? 0 : 8,
+			sortOrder,
+		});
+		// a dock is the engine's: it stays open beside other panels, and the button follows it however it opens or
+		// closes (its close box, View > Panels)
+		const docked =
+			typeof Panels != "undefined" && Panels.names().indexOf(name) >= 0;
+		// the desktop window is made on the first open, so the page does no work until it is wanted
+		let window: OverlayWindow = null;
+		const makeWindow = () => {
+			window = new OverlayWindow({
+				title: "", // the page carries its own large title; the frame keeps only its close box
+				source: qmlUrl,
+				width: 560,
+				height: 640,
+				visible: false,
+			});
+			this.qmlWindows.push(window);
+			// the window's own close box: a hide counts once the window has been seen open since open() (a new
+			// window's first signals say "hidden" while it is still coming up; taken as a close, they hid it mid
+			// fade-in, which left it on screen marked hidden, and its close box did nothing)
+			this.signalManager.connect(window.visibleChanged, () => {
+				if (window.isVisible()) {
+					seenOpen = true;
+				} else if (seenOpen && visible && !this.inVr()) {
+					close();
+				}
+			});
+		};
+
+		let visible = false;
+		let seenOpen = false;
+
+		const open = () => {
+			if (visible) return;
+			visible = true;
+			seenOpen = false;
+			button.editProperties({ isActive: true });
+
+			if (this.inVr()) {
+				this.tablet.loadQMLSource(qmlUrl);
+				HMD.openTablet();
+			} else if (docked) {
+				Panels.open(name);
+			} else {
+				for (const panel of this.panels) {
+					panel.window.setVisible(false);
+				}
+				for (const qmlWindow of this.qmlWindows) {
+					if (qmlWindow != window) qmlWindow.setVisible(false);
+				}
+				if (window == null) makeWindow();
+				// as tall as a big panel; a column wide (a settings page), or wider for a big one (Explore's cards)
+				const size = this.getOptimalWindowSize(isPanel == "small");
+				const width = Math.min(size.x, isPanel == "big" ? 760 : 560);
+				window.setSize(width, this.getOptimalWindowSize(false).y);
+				window.setPosition(
+					Window.innerWidth / 2 - width / 2,
+					Window.innerHeight / 2 - this.getOptimalWindowSize(false).y / 2,
+				);
+				window.setVisible(true);
+				window.raise();
+			}
+		};
+
+		const close = (force = false) => {
+			if (!visible) return;
+			visible = false;
+			seenOpen = false;
+			button.editProperties({ isActive: false });
+
+			const inVr = this.inVr();
+			if ((inVr || force) && this.tablet.isPathLoaded(qmlUrl)) {
+				this.tablet.gotoHomeScreen();
+			}
+			if ((!inVr || force) && docked) {
+				Panels.close(name);
+			} else if ((!inVr || force) && window != null) {
+				window.setVisible(false);
+			}
+		};
+
+		const buttonData: ButtonData = { button, panel: null, open, close };
+
+		if (docked) {
+			// open from the saved layout before this script started, or opened and closed by the player
+			const follow = (open: boolean) => {
+				if (this.inVr() || open == visible) return;
+				visible = open;
+				button.editProperties({ isActive: open });
+			};
+			follow(Panels.isOpen(name));
+			this.signalManager.connect(
+				Panels.openChanged,
+				(panelName: string, open: boolean) => {
+					if (panelName == name) follow(open);
+				},
+			);
+		}
+
+		this.signalManager.connect(button.clicked, () => {
+			// a dock open behind another panel's tab comes in front; in front, it closes
+			if (docked && !this.inVr()) Panels.toggle(name);
+			else if (visible) close();
+			else open();
+		});
+		// the tablet showing something else
+		this.signalManager.connect(
+			this.tablet.screenChanged,
+			(type: string, newCurrentUrl: string) => {
+				if (this.inVr() && visible && newCurrentUrl != qmlUrl) close();
+			},
+		);
+		// switching between the desktop and a headset: a dock stays on the desktop as the player left it
+		this.signalManager.connect(HMD.displayModeChanged, () => {
+			if (!docked) {
+				close(true);
+				return;
+			}
+			if (this.tablet.isPathLoaded(qmlUrl)) this.tablet.gotoHomeScreen();
+			visible = !this.inVr() && Panels.isOpen(name);
+			seenOpen = false;
+			button.editProperties({ isActive: visible });
+		});
 
 		this.buttons.push(buttonData);
 		return buttonData;
@@ -415,6 +569,13 @@ export class ButtonManager {
 		return button;
 	}
 
+	// every panel closed: the sign-in screen is coming up (ui/SignInGate.cpp) and must not sit under one
+	closeAll() {
+		for (const button of this.buttons) {
+			button.close();
+		}
+	}
+
 	cleanup() {
 		for (let button of this.buttons) {
 			this.tablet.removeButton(button.button);
@@ -423,6 +584,10 @@ export class ButtonManager {
 		for (let panel of this.panels) {
 			panel.window.close();
 			Entities.deleteEntity(panel.entity);
+		}
+
+		for (let qmlWindow of this.qmlWindows) {
+			qmlWindow.close();
 		}
 
 		for (let handler of this.handlers) {

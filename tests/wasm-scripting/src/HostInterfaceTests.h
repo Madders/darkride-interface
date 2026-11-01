@@ -21,11 +21,13 @@ private slots:
     void testDescribe();
     void testCall();
     void testCallErrors();
+    void testEnumResults();
     void testProperties();
     void testSignals();
     void testCallbacksAndFailures();
     void testHandlesAndRelease();
     void testLog();
+    void testMemberGate();
 };
 
 #endif // hifi_HostInterfaceTests_h

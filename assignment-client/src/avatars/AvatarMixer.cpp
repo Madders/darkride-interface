@@ -83,7 +83,6 @@ AvatarMixer::AvatarMixer(ReceivedMessage& message) :
     packetReceiver.registerListener(PacketType::BulkAvatarTraitsAck, this, "queueIncomingPacket");
     packetReceiver.registerListenerForTypes({ PacketType::OctreeStats, PacketType::EntityData, PacketType::EntityErase },
         this, "handleOctreePacket");
-    packetReceiver.registerListener(PacketType::ChallengeOwnership, this, "queueIncomingPacket");
 
     packetReceiver.registerListenerForTypes({
         PacketType::ReplicatedAvatarIdentity,
@@ -527,8 +526,6 @@ void AvatarMixer::handleAvatarKilled(SharedNodePointer avatarNode) {
            } else {
                _sessionDisplayNames.erase(displayNameIter);
            }
-
-            nodeData->getAvatar().stopChallengeTimer();
         }
 
         std::unique_ptr<NLPacket> killPacket;
@@ -956,6 +953,8 @@ void AvatarMixer::sendStatsPacket() {
 }
 
 void AvatarMixer::run() {
+    // a mark a deploy can find in the binary and the log: this mixer passes on parented avatars' local positions
+    qCInfo(avatars) << "Avatar mixer passes on parented avatars' local positions (MixerAvatar, 10-29)";
     qCDebug(avatars) << "Waiting for connection to domain to request settings from domain-server.";
 
     // wait until we have the domain-server settings, otherwise we bail
@@ -1136,8 +1135,11 @@ void AvatarMixer::handleOctreePacket(QSharedPointer<ReceivedMessage> message, Sh
             memcpy(buffer.get(), message->getRawMessage() + message->getPosition(), piggyBackedSizeWithHeader);
 
             auto newPacket = NLPacket::fromReceivedPacket(std::move(buffer), piggyBackedSizeWithHeader, message->getSenderSockAddr());
-            auto newMessage = QSharedPointer<ReceivedMessage>::create(*newPacket);
-            handleOctreePacket(newMessage, senderNode);
+            // a piggybacked packet too short for its header is left unread
+            if (newPacket) {
+                auto newMessage = QSharedPointer<ReceivedMessage>::create(*newPacket);
+                handleOctreePacket(newMessage, senderNode);
+            }
         }
         break;
     }

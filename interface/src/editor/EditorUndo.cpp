@@ -9,6 +9,7 @@
 #include "EditorUndo.h"
 
 #include <QtCore/QSet>
+#include <QtCore/QTimer>
 #include <QtWidgets/QUndoCommand>
 
 #include <EntitiesLogging.h>
@@ -20,6 +21,9 @@
 #include <SharedUtil.h>
 
 #include "Application.h"
+
+// how long a new vehicle stays static and of type "none" before it becomes one (createEntities)
+static const int BECOME_VEHICLE_AFTER_MS = 1500;
 
 namespace {
     const int MAX_REMAP_DEPTH = 64;
@@ -411,6 +415,23 @@ QList<QUuid> EditorUndo::createEntities(const QVector<EntityItemProperties>& pro
         if (!parentID.isNull()) {
             copy.setParentID(batch.contains(parentID) ? batch.value(parentID) : resolve(parentID));
         }
+        // a car made with its Track (Create's Rail, a paste of both) rides the new Track, not the one it was copied from
+        QUuid trackID = copy.getTrackID();
+        if (!trackID.isNull() && batch.contains(trackID)) {
+            copy.setTrackID(batch.value(trackID));
+        }
+        // a vehicle is made in two steps, as physics' rigs make theirs (tests-manual/physics-baseline): first static
+        // and of type "none", then its type and dynamic a moment later. The physics server builds a vehicle's model
+        // when it first sees the type, and a big entity can reach it in two packets: a model built from the first
+        // takes what it lacked as zero (an airship with no ballast floats away; 10-24, about one in nine). A wheel is
+        // only a picture of its parent's wheel, made at once
+        const QString vehicleType = copy.getVehicle().getType();
+        const bool twoStep = !vehicleType.isEmpty() && vehicleType != VehicleType::NONE && vehicleType != VehicleType::WHEEL;
+        const bool dynamic = copy.getDynamic();
+        if (twoStep) {
+            copy.getVehicle().setType(VehicleType::NONE);
+            copy.setDynamic(false);
+        }
         // a new entity: a fresh creation time (with the old one, a finite lifetime would already be
         // over and the server would delete it on arrival), no stale edit stamp, no inherited physics
         copy.setCreated(UNKNOWN_CREATED_TIME);
@@ -419,6 +440,15 @@ QList<QUuid> EditorUndo::createEntities(const QVector<EntityItemProperties>& pro
         copy.setSimulationOwner(QUuid(), 0);
         QUuid newId = entities->addEntity(copy);
         newIds << newId;
+        if (twoStep && !newId.isNull()) {
+            // undone in the meantime, the edit finds no entity and does nothing
+            QTimer::singleShot(BECOME_VEHICLE_AFTER_MS, this, [entities, newId, vehicleType, dynamic] {
+                EntityItemProperties become;
+                become.setDynamic(dynamic);
+                become.getVehicle().setType(vehicleType);
+                entities->editEntity(newId, become);
+            });
+        }
         // a paste used to skip this (no ids to remap), so its children went back onto the originals
         QUuid sourceId = i < sourceIds.size() ? sourceIds[i] : QUuid();
         if (!sourceId.isNull() && !newId.isNull()) {

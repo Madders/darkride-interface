@@ -1,0 +1,23 @@
+# Cases for `check-patches.sh time`: name=iterations=source, the source a function of the iteration count.
+# Plain JavaScript, as in tests/wasm-speed:
+js-arithmetic=2000000=(function (n) { var a = 1.0, i; for (i = 0; i < n; i++) { a = (a * 1.000001 + i) % 1000; } return Math.round(a); })
+js-objects=1000000=(function (n) { var sum = 0, i, v; for (i = 0; i < n; i++) { v = { x: i, y: i * 2, z: 0 }; sum += v.x + v.y; } return sum; })
+js-strings=500000=(function (n) { var s = "", i, len = 0; for (i = 0; i < n; i++) { s = "entity-" + i + "-" + (i % 7); len += s.length; } return len; })
+js-arrays=400000=(function (n) { var arr = [], i; for (i = 0; i < n; i++) { arr.push((i * 7919) % 1000); } arr.sort(function (a, b) { return a - b; }); return arr[n - 1]; })
+js-function-calls=2000000=(function (n) { function add(a, b) { return a + b; } var s = 0, i; for (i = 0; i < n; i++) { s = add(s, i & 7); } return s; })
+js-json=10000=(function (n) { var obj = { position: { x: 1.5, y: 2.5, z: -3.5 }, rotation: { x: 0, y: 0, z: 0, w: 1 }, name: "box", list: [1, 2, 3, 4, 5, 6, 7, 8], nested: { a: { b: { c: "deep" } } } }; var len = 0, i; for (i = 0; i < n; i++) { len += JSON.stringify(JSON.parse(JSON.stringify(obj))).length; } return len; })
+js-properties=2000000=(function (n) { var o = { a: 1, b: 2, c: 3, d: 4 }, s = 0, i; for (i = 0; i < n; i++) { s += o.a + o.d; o.b = i; } return s + o.b; })
+js-methods=1000000=(function (n) { function Point(x, y) { this.x = x; this.y = y; } Point.prototype.dot = function (p) { return this.x * p.x + this.y * p.y; }; var a = new Point(1, 2), b = new Point(3, 4), s = 0, i; for (i = 0; i < n; i++) { s += a.dot(b); } return s; })
+# Calls:
+call-fewer-args=2000000=(function (n) { function add(a, b) { return a + (b || 0); } var s = 0, i; for (i = 0; i < n; i++) { s += add(i & 7); } return s; })
+call-arrow=2000000=(function (n) { var add = (a, b) => a + b, s = 0, i; for (i = 0; i < n; i++) { s = add(s, i & 7); } return s; })
+call-closure=2000000=(function (n) { function make(k) { return function (x) { return x + k; }; } var f = make(3), s = 0, i; for (i = 0; i < n; i++) { s = f(s) & 65535; } return s; })
+call-recursive=20=(function (n) { function fib(k) { return k < 2 ? k : fib(k - 1) + fib(k - 2); } var s = 0, i; for (i = 0; i < n; i++) { s += fib(20); } return s; })
+call-call=1000000=(function (n) { function add(a, b) { return a + b; } var s = 0, i; for (i = 0; i < n; i++) { s = add.call(null, s, i & 7); } return s; })
+call-constructor=1000000=(function (n) { function P(x) { this.x = x; } var s = 0, i; for (i = 0; i < n; i++) { s += new P(i & 7).x; } return s; })
+call-math=2000000=(function (n) { var s = 0, i; for (i = 0; i < n; i++) { s += Math.abs(i - 1000); } return s; })
+call-native=2000000=(function (n) { var i; for (i = 0; i < n; i++) { nativeNothing(i, 1); } return n; })
+call-native-fewer-args=2000000=(function (n) { var i; for (i = 0; i < n; i++) { nativeNothing(i); } return n; })
+call-native-data=2000000=(function (n) { var i; for (i = 0; i < n; i++) { nativeDataNothing(i, 1); } return n; })
+call-from-native=200000=(function (n) { var a = [1, 2, 3, 4, 5, 6, 7, 8], s = 0, i; for (i = 0; i < n; i++) { s += a.reduce(function (x, y) { return x + y; }, 0); } return s; })
+call-sort-by-field=100000=(function (n) { var arr = [], i; for (i = 0; i < n; i++) { arr.push({ d: (i * 7919) % 1000 }); } arr.sort(function (a, b) { return a.d - b.d; }); return arr[n - 1].d; })

@@ -401,6 +401,9 @@ void Texture::assignStoredMipFace(uint16 level, uint8 face, Size size, const Byt
 }
 
 void Texture::assignStoredMip(uint16 level, storage::StoragePointer& storage) {
+    if (!storage) {
+        return;
+    }
     // Check that level accessed make sense
     if (level != 0) {
         if (_autoGenerateMips) {
@@ -432,6 +435,9 @@ void Texture::assignStoredMip(uint16 level, storage::StoragePointer& storage) {
 }
 
 void Texture::assignStoredMipFace(uint16 level, uint8 face, storage::StoragePointer& storage) {
+    if (!storage) {
+        return;
+    }
     // Check that level accessed make sense
     if (level != 0) {
         if (_autoGenerateMips) {
@@ -733,7 +739,8 @@ bool sphericalHarmonicsFromTexture(const gpu::Texture& cubeTexture, std::vector<
     for(int face=0; face < gpu::Texture::NUM_CUBE_FACES; face++) {
         PROFILE_RANGE(render_gpu, "ProcessFace");
 
-        auto data = cubeTexture.accessStoredMipFace(0, face)->readData();
+        auto mip = cubeTexture.accessStoredMipFace(0, face);
+        auto data = mip ? mip->readData() : nullptr;
         if (data == nullptr) {
             continue;
         }

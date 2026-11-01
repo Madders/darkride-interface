@@ -8,6 +8,8 @@
 #ifndef hifi_RayPick_h
 #define hifi_RayPick_h
 
+#include <mutex>
+
 #include <RegisteredMetaTypes.h>
 #include <Pick.h>
 
@@ -92,6 +94,12 @@ public:
 
     PickRay getMathematicalPick() const override;
 
+    /// steadies the ray's direction with a One Euro filter (Casiez et al. 2012, an adaptive low-pass filter): strong
+    /// smoothing while the direction barely moves (a hand's tremor), little while it moves fast, so aiming doesn't lag.
+    /// minCutoff (Hz) sets the smoothing at rest, beta how quickly it lets go with speed; 0 for either: no smoothing.
+    /// The VR controllers' lasers (Caity 10-28).
+    void setSmoothing(float minCutoff, float beta) { _minCutoff = minCutoff; _beta = beta; }
+
     PickResultPointer getDefaultResult(const QVariantMap& pickVariant) const override { return std::make_shared<RayPickResult>(pickVariant); }
     PickResultPointer getEntityIntersection(const PickRay& pick) override;
     PickResultPointer getAvatarIntersection(const PickRay& pick) override;
@@ -107,6 +115,17 @@ public:
 
 private:
     static glm::vec3 intersectRayWithXYPlane(const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& point, const glm::quat& rotation, const glm::vec3& registration);
+
+    glm::vec3 smoothDirection(const glm::vec3& direction) const;
+
+    float _minCutoff { 0.0f };
+    float _beta { 0.0f };
+    // the filter's state: getMathematicalPick is const and may be asked from a script's thread too
+    mutable std::mutex _smoothingMutex;
+    mutable bool _smoothingStarted { false };
+    mutable glm::vec3 _smoothedDirection;
+    mutable glm::vec3 _directionSpeed;   // the direction's rate of change, itself filtered
+    mutable quint64 _smoothedAt { 0 };
 };
 
 #endif // hifi_RayPick_h

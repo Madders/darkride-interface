@@ -75,7 +75,7 @@ void Menu::scanMenu(QMenu& menu, settingsAction modifySetting, Settings& setting
     foreach (QAction* action, menu.actions()) {
         if (action->menu()) {
             scanMenu(*action->menu(), modifySetting, settings);
-        } else if (action->isCheckable()) {
+        } else if (action->isCheckable() && !action->property(TICK_NOT_SAVED).toBool()) {
             modifySetting(settings, *action);
         }
     }

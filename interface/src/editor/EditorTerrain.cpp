@@ -25,6 +25,7 @@
 #include <NumericalConstants.h>
 #include <PickFilter.h>
 #include <RenderableTerrainEntityItem.h>
+#include <SharedUtil.h>
 #include <terrain/Resample.h>
 #include <terrain/TerrainFile.h>
 
@@ -190,6 +191,9 @@ EditorTerrain::EditorTerrain(EditorUndo* undo, QObject* parent) : QObject(parent
 }
 
 void EditorTerrain::setBrush(const EditorTerrainBrush& brush) {
+    if (brush.randomAngle && !_brush.randomAngle) {
+        _randomAngle = randFloatInRange(0.0f, 360.0f);
+    }
     _brush = brush;
     if (brush.shape != _maskShape) {
         _maskShape = brush.shape;
@@ -329,7 +333,7 @@ terrain::Brush EditorTerrain::voxelBrush(const RenderableTerrainEntityItem& enti
     brush.material = _stroking ? _strokeMaterial : (uint8_t)glm::clamp(_brush.material, 0, 255);
     brush.flattenHeight = _flattenHeight;
     brush.mask = _mask.get();
-    brush.angle = glm::radians(_brush.angle);
+    brush.angle = glm::radians(angle());
     return brush;
 }
 
@@ -344,7 +348,7 @@ terrain::PaintBrush EditorTerrain::paintBrush(const RenderableTerrainEntityItem&
     brush.hardness = glm::clamp(_brush.hardness, 0.0f, 1.0f);
     brush.layer = (uint8_t)glm::clamp(_brush.material, 0, terrain::PAINT_LAYERS - 1);
     brush.mask = _mask.get();
-    brush.angle = glm::radians(_brush.angle);
+    brush.angle = glm::radians(angle());
     return brush;
 }
 
@@ -662,6 +666,15 @@ void EditorTerrain::endStroke(bool cancel) {
     _changed = 0;
     _accumulated = 0.0f;
     _spheres.clear();
+    if (_brush.randomAngle) {
+        // the next stroke's angle, which the outline shows from now on
+        _randomAngle = randFloatInRange(0.0f, 360.0f);
+        if (_hasLastHit) {
+            if (auto shown = terrainEntity(_lastHit.id)) {
+                showOutline(*shown, _lastHit);
+            }
+        }
+    }
 }
 
 void EditorTerrain::dropStroke() {
@@ -931,9 +944,9 @@ void EditorTerrain::showOutline(const RenderableTerrainEntityItem& entity, const
     QVector<QVector<glm::vec3>> rings;
     if (_mask && !isSphere(_brush.mode)) {
         // the shape picture's edges, turned as the brush is (the turn weightAt undoes, BrushMask.cpp)
-        const float angle = glm::radians(_brush.angle);
-        const float c = std::cos(angle);
-        const float s = std::sin(angle);
+        const float turn = glm::radians(angle());
+        const float c = std::cos(turn);
+        const float s = std::sin(turn);
         for (const std::vector<glm::vec2>& curve : _mask->outline(OUTLINE_MASK_LEVEL, OUTLINE_MASK_SAMPLES)) {
             QVector<glm::vec3> ring;
             ring.reserve((int)curve.size());

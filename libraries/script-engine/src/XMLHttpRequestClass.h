@@ -60,6 +60,11 @@ XMlHttpRequest.getResponseHeader(QString) function
  * Provides a means to interact with web servers. It is a near-complete implementation of the XMLHttpRequest API described in 
  * the Mozilla docs:
  * <a href="https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest">https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest</a>.
+ *
+ * <p>On a person's client, a script that came over the network (a world's script) may use web addresses only (http, https,
+ * atp), to public hosts: not the files on that computer, not services on it or on its network. A refused request ends as a
+ * failed one (status 0, error 201), with the reason in the script's log. A script loaded from the computer itself, or any
+ * script of a world served from that computer or its network, keeps every address.</p>
  * 
  * <p>Create using <code>new XMLHttpRequest(...)</code>.</p>
  *
@@ -291,6 +296,9 @@ signals:
 
 private:
     void setReadyState(ReadyState readyState);
+    /// Ends the request as refused by the network rule for a script's own requests (ScriptNetworkPolicy): a failed
+    /// request, with the reason in the script's log.
+    void refuse(const QString& reason);
     void doSend();
     void connectToReply(QNetworkReply* reply);
     void disconnectFromReply(QNetworkReply* reply);
@@ -360,6 +368,11 @@ private:
      * @typedef {number} XMLHttpRequest.NetworkError
      */
     QNetworkReply::NetworkError _errorCode { QNetworkReply::NoError };
+    QUrl _origin;                // where the script making the request came from
+    bool _ruled { false };       // whether the network rule holds here (a person's client)
+    bool _worldIsLocal { false };    // the world the script is judged in (ScriptEngine::worldIsLocal), when it made the request
+    bool _deciding { false };    // the rule is still judging (a name lookup)
+    int _generation { 0 };       // abort() moves it on, so a judgement that comes late is dropped
 
     int _timeout { 0 };
     QTimer _timer;

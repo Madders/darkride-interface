@@ -32,6 +32,12 @@ public:
     static inline int alive { 0 };
 };
 
+/// An enum Qt doesn't know (no Q_ENUM, in a class that is not a QObject), as RefreshRateManager's were before
+/// Performance mirrored them: a method returning one can't be called from a script, on either engine.
+struct PlainLevels {
+    enum Level { Low, High = 7 };
+};
+
 class Probe : public QObject {
     Q_OBJECT
     Q_PROPERTY(int count READ count WRITE setCount NOTIFY countChanged)
@@ -61,6 +67,10 @@ public:
     Q_INVOKABLE int countOfProbe(const Probe* probe) { return probe ? probe->count() : -1; }
     Q_INVOKABLE QVariantMap describeSelf() { QVariantMap m; m["count"] = _count; m["mode"] = int(_mode); return m; }
     Q_INVOKABLE Other* makeOther() { return new Other(); }
+    // an enum result: Qt's own (Q_ENUM) reaches a script as its number; one Qt doesn't know can't be carried
+    Q_INVOKABLE Mode currentMode() const { return _mode; }
+    Q_INVOKABLE void useMode(Mode mode) { _mode = mode; }
+    Q_INVOKABLE PlainLevels::Level plainLevel() const { return PlainLevels::High; }
     // a method of the QtScript engine's, which a module cannot call
     Q_INVOKABLE void takeScriptValue(const QScriptValue& value) { Q_UNUSED(value); }
 

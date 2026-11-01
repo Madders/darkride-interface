@@ -80,6 +80,9 @@ namespace Setting {
 
     // Sets up the settings private instance. Should only be run once at startup.
     void init() {
+        // A walled-off client's or sandboxed server's settings stay in its own folders (TIVOLI_APP_DATA_DIR)
+        setSettingsPathFromEnvironment();
+
         // Set settings format
         QSettings::setDefaultFormat(JSON_FORMAT);
         QSettings settings;

@@ -45,7 +45,7 @@ void GLESBackend::transferTransformState(const Batch& batch) const {
         glBindBuffer(GL_TEXTURE_BUFFER, 0);
     }
 
-    if (!batch._namedData.empty()) {
+    if (!batch._namedData.empty() || !batch._instanceDrawCallInfos.empty()) {
         bufferData.clear();
         for (auto& data : batch._namedData) {
             auto currentSize = bufferData.size();
@@ -53,6 +53,14 @@ void GLESBackend::transferTransformState(const Batch& batch) const {
             bufferData.resize(currentSize + bytesToCopy);
             memcpy(bufferData.data() + currentSize, data.second.drawCallInfos.data(), bytesToCopy);
             _transform._drawCallInfoOffsets[data.first] = (GLvoid*)currentSize;
+        }
+        // the inline instance lists (Batch::drawIndexedInstances), after the named calls' lists
+        if (!batch._instanceDrawCallInfos.empty()) {
+            auto currentSize = bufferData.size();
+            auto bytesToCopy = batch._instanceDrawCallInfos.size() * sizeof(Batch::DrawCallInfo);
+            bufferData.resize(currentSize + bytesToCopy);
+            memcpy(bufferData.data() + currentSize, batch._instanceDrawCallInfos.data(), bytesToCopy);
+            _transform._instanceDrawCallInfoOffset = currentSize;
         }
 
         glBindBuffer(GL_ARRAY_BUFFER, _transform._drawCallInfoBuffer);

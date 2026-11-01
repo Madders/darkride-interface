@@ -14,6 +14,8 @@
 #include <atomic>
 
 #if defined(Q_OS_WIN)
+// winsock2.h first: Windows.h would otherwise pull in the old winsock.h, which clashes with it
+#include <winsock2.h>
 #include <Windows.h>
 #endif
 

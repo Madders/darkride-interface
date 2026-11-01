@@ -1,0 +1,10 @@
+--- a/tensorflow/lite/core/model_building.h
++++ b/tensorflow/lite/core/model_building.h
+@@ -37,6 +37,7 @@
+ 
+ class InterpreterInfo;
+ class Graph;
++class Tensor;
+ 
+ namespace internal {
+ 

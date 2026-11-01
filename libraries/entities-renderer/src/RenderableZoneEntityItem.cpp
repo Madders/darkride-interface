@@ -40,6 +40,9 @@ using namespace render::entities;
 
 ZoneEntityRenderer::ZoneEntityRenderer(const EntityItemPointer& entity) : Parent(entity) {
     _background->setSkybox(std::make_shared<ProceduralSkybox>(entity->getCreated()));
+    // A zone with no ambient picture is lit by the built-in sphere from the start. setAmbientURL("") returns early
+    // while the URL is still empty, so without this the sphere stayed black until a picture was set and cleared.
+    _ambientLight->setAmbientSpherePreset(gpu::SphericalHarmonics::BREEZEWAY);
     auto entityScriptingInterface = DependencyManager::get<EntityScriptingInterface>();
 }
 
@@ -207,41 +210,7 @@ void ZoneEntityRenderer::doRender(RenderArgs* args) {
         } else if (_bloomMode == COMPONENT_MODE_ENABLED) {
             _bloomStage->_currentFrame.pushBloom(_bloomIndex);
         }
-        
-        // TO DO:  Finish this.
-        // Move actual implementation via invoke away from qApp and over to a new tone mapping stage
-        // following the same example used in bloom and haze
-        if (false) { // for now, disable
-            storeOldToneMappingMode();
-            if (toneMappingModeChanged()) {             
-                if (_toneMappingMode == TONE_MAPPING_INHERIT) { // do nothing
-                    //instance->setTonemappingMode()
-                    //instance->setAntialiasingMethod(RenderScriptingInterface::AntialiasingMethod::NONE); 
-                } else if (_toneMappingMode == TONE_MAPPING_RGB) {
-                    QMetaObject::invokeMethod(qApp, "setTonemappingMode", Q_ARG(int, 0), Q_ARG(float, 0));
-                    qDebug() << "TONE MAPPING RGB";
-                } else if (_toneMappingMode == TONE_MAPPING_SRGB) {
-                    QMetaObject::invokeMethod(qApp, "setTonemappingMode", Q_ARG(int, 1), Q_ARG(float, 0));
-                    // instance->setTonemappingMode(1,0);
-                    qDebug() << "TONE MAPPING SRGB";
-                } else if (_toneMappingMode == TONE_MAPPING_REINHARD) {
-                    QMetaObject::invokeMethod(qApp, "setTonemappingMode", Q_ARG(int, 2), Q_ARG(float, 0));
-                    qDebug() << "TONE MAPPING REINHARD";
-                } else if (_toneMappingMode == TONE_MAPPING_FILMIC) {
-                    QMetaObject::invokeMethod(qApp, "setTonemappingMode", Q_ARG(int, 3), Q_ARG(float, 0));
-                    qDebug() << "TONE MAPPING FILMIC";
-                }
-            }        
-        }
     }
-}
-
-void ZoneEntityRenderer::storeOldToneMappingMode() {
-    _prevToneMappingMode = _toneMappingMode;
-}
-
-bool ZoneEntityRenderer::toneMappingModeChanged() {
-    return _prevToneMappingMode == _toneMappingMode;
 }
 
 void ZoneEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& scene,

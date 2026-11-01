@@ -38,7 +38,6 @@
 #include "udt/PacketHeaders.h"
 #include "RSAKeypairGenerator.h"
 #include "SharedUtil.h"
-#include "UserActivityLogger.h"
 
 
 const bool VERBOSE_HTTP_REQUEST_DEBUGGING = false;
@@ -123,7 +122,6 @@ void AccountManager::logout() {
 
     // remove this account from the account settings file
     removeAccountFromFile();
-    saveLoginStatus(false);
 
     emit logoutComplete();
     // the username has changed to blank
@@ -635,51 +633,6 @@ void AccountManager::requestAccessTokenWithAuthCode(const QString& authCode, con
     connect(requestReply, &QNetworkReply::finished, this, &AccountManager::requestAccessTokenFinished);
 }
 
-void AccountManager::requestAccessTokenWithSteam(QByteArray authSessionTicket) {
-    QNetworkAccessManager& networkAccessManager = NetworkAccessManager::getInstance();
-
-    QNetworkRequest request;
-    request.setHeader(QNetworkRequest::UserAgentHeader, _userAgentGetter());
-
-    QUrl grantURL = _authURL;
-    grantURL.setPath("/oauth/token");
-
-    QByteArray postData;
-    postData.append("grant_type=password&");
-    postData.append("steam_auth_ticket=" + QUrl::toPercentEncoding(authSessionTicket) + "&");
-    postData.append("scope=" + ACCOUNT_MANAGER_REQUESTED_SCOPE);
-
-    request.setUrl(grantURL);
-    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/x-www-form-urlencoded");
-
-    QNetworkReply* requestReply = networkAccessManager.post(request, postData);
-    connect(requestReply, &QNetworkReply::finished, this, &AccountManager::requestAccessTokenFinished);
-    connect(requestReply, SIGNAL(error(QNetworkReply::NetworkError)), this, SLOT(requestAccessTokenError(QNetworkReply::NetworkError)));
-}
-
-void AccountManager::requestAccessTokenWithOculus(const QString& nonce, const QString &oculusID) {
-    QNetworkAccessManager& networkAccessManager = NetworkAccessManager::getInstance();
-
-    QNetworkRequest request;
-    request.setHeader(QNetworkRequest::UserAgentHeader, _userAgentGetter());
-
-    QUrl grantURL = _authURL;
-    grantURL.setPath("/oauth/token");
-
-    QByteArray postData;
-    postData.append("grant_type=password&");
-    postData.append("oculus_nonce=" + nonce + "&");
-    postData.append("oculus_id=" + oculusID + "&");
-    postData.append("scope=" + ACCOUNT_MANAGER_REQUESTED_SCOPE);
-
-    request.setUrl(grantURL);
-    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/x-www-form-urlencoded");
-
-    QNetworkReply* requestReply = networkAccessManager.post(request, postData);
-    connect(requestReply, &QNetworkReply::finished, this, &AccountManager::requestAccessTokenFinished);
-    connect(requestReply, SIGNAL(error(QNetworkReply::NetworkError)), this, SLOT(requestAccessTokenError(QNetworkReply::NetworkError)));
-}
-
 void AccountManager::refreshAccessToken() {
 
     // we can't refresh our access token if we don't have a refresh token, so check for that first
@@ -737,7 +690,6 @@ void AccountManager::setAccessTokens(const QString& response) {
             emit loginComplete(rootURL);
 
             persistAccountToFile();
-            saveLoginStatus(true);
             requestProfile();
         }
     } else {
@@ -1114,41 +1066,6 @@ void AccountManager::handleKeypairGenerationError() {
 
     // reset our waiting state for keypair response
     _isWaitingForKeypairResponse = false;
-}
-
-void AccountManager::setLimitedCommerce(bool isLimited) {
-    _limitedCommerce = isLimited;
-}
-
-void AccountManager::saveLoginStatus(bool isLoggedIn) {
-    if (!_configFileURL.isEmpty()) {
-        QFile configFile(_configFileURL);
-        configFile.open(QIODevice::ReadOnly | QIODevice::Text);
-        QJsonParseError error;
-        QJsonDocument jsonDocument = QJsonDocument::fromJson(configFile.readAll(), &error);
-        configFile.close();
-        QString launcherPath;
-        if (error.error == QJsonParseError::NoError) {
-            QJsonObject rootObject = jsonDocument.object();
-            if (rootObject.contains("launcherPath")) {
-                launcherPath = rootObject["launcherPath"].toString();
-            }
-            if (rootObject.contains("loggedIn")) {
-                rootObject["loggedIn"] = isLoggedIn;
-            }
-            jsonDocument = QJsonDocument(rootObject);
-
-        }
-        configFile.open(QFile::WriteOnly | QFile::Text | QFile::Truncate);
-        configFile.write(jsonDocument.toJson());
-        configFile.close();
-        if (!isLoggedIn && !launcherPath.isEmpty()) {
-            QProcess launcher;
-            launcher.setProgram(launcherPath);
-            launcher.startDetached();
-            QMetaObject::invokeMethod(qApp, "quit", Qt::QueuedConnection);
-        }
-    }
 }
 
 bool AccountManager::hasKeyPair() const {

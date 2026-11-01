@@ -26,9 +26,15 @@ namespace EditorCreate {
     struct Item {
         QString key;                    // "cube", "spot", "model" ...
         QString label;                  // the menu text
-        QString group;                  // a submenu, or empty for the top level
+        QString group;                  // a submenu, or empty for the top level; "/" nests ("Special items/Vehicles")
         EntityTypes::EntityType type;
         bool separatorBefore { false }; // a separator above this item (or above its group)
+        // a ready-made family of entities: an entity file in the app's resources, placed whole (Editor::createPreset)
+        QString preset {};
+        float ahead { 0.0f };           // a big one goes at least this far from the camera (the airship)
+        // greyed in the menu with this as its tooltip (a kind the engine can't make yet); or a tooltip for one it can
+        bool disabled { false };
+        QString tooltip {};
     };
     const QVector<Item>& items();
     const Item* item(const QString& key);
@@ -63,6 +69,10 @@ public:
     QString fileName() const { return _fileName; }
     // the name a file is stored under: letters, digits, dot, dash and underscore; anything else becomes "_"
     static QString safeFileName(const QString& name);
+    // Build mode's status while a file goes up: "Uploading chair.glb 40%", or from 100 "Processing chair.glb…" (sent;
+    // the server is storing it), then more (" (+2 more)"); for a file from this computer, the rights line after it
+    // (ui/RightsLine.h), all the while it goes up
+    static QString uploadingStatus(const QString& fileName, int percent, const QString& more, bool fromComputer);
 
 signals:
     void progress(qint64 sent, qint64 total);

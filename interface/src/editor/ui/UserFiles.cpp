@@ -10,6 +10,7 @@
 
 #include <algorithm>
 
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QCollator>
 #include <QtCore/QFileInfo>
 #include <QtCore/QJsonArray>
@@ -188,20 +189,11 @@ QString UserFiles::withStableLinks(const QString& text, int& rewritten, QStringL
 
 QVector<const UserFile*> UserFiles::childrenOf(const QString& folderPath) const {
     QVector<const UserFile*> children;
-    for (const auto& file : _files) {
-        if (UserFile::folderOf(file.path) == folderPath) {
-            children << &file;
-        }
+    const QVector<int> indexes = _childrenByFolder.value(folderPath);
+    children.reserve(indexes.size());
+    for (int index : indexes) {
+        children << &_files[index];
     }
-    QCollator collator;
-    collator.setNumericMode(true);
-    collator.setCaseSensitivity(Qt::CaseInsensitive);
-    std::stable_sort(children.begin(), children.end(), [&collator](const UserFile* a, const UserFile* b) {
-        if (a->folder != b->folder) {
-            return a->folder;
-        }
-        return collator.compare(a->name, b->name) < 0;
-    });
     return children;
 }
 
@@ -234,6 +226,8 @@ void UserFiles::clear() {
     _files.clear();
     _byPath.clear();
     _countUnder.clear();
+    _childrenByFolder.clear();
+    _listedAt.invalidate();
     _baseUrl.clear();
     _listed = false;
     _usedSize = 0;
@@ -279,6 +273,13 @@ QString UserFiles::errorText(QNetworkReply* reply) {
     return detail.isEmpty() ? reply->errorString() : detail;
 }
 
+void UserFiles::refreshIfStale(qint64 maxAgeMs) {
+    if (_listed && _listedAt.isValid() && _listedAt.elapsed() < maxAgeMs && isLoggedIn()) {
+        return;
+    }
+    refresh();
+}
+
 void UserFiles::refresh() {
     if (!isLoggedIn()) {
         clear();
@@ -321,6 +322,8 @@ void UserFiles::onListing(QNetworkReply* reply) {
         emit listingFailed(why);
         return;
     }
+    QElapsedTimer listingTimer;
+    listingTimer.start();
     QJsonObject listing = QJsonDocument::fromJson(reply->readAll()).object();
     _baseUrl = listing.value("url").toString();
     QVector<UserFile> files;
@@ -375,11 +378,32 @@ void UserFiles::onListing(QNetworkReply* reply) {
             }
         }
     }
+    // Each folder's entries, once, sorted as the panel shows them (folders first, then by name, numbers in order).
+    // childrenOf used to scan every entry, and the folder tree asks it once a folder: with 18,746 entries that was
+    // over a second of the main thread at each listing, which build mode asks for each time it comes on (10-24:
+    // build mode toggles late, a frame held 1.6 s).
+    QHash<QString, QVector<int>> childrenByFolder;
+    for (int i = 0; i < files.size(); ++i) {
+        childrenByFolder[UserFile::folderOf(files[i].path)] << i;
+    }
+    QCollator collator;
+    collator.setNumericMode(true);
+    collator.setCaseSensitivity(Qt::CaseInsensitive);
+    for (auto it = childrenByFolder.begin(); it != childrenByFolder.end(); ++it) {
+        std::stable_sort(it->begin(), it->end(), [&files, &collator](int a, int b) {
+            if (files[a].folder != files[b].folder) {
+                return files[a].folder;
+            }
+            return collator.compare(files[a].name, files[b].name) < 0;
+        });
+    }
     _files = files;
     _byPath = byPath;
     _countUnder = countUnder;
+    _childrenByFolder = childrenByFolder;
     _listed = true;
-    qCDebug(interfaceapp) << "My Files listed:" << _files.size() << "entries";
+    _listedAt.start();
+    qCDebug(interfaceapp) << "My Files listed:" << _files.size() << "entries in" << listingTimer.elapsed() << "ms";
     emit listed();
     if (_refreshWanted) {
         _refreshWanted = false;

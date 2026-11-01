@@ -150,19 +150,20 @@ void HmdDisplayPlugin::uncustomizeContext() {
 ivec4 HmdDisplayPlugin::getViewportForSourceSize(const uvec2& size) const {
     // screen preview mirroring
     auto window = _container->getPrimaryWidget();
-    auto devicePixelRatio = window->devicePixelRatio();
-    auto windowSize = toGlm(window->size());
-    windowSize *= devicePixelRatio;
+    // in pixels at the exact ratio (a whole-number one is 1 at 150 %), and the letterbox worked out in floats: a uvec2
+    // times a float takes the float as a whole number first (an aspect of 0.8 made the width 0)
+    uvec2 windowSize = toGlm(window->size() * window->devicePixelRatioF());
     float windowAspect = aspect(windowSize);
     float sceneAspect = aspect(size);
     float aspectRatio = sceneAspect / windowAspect;
 
-    uvec2 targetViewportSize = windowSize;
+    vec2 targetSize = vec2(windowSize);
     if (aspectRatio < 1.0f) {
-        targetViewportSize.x *= aspectRatio;
+        targetSize.x *= aspectRatio;
     } else {
-        targetViewportSize.y /= aspectRatio;
+        targetSize.y /= aspectRatio;
     }
+    uvec2 targetViewportSize = uvec2(glm::round(targetSize));
     uvec2 targetViewportPosition;
     if (targetViewportSize.x < windowSize.x) {
         targetViewportPosition.x = (windowSize.x - targetViewportSize.x) / 2;
@@ -232,7 +233,7 @@ void HmdDisplayPlugin::internalPresent() {
 
             if (_monoPreview) {
                 auto window = _container->getPrimaryWidget();
-                float devicePixelRatio = window->devicePixelRatio();
+                float devicePixelRatio = window->devicePixelRatioF();   // the exact ratio, as getViewportForSourceSize
                 glm::vec2 windowSize = toGlm(window->size());
                 windowSize *= devicePixelRatio;
 

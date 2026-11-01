@@ -47,7 +47,6 @@ namespace MenuOption {
     const QString AutoMuteAudio = "Auto Mute Microphone";
     const QString AvatarReceiveStats = "Show Receive Stats";
     const QString AvatarBookmarks = "Avatar Bookmarks";
-    const QString AvatarPackager = "Avatar Packager";
     const QString Back = "Back";
     const QString BinaryEyelidControl = "Binary Eyelid Control";
     const QString BookmarkAvatar = "Bookmark Avatar";
@@ -62,18 +61,20 @@ namespace MenuOption {
     const QString BuildRedo = "Redo";
     const QString BuildResetPanels = "Reset Panels";
     const QString BuildUseStableLinks = "Use Stable Links";
+    const QString BuildImportEntities = "Import Entities…";
+    const QString BuildImportEntitiesFromUrl = "Import Entities from URL…";
+    const QString BuildExportEntities = "Export Selected Entities…";
     const QString BuildBakeImpostor = "Bake Impostor";
     const QString BuildBakeAllImpostors = "Bake All Impostors";
     const QString BuildRemoveImpostor = "Remove Impostor";
     const QString BuildUndo = "Undo";
     const QString CalibrateCamera = "Calibrate Camera";
+    const QString CameraCollision = "Camera Collision";
     const QString CenterPlayerInView = "Center Player In View";
-    const QString Chat = "Chat...";
     const QString ClearDiskCaches = "Clear Disk Caches (requires restart)";
     const QString Collisions = "Collisions";
     const QString Connexion = "Activate 3D Connexion Devices";
     const QString Console = "Console...";
-    const QString ControlWithSpeech = "Enable Speech Control API";
     const QString CopyAddress = "Copy Address to Clipboard";
     const QString CopyPath = "Copy Path to Clipboard";
     const QString CoupleEyelids = "Couple Eyelids";
@@ -100,7 +101,6 @@ namespace MenuOption {
     const QString DeleteAvatarBookmark = "Delete Avatar Bookmark...";
     const QString DeleteAvatarEntitiesBookmark = "Delete Avatar Entities Bookmark";
     const QString DeleteBookmark = "Delete Bookmark...";
-    const QString DisableActivityLogger = "Disable Activity Logger";
     const QString DisableEyelidAdjustment = "Disable Eyelid Adjustment";
     const QString DisableLightEntities = "Disable Light Entities";
     const QString DisplayCrashOptions = "Display Crash Options";
@@ -117,6 +117,7 @@ namespace MenuOption {
     const QString EchoServerAudio = "Echo Server Audio";
     const QString EnableFlying = "Enable Flying";
     const QString EnableAvatarCollisions = "Enable Avatar Collisions";
+    const QString WalkThroughWalls = "Walk Through Walls";
     const QString EnableInverseKinematics = "Enable Inverse Kinematics";
     const QString EntityScriptServerLog = "Entity Script Server Log";
     const QString ExpandMyAvatarSimulateTiming = "Expand /myAvatar/simulation";
@@ -163,7 +164,8 @@ namespace MenuOption {
     const QString Pair = "Pair";
     const QString PhysicsShowOwned = "Highlight Simulation Ownership";
     const QString VerboseLogging = "Verbose Logging";
-    const QString RunJavaScriptOnWebAssembly = "Run JavaScript on WebAssembly";
+    const QString RunJavaScriptOnQtScript = "Run JavaScript on QtScript (the old engine)";
+    const QString RunJavaScriptOnQtScriptNoRuntime = "Run JavaScript on QtScript (no WebAssembly runtime file)";
     const QString PhysicsShowBulletWireframe = "Show Bullet Collision";
     const QString PhysicsShowBulletAABBs = "Show Bullet Bounding Boxes";
     const QString PhysicsShowBulletContactPoints = "Show Bullet Contact Points";
@@ -230,6 +232,8 @@ namespace MenuOption {
     const QString DesktopTabletToToolbar = "Desktop Tablet Becomes Toolbar";
     const QString HMDTabletToToolbar = "HMD Tablet Becomes Toolbar";
     const QString Shadows = "Shadows";
+    const QString GpuInstancing = "GPU Instancing";
+    const QString Vsync = "Vsync";
     const QString RenderForward = "Forward Rendering";
     const QString RenderMsaaMenu = "MSAA (Forward)";
     const QString RenderMsaaOff = "No MSAA";
@@ -245,6 +249,7 @@ namespace MenuOption {
     const QString ShowImpostorsAndLods = "Show Impostors and LODs";
     const QString ShowModelsStillLoading = "Show Models Still Loading";
     const QString ShowNaNPixels = "Show NaN Pixels";
+    const QString UpscaleFSRInVR = "Upscaling (FSR) in VR";
     const QString AmbientOcclusion = "Ambient Occlusion";
     const QString NotificationSounds = "play_notification_sounds";
     const QString NotificationSoundsSnapshot = "play_notification_sounds_snapshot";

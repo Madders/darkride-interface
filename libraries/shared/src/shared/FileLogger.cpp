@@ -10,6 +10,8 @@
 
 #include "FileLogger.h"
 
+#include "../StartupProfiler.h"
+
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtGui/QDesktopServices>
@@ -129,6 +131,7 @@ FileLogger::FileLogger(QObject* parent) :
     AbstractLoggerInterface(parent),
     _fileName(FileLogger::getLogFilename())
 {
+    StartupProfiler::Scope step("FileLogger: the log file and its persist thread");
     _persistThreadInstance = new FilePersistThread(*this);
     _persistThreadInstance->initialize(true, QThread::LowestPriority);
     connect(_persistThreadInstance, &FilePersistThread::rollingLogFile, this, &FileLogger::rollingLogFile);

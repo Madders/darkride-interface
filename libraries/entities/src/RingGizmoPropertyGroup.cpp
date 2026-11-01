@@ -20,8 +20,9 @@ const float RingGizmoPropertyGroup::MAX_ALPHA = 1.0f;
 const float RingGizmoPropertyGroup::MIN_RADIUS = 0.0f;
 const float RingGizmoPropertyGroup::MAX_RADIUS = 0.5f;
 
-void RingGizmoPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties,
-                                          QScriptEngine* engine, bool skipDefaults,
+template <typename Value, typename Engine>
+void RingGizmoPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties,
+                                          Engine* engine, bool skipDefaults,
                                           EntityItemProperties& defaultEntityProperties) const {
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_START_ANGLE, Ring, ring, StartAngle, startAngle);
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_END_ANGLE, Ring, ring, EndAngle, endAngle);
@@ -46,7 +47,8 @@ void RingGizmoPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desire
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE_TYPED(PROP_MINOR_TICK_MARKS_COLOR, Ring, ring, MinorTickMarksColor, minorTickMarksColor, u8vec3Color);
 }
 
-void RingGizmoPropertyGroup::copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) {
+template <typename Value>
+void RingGizmoPropertyGroup::copyFromScriptValue(const Value& object, bool& _defaultSettings) {
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(ring, startAngle, float, setStartAngle);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(ring, endAngle, float, setEndAngle);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(ring, innerRadius, float, setInnerRadius);
@@ -211,33 +213,33 @@ bool RingGizmoPropertyGroup::appendToEditPacket(OctreePacketData* packetData,
 }
 
 bool RingGizmoPropertyGroup::decodeFromEditPacket(EntityPropertyFlags& propertyFlags,
-                                             const unsigned char*& dataAt , int& processedBytes) {
+                                             const unsigned char*& dataAt , int& processedBytes, int bytesToRead) {
 
     int bytesRead = 0;
     bool overwriteLocalData = true;
     bool somethingChanged = false;
 
-    READ_ENTITY_PROPERTY(PROP_START_ANGLE, float, setStartAngle);
-    READ_ENTITY_PROPERTY(PROP_END_ANGLE, float, setEndAngle);
-    READ_ENTITY_PROPERTY(PROP_INNER_RADIUS, float, setInnerRadius);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_START_ANGLE, float, setStartAngle);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_END_ANGLE, float, setEndAngle);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_INNER_RADIUS, float, setInnerRadius);
 
-    READ_ENTITY_PROPERTY(PROP_INNER_START_COLOR, u8vec3Color, setInnerStartColor);
-    READ_ENTITY_PROPERTY(PROP_INNER_END_COLOR, u8vec3Color, setInnerEndColor);
-    READ_ENTITY_PROPERTY(PROP_OUTER_START_COLOR, u8vec3Color, setOuterStartColor);
-    READ_ENTITY_PROPERTY(PROP_OUTER_END_COLOR, u8vec3Color, setOuterEndColor);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_INNER_START_COLOR, u8vec3Color, setInnerStartColor);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_INNER_END_COLOR, u8vec3Color, setInnerEndColor);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_OUTER_START_COLOR, u8vec3Color, setOuterStartColor);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_OUTER_END_COLOR, u8vec3Color, setOuterEndColor);
 
-    READ_ENTITY_PROPERTY(PROP_INNER_START_ALPHA, float, setInnerStartAlpha);
-    READ_ENTITY_PROPERTY(PROP_INNER_END_ALPHA, float, setInnerEndAlpha);
-    READ_ENTITY_PROPERTY(PROP_OUTER_START_ALPHA, float, setOuterStartAlpha);
-    READ_ENTITY_PROPERTY(PROP_OUTER_END_ALPHA, float, setOuterEndAlpha);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_INNER_START_ALPHA, float, setInnerStartAlpha);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_INNER_END_ALPHA, float, setInnerEndAlpha);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_OUTER_START_ALPHA, float, setOuterStartAlpha);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_OUTER_END_ALPHA, float, setOuterEndAlpha);
 
-    READ_ENTITY_PROPERTY(PROP_HAS_TICK_MARKS, bool, setHasTickMarks);
-    READ_ENTITY_PROPERTY(PROP_MAJOR_TICK_MARKS_ANGLE, float, setMajorTickMarksAngle);
-    READ_ENTITY_PROPERTY(PROP_MINOR_TICK_MARKS_ANGLE, float, setMinorTickMarksAngle);
-    READ_ENTITY_PROPERTY(PROP_MAJOR_TICK_MARKS_LENGTH, float, setMajorTickMarksLength);
-    READ_ENTITY_PROPERTY(PROP_MINOR_TICK_MARKS_LENGTH, float, setMinorTickMarksLength);
-    READ_ENTITY_PROPERTY(PROP_MAJOR_TICK_MARKS_COLOR, u8vec3Color, setMajorTickMarksColor);
-    READ_ENTITY_PROPERTY(PROP_MINOR_TICK_MARKS_COLOR, u8vec3Color, setMinorTickMarksColor);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_HAS_TICK_MARKS, bool, setHasTickMarks);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_MAJOR_TICK_MARKS_ANGLE, float, setMajorTickMarksAngle);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_MINOR_TICK_MARKS_ANGLE, float, setMinorTickMarksAngle);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_MAJOR_TICK_MARKS_LENGTH, float, setMajorTickMarksLength);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_MINOR_TICK_MARKS_LENGTH, float, setMinorTickMarksLength);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_MAJOR_TICK_MARKS_COLOR, u8vec3Color, setMajorTickMarksColor);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_MINOR_TICK_MARKS_COLOR, u8vec3Color, setMinorTickMarksColor);
 
 
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_START_ANGLE, StartAngle);
@@ -487,3 +489,5 @@ bool RingGizmoPropertyGroup::operator==(const RingGizmoPropertyGroup& a) const {
            (a._majorTickMarksColor == _majorTickMarksColor) &&
            (a._minorTickMarksColor == _minorTickMarksColor);
 }
+
+INSTANTIATE_PROPERTY_GROUP_CONVERSIONS(RingGizmoPropertyGroup)

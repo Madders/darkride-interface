@@ -7,6 +7,18 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: the Placing scope (the engine places the camera inside ViewState::updateCamera) and the pose setters
+//   it guards (their bodies in Camera.cpp).
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 
 #ifndef hifi_Camera_h
 #define hifi_Camera_h
@@ -14,6 +26,8 @@
 #include "../GLMHelpers.h"
 #include "../RegisteredMetaTypes.h"
 #include "../ViewFrustum.h"
+
+#include <atomic>
 
 enum CameraMode
 {
@@ -61,6 +75,22 @@ public:
 
     const glm::mat4& getProjection() const { return _projection; }
     void setProjection(const glm::mat4& projection);
+
+    // FROZEN (vehicle path): see the note at the top of this file.
+    // Who placed the camera (team/performance/INSTRUMENTS-PLAN.md, item 11): the engine composes every desktop mode's
+    // pose on the game loop inside ViewState::updateCamera, in a Placing scope; a pose setter called outside that
+    // scope is a script's (Camera.position from a script's thread, on that thread's clock, a frame off at random),
+    // noted until the frame trace reads it each frame (its cam.source column). A flag, not a count: a script's set
+    // that lands while updateCamera itself runs is taken for the engine's, so a script's camera is missed now and
+    // then, never reported falsely (no engine code places the camera outside ViewState::updateCamera).
+    class Placing {
+    public:
+        Placing(Camera& camera) : _camera(camera) { _camera._placing = true; }
+        ~Placing() { _camera._placing = false; }
+    private:
+        Camera& _camera;
+    };
+    bool takeSetOutside() { return _setOutside.exchange(false); }
 
     QVariantMap getViewFrustum();
 
@@ -208,6 +238,10 @@ private:
     bool _isKeepLookingAt{ false };
     glm::vec3 _lookingAt;
     bool _disableLookAt{ false };
+
+    void noteSetter() { if (!_placing) { _setOutside = true; } }   // a pose set outside updateCamera's scope
+    std::atomic<bool> _placing{ false };
+    std::atomic<bool> _setOutside{ false };
 };
 
 #endif // hifi_Camera_h

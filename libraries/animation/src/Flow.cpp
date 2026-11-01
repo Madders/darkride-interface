@@ -456,6 +456,20 @@ void Flow::calculateConstraints(const std::shared_ptr<AnimSkeleton>& skeleton,
 
         jointData.second.setInitialData(jointPosition, jointTranslation, jointRotation, parentPosition);
     }
+    // A joint on top of its parent (an exporter's end joint, such as Seed-san's hair_F_end) has no length to keep or
+    // direction to turn by, and its constraint divides by its length: it stays animated, and its children start
+    // threads of their own
+    const float SHORTEST_JOINT = 0.0001f;
+    for (auto itr = _flowJointData.begin(); itr != _flowJointData.end();) {
+        glm::vec3 jointPosition, parentPosition;
+        getJointPositionInWorldFrame(absolutePoses, itr->first, jointPosition, _entityPosition, _entityRotation);
+        getJointPositionInWorldFrame(absolutePoses, itr->second.getParentIndex(), parentPosition, _entityPosition, _entityRotation);
+        if (glm::length(jointPosition - parentPosition) < SHORTEST_JOINT) {
+            itr = _flowJointData.erase(itr);
+        } else {
+            itr++;
+        }
+    }
 
     std::vector<int> roots;
 

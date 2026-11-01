@@ -6,7 +6,8 @@
 //  that glides; one short line saying what's happening. It fades in at once and fades out into the world.
 //
 //  It draws only; scripts/system/worldLoading.js decides, calling Window.setLoadingScreen({up: true|false, world,
-//  author, picture: "<url>", status}), any field left out keeping its last value. (QML may not listen to the
+//  author, picture: "<url>", status, progress, canCancel, canShowNow}), any field left out keeping its last value. progress is 0 to 1 while a
+//  world its owner set to load whole first is loading, and the bar fills; negative (the default) and the bar glides. (QML may not listen to the
 //  Messages client, which lives on the network thread; Window lives on the main thread with this.) In a headset
 //  the script shows its own card instead, and this stays hidden.
 //
@@ -31,6 +32,10 @@ Item {
     property string author: ""
     property string picture: ""
     property string status: ""
+    property real progress: -1
+    // the buttons the script offers: Cancel (back where you came from) and Show me now (a world loading whole)
+    property bool canCancel: false
+    property bool canShowNow: false
 
     readonly property bool shown: up && !HMD.active
     opacity: shown ? 1.0 : 0.0
@@ -168,7 +173,8 @@ Item {
             height: 44
         }
 
-        // a bar with a short light gliding along it, back and forth, while anything is under way
+        // a bar with a short light gliding along it, back and forth, while anything is under way; or, while a world
+        // loads whole, filling from the left
         Item {
             id: bar
             anchors.horizontalCenter: parent.horizontalCenter
@@ -181,14 +187,26 @@ Item {
                 color: "#2effffff"
             }
             Rectangle {
+                id: fill
+                visible: root.progress >= 0
+                width: Math.max(height, bar.width * Math.min(1, Math.max(0, root.progress)))
+                height: parent.height
+                radius: height / 2
+                color: "#e6ffffff"
+                Behavior on width {
+                    NumberAnimation { duration: 300; easing.type: Easing.OutCubic }
+                }
+            }
+            Rectangle {
                 id: glider
+                visible: root.progress < 0
                 width: 90
                 height: parent.height
                 radius: height / 2
                 color: "#e6ffffff"
 
                 SequentialAnimation on x {
-                    running: root.visible
+                    running: root.visible && root.progress < 0
                     loops: Animation.Infinite
                     NumberAnimation { from: 0; to: bar.width - glider.width; duration: 1100; easing.type: Easing.InOutSine }
                     NumberAnimation { from: bar.width - glider.width; to: 0; duration: 1100; easing.type: Easing.InOutSine }
@@ -203,6 +221,57 @@ Item {
             text: root.status
             color: "#8cffffff"
             font.pixelSize: 15
+        }
+
+        Item {
+            width: 1
+            height: 30
+        }
+
+        // quiet pills that fade in when offered; the script says what each does (Window.loadingScreenButtonPressed)
+        Row {
+            id: buttons
+            anchors.horizontalCenter: parent.horizontalCenter
+            spacing: 12
+            height: 36
+            opacity: root.canCancel || root.canShowNow ? 1.0 : 0.0
+            Behavior on opacity {
+                NumberAnimation { duration: 300; easing.type: Easing.InOutQuad }
+            }
+
+            Repeater {
+                // Cancel on the left, as on every pair of buttons (Caity, 10-22)
+                model: [
+                    { name: "cancel", label: "Cancel", shown: root.canCancel },
+                    { name: "showNow", label: "Show me now", shown: root.canShowNow }
+                ]
+                delegate: Rectangle {
+                    visible: modelData.shown
+                    width: label.implicitWidth + 40
+                    height: 36
+                    radius: height / 2
+                    color: area.pressed ? "#40ffffff" : (area.containsMouse ? "#2effffff" : "#1affffff")
+                    border.color: "#33ffffff"
+                    border.width: 1
+
+                    Text {
+                        id: label
+                        anchors.centerIn: parent
+                        text: modelData.label
+                        color: "#e6ffffff"
+                        font.pixelSize: 15
+                        font.weight: Font.Medium
+                    }
+                    MouseArea {
+                        id: area
+                        anchors.fill: parent
+                        enabled: root.shown && buttons.opacity > 0.5
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: Window.pressLoadingScreenButton(modelData.name)
+                    }
+                }
+            }
         }
     }
 
@@ -221,6 +290,15 @@ Item {
             }
             if (state.status !== undefined) {
                 root.status = state.status || "";
+            }
+            if (state.progress !== undefined) {
+                root.progress = state.progress;
+            }
+            if (state.canCancel !== undefined) {
+                root.canCancel = !!state.canCancel;
+            }
+            if (state.canShowNow !== undefined) {
+                root.canShowNow = !!state.canShowNow;
             }
             if (state.up !== undefined) {
                 root.up = !!state.up;

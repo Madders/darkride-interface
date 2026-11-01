@@ -74,7 +74,6 @@ module.exports = {
         "Settings": false,
         "Snapshot": false,
         "SoundCache": false,
-        "SpeechRecognizer": false,
         "Stats": false,
         "Steam": false,
         "Tablet": false,

@@ -36,6 +36,11 @@
 /// Scriptable interface for a UUID helper class object. Used exclusively in the JavaScript API
 class ScriptUUID : public QObject, protected QScriptable {
     Q_OBJECT
+#ifdef Q_MOC_RUN
+    // moc expands the NULL macro as the compiler would (to __null or 0), which named this property __null and left
+    // Uuid.NULL undefined in every script: moc must see the word itself
+#undef NULL
+#endif
     Q_PROPERTY(QString NULL READ NULL_UUID CONSTANT) // String for use in scripts.
 
 public slots:

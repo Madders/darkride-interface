@@ -70,6 +70,7 @@
 #include <Jolt/Core/Reference.h>
 #include <Jolt/Physics/Body/BodyID.h>
 
+#include "CorrectionCounters.h"
 #include <AirshipModel.h>
 #include <AircraftModel.h>
 #include <EntityItem.h>
@@ -158,6 +159,9 @@ public:
     void fillState(EntityMotionState* state, EntityItemProperties& properties);
     // this process is driving the vehicle from local controls (the driver's seat here, or it owns the vehicle)
     bool isLocalDriver(EntityMotionState* state) const;
+
+    // the server-state corrections, counted (item 6 of the instruments plan): for the Stats line
+    const CorrectionCounters& getCorrectionCounters() const { return _corrections; }
 
     struct Stats {
         int vehicles { 0 };
@@ -270,6 +274,7 @@ private:
         AircraftForces aircraftForces;
         // inputs
         VehicleInput applied;                 // the last input applied, with its sequence
+        float steering { 0.0f };              // the local driver's steering as the wheels took it (shapeSteering)
         uint32_t nextSequence { 1 };          // the driver's next
         InputBuffer inputs;                   // the authority's: a remote driver's inputs by tick (round 10)
         QUuid queueDriver;                    // whose inputs the buffer holds
@@ -311,6 +316,8 @@ private:
         uint32_t visualsScanStep { 0 };
         int childCount { -1 };
         bool wasAuthority { false };
+        bool wasLocalDriver { false };        // the wheel taken here last substep (round 12: a fresh start at each sit)
+        uint32_t driveStartSequence { 0 };    // the driver's first input of this sit: the lead ignores states acked before it
         bool logged { false };
     };
     struct Snapshot {
@@ -348,6 +355,7 @@ private:
     bool isAuthority(const Vehicle& vehicle) const;
     bool localControls(const Vehicle& vehicle, VehicleInput& input) const;
     void chooseInput(Vehicle& vehicle, uint32_t step);
+    void shapeSteering(Vehicle& vehicle, VehicleInput& input);
     void easeOff(Vehicle& vehicle);
     // the model takes this substep's input: the wheeled controller's driver input, or an airship's forces on its body
     void applyModelInput(Vehicle& vehicle, const VehicleInput& input, float dt);
@@ -374,6 +382,7 @@ private:
     bool _serverless { false };
     std::map<EntityMotionState*, Vehicle> _vehicles;
     std::map<QUuid, EntityMotionState*> _byEntity;
+    CorrectionCounters _corrections;
     std::deque<Snapshot> _snapshots;
     std::mutex _inputMutex;
     Stats _stats;

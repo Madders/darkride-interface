@@ -11,6 +11,8 @@
 #include "Batch.h"
 
 #include <string.h>
+#include <limits>
+#include <mutex>
 
 #include <QDebug>
 #include "ShaderConstants.h"
@@ -80,6 +82,7 @@ void Batch::clear() {
     _commandOffsets.clear();
     _data.clear();
     _drawCallInfos.clear();
+    _instanceDrawCallInfos.clear();
     _buffers.clear();
     _framebuffers.clear();
     _lambdas.clear();
@@ -164,6 +167,47 @@ void Batch::drawIndexedInstanced(uint32 numInstances, Primitive primitiveType, u
     _params.emplace_back(numInstances);
 
     captureDrawCallInfo();
+}
+
+void Batch::drawIndexedInstances(Primitive primitiveType, uint32 numIndices, uint32 startIndex, const std::vector<Transform>& transforms) {
+    if (transforms.empty()) {
+        return;
+    }
+    const size_t limit = std::numeric_limits<uint16_t>::max();
+    const size_t room = _objects.size() >= limit ? 0 : limit - _objects.size();
+    size_t numInstances = transforms.size();
+    if (numInstances > room) {
+        static std::once_flag once;
+        std::call_once(once, [] { qCWarning(gpulogging) << "Batch::drawIndexedInstances: a batch holds at most 65,535 object transforms; an instance list is cut at that"; });
+        numInstances = room;
+        if (numInstances == 0) {
+            return;
+        }
+    }
+
+    ADD_COMMAND(drawIndexedInstances);
+
+    _params.emplace_back((uint32)_instanceDrawCallInfos.size());   // where this draw's list starts
+    _params.emplace_back(startIndex);
+    _params.emplace_back(numIndices);
+    _params.emplace_back(primitiveType);
+    _params.emplace_back((uint32)numInstances);
+
+    for (size_t i = 0; i < numInstances; i++) {
+        TransformObject object;
+        transforms[i].getMatrix(object._model);
+        object._modelInverse = glm::inverse(object._model);   // as captureDrawCallInfoImpl does (its FIXME applies)
+        _objects.emplace_back(object);
+        _instanceDrawCallInfos.emplace_back((uint16)_objects.size() - 1, _drawcallUniform);
+    }
+    _drawcallUniform = _drawcallUniformReset;
+    // the current model's object goes in again before the next plain draw: captureDrawCallInfoImpl points a draw at the
+    // last object pushed, which is now the last instance's (editor-renderer's review, 10-22)
+    _invalidModel = true;
+
+    // the draw's own entry in the per-draw list keeps the backend's draw index in step; it is not what the attribute
+    // reads for this draw
+    getDrawCallInfoBuffer().emplace_back((uint16)(_objects.size() - numInstances), (uint16)0);
 }
 
 void Batch::multiDrawIndirect(uint32 numCommands, Primitive primitiveType) {

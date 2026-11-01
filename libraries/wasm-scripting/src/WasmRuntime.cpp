@@ -10,12 +10,15 @@
 
 #include <atomic>
 #include <cstring>
+#include <deque>
 #include <thread>
 #include <type_traits>
 
 #include <wasm.h>
 #include <wasmtime.h>
+#include <wasmtime/profiling.h>
 
+#include <QtCore/QHash>
 #include <QtCore/QLoggingCategory>
 
 Q_LOGGING_CATEGORY(wasmScripting, "hifi.wasm-scripting")
@@ -122,7 +125,8 @@ QString nameToString(const wasm_name_t* name) {
 // WasmRuntime
 
 struct WasmRuntime::Impl {
-    wasm_engine_t* engine { nullptr };
+    wasm_engine_t* engine { nullptr };              // epoch interruption: a module from anywhere
+    wasm_engine_t* cooperativeEngine { nullptr };   // no epoch checks: a module that asks whether to stop
     std::thread ticker;
     std::atomic<bool> stopTicker { false };
 };
@@ -132,9 +136,15 @@ WasmRuntime::WasmRuntime() : WasmRuntime(Settings()) {
 
 WasmRuntime::WasmRuntime(const Settings& settings) : _settings(settings), _impl(new Impl) {
     wasm_config_t* config = wasm_config_new();
-    wasmtime_config_epoch_interruption_set(config, true);
+    wasmtime_config_epoch_interruption_set(config, settings.epochInterruption);
     wasmtime_config_cranelift_opt_level_set(config, WASMTIME_OPT_LEVEL_SPEED);
     _impl->engine = wasm_engine_new_with_config(config); // takes the config
+    // A module compiled by one engine runs only on that engine's stores, so the modules that stop themselves get an
+    // engine of their own, without the checks.
+    wasm_config_t* cooperativeConfig = wasm_config_new();
+    wasmtime_config_epoch_interruption_set(cooperativeConfig, false);
+    wasmtime_config_cranelift_opt_level_set(cooperativeConfig, WASMTIME_OPT_LEVEL_SPEED);
+    _impl->cooperativeEngine = wasm_engine_new_with_config(cooperativeConfig);
     // The epoch is the clock every instance's time limit is measured in; one thread advances it for all.
     wasm_engine_t* engine = _impl->engine;
     auto tick = settings.epochTick;
@@ -151,15 +161,19 @@ WasmRuntime::~WasmRuntime() {
     _impl->stopTicker = true;
     _impl->ticker.join();
     wasm_engine_delete(_impl->engine);
+    wasm_engine_delete(_impl->cooperativeEngine);
 }
 
 struct WasmModule::Impl {
     wasmtime_module_t* module { nullptr };
+    wasm_engine_t* engine { nullptr };
+    WasmRuntime::Interruption interruption { WasmRuntime::Interruption::Epoch };
 };
 
-std::shared_ptr<WasmModule> WasmRuntime::compile(const QByteArray& wasm, QString& error) {
+std::shared_ptr<WasmModule> WasmRuntime::compile(const QByteArray& wasm, QString& error, Interruption interruption) {
+    wasm_engine_t* engine = interruption == Interruption::Cooperative ? _impl->cooperativeEngine : _impl->engine;
     wasmtime_module_t* module = nullptr;
-    auto result = wasmtime_module_new(_impl->engine, reinterpret_cast<const uint8_t*>(wasm.constData()),
+    auto result = wasmtime_module_new(engine, reinterpret_cast<const uint8_t*>(wasm.constData()),
                                       static_cast<size_t>(wasm.size()), &module);
     if (result) {
         error = takeErrorText(result);
@@ -167,10 +181,12 @@ std::shared_ptr<WasmModule> WasmRuntime::compile(const QByteArray& wasm, QString
     }
     auto impl = std::make_unique<WasmModule::Impl>();
     impl->module = module;
+    impl->engine = engine;
+    impl->interruption = interruption;
     return std::shared_ptr<WasmModule>(new WasmModule(shared_from_this(), std::move(impl)));
 }
 
-std::shared_ptr<WasmModule> WasmRuntime::compileText(const QString& text, QString& error) {
+std::shared_ptr<WasmModule> WasmRuntime::compileText(const QString& text, QString& error, Interruption interruption) {
     QByteArray utf8 = text.toUtf8();
     wasm_byte_vec_t binary;
     auto result = wasmtime_wat2wasm(utf8.constData(), static_cast<size_t>(utf8.size()), &binary);
@@ -180,7 +196,7 @@ std::shared_ptr<WasmModule> WasmRuntime::compileText(const QString& text, QStrin
     }
     QByteArray bytes(binary.data, static_cast<int>(binary.size));
     wasm_byte_vec_delete(&binary);
-    return compile(bytes, error);
+    return compile(bytes, error, interruption);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -192,6 +208,10 @@ WasmModule::WasmModule(std::shared_ptr<WasmRuntime> runtime, std::unique_ptr<Imp
 
 WasmModule::~WasmModule() {
     wasmtime_module_delete(_impl->module);
+}
+
+WasmRuntime::Interruption WasmModule::interruption() const {
+    return _impl->interruption;
 }
 
 QStringList WasmModule::imports() const {
@@ -243,14 +263,62 @@ struct WasmInstance::Impl {
     std::chrono::steady_clock::time_point callStarted;
     std::chrono::milliseconds callTimeout { 0 };
     int callDepth { 0 };
+    // The module's own time in the outermost call: the clock runs while the module runs and pauses while a host
+    // function does (the trampoline), so a slow host call does not count against the limit.
+    bool inGuest { false };
+    std::chrono::steady_clock::time_point guestSince;
+    std::chrono::nanoseconds guestTime { 0 };
+    bool limitReported { false };  // the time limit is reported once per outermost call
+    std::chrono::milliseconds callWarning { 0 };
+    bool warningReported { false };  // and the warning once per outermost call
+    std::function<void(std::chrono::milliseconds)> warningHandler;
+    wasmtime_guestprofiler_t* profiler { nullptr };
+    std::chrono::steady_clock::time_point lastSample;
+    QString interruptionReason; // why a cooperative module was last told to stop, until taken
+
+    // An exported function, found by name once: the host calls a few of them (alloc, the entry points) many times
+    // a frame, and looking one up builds its type each time.
+    struct ExportedFunction {
+        wasmtime_func_t function;
+        size_t paramCount;
+        size_t resultCount;
+    };
+    QHash<QString, ExportedFunction> exportedFunctions;
 
     // The outermost call sets the deadline one tick out and starts the clock; at each tick the runtime asks
     // whether to go on. A call made from inside a host function (reentrant) runs under the outer call's limit.
     void beginCall() {
         if (callDepth == 0) {
             callStarted = std::chrono::steady_clock::now();
+            lastSample = callStarted;
+            guestTime = std::chrono::nanoseconds(0);
+            inGuest = false;
+            limitReported = false;
+            warningReported = false;
             wasmtime_context_set_epoch_deadline(context, 1);
         }
+    }
+
+    // The module starts or resumes running (a call into it, a host function returning to it).
+    void enterGuest() {
+        if (!inGuest) {
+            inGuest = true;
+            guestSince = std::chrono::steady_clock::now();
+        }
+    }
+    // The module stops running for now (a host function entered, a call into it returned).
+    void leaveGuest() {
+        if (inGuest) {
+            guestTime += std::chrono::steady_clock::now() - guestSince;
+            inGuest = false;
+        }
+    }
+    std::chrono::milliseconds guestElapsed() const {
+        std::chrono::nanoseconds total = guestTime;
+        if (inGuest) {
+            total += std::chrono::steady_clock::now() - guestSince;
+        }
+        return std::chrono::duration_cast<std::chrono::milliseconds>(total);
     }
 
     template <typename Function>
@@ -262,16 +330,51 @@ struct WasmInstance::Impl {
         return result;
     }
 
+    // A profile sample when one is due: at every epoch tick, or as often as a cooperative module asks to stop.
+    void sample(std::chrono::nanoseconds interval) {
+        auto now = std::chrono::steady_clock::now();
+        auto spent = std::chrono::duration_cast<std::chrono::nanoseconds>(now - lastSample);
+        if (spent >= interval) {
+            lastSample = now;
+            wasmtime_guestprofiler_sample(profiler, store, uint64_t(spent.count()));
+        }
+    }
+
+    // The warning of a call that has run past callWarning, once per outermost call; the call goes on.
+    void checkWarning() {
+        if (callWarning.count() > 0 && !warningReported) {
+            const std::chrono::milliseconds elapsed = guestElapsed();
+            if (elapsed > callWarning) {
+                warningReported = true;
+                if (warningHandler) {
+                    warningHandler(elapsed);
+                }
+            }
+        }
+    }
+
+    // Why the running call must stop now, or nothing.
+    QString interruption() const {
+        if (stopRequested.load()) {
+            return "the script was stopped";
+        }
+        if (callTimeout.count() > 0 && guestElapsed() > callTimeout) {
+            return QString("a call into the script ran longer than its limit of %1 ms").arg(callTimeout.count());
+        }
+        return QString();
+    }
+
     static wasmtime_error_t* onDeadline(wasmtime_context_t* context, void* data, uint64_t* delta,
                                         wasmtime_update_deadline_kind_t* kind) {
         Q_UNUSED(context);
         auto self = static_cast<Impl*>(data);
-        if (self->stopRequested.load()) {
-            return wasmtime_error_new("the script was stopped");
+        if (self->profiler) {
+            self->sample(std::chrono::nanoseconds(0));
         }
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - self->callStarted);
-        if (self->callTimeout.count() > 0 && elapsed > self->callTimeout) {
-            QByteArray text = QString("a call into the script ran longer than its limit of %1 ms").arg(self->callTimeout.count()).toUtf8();
+        self->checkWarning();
+        QString reason = self->interruption();
+        if (!reason.isEmpty()) {
+            QByteArray text = reason.toUtf8();
             return wasmtime_error_new(text.constData());
         }
         *delta = 1;
@@ -283,23 +386,69 @@ struct WasmInstance::Impl {
         QByteArray utf8 = name.toUtf8();
         return instantiated && wasmtime_instance_export_get(context, &instance, utf8.constData(), static_cast<size_t>(utf8.size()), &item);
     }
+
+    const ExportedFunction* findFunction(const QString& name) {
+        auto found = exportedFunctions.constFind(name);
+        if (found != exportedFunctions.constEnd()) {
+            return &found.value();
+        }
+        wasmtime_extern_t item;
+        if (!findExport(name, item) || item.kind != WASMTIME_EXTERN_FUNC) {
+            return nullptr;
+        }
+        ExportedFunction exported;
+        exported.function = item.of.func;
+        wasm_functype_t* type = wasmtime_func_type(context, &exported.function);
+        exported.paramCount = wasm_functype_params(type)->size;
+        exported.resultCount = wasm_functype_results(type)->size;
+        wasm_functype_delete(type);
+        return &exportedFunctions.insert(name, exported).value();
+    }
 };
 
 namespace {
+
+// The argument and result vectors of the host functions running on this thread, one pair per nesting depth (a host
+// function can call into the module, which can call a host function again), kept so that a call allocates nothing.
+// A deque, so that a deeper call adding a pair moves none of the outer calls' pairs.
+struct TrampolineBuffers {
+    std::vector<WasmValue> in;
+    std::vector<WasmValue> out;
+};
+thread_local std::deque<TrampolineBuffers> trampolineBuffers;
+thread_local size_t trampolineDepth = 0;
+
+struct TrampolineScope {
+    TrampolineBuffers& buffers;
+    TrampolineScope() : buffers(take()) {}
+    ~TrampolineScope() { --trampolineDepth; }
+    static TrampolineBuffers& take() {
+        if (trampolineBuffers.size() <= trampolineDepth) {
+            trampolineBuffers.emplace_back();
+        }
+        TrampolineBuffers& buffers = trampolineBuffers[trampolineDepth++];
+        buffers.in.clear();
+        buffers.out.clear();
+        return buffers;
+    }
+};
 
 // What the module calls when it calls a host function.
 wasm_trap_t* hostFunctionTrampoline(void* env, wasmtime_caller_t* caller, const wasmtime_val_t* args, size_t argCount,
                                     wasmtime_val_t* results, size_t resultCount) {
     auto entry = static_cast<HostFunctionEntry*>(env);
-    std::vector<WasmValue> in;
-    in.reserve(argCount);
+    TrampolineScope scope;
+    std::vector<WasmValue>& in = scope.buffers.in;
     for (size_t i = 0; i < argCount; ++i) {
         in.push_back(fromVal(args[i]));
     }
-    std::vector<WasmValue> out;
+    std::vector<WasmValue>& out = scope.buffers.out;
     // While the host function runs, the instance works through the caller's context: a call back into the
     // module (the guest's alloc, a callback) and its memory accesses go through it, as wasmtime requires.
-    QString error = entry->instance->impl().withCallerContext(caller, [&] { return entry->function(*entry->instance, in, out); });
+    WasmInstance::Impl& impl = entry->instance->impl();
+    impl.leaveGuest();
+    QString error = impl.withCallerContext(caller, [&] { return entry->function(*entry->instance, in, out); });
+    impl.enterGuest();
     if (!error.isEmpty()) {
         QByteArray utf8 = error.toUtf8();
         return wasmtime_trap_new(utf8.constData(), static_cast<size_t>(utf8.size()));
@@ -321,16 +470,20 @@ WasmInstance::WasmInstance(std::shared_ptr<WasmModule> module) : WasmInstance(st
 
 WasmInstance::WasmInstance(std::shared_ptr<WasmModule> module, const Limits& limits) :
     _module(std::move(module)), _limits(limits), _impl(new Impl) {
-    wasm_engine_t* engine = _module->runtime()->impl().engine;
+    wasm_engine_t* engine = _module->impl().engine;
     _impl->store = wasmtime_store_new(engine, nullptr, nullptr);
     _impl->context = wasmtime_store_context(_impl->store);
     _impl->callTimeout = limits.callTimeout;
+    _impl->callWarning = limits.callWarning;
     wasmtime_store_limiter(_impl->store, limits.memoryBytes, -1, -1, -1, -1);
     wasmtime_store_epoch_deadline_callback(_impl->store, &Impl::onDeadline, _impl.get(), nullptr);
     _impl->linker = wasmtime_linker_new(engine);
 }
 
 WasmInstance::~WasmInstance() {
+    if (_impl->profiler) {
+        wasmtime_guestprofiler_delete(_impl->profiler);
+    }
     wasmtime_linker_delete(_impl->linker);
     wasmtime_store_delete(_impl->store);
 }
@@ -379,8 +532,10 @@ bool WasmInstance::instantiate(QString& error) {
         }
     }
     _impl->beginCall(); // the module's start function runs now
+    _impl->enterGuest();
     wasm_trap_t* trap = nullptr;
     auto result = wasmtime_linker_instantiate(_impl->linker, _impl->context, _module->impl().module, &_impl->instance, &trap);
+    _impl->leaveGuest();
     if (result) {
         error = takeErrorText(result);
         return false;
@@ -410,30 +565,45 @@ bool WasmInstance::hasExport(const QString& name) const {
 bool WasmInstance::call(const QString& name, const std::vector<WasmValue>& args, std::vector<WasmValue>& results,
                         QString& error) {
     results.clear();
-    wasmtime_extern_t item;
-    if (!_impl->findExport(name, item) || item.kind != WASMTIME_EXTERN_FUNC) {
+    if (_impl->stopRequested.load()) {
+        error = "the script was stopped";
+        return false;
+    }
+    const Impl::ExportedFunction* exported = _impl->instantiated ? _impl->findFunction(name) : nullptr;
+    if (!exported) {
         error = QString("no exported function \"%1\"").arg(name);
         return false;
     }
-    wasmtime_func_t function = item.of.func;
-    wasm_functype_t* type = wasmtime_func_type(_impl->context, &function);
-    size_t paramCount = wasm_functype_params(type)->size;
-    size_t resultCount = wasm_functype_results(type)->size;
-    wasm_functype_delete(type);
-    if (paramCount != args.size()) {
-        error = QString("\"%1\" takes %2 arguments, %3 given").arg(name).arg(paramCount).arg(args.size());
+    wasmtime_func_t function = exported->function;
+    size_t resultCount = exported->resultCount;
+    if (exported->paramCount != args.size()) {
+        error = QString("\"%1\" takes %2 arguments, %3 given").arg(name).arg(exported->paramCount).arg(args.size());
         return false;
     }
-    std::vector<wasmtime_val_t> in;
-    in.reserve(args.size());
-    for (const auto& arg : args) {
-        in.push_back(toVal(arg));
+    // the values on the stack: the host calls into the module many times a frame
+    const size_t INLINE_VALUES = 8;
+    wasmtime_val_t inlineIn[INLINE_VALUES];
+    wasmtime_val_t inlineOut[INLINE_VALUES];
+    std::vector<wasmtime_val_t> heapIn, heapOut;
+    wasmtime_val_t* in = inlineIn;
+    wasmtime_val_t* out = inlineOut;
+    if (args.size() > INLINE_VALUES) {
+        heapIn.resize(args.size());
+        in = heapIn.data();
     }
-    std::vector<wasmtime_val_t> out(resultCount);
+    if (resultCount > INLINE_VALUES) {
+        heapOut.resize(resultCount);
+        out = heapOut.data();
+    }
+    for (size_t i = 0; i < args.size(); ++i) {
+        in[i] = toVal(args[i]);
+    }
     _impl->beginCall();
     ++_impl->callDepth;
+    _impl->enterGuest();
     wasm_trap_t* trap = nullptr;
-    auto result = wasmtime_func_call(_impl->context, &function, in.data(), in.size(), out.data(), out.size(), &trap);
+    auto result = wasmtime_func_call(_impl->context, &function, in, args.size(), out, resultCount, &trap);
+    _impl->leaveGuest();
     --_impl->callDepth;
     if (result) {
         error = takeErrorText(result);
@@ -443,9 +613,8 @@ bool WasmInstance::call(const QString& name, const std::vector<WasmValue>& args,
         error = takeTrapText(trap);
         return false;
     }
-    results.reserve(resultCount);
-    for (const auto& value : out) {
-        results.push_back(fromVal(value));
+    for (size_t i = 0; i < resultCount; ++i) {
+        results.push_back(fromVal(out[i]));
     }
     return true;
 }
@@ -476,4 +645,75 @@ bool WasmInstance::writeMemory(uint64_t offset, const QByteArray& bytes) {
 
 void WasmInstance::requestStop() {
     _impl->stopRequested = true;
+}
+
+bool WasmInstance::isStopRequested() const {
+    return _impl->stopRequested.load();
+}
+
+bool WasmInstance::interruptRequested() {
+    if (_impl->profiler) {
+        _impl->sample(_module->runtime()->settings().epochTick);
+    }
+    _impl->checkWarning();
+    QString reason = _impl->interruption();
+    if (reason.isEmpty()) {
+        return false;
+    }
+    // the time limit is recorded once per outermost call: a nested call (one made from a host function) unwinds
+    // first and is the one reported; the outer frames, told to stop too, end without a second report
+    const bool limit = !_impl->stopRequested.load();
+    if (_impl->interruptionReason.isEmpty() && !(limit && _impl->limitReported)) {
+        _impl->interruptionReason = reason;
+    }
+    if (limit) {
+        _impl->limitReported = true;
+    }
+    return true;
+}
+
+void WasmInstance::setCallWarningHandler(std::function<void(std::chrono::milliseconds elapsed)> handler) {
+    _impl->warningHandler = std::move(handler);
+}
+
+QString WasmInstance::takeInterruptionReason() {
+    QString reason = _impl->interruptionReason;
+    _impl->interruptionReason.clear();
+    return reason;
+}
+
+bool WasmInstance::startProfiling(const QString& name, QString& error) {
+    if (_impl->profiler) {
+        error = "already profiling";
+        return false;
+    }
+    QByteArray utf8 = name.toUtf8();
+    wasm_name_t moduleName;
+    wasm_name_new(&moduleName, static_cast<size_t>(utf8.size()), utf8.constData());
+    wasmtime_guestprofiler_modules_t modules { &moduleName, _module->impl().module };
+    auto interval = std::chrono::duration_cast<std::chrono::nanoseconds>(_module->runtime()->settings().epochTick).count();
+    _impl->profiler = wasmtime_guestprofiler_new(_module->impl().engine, &moduleName, uint64_t(interval), &modules, 1);
+    wasm_name_delete(&moduleName); // the profiler keeps its own copies
+    if (!_impl->profiler) {
+        error = "the guest profiler could not be made";
+        return false;
+    }
+    return true;
+}
+
+QByteArray WasmInstance::finishProfiling(QString& error) {
+    if (!_impl->profiler) {
+        error = "not profiling";
+        return QByteArray();
+    }
+    wasm_byte_vec_t profile;
+    auto result = wasmtime_guestprofiler_finish(_impl->profiler, &profile); // takes the profiler
+    _impl->profiler = nullptr;
+    if (result) {
+        error = takeErrorText(result);
+        return QByteArray();
+    }
+    QByteArray bytes(profile.data, static_cast<int>(profile.size));
+    wasm_byte_vec_delete(&profile);
+    return bytes;
 }

@@ -89,14 +89,12 @@
         EDIT_ERROR: 3,
         TABLET: 4,
         CONNECTION: 5,
-        WALLET: 6,
         properties: [
             { text: "Snapshot" },
             { text: "Connection Refused" },
             { text: "Edit error" },
             { text: "Tablet" },
-            { text: "Connection" },
-            { text: "Wallet" }
+            { text: "Connection" }
         ],
         getTypeFromMenuItem: function (menuItemName) {
             var type;
@@ -540,11 +538,18 @@
         createNotification(wordWrap(msg), NotificationType.UNKNOWN); // Needs a generic notification system for user feedback, thus using this
     }
 
-    function onMessageReceived(channel, message) {
-        if (channel === NOTIFICATIONS_MESSAGE_CHANNEL) {
-            message = JSON.parse(message);
-            createNotification(wordWrap(message.message), message.notificationType);
+    // a notification looks like the app's own, so only the visitor's own scripts and the app's pages make one: never one
+    // from the network, nor a world's scripts on this computer (fromOwnScripts false; a viewer without it gives none)
+    function onMessageReceived(channel, message, senderID, localOnly, fromOwnScripts) {
+        if (channel !== NOTIFICATIONS_MESSAGE_CHANNEL || !localOnly || fromOwnScripts === false) {
+            return;
         }
+        try {
+            message = JSON.parse(message);
+        } catch (e) {
+            return;
+        }
+        createNotification(wordWrap(String(message.message)), message.notificationType);
     }
 
     function onSnapshotTaken(pathStillSnapshot, notify) {
@@ -563,10 +568,6 @@
 
     function processingGif() {
         createNotification("Processing GIF snapshot...", NotificationType.SNAPSHOT);
-    }
-
-    function walletNotSetup() {
-        createNotification("Your wallet isn't activated yet. Open the WALLET app.", NotificationType.WALLET);
     }
 
     function connectionAdded(connectionName) {
@@ -636,7 +637,6 @@
     Window.notifyEditError = onEditError;
     Window.notify = onNotify;
     Tablet.tabletNotification.connect(tabletNotification);
-    WalletScriptingInterface.walletNotSetup.connect(walletNotSetup);
 
     Messages.subscribe(NOTIFICATIONS_MESSAGE_CHANNEL);
     Messages.messageReceived.connect(onMessageReceived);

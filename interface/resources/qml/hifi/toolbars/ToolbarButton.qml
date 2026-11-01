@@ -1,6 +1,7 @@
 import QtQuick 2.5
 import QtGraphicalEffects 1.12
 import TabletScriptingInterface 1.0
+import DarkridePanels 1.0
 
 Item {
     id: button
@@ -19,6 +20,16 @@ Item {
     property color defaultCaptionColor: "#ffffff"
     property color captionColor: defaultCaptionColor
     property color backgroundColor: "#1d1f21"
+
+    // a skin's bar button frame (SKINS.md "barButton", stage 2: "checked" while its app is open) and its text colour
+    // on the floating bar; the tablet's buttons keep their own look
+    readonly property var skinFrame: !isTablet && PanelTheme.skin && PanelTheme.skin.frames
+        ? (PanelTheme.skin.frames.barButton || null) : null
+    // the skin's text colour only where the skin draws behind the captions too (a "bar" or "barButton" frame): over
+    // the bar's own dark ground, a light skin's dark text didn't show (10-25)
+    readonly property bool skinDrawsBehind: !isTablet && !!PanelTheme.skin && !!PanelTheme.skin.frames
+        && !!(PanelTheme.skin.frames.barButton || PanelTheme.skin.frames.bar)
+    readonly property var skinText: skinDrawsBehind && PanelTheme.skin.colors ? PanelTheme.skin.colors.text : undefined
 
     property bool buttonEnabled: true
     property bool isActive: false
@@ -43,6 +54,9 @@ Item {
     property int sortOrder: 100
     property int stableOrder: 0
     property var uuid;
+    // a count waiting (the Chat button's unread mentions and direct messages): a red capsule at the top right
+    property int badge: 0
+    property bool muted: false   // the Audio button's microphone muted: the bar draws it red (BarButton.qml)
 
     signal clicked()
 
@@ -132,6 +146,20 @@ Item {
         visible: false
     }
 
+    // a skin's frame behind the whole button, icon and caption
+    BorderImage {
+        anchors.fill: parent
+        visible: !!button.skinFrame
+        source: !button.skinFrame ? ""
+            : button.isActive && button.skinFrame.checked ? button.skinFrame.checked
+            : button.isEntered && button.skinFrame.hover ? button.skinFrame.hover
+            : button.skinFrame.source
+        border.left: button.skinFrame ? button.skinFrame.slice[0] : 0
+        border.top: button.skinFrame ? button.skinFrame.slice[1] : 0
+        border.right: button.skinFrame ? button.skinFrame.slice[2] : 0
+        border.bottom: button.skinFrame ? button.skinFrame.slice[3] : 0
+    }
+
     // isactive background
     Rectangle {
         width: button.size
@@ -141,7 +169,7 @@ Item {
         anchors.horizontalCenter: parent.horizontalCenter
         
         color: Qt.rgba(0.6,0.6,0.6,0.6) // same as toolframedecoration handlecolor
-        visible: isActive
+        visible: isActive && !(button.skinFrame && button.skinFrame.checked)
 
         layer.enabled: true
         layer.effect: OpacityMask {
@@ -211,10 +239,30 @@ Item {
         }
     }
 
+    // the count waiting, over the icon's top right corner, as the docked bar draws it (ui/SystemToolbar.cpp)
+    Rectangle {
+        visible: button.badge > 0
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.rightMargin: (button.width - button.size) / 2
+        height: 18 * button.scale
+        width: Math.max(height, badgeText.implicitWidth + 9 * button.scale)
+        radius: height / 2
+        color: "#ff3b30" // Apple's system red
+        Text {
+            id: badgeText
+            anchors.centerIn: parent
+            text: button.badge > 99 ? "99+" : button.badge
+            color: "#ffffff"
+            font.pixelSize: 12 * button.scale
+            font.bold: true
+        }
+    }
+
     // caption
     Text {
         id: caption
-        color: button.isActive ? "#fff" : captionColor
+        color: button.skinText !== undefined ? button.skinText : button.isActive ? "#fff" : captionColor
         text: (
             button.isActive ?
             (button.isEntered ? button.activeHoverText : button.activeText) :

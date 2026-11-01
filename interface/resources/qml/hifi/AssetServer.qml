@@ -71,13 +71,35 @@ Windows.ScrollingWindow {
         letterboxMessage.popupRadius = 0;
     }
 
-    function errorMessageBox(message) {
+    function errorMessageBox(title, message, details) {
         return desktop.messageBox({
             icon: hifi.icons.warning,
             defaultButton: OriginalDialogs.StandardButton.Ok,
-            title: "Error",
-            text: message
+            title: title,
+            text: message || "",
+            detailedText: details || ""
         });
+    }
+
+    // The last part of a path: "lantern.glb" for "/models/lantern.glb", "models" for "/models/".
+    function baseName(path) {
+        var parts = String(path).replace(/\/+$/, "").split("/");
+        return parts[parts.length - 1];
+    }
+
+    // What the world's server said, in plain words.
+    function plainAssetError(err) {
+        var said = String(err).toLowerCase();
+        if (said.indexOf("permission") >= 0) {
+            return "You can't change this world's assets.";
+        }
+        if (said.indexOf("time") >= 0 || said.indexOf("network") >= 0 || said.indexOf("unavailable") >= 0) {
+            return "The world's server didn't answer.";
+        }
+        if (said.indexOf("too large") >= 0) {
+            return "It's too large for this world's assets.";
+        }
+        return "The world's server didn't take it.";
     }
 
     function doDeleteFile(paths) {
@@ -87,7 +109,8 @@ Windows.ScrollingWindow {
             if (err) {
                 console.log("Asset browser - error deleting paths: ", paths, err);
 
-                box = errorMessageBox("There was an error deleting:\n" + paths + "\n" + err);
+                box = errorMessageBox("Couldn't delete " + (paths.length === 1 ? baseName(paths[0]) : paths.length + " items"),
+                                      plainAssetError(err), paths.join("\n") + "\n" + err);
                 box.selected.connect(reload);
             } else {
                 console.log("Asset browser - finished deleting paths: ", paths);
@@ -109,8 +132,9 @@ Windows.ScrollingWindow {
         }
 
         if (Assets.isKnownFolder(newPath)) {
-            box = errorMessageBox("Cannot overwrite existing directory.");
+            box = errorMessageBox("There's already a folder called " + baseName(newPath), "Choose another name.");
             box.selected.connect(reload);
+            return;
         }
 
         console.log("Asset browser - renaming " + oldPath + " to " + newPath);
@@ -118,7 +142,8 @@ Windows.ScrollingWindow {
         Assets.renameMapping(oldPath, newPath, function(err) {
             if (err) {
                 console.log("Asset browser - error renaming: ", oldPath, "=>", newPath, " - error ", err);
-                box = errorMessageBox("There was an error renaming:\n" + oldPath + " to " + newPath + "\n" + err);
+                box = errorMessageBox("Couldn't rename " + baseName(oldPath), plainAssetError(err),
+                                      oldPath + "\n" + newPath + "\n" + err);
                 box.selected.connect(reload);
             } else {
                 console.log("Asset browser - finished rename: ", oldPath, "=>", newPath);
@@ -135,10 +160,12 @@ Windows.ScrollingWindow {
     function askForOverwrite(path, callback) {
         var object = desktop.messageBox({
             icon: hifi.icons.question,
-            buttons: OriginalDialogs.StandardButton.Yes | OriginalDialogs.StandardButton.No,
-            defaultButton: OriginalDialogs.StandardButton.No,
-            title: "Overwrite File",
-            text: path + "\n" + "This file already exists. Do you want to overwrite it?"
+            buttons: OriginalDialogs.StandardButton.Yes | OriginalDialogs.StandardButton.Cancel,
+            defaultButton: OriginalDialogs.StandardButton.Cancel,
+            destructiveButton: OriginalDialogs.StandardButton.Yes,
+            buttonTexts: { yes: "Replace" },
+            title: "Replace " + baseName(path) + "?",
+            text: "A file with this name is already in the world's assets."
         });
         object.selected.connect(function(button) {
             if (button === OriginalDialogs.StandardButton.Yes) {
@@ -176,7 +203,7 @@ Windows.ScrollingWindow {
     }
 
     function handleGetMappingsError(errorString) {
-        errorMessageBox("There was a problem retrieving the list of assets from your Asset Server.\n" + errorString);
+        errorMessageBox("Couldn't load the world's assets", plainAssetError(errorString), errorString);
     }
 
     function addToWorld() {
@@ -209,22 +236,23 @@ Windows.ScrollingWindow {
             var SHAPE_TYPE_SPHERE = 5;
 
             var SHAPE_TYPES = [];
-            SHAPE_TYPES[SHAPE_TYPE_NONE] = "No Collision";
-            SHAPE_TYPES[SHAPE_TYPE_SIMPLE_HULL] = "Basic - Whole model";
-            SHAPE_TYPES[SHAPE_TYPE_SIMPLE_COMPOUND] = "Good - Sub-meshes";
-            SHAPE_TYPES[SHAPE_TYPE_STATIC_MESH] = "Exact - All polygons";
+            SHAPE_TYPES[SHAPE_TYPE_NONE] = "No collisions";
+            SHAPE_TYPES[SHAPE_TYPE_SIMPLE_HULL] = "Basic, whole model";
+            SHAPE_TYPES[SHAPE_TYPE_SIMPLE_COMPOUND] = "Good, sub-meshes";
+            SHAPE_TYPES[SHAPE_TYPE_STATIC_MESH] = "Exact, all polygons";
             SHAPE_TYPES[SHAPE_TYPE_BOX] = "Box";
             SHAPE_TYPES[SHAPE_TYPE_SPHERE] = "Sphere";
 
             var SHAPE_TYPE_DEFAULT = SHAPE_TYPE_SIMPLE_COMPOUND;
             var DYNAMIC_DEFAULT = false;
             var prompt = desktop.customInputDialog({
+                title: "Add " + assetProxyModel.data(treeView.selection.currentIndex) + " to the World",
                 textInput: {
-                    label: "Model URL",
-                    text: defaultURL
+                    text: defaultURL,
+                    monospace: true
                 },
                 comboBox: {
-                    label: "Automatic Collisions",
+                    label: "Collisions",
                     index: SHAPE_TYPE_DEFAULT,
                     items: SHAPE_TYPES
                 },
@@ -235,7 +263,7 @@ Windows.ScrollingWindow {
                         SHAPE_TYPE_STATIC_MESH
                     ],
                     checkStateOnDisable: false,
-                    warningOnDisable: "Models with 'Exact' automatic collisions cannot be dynamic, and should not be used as floors"
+                    warningOnDisable: "Exact collisions can't be dynamic."
                 }
             });
 
@@ -336,9 +364,10 @@ Windows.ScrollingWindow {
         }
 
         var object = desktop.inputDialog({
-            label: "Enter new path:",
+            title: "Rename " + baseName(path),
             current: path,
-            placeholderText: "Enter path here"
+            monospace: true,
+            buttonTexts: { ok: "Rename" }
         });
         object.selected.connect(function(destinationPath) {
             destinationPath = destinationPath.trim();
@@ -365,27 +394,34 @@ Windows.ScrollingWindow {
             }
         }
 
-        if (!paths) {
+        if (paths.length === 0 && index) {
+            paths = [assetProxyModel.data(index, 0x100)];
+        }
+        if (paths.length === 0) {
             return;
         }
 
-        var modalMessage = "";
-        var items = selectedItemCount.toString();
-        var isFolder = assetProxyModel.data(treeView.selection.currentIndex, 0x101);
-        var typeString = isFolder ? 'folder' : 'file';
-
-        if (selectedItemCount > 1) {
-            modalMessage = "You are about to delete " + items + " items \nDo you want to continue?";
+        // Deleting can't be undone, so Cancel is the default and Delete is red.
+        var title, message;
+        if (paths.length > 1) {
+            title = "Delete " + paths.length + " items?";
+            message = "Worlds that use them lose them. You can't undo this.";
+        } else if (assetProxyModel.data(treeView.selection.currentIndex, 0x101)) {
+            title = "Delete the folder \u201C" + baseName(paths[0]) + "\u201D?";
+            message = "Worlds that use what's in it lose it. You can't undo this.";
         } else {
-            modalMessage = "You are about to delete the following " + typeString + ":\n" + paths + "\nDo you want to continue?";
+            title = "Delete \u201C" + baseName(paths[0]) + "\u201D?";
+            message = "Worlds that use it lose it. You can't undo this.";
         }
 
         var object = desktop.messageBox({
             icon: hifi.icons.question,
-            buttons: OriginalDialogs.StandardButton.Yes + OriginalDialogs.StandardButton.No,
-            defaultButton: OriginalDialogs.StandardButton.Yes,
-            title: "Delete",
-            text: modalMessage
+            buttons: OriginalDialogs.StandardButton.Yes | OriginalDialogs.StandardButton.Cancel,
+            defaultButton: OriginalDialogs.StandardButton.Cancel,
+            destructiveButton: OriginalDialogs.StandardButton.Yes,
+            buttonTexts: { yes: "Delete" },
+            title: title,
+            text: message
         });
         object.selected.connect(function(button) {
             if (button === OriginalDialogs.StandardButton.Yes) {
@@ -448,7 +484,8 @@ Windows.ScrollingWindow {
 
                         if (err !== -1) {
                             console.log("Asset Browser - error uploading: ", fileUrl, " - error ", err);
-                            var box = errorMessageBox("There was an error uploading:\n" + fileUrl + "\n" + err);
+                            var box = errorMessageBox("Couldn't upload " + filename, plainAssetError(err),
+                                                      fileUrl + "\n" + err);
                             box.selected.connect(reload);
                         }
                     }
@@ -564,13 +601,7 @@ Windows.ScrollingWindow {
                 id: nameColumn
                 title: "Name:"
                 role: "name"
-                width: treeView.width - bakedColumn.width;
-            }
-            TableViewColumn {
-                id: bakedColumn
-                title: "Use Baked?"
-                role: "baked"
-                width: 170
+                width: treeView.width;
             }
 
             onSortIndicatorOrderChanged: {
@@ -589,16 +620,7 @@ Windows.ScrollingWindow {
                 }
 
                 function convertToGlyph(text) {
-                    switch (text) {
-                        case "Not Baked":
-                            return hifi.glyphs.circleSlash;
-                        case "Baked":
-                            return hifi.glyphs.checkmark;
-                        case "Error":
-                            return hifi.glyphs.alert;
-                        default:
-                            return "";
-                    }
+                    return "";   // the glyph column (the baking status) is gone
                 }
 
                 function getComponent() {
@@ -820,12 +842,7 @@ Windows.ScrollingWindow {
                 anchors.verticalCenter: parent.verticalCenter
 
                 function makeText() {
-                    var numPendingBakes = assetMappingsModel.numPendingBakes;
-                    if (selectedItemCount > 1 || numPendingBakes === 0) {
-                        return selectedItemCount + " items selected";
-                    } else {
-                        return numPendingBakes + " bakes pending"
-                    }
+                    return selectedItemCount + " items selected";
                 }
 
                 size: hifi.fontSizes.sectionName
@@ -834,96 +851,6 @@ Windows.ScrollingWindow {
                 color: hifi.colors.lightGrayText
             }
 
-            HifiControls.HorizontalSpacer { }
-
-            HifiControls.CheckBox {
-                id: bakingCheckbox
-                anchors.leftMargin: 2 * hifi.dimensions.contentSpacing.x
-                anchors.verticalCenter: parent.verticalCenter
-
-                text: " Use baked version"
-                colorScheme: root.colorScheme
-                enabled: isEnabled()
-                checked: isChecked()
-                onClicked: {
-                    var mappings = [];
-                    for (var i in treeView.selection.selectedIndexes) {
-                        var index = treeView.selection.selectedIndexes[i];
-                        var path = assetProxyModel.data(index, 0x100);
-                        mappings.push(path);
-                    }
-                    print("Setting baking enabled:" + mappings + " " + checked);
-                    Assets.setBakingEnabled(mappings, checked, function() {
-                        reload();
-                    });
-
-                    checked = Qt.binding(isChecked);
-                }
-
-                function getStatus() {
-                    // kind of hack for ensuring getStatus() will be re-evaluated on updatesCount changes
-                    return updatesCount, assetProxyModel.data(treeView.selection.currentIndex, 0x105);
-                }
-                
-                function isEnabled() {
-                    if (!treeView.selection.hasSelection) {
-                        return false;
-                    }
-
-                    var status = getStatus();
-                    if (status === "--") {
-                        return false;
-                    }
-                    var bakingEnabled = status !== "Not Baked";
-
-                    for (var i in treeView.selection.selectedIndexes) {
-                        var thisStatus = assetProxyModel.data(treeView.selection.selectedIndexes[i], 0x105);
-                        if (thisStatus === "--") {
-                            return false;
-                        }
-                        var thisBakingEnalbed = (thisStatus !== "Not Baked");
-
-                        if (bakingEnabled !== thisBakingEnalbed) {
-                            return false;
-                        }
-                    }
-
-                    return true;
-                }
-                function isChecked() {
-                    if (!treeView.selection.hasSelection) {
-                        return false;
-                    }
-
-                    var status = getStatus();
-                    return isEnabled() && status !== "Not Baked"; 
-                }  
-            }
-
-            Item {
-                anchors.verticalCenter: parent.verticalCenter
-                width: infoGlyph.size;
-                height: infoGlyph.size;
-
-                HiFiGlyphs {
-                    id: infoGlyph;
-                    anchors.fill: parent;
-                    horizontalAlignment: Text.AlignHCenter;
-                    verticalAlignment: Text.AlignVCenter;
-                    text: hifi.glyphs.question;
-                    size: 35;
-                    color:  hifi.colors.lightGrayText;
-                }
-                MouseArea {
-                    anchors.fill: parent;
-                    hoverEnabled: true;
-                    onEntered: infoGlyph.color = hifi.colors.blueHighlight;
-                    onExited: infoGlyph.color =  hifi.colors.lightGrayText;
-                    onClicked: letterbox(hifi.glyphs.question,
-                                            "What is baking?",
-                                            "Baking compresses and optimizes files for faster network transfer and display. We recommend you bake your content to reduce initial load times for your visitors.");
-                    }
-            }
         }// End_OF( infoRow )
 
         HifiControls.ContentSection {

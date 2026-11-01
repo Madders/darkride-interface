@@ -46,7 +46,6 @@
 #include "MyAvatar.h"
 #include "DebugDraw.h"
 #include "SceneScriptingInterface.h"
-#include "ui/AvatarCertifyBanner.h"
 
 // 50 times per second - target is 45hz, but this helps account for any small deviations
 // in the update loop - this also results in ~30hz when in desktop mode which is essentially
@@ -202,13 +201,6 @@ void AvatarManager::updateMyAvatar(float deltaTime) {
         _myAvatar->sendAvatarDataPacket();
         _lastSendAvatarDataTime = now;
         _myAvatarSendRate.increment();
-    }
-
-    static AvatarCertifyBanner theftBanner;
-    if (_myAvatar->isCertifyFailed()) {
-        theftBanner.show(_myAvatar->getSessionUUID());
-    } else {
-        theftBanner.clear();
     }
 }
 

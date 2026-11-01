@@ -6,7 +6,8 @@
 //  QtScript engine) with QVariant values and signals in place of QScriptValue callbacks, so that a script
 //  on the WebAssembly engine reaches it by reflection. The JavaScript shim wraps one of these as an
 //  XMLHttpRequest; a native module can use it as it is. HttpRequestFactory is the "Http" global that
-//  makes them; a request lives until the factory is told to dispose of it or the engine stops.
+//  makes them. The script owns a request it made: it is deleted when the script lets it go (once it is done), when
+//  the factory is told to dispose of it, or when the engine stops.
 //
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
@@ -14,6 +15,8 @@
 
 #ifndef hifi_HttpRequestObject_h
 #define hifi_HttpRequestObject_h
+
+#include <functional>
 
 #include <QtCore/QByteArray>
 #include <QtCore/QObject>
@@ -23,6 +26,8 @@
 #include <QtCore/QVariant>
 #include <QtNetwork/QNetworkReply>
 #include <QtNetwork/QNetworkRequest>
+
+class ScriptEngine;
 
 class HttpRequestObject : public QObject {
     Q_OBJECT
@@ -52,9 +57,20 @@ public:
     int status() const;
     QString statusText() const;
     int readyState() const { return _readyState; }
+    /// Whether it was sent and its reply has not come yet.
+    bool isSending() const { return _reply != nullptr; }
     int errorCode() const { return _errorCode; }
     int timeout() const { return _timeout; }
     void setTimeout(int timeout) { _timeout = timeout; }
+    /// Where the script that makes this request came from, and whether the network rule for a script's own requests
+    /// (ScriptNetworkPolicy) holds here (a person's client); set by the factory.
+    void setOrigin(const QUrl& origin, bool ruled, bool worldIsLocal) {
+        _origin = origin;
+        _ruled = ruled;
+        _worldIsLocal = worldIsLocal;
+    }
+    /// Where a refusal is logged (the script's own log).
+    void setLogger(std::function<void(const QString&)> logger) { _logger = std::move(logger); }
     int unsent() const { return UNSENT; }
     int opened() const { return OPENED; }
     int headersReceived() const { return HEADERS_RECEIVED; }
@@ -86,6 +102,8 @@ private:
     void setReadyState(ReadyState state);
     void doSend();
     void abortRequest();
+    /// Ends the request as refused by the network rule: a failed request, with the reason in the log.
+    void refuse(const QString& reason);
 
     QNetworkRequest _request;
     QNetworkReply* _reply { nullptr };
@@ -103,17 +121,29 @@ private:
     int _timeout { 0 };
     bool _async { true };
     QTimer _timer;
+    QUrl _origin;
+    bool _ruled { false };
+    bool _worldIsLocal { false };   // the world the script is judged in (ScriptEngine::worldIsLocal), when it made the request
+    bool _deciding { false };    // the network rule is still judging (a name lookup)
+    int _generation { 0 };       // abort() moves it on, so a judgement that comes late is dropped
+    std::function<void(const QString&)> _logger;
 };
 
 /// The "Http" global: makes requests for the script that asked.
 class HttpRequestFactory : public QObject {
     Q_OBJECT
 public:
-    explicit HttpRequestFactory(QObject* parent = nullptr) : QObject(parent) {}
+    explicit HttpRequestFactory(ScriptEngine* engine);
 
-    Q_INVOKABLE QObject* createRequest();
+    /// A request the script owns (ValueCodec: an owned object), so that one it has let go of is deleted. origin is
+    /// where the code making it came from (the entity script running, else the script itself); without one, the
+    /// engine's own answer. The network rule judges the request by it.
+    Q_INVOKABLE HttpRequestObject* createRequest(const QString& origin = QString());
     /// Deletes a request this factory made, once the script is done with it.
     Q_INVOKABLE void dispose(QObject* request);
+
+private:
+    ScriptEngine* _engine { nullptr };
 };
 
 #endif // hifi_HttpRequestObject_h

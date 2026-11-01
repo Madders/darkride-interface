@@ -51,6 +51,31 @@
         }
     }
 
+    // An aircraft crosses the 192 m terrain in seconds: a flat plain 4 km across round it (four slabs framing the
+    // terrain, their tops at its edges' height) gives it somewhere to fly over and land on. Not named like a vehicle's
+    // part, so the playgrounds' clearing of the pad leaves it.
+    function createPlain() {
+        if (Entities.findEntitiesByName("airfield-plain", LandRover.TERRAIN_CENTER, 4000, false).length > 0) {
+            return;
+        }
+        var c = LandRover.TERRAIN_CENTER, half = LandRover.TERRAIN_SIZE / 2, reach = 2000, top = -8, depth = 4;
+        var side = reach - half;
+        var slabs = [
+            { x: c.x, z: c.z - half - side / 2, w: 2 * reach, d: side },
+            { x: c.x, z: c.z + half + side / 2, w: 2 * reach, d: side },
+            { x: c.x - half - side / 2, z: c.z, w: side, d: 2 * half },
+            { x: c.x + half + side / 2, z: c.z, w: side, d: 2 * half }
+        ];
+        slabs.forEach(function (slab) {
+            Entities.addEntity({
+                type: "Box", name: "airfield-plain", position: { x: slab.x, y: top - depth / 2, z: slab.z },
+                dimensions: { x: slab.w, y: depth, z: slab.d }, color: { red: 120, green: 150, blue: 95 },
+                dynamic: false, collisionless: false, grab: { grabbable: false }, lifetime: LIFETIME
+            });
+        });
+        log("a flat plain 4 km across round the terrain");
+    }
+
     function setUp() {
         terrain = LandRover.createTerrain(TERRAIN_URL, LIFETIME);
         if (!terrain || terrain === Uuid.NULL) {
@@ -59,6 +84,9 @@
             return;
         }
         toPad();
+        if (KIND === "aircraft") {
+            createPlain();
+        }
         Script.setTimeout(function () {
             ship = existingShip();
             if (ship) {
@@ -68,7 +96,7 @@
                 newShip();
             }
             if (KIND === "aircraft") {
-                log("climb aboard and click the craft for the stick; W/S throttle, X cut, A/D roll and yaw, up/down elevator, Space tilts to hover, C tilts to forward flight, F leave; R fresh craft; T to the pad");
+                log("climb aboard and click the craft for the stick (the flight assistant): W/S faster and slower, X stop, A/D bank (turn in a hover), Up/Down or Space/C climb and descend, F leave; R fresh craft; T to the pad");
             } else {
                 log("walk aboard and click the ship for the helm; W/S throttle, X cut, A/D rudder, up/down elevator, Space/C up and down, B ballast, V vent, F leave; R fresh ship; T to the pad");
             }

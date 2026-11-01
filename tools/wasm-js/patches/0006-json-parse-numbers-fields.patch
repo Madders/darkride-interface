@@ -1,0 +1,85 @@
+JSON.parse: integers as such, numbers by js_atod, fields defined directly
+
+A number was always a float64 from strtod: an integer of at most nine digits is now an int32 (-0 stays a float64)
+and other numbers are parsed by js_atod, correctly rounded as strtod is, so the values are the same. A field is
+defined by a direct CreateDataProperty on the new plain object (a repeated name still replaces the value in
+place) instead of the general property definition.
+
+diff --git a/quickjs.c b/quickjs.c
+index 65376ad..b349951 100644
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -23799,7 +23799,32 @@ static int json_parse_number(JSParseState *s, const uint8_t **pp)
+             p++;
+     }
+     s->token.val = TOK_NUMBER;
+-    s->token.u.num.val = js_float64(strtod((const char *)p_start, NULL));
++    {
++        /* an integer of at most 9 digits: an int32, or -0 */
++        const uint8_t *q = p_start;
++        bool neg = (*q == '-');
++        int32_t v = 0;
++        if (neg)
++            q++;
++        if (p - q <= 9) {
++            while (q < p && is_digit(*q))
++                v = v * 10 + (*q++ - '0');
++            if (q == p) {
++                if (neg && v == 0)
++                    s->token.u.num.val = js_float64(-0.0);
++                else
++                    s->token.u.num.val = js_int32(neg ? -v : v);
++                *pp = p;
++                return 0;
++            }
++        }
++    }
++    {
++        /* correctly rounded, as strtod; the syntax was checked above */
++        JSATODTempMem atod_mem;
++        s->token.u.num.val = js_number(js_atod((const char *)p_start, NULL,
++                                               10, 0, &atod_mem));
++    }
+     *pp = p;
+     return 0;
+ }
+@@ -51411,6 +51436,29 @@ static void json_free_parse_record(JSContext *ctx, JSONParseRecord *pr)
+ }
+ 
+ /* 'pr' can be NULL */
++/* Defines a field of an object made by JSON.parse, a plain extensible
++   object whose only properties are its fields so far: CreateDataProperty
++   without the general checks. A repeated name replaces the value in place,
++   as defining it again does. */
++static int json_define_field(JSContext *ctx, JSValueConst obj, JSAtom atom,
++                             JSValue val)
++{
++    JSObject *p = JS_VALUE_GET_OBJ(obj);
++    JSProperty *pr;
++
++    if (unlikely(find_own_property(&pr, p, atom))) {
++        set_value(ctx, &pr->u.value, val);
++        return 0;
++    }
++    pr = add_property(ctx, p, atom, JS_PROP_C_W_E);
++    if (unlikely(!pr)) {
++        JS_FreeValue(ctx, val);
++        return -1;
++    }
++    pr->u.value = val;
++    return 0;
++}
++
+ static JSValue json_parse_value(JSParseState *s, JSONParseRecord *pr)
+ {
+     JSContext *ctx = s->ctx;
+@@ -51473,8 +51521,7 @@ static JSValue json_parse_value(JSParseState *s, JSONParseRecord *pr)
+                         JS_FreeAtom(ctx, prop_name);
+                         goto fail;
+                     }
+-                    ret = JS_DefinePropertyValue(ctx, val, prop_name,
+-                                                 prop_val, JS_PROP_C_W_E);
++                    ret = json_define_field(ctx, val, prop_name, prop_val);
+                     JS_FreeAtom(ctx, prop_name);
+                     if (ret < 0)
+                         goto fail;

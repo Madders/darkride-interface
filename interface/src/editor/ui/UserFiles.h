@@ -13,6 +13,7 @@
 #ifndef hifi_UserFiles_h
 #define hifi_UserFiles_h
 
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QDateTime>
 #include <QtCore/QHash>
 #include <QtCore/QList>
@@ -78,6 +79,8 @@ public:
 public slots:
     // fetches the listing (and the quota); nothing happens while one is on its way
     void refresh();
+    // a listing only when the last is older than this: build mode coming on uses one that is fresh
+    void refreshIfStale(qint64 maxAgeMs);
     void clear();
     void createFolder(const QString& folderPath);               // "/a/b/"
     // a rename is a move within the folder; a folder's paths end in "/"
@@ -107,8 +110,11 @@ private:
     QVector<UserFile> _files;
     QHash<QString, int> _byPath;
     QHash<QString, int> _countUnder;   // files at any depth, by folder path
+    // each folder's entries (indexes into _files), sorted as childrenOf gives them: built once a listing
+    QHash<QString, QVector<int>> _childrenByFolder;
     QString _baseUrl;               // <files host>/<username>
     bool _listed { false };
+    QElapsedTimer _listedAt;
     bool _loading { false };
     bool _refreshWanted { false };  // a refresh asked for while one was on its way
     qint64 _usedSize { 0 };

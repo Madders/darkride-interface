@@ -21,6 +21,7 @@
 #include <Application.h>
 #include <OffscreenUi.h>
 
+#include "LocationBookmarks.h"
 #include "MainWindow.h"
 #include "Menu.h"
 #include "InterfaceLogging.h"
@@ -36,13 +37,16 @@ void Bookmarks::deleteBookmark() {
         bookmarkList.append(menuItems[i]->text());
     }
 
-    bool ok = false;
-    auto bookmarkName = OffscreenUi::getItem(OffscreenUi::ICON_PLACEMARK, "Delete Bookmark", "Select the bookmark to delete", bookmarkList, 0, false, &ok);
-    if (!ok) {
+    auto offscreenUi = DependencyManager::get<OffscreenUi>();
+    QQuickItem* box = offscreenUi->createInputDialog(OffscreenUi::ICON_PLACEMARK, "Delete a Bookmark", QString(), 0);
+    if (!box) {
         return;
     }
+    box->setProperty("items", bookmarkList);
+    box->setProperty("editable", false);
+    OffscreenUi::setButtonText(box, QMessageBox::Ok, "Delete");
 
-    bookmarkName = bookmarkName.trimmed();
+    QString bookmarkName = offscreenUi->waitForInputDialogResult(box).toString().trimmed();
     if (bookmarkName.length() == 0) {
         return;
     }
@@ -62,11 +66,18 @@ void Bookmarks::deleteBookmark(const QString& bookmarkName) {
 void Bookmarks::addBookmarkToFile(const QString& bookmarkName, const QVariant& bookmark) {
     Menu* menubar = Menu::getInstance();
     if (contains(bookmarkName)) {
-        auto offscreenUi = DependencyManager::get<OffscreenUi>();
-        ModalDialogListener* dlg = OffscreenUi::asyncWarning("Duplicate Bookmark",
-                                  "The bookmark name you entered already exists in your list.",
-                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
-        dlg->setProperty("informativeText", "Would you like to overwrite it?");
+        QString title = QString::fromUtf8("Replace the bookmark “%1”?").arg(bookmarkName);
+        QString text = "You already have one with this name.";
+        if (bookmarkName == LocationBookmarks::HOME_BOOKMARK) {
+            // a place's name says where home is; an address (localhost, a number) says nothing
+            const QString place = QUrl(addressForBookmark(bookmarkName)).host();
+            title = "Replace your home?";
+            text = !place.isEmpty() && !place.contains('.') && place != "localhost" ? "Home is " + place + " now."
+                                                                                    : QString("You already have a home.");
+        }
+        ModalDialogListener* dlg = OffscreenUi::asyncQuestion(title, text, QMessageBox::Yes | QMessageBox::Cancel,
+                                                              QMessageBox::Yes);
+        OffscreenUi::setButtonText(dlg->getDialogItem(), QMessageBox::Yes, "Replace");
         QObject::connect(dlg, &ModalDialogListener::response, this, [=] (QVariant answer) {
             QObject::disconnect(dlg, &ModalDialogListener::response, this, nullptr);
 

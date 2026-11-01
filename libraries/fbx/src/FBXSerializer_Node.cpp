@@ -404,8 +404,8 @@ FBXNode FBXSerializer::parseFBX(QIODevice* device) {
 
 
 glm::vec3 FBXSerializer::getVec3(const QVariantList& properties, int index) {
-    return glm::vec3(properties.at(index).value<double>(), properties.at(index + 1).value<double>(),
-        properties.at(index + 2).value<double>());
+    return glm::vec3(properties.value(index).value<double>(), properties.value(index + 1).value<double>(),
+        properties.value(index + 2).value<double>());
 }
 
 QVector<glm::vec4> FBXSerializer::createVec4Vector(const QVector<double>& doubleVector) {
@@ -475,12 +475,12 @@ QVector<int> FBXSerializer::getIntVector(const FBXNode& node) {
     if (node.properties.isEmpty()) {
         return QVector<int>();
     }
-    QVector<int> vector = node.properties.at(0).value<QVector<int> >();
+    QVector<int> vector = node.properties.value(0).value<QVector<int> >();
     if (!vector.isEmpty()) {
         return vector;
     }
     for (int i = 0; i < node.properties.size(); i++) {
-        vector.append(node.properties.at(i).toInt());
+        vector.append(node.properties.value(i).toInt());
     }
     return vector;
 }
@@ -494,12 +494,12 @@ QVector<float> FBXSerializer::getFloatVector(const FBXNode& node) {
     if (node.properties.isEmpty()) {
         return QVector<float>();
     }
-    QVector<float> vector = node.properties.at(0).value<QVector<float> >();
+    QVector<float> vector = node.properties.value(0).value<QVector<float> >();
     if (!vector.isEmpty()) {
         return vector;
     }
     for (int i = 0; i < node.properties.size(); i++) {
-        vector.append(node.properties.at(i).toFloat());
+        vector.append(node.properties.value(i).toFloat());
     }
     return vector;
 }
@@ -513,12 +513,12 @@ QVector<double> FBXSerializer::getDoubleVector(const FBXNode& node) {
     if (node.properties.isEmpty()) {
         return QVector<double>();
     }
-    QVector<double> vector = node.properties.at(0).value<QVector<double> >();
+    QVector<double> vector = node.properties.value(0).value<QVector<double> >();
     if (!vector.isEmpty()) {
         return vector;
     }
     for (int i = 0; i < node.properties.size(); i++) {
-        vector.append(node.properties.at(i).toDouble());
+        vector.append(node.properties.value(i).toDouble());
     }
     return vector;
 }

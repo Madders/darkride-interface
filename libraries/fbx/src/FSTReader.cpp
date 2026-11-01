@@ -102,6 +102,26 @@ QVariantHash FSTReader::readMapping(const QByteArray& data) {
     return mapping;
 }
 
+QVariantHash FSTReader::getBlendshapeMappings(const QVariantHash& mapping) {
+    QVariantHash blendshapes = mapping.value(BLENDSHAPE_FIELD).toHash();
+    const QVariantHash faceTracking = mapping.value(FACE_TRACKING_BLENDSHAPE_FIELD).toHash();
+    for (auto it = faceTracking.constBegin(); it != faceTracking.constEnd(); ++it) {
+        blendshapes.insertMulti(it.key(), it.value());
+    }
+    return blendshapes;
+}
+
+QStringList FSTReader::getFaceTrackingOnlyBlendshapes(const QVariantHash& mapping) {
+    const QVariantHash blendshapes = mapping.value(BLENDSHAPE_FIELD).toHash();
+    QStringList names;
+    for (const QString& name : mapping.value(FACE_TRACKING_BLENDSHAPE_FIELD).toHash().uniqueKeys()) {
+        if (!blendshapes.contains(name)) {
+            names << name;
+        }
+    }
+    return names;
+}
+
 void FSTReader::writeVariant(QBuffer& buffer, QVariantHash::const_iterator& it) {
     QByteArray key = it.key().toUtf8() + " = ";
     QVariantHash hashValue = it.value().toHash();

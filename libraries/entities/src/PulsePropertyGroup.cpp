@@ -57,8 +57,9 @@ void PulsePropertyGroup::setAlphaModeFromString(const QString& pulseMode) {
     }
 }
 
-void PulsePropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties,
-                                          QScriptEngine* engine, bool skipDefaults,
+template <typename Value, typename Engine>
+void PulsePropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties,
+                                          Engine* engine, bool skipDefaults,
                                           EntityItemProperties& defaultEntityProperties) const {
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_PULSE_MIN, Pulse, pulse, Min, min);
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_PULSE_MAX, Pulse, pulse, Max, max);
@@ -67,7 +68,8 @@ void PulsePropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredPro
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE_GETTER(PROP_PULSE_ALPHA_MODE, Pulse, pulse, AlphaMode, alphaMode, getAlphaModeAsString);
 }
 
-void PulsePropertyGroup::copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) {
+template <typename Value>
+void PulsePropertyGroup::copyFromScriptValue(const Value& object, bool& _defaultSettings) {
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(pulse, min, float, setMin);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(pulse, max, float, setMax);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(pulse, period, float, setPeriod);
@@ -129,17 +131,17 @@ bool PulsePropertyGroup::appendToEditPacket(OctreePacketData* packetData,
 }
 
 bool PulsePropertyGroup::decodeFromEditPacket(EntityPropertyFlags& propertyFlags,
-                                             const unsigned char*& dataAt , int& processedBytes) {
+                                             const unsigned char*& dataAt , int& processedBytes, int bytesToRead) {
 
     int bytesRead = 0;
     bool overwriteLocalData = true;
     bool somethingChanged = false;
 
-    READ_ENTITY_PROPERTY(PROP_PULSE_MIN, float, setMin);
-    READ_ENTITY_PROPERTY(PROP_PULSE_MAX, float, setMax);
-    READ_ENTITY_PROPERTY(PROP_PULSE_PERIOD, float, setPeriod);
-    READ_ENTITY_PROPERTY(PROP_PULSE_COLOR_MODE, PulseMode, setColorMode);
-    READ_ENTITY_PROPERTY(PROP_PULSE_ALPHA_MODE, PulseMode, setAlphaMode);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_PULSE_MIN, float, setMin);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_PULSE_MAX, float, setMax);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_PULSE_PERIOD, float, setPeriod);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_PULSE_COLOR_MODE, PulseMode, setColorMode);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_PULSE_ALPHA_MODE, PulseMode, setAlphaMode);
 
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_PULSE_MIN, Min);
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_PULSE_MAX, Max);
@@ -247,3 +249,5 @@ bool PulsePropertyGroup::operator==(const PulsePropertyGroup& a) const {
            (a._colorMode == _colorMode) &&
            (a._alphaMode == _alphaMode);
 }
+
+INSTANTIATE_PROPERTY_GROUP_CONVERSIONS(PulsePropertyGroup)

@@ -81,6 +81,15 @@ public:
     bool isDriven(int wheelIndex) const;
     // The first seat marked driver, else -1.
     int driverSeat() const;
+    // m: from the frontmost wheel to the rearmost along z; 0 with one axle.
+    float wheelbase() const;
+    // The steering the wheels take now, from what the driver asks (wanted, -1 to 1), what they took dt seconds ago
+    // (current) and the vehicle's speed over the ground (m/s). The wheels turn toward the ask at a rate, not at once
+    // (keyboard steering is all or nothing): full lock in STEER_IN_TIME, back toward the centre in STEER_OUT_TIME. And
+    // the lock is held under the angle whose turn would need STEER_GRIP g of sideways grip at this speed, atan(grip g
+    // L / v^2), the standard speed-sensitive steering: full lock at walking pace, a gentle arc at top speed, never more
+    // turn than the tyres hold (kart 2 at full lock spun from 7 m/s without it; physics, 2026-10-26).
+    float steeringFor(float current, float wanted, float speed, float dt) const;
 
     bool isValid() const { return !wheels.empty(); }
 };

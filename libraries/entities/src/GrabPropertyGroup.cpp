@@ -16,8 +16,9 @@
 #include "EntityItemProperties.h"
 #include "EntityItemPropertiesMacros.h"
 
-void GrabPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties,
-                                          QScriptEngine* engine, bool skipDefaults,
+template <typename Value, typename Engine>
+void GrabPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties,
+                                          Engine* engine, bool skipDefaults,
                                           EntityItemProperties& defaultEntityProperties) const {
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_GRAB_GRABBABLE, Grab, grab, Grabbable, grabbable);
     COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(PROP_GRAB_KINEMATIC, Grab, grab, GrabKinematic, grabKinematic);
@@ -43,7 +44,8 @@ void GrabPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProp
 
 }
 
-void GrabPropertyGroup::copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) {
+template <typename Value>
+void GrabPropertyGroup::copyFromScriptValue(const Value& object, bool& _defaultSettings) {
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(grab, grabbable, bool, setGrabbable);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(grab, grabKinematic, bool, setGrabKinematic);
     COPY_GROUP_PROPERTY_FROM_QSCRIPTVALUE(grab, grabFollowsController, bool, setGrabFollowsController);
@@ -161,25 +163,25 @@ bool GrabPropertyGroup::appendToEditPacket(OctreePacketData* packetData,
 }
 
 bool GrabPropertyGroup::decodeFromEditPacket(EntityPropertyFlags& propertyFlags,
-                                             const unsigned char*& dataAt , int& processedBytes) {
+                                             const unsigned char*& dataAt , int& processedBytes, int bytesToRead) {
 
     int bytesRead = 0;
     bool overwriteLocalData = true;
     bool somethingChanged = false;
 
-    READ_ENTITY_PROPERTY(PROP_GRAB_GRABBABLE, bool, setGrabbable);
-    READ_ENTITY_PROPERTY(PROP_GRAB_KINEMATIC, bool, setGrabKinematic);
-    READ_ENTITY_PROPERTY(PROP_GRAB_FOLLOWS_CONTROLLER, bool, setGrabFollowsController);
-    READ_ENTITY_PROPERTY(PROP_GRAB_TRIGGERABLE, bool, setTriggerable);
-    READ_ENTITY_PROPERTY(PROP_GRAB_EQUIPPABLE, bool, setEquippable);
-    READ_ENTITY_PROPERTY(PROP_GRAB_DELEGATE_TO_PARENT, bool, setGrabDelegateToParent);
-    READ_ENTITY_PROPERTY(PROP_GRAB_LEFT_EQUIPPABLE_POSITION_OFFSET, glm::vec3, setEquippableLeftPosition);
-    READ_ENTITY_PROPERTY(PROP_GRAB_LEFT_EQUIPPABLE_ROTATION_OFFSET, glm::quat, setEquippableLeftRotation);
-    READ_ENTITY_PROPERTY(PROP_GRAB_RIGHT_EQUIPPABLE_POSITION_OFFSET, glm::vec3, setEquippableRightPosition);
-    READ_ENTITY_PROPERTY(PROP_GRAB_RIGHT_EQUIPPABLE_ROTATION_OFFSET, glm::quat, setEquippableRightRotation);
-    READ_ENTITY_PROPERTY(PROP_GRAB_EQUIPPABLE_INDICATOR_URL, QString, setEquippableIndicatorURL);
-    READ_ENTITY_PROPERTY(PROP_GRAB_EQUIPPABLE_INDICATOR_SCALE, glm::vec3, setEquippableIndicatorScale);
-    READ_ENTITY_PROPERTY(PROP_GRAB_EQUIPPABLE_INDICATOR_OFFSET, glm::vec3, setEquippableIndicatorOffset);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_GRAB_GRABBABLE, bool, setGrabbable);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_GRAB_KINEMATIC, bool, setGrabKinematic);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_GRAB_FOLLOWS_CONTROLLER, bool, setGrabFollowsController);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_GRAB_TRIGGERABLE, bool, setTriggerable);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_GRAB_EQUIPPABLE, bool, setEquippable);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_GRAB_DELEGATE_TO_PARENT, bool, setGrabDelegateToParent);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_GRAB_LEFT_EQUIPPABLE_POSITION_OFFSET, glm::vec3, setEquippableLeftPosition);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_GRAB_LEFT_EQUIPPABLE_ROTATION_OFFSET, glm::quat, setEquippableLeftRotation);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_GRAB_RIGHT_EQUIPPABLE_POSITION_OFFSET, glm::vec3, setEquippableRightPosition);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_GRAB_RIGHT_EQUIPPABLE_ROTATION_OFFSET, glm::quat, setEquippableRightRotation);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_GRAB_EQUIPPABLE_INDICATOR_URL, QString, setEquippableIndicatorURL);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_GRAB_EQUIPPABLE_INDICATOR_SCALE, glm::vec3, setEquippableIndicatorScale);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_GRAB_EQUIPPABLE_INDICATOR_OFFSET, glm::vec3, setEquippableIndicatorOffset);
 
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_GRAB_GRABBABLE, Grabbable);
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_GRAB_KINEMATIC, GrabKinematic);
@@ -348,3 +350,5 @@ int GrabPropertyGroup::readEntitySubclassDataFromBuffer(const unsigned char* dat
 
     return bytesRead;
 }
+
+INSTANTIATE_PROPERTY_GROUP_CONVERSIONS(GrabPropertyGroup)

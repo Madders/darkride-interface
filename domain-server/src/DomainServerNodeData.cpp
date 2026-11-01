@@ -22,7 +22,6 @@
 DomainServerNodeData::StringPairHash DomainServerNodeData::_overrideHash;
 
 DomainServerNodeData::DomainServerNodeData() {
-    _paymentIntervalTimer.start();
 }
 
 void DomainServerNodeData::updateJSONStats(QByteArray statsByteArray) {

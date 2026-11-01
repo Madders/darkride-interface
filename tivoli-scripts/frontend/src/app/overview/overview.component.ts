@@ -16,6 +16,7 @@ export class OverviewComponent implements OnInit {
 			username: string;
 			distance: number;
 			ai?: boolean;
+			bot?: boolean;
 			markLine?: string;
 		}[];
 		usersCount: number;

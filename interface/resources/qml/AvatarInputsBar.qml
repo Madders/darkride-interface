@@ -21,11 +21,12 @@ Item {
     property int modality: Qt.NonModal
     readonly property bool ignoreRadiusEnabled: AvatarInputs.ignoreRadiusEnabled;
     x: 10;
-    y: 5;
+    y: 10;
     readonly property bool shouldReposition: true;
     property bool hmdActive: HMD.active;
-    width: hmdActive ? audio.width : audioApplication.width;
-    height: hmdActive ? audio.height : audioApplication.height;
+    // the mic pill's size (its width changes as it shows the level or "Muted"; there was no "audioApplication")
+    width: audio.width;
+    height: audio.height;
 
     Timer {
         id: hmdActiveCheckTimer;

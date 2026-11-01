@@ -3,13 +3,15 @@ import { SignalManager } from "./lib/signal-manager";
 // Who each avatar in this world is: session id ("{...}") → the account behind it, shared by the nametags, the chat and
 // the Tab overview. The world server says which account each session signed in with (it checked that account when the
 // session connected; Users.requestUsernameFromID), and the account's public profile on the metaverse gives its picture
-// and, for an AI resident, its mark, its own word and its host (AI-FIRST-CLIENT.md §10.4). So an avatar is matched to
+// and, for an AI resident, its mark, its own word and its host (AI-FIRST-CLIENT.md §10.4); for a bot (scripted logic,
+// not AI), its host. So an avatar is matched to
 // its account by the world's check, never by the display name it shows, and nothing here asks the metaverse who is
 // where.
 
 export interface CachedUser {
 	username: string;
 	ai: boolean;
+	bot: boolean;
 	aiWord: string;
 	host: string;
 	thumbnail: string;
@@ -18,8 +20,10 @@ export interface CachedUser {
 
 export type CachedUsers = { [sessionId: string]: CachedUser };
 
-// the line under a resident's name: "✦ language model · hosted by caitlyn"
-export function markLine(user: { aiWord?: string; host?: string }) {
+// the line under a resident's name: "✦ language model · hosted by caitlyn", or for a bot "⚙ bot · hosted by madders"
+// (U+2699 alone: with U+FE0F it is drawn as a colour emoji)
+export function markLine(user: { bot?: boolean; aiWord?: string; host?: string }) {
+	if (user.bot) return "\u2699 bot" + (user.host ? " · hosted by " + user.host : "");
 	return (
 		"✦ " +
 		(user.aiWord || "AI resident") +
@@ -32,6 +36,7 @@ const NULL_UUID = "{00000000-0000-0000-0000-000000000000}";
 interface Profile {
 	username: string;
 	ai: boolean;
+	bot: boolean;
 	aiWord: string;
 	host: string;
 	image: string;
@@ -158,6 +163,7 @@ class UsersCache {
 			old != null &&
 			old.username == profile.username &&
 			old.ai == profile.ai &&
+			old.bot == profile.bot &&
 			old.aiWord == profile.aiWord &&
 			old.host == profile.host &&
 			old.thumbnail == profile.image
@@ -167,6 +173,7 @@ class UsersCache {
 		this.bySession[sessionId] = {
 			username: profile.username,
 			ai: profile.ai,
+			bot: profile.bot,
 			aiWord: profile.aiWord,
 			host: profile.host,
 			thumbnail: profile.image,
@@ -175,7 +182,8 @@ class UsersCache {
 		this.notify();
 	}
 
-	// an account's public card on the metaverse: its picture, and for an AI resident its mark, word and host
+	// an account's public card on the metaverse: its picture, and for an AI resident its mark, word and host. `kind`
+	// ("person", "ai" or "bot") comes first: a bot has `ai` false, and is never shown as AI
 	private fetchProfile(username: string) {
 		if (this.fetching[username]) return;
 		this.fetching[username] = true;
@@ -194,10 +202,13 @@ class UsersCache {
 			}
 			if (json == null || typeof json.username != "string") return;
 
+			const bot = json.kind === "bot";
+			const ai = !bot && (json.kind === "ai" || json.ai === true);
 			const profile: Profile = {
 				username: json.username,
-				ai: json.ai === true,
-				aiWord: json.aiWord || "",
+				ai,
+				bot,
+				aiWord: (ai && json.aiWord) || "",
 				host: json.host || "",
 				image: json.image || "",
 				fetchedAt: Date.now(),

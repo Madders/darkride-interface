@@ -8,17 +8,19 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+
 #ifndef hifi_EntityEditFilters_h
 #define hifi_EntityEditFilters_h
 
 #include <QObject>
 #include <QMap>
-#include <QScriptValue>
-#include <QScriptEngine>
 #include <glm/glm.hpp>
 
 #include <functional>
+#include <memory>
+#include <mutex>
 
+#include "EntityEditFilterEngine.h"
 #include "EntityItemID.h"
 #include "EntityItemProperties.h"
 #include "EntityTree.h"
@@ -27,7 +29,8 @@ class EntityEditFilters : public QObject, public Dependency {
     Q_OBJECT
 public:
     struct FilterData {
-        QScriptValue filterFn;
+        std::shared_ptr<EntityEditFilterEngine> engine;
+        std::shared_ptr<std::mutex> callLock;  // one call into the engine at a time
         bool wantsOriginalProperties { false };
         bool wantsZoneProperties { false };
 
@@ -40,18 +43,22 @@ public:
         EntityPropertyFlags includedZoneProperties;
         bool wantsZoneBoundingBox { false };
 
-        std::function<bool()> uncaughtExceptions;
-        QScriptEngine* engine;
-        bool rejectAll;
-        
-        FilterData(): engine(nullptr), rejectAll(false) {};
-        bool valid() { return (rejectAll || (engine != nullptr && filterFn.isFunction() && uncaughtExceptions)); }
+        bool rejectAll { false };
+
+        bool valid() const { return rejectAll || engine != nullptr; }
     };
 
     EntityEditFilters() {};
     EntityEditFilters(EntityTreePointer tree ): _tree(tree) {};
 
+    /// The engine a filter script runs in, chosen by whoever sets the factory (the entity server: QtScript or
+    /// WebAssembly, by the scripting setting). Without one, QtScript.
+    static void setEngineFactory(EntityEditFilterEngineFactory factory);
+
     void addFilter(EntityItemID entityID, QString filterURL);
+    /// A filter from its source, as addFilter installs one once the download is in; filterAdded says whether
+    /// it loaded (tests feed scripts this way).
+    void addFilterSource(EntityItemID entityID, const QString& url, const QString& source);
     void removeFilter(EntityItemID entityID);
 
     bool filter(glm::vec3& position, EntityItemProperties& propertiesIn, EntityItemProperties& propertiesOut, bool& wasChanged, 
@@ -67,8 +74,6 @@ private:
     QList<EntityItemID> getZonesByPosition(glm::vec3& position);
 
     EntityTreePointer _tree {};
-    bool _rejectAll {false};
-    QScriptValue _nullObjectForFilter{};
     
     QReadWriteLock _lock;
     QMap<EntityItemID, FilterData> _filterDataMap;

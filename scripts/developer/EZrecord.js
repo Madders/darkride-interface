@@ -26,12 +26,6 @@
         print(APP_NAME + ": " + message);
     }
 
-    function logDetails() {
-        return {
-            current_domain: location.placename
-        };
-    }
-
     RecordingIndicator = (function () {
         // Displays "recording" overlay.
 
@@ -175,7 +169,6 @@
             log("Finish recording: " + filename);
             Recording.saveRecording(filename);
             recordingState = IDLE;
-            UserActivityLogger.logAction("ezrecord_finish_recording", logDetails());
         }
 
         function stopRecording() {
@@ -246,8 +239,6 @@
         }
 
         Controller.keyPressEvent.connect(onKeyPressEvent);
-
-        UserActivityLogger.logAction("ezrecord_run_script", logDetails());
     }
 
     function tearDown() {

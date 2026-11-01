@@ -14,10 +14,12 @@
 #include "EntityItemProperties.h"
 #include "EntityItemPropertiesMacros.h"
 
-void EntityPriorityPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, QScriptValue& properties, QScriptEngine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
+template <typename Value, typename Engine>
+void EntityPriorityPropertyGroup::copyToScriptValue(const EntityPropertyFlags& desiredProperties, Value& properties, Engine* engine, bool skipDefaults, EntityItemProperties& defaultEntityProperties) const {
 }
 
-void EntityPriorityPropertyGroup::copyFromScriptValue(const QScriptValue& object, bool& _defaultSettings) {
+template <typename Value>
+void EntityPriorityPropertyGroup::copyFromScriptValue(const Value& object, bool& _defaultSettings) {
 }
 
 void EntityPriorityPropertyGroup::merge(const EntityPriorityPropertyGroup& other) {
@@ -40,7 +42,7 @@ bool EntityPriorityPropertyGroup::appendToEditPacket(OctreePacketData* packetDat
 
 bool EntityPriorityPropertyGroup::decodeFromEditPacket(EntityPropertyFlags& propertyFlags,
                                                     const unsigned char*& dataAt,
-                                                    int& processedBytes) {
+                                                    int& processedBytes, int bytesToRead) {
     int bytesRead = 0;
     processedBytes += bytesRead;
     return true;
@@ -83,3 +85,5 @@ int EntityPriorityPropertyGroup::readEntitySubclassDataFromBuffer(const unsigned
     int bytesRead = 0;
     return bytesRead;
 }
+
+INSTANTIATE_PROPERTY_GROUP_CONVERSIONS(EntityPriorityPropertyGroup)

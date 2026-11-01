@@ -99,6 +99,9 @@ PickFilter getPickFilter(unsigned int filter) {
  * @property {Vec3} [dirOffset] - Synonym for <code>direction</code>.
  * @property {Quat} [orientation] - Alternative property for specifying <code>direction</code>. The value is applied to the 
  *     default <code>direction</code> value.
+ * @property {object} [smoothing] - Steadies a parented ray's direction (a One Euro filter: smooth while it barely moves,
+ *     quick while it moves fast): <code>{ minCutoff, beta }</code>, the smoothing at rest in Hz (lower is steadier) and how
+ *     quickly it lets go as the direction speeds up. None by default; the VR controllers' lasers use it.
  * @property {PickType} pickType - The type of pick when getting these properties from {@link Picks.getPickProperties} or 
  *     {@link Picks.getPickScriptParameters}. A ray pick's type is {@link PickType.Ray}.
  * @property {Vec3} baseScale - Returned from {@link Picks.getPickProperties} when the pick has a parent with varying scale 
@@ -153,6 +156,10 @@ std::shared_ptr<PickQuery> PickScriptingInterface::buildRayPick(const QVariantMa
 
     auto rayPick = std::make_shared<RayPick>(position, direction, filter, maxDistance, enabled);
     setParentTransform(rayPick, propMap);
+    if (propMap["smoothing"].isValid()) {
+        const QVariantMap smoothing = propMap["smoothing"].toMap();
+        rayPick->setSmoothing(smoothing["minCutoff"].toFloat(), smoothing["beta"].toFloat());
+    }
 
     return rayPick;
 }
@@ -462,12 +469,18 @@ void pickTypesFromScriptValue(const QScriptValue& object, PickQuery::PickType& p
 }
 
 void PickScriptingInterface::registerMetaTypes(QScriptEngine* engine) {
-    QScriptValue pickTypes = engine->newObject();
+    // PickType through the engine's registration, so that every script engine sees it (on QtScript the same plain
+    // object of the types' values as before)
+    QVariantMap pickTypes;
     auto metaEnum = QMetaEnum::fromType<PickQuery::PickType>();
     for (int i = 0; i < PickQuery::PickType::NUM_PICK_TYPES; ++i) {
-        pickTypes.setProperty(metaEnum.key(i), metaEnum.value(i));
+        pickTypes[metaEnum.key(i)] = metaEnum.value(i);
     }
-    engine->globalObject().setProperty("PickType", pickTypes);
+    if (auto scriptEngine = qobject_cast<ScriptEngine*>(engine)) {
+        scriptEngine->registerGlobalValue("PickType", pickTypes);
+    } else {
+        engine->globalObject().setProperty("PickType", engine->toScriptValue(pickTypes));
+    }
 
     qScriptRegisterMetaType(engine, pickTypesToScriptValue, pickTypesFromScriptValue);
 }

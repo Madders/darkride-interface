@@ -124,11 +124,19 @@ void FileUtils::locateFile(const QString& filePath) {
 QString FileUtils::standardPath(QString subfolder) {
     // standard path
     // Mac: ~/Library/Application Support/Interface
+    // TIVOLI_APP_DATA_DIR (a walled-off test client's or a sandbox's own folder, as PathUtils::getAppDataPath reads it)
+    // wins, so its logs and shader cache stay there and out of the user's own (2026-10-25)
+    QString path = QString::fromLocal8Bit(qgetenv("TIVOLI_APP_DATA_DIR"));
+    while (path.endsWith('/')) {
+        path.chop(1);
+    }
+    if (path.isEmpty()) {
 #ifdef Q_OS_ANDROID
-    QString path = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+        path = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
 #else
-    QString path = QStandardPaths::writableLocation(QStandardPaths::DataLocation);
+        path = QStandardPaths::writableLocation(QStandardPaths::DataLocation);
 #endif
+    }
     if (!subfolder.startsWith("/")) {
         subfolder.prepend("/");
     }

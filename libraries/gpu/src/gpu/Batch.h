@@ -80,6 +80,9 @@ public:
 
     DrawCallInfoBuffer _drawCallInfos;
     static size_t _drawCallInfosMax;
+    // the inline instance lists (drawIndexedInstances), one entry per instance, every draw's list at the offset its
+    // command carries; uploaded after the named calls' lists
+    DrawCallInfoBuffer _instanceDrawCallInfos;
 
     mutable std::string _currentNamedCall;
 
@@ -125,6 +128,12 @@ public:
     void drawIndexed(Primitive primitiveType, uint32 numIndices, uint32 startIndex = 0);
     void drawInstanced(uint32 numInstances, Primitive primitiveType, uint32 numVertices, uint32 startVertex = 0, uint32 startInstance = 0);
     void drawIndexedInstanced(uint32 numInstances, Primitive primitiveType, uint32 numIndices, uint32 startIndex = 0, uint32 startInstance = 0);
+    // GPU instancing (INSTANCING.md 3.4): one indexed draw of the mesh bound now, a copy per transform in the list, where
+    // it stands in the command stream (a named call runs at the batch's end). The backend points the draw-call-info
+    // attribute at the list, so getTransformObject() in the shaders gives each instance its own object, as for a named
+    // call; the draw-call uniform set before it goes to every instance. Objects are indexed by 16 bits: the list is cut
+    // where a batch would pass 65,535 of them.
+    void drawIndexedInstances(Primitive primitiveType, uint32 numIndices, uint32 startIndex, const std::vector<Transform>& transforms);
     void multiDrawIndirect(uint32 numCommands, Primitive primitiveType);
     void multiDrawIndexedIndirect(uint32 numCommands, Primitive primitiveType);
 
@@ -300,6 +309,7 @@ public:
         COMMAND_drawIndexedInstanced,
         COMMAND_multiDrawIndirect,
         COMMAND_multiDrawIndexedIndirect,
+        COMMAND_drawIndexedInstances,
 
         COMMAND_setInputFormat,
         COMMAND_setInputBuffer,

@@ -25,7 +25,9 @@
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Collision/Shape/Shape.h>
+#include <Jolt/Physics/Collision/Shape/SphereShape.h>
 
 #include <PhysicsCollisionGroups.h>
 #include <Profile.h>
@@ -891,4 +893,89 @@ void PhysicsWorld::castRayAll(const glm::vec3& start, const glm::vec3& end, int3
         }
         results.push_back(result);
     }
+}
+
+namespace {
+// the nearest hit of a shape cast that is on the way: a body the cast shape starts inside reports fraction 0 (and its
+// penetration as a negative early-out fraction) and is passed over
+class ClosestHitOnTheWay : public JPH::CastShapeCollector {
+public:
+    void AddHit(const JPH::ShapeCastResult& hit) override {
+        if (hit.mFraction <= 0.0f || (hadHit && hit.mFraction >= closest.mFraction)) {
+            return;
+        }
+        closest = hit;
+        hadHit = true;
+        UpdateEarlyOutFraction(hit.mFraction);
+    }
+    JPH::ShapeCastResult closest;
+    bool hadHit { false };
+};
+}
+
+glm::vec3 PhysicsWorld::sphereOverlapPush(const glm::vec3& center, float radius, int32_t group, int32_t mask,
+                                          const JPH::BodyFilter* bodyFilter) const {
+    if (!_system || radius <= 0.0f) {
+        return glm::vec3(0.0f);
+    }
+    JPH::ObjectLayer layer = JoltLayers::layerFor(group, mask);
+    JPH::DefaultBroadPhaseLayerFilter broadPhaseFilter(_layers->objectVsBroadPhase, layer);
+    JPH::DefaultObjectLayerFilter objectLayerFilter(_layers->objectLayerPairs, layer);
+    JPH::BodyFilter noBodyFilter;
+
+    JPH::SphereShape sphere(radius);
+    sphere.SetEmbedded();   // on the stack, not reference counted
+    JPH::CollideShapeSettings settings;
+    JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
+    _system->GetNarrowPhaseQueryNoLock().CollideShape(&sphere, JPH::Vec3::sReplicate(1.0f),
+                                                      JPH::RMat44::sTranslation(glmToJoltR(center)), settings,
+                                                      JPH::RVec3::sZero(), collector, broadPhaseFilter, objectLayerFilter,
+                                                      bodyFilter ? *bodyFilter : noBodyFilter);
+    glm::vec3 push(0.0f);
+    for (const JPH::CollideShapeResult& hit : collector.mHits) {
+        glm::vec3 axis = joltToGLM(hit.mPenetrationAxis);   // the way the body would move out of the sphere
+        if (hit.mPenetrationDepth > 0.0f && glm::length(axis) > 0.0f) {
+            push -= glm::normalize(axis) * hit.mPenetrationDepth;
+        }
+    }
+    return push;
+}
+
+bool PhysicsWorld::castSphereClosest(const glm::vec3& start, const glm::vec3& end, float radius, int32_t group,
+                                     int32_t mask, const JPH::BodyFilter* bodyFilter, RayHit& result) const {
+    result = RayHit();
+    if (!_system || radius <= 0.0f) {
+        return false;
+    }
+    JPH::ObjectLayer layer = JoltLayers::layerFor(group, mask);
+    JPH::DefaultBroadPhaseLayerFilter broadPhaseFilter(_layers->objectVsBroadPhase, layer);
+    JPH::DefaultObjectLayerFilter objectLayerFilter(_layers->objectLayerPairs, layer);
+    JPH::BodyFilter noBodyFilter;
+
+    JPH::SphereShape sphere(radius);
+    sphere.SetEmbedded();   // on the stack, not reference counted
+    JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(&sphere, JPH::Vec3::sReplicate(1.0f),
+                                                                JPH::RMat44::sTranslation(glmToJoltR(start)),
+                                                                glmToJolt(end - start));
+    JPH::ShapeCastSettings settings;
+    ClosestHitOnTheWay collector;
+    _system->GetNarrowPhaseQueryNoLock().CastShape(cast, settings, JPH::RVec3::sZero(), collector, broadPhaseFilter,
+                                                   objectLayerFilter, bodyFilter ? *bodyFilter : noBodyFilter);
+    if (!collector.hadHit) {
+        return false;
+    }
+    const JPH::ShapeCastResult& hit = collector.closest;
+    result.hit = true;
+    result.fraction = hit.mFraction;
+    result.bodyID = hit.mBodyID2;
+    result.point = joltToGLM(hit.mContactPointOn2);   // the base offset is zero: this world's coordinates
+    glm::vec3 axis = joltToGLM(hit.mPenetrationAxis);  // the way the body would move out of the sphere
+    if (glm::length(axis) > 0.0f) {
+        result.normal = -glm::normalize(axis);
+    }
+    JPH::BodyLockRead lock(_system->GetBodyLockInterfaceNoLock(), hit.mBodyID2);
+    if (lock.Succeeded()) {
+        result.motionState = motionStateOf(lock.GetBody());
+    }
+    return true;
 }

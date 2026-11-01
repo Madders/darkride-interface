@@ -68,6 +68,7 @@ void CauterizedModel::createRenderItemSet() {
             const auto& shape = shapes[shapeID];
 
             _modelMeshRenderItems << std::make_shared<CauterizedMeshPartPayload>(shared_from_this(), shape.mesh, shape.meshPart, shapeID, transform, offset, _created);
+            _modelMeshRenderItems.back()->setHidden(isShapeHidden(shapeID));
 
             auto material = getNetworkModel()->getShapeMaterial(shapeID);
             _modelMeshMaterialNames.push_back(material ? material->getName() : "");
@@ -110,7 +111,7 @@ void CauterizedModel::updateClusterMatrices() {
     // as an optimization, don't build cautrizedClusterMatrices if the boneSet is empty.
     if (!_cauterizeBoneSet.empty()) {
 
-        AnimPose cauterizePose = _rig.getJointPose(_rig.indexOfJoint("Neck"));
+        AnimPose cauterizePose = _rig.getJointPose(_rig.indexOfJoint("Head"));
         cauterizePose.scale() = glm::vec3(0.0001f, 0.0001f, 0.0001f);
         Transform cauterizedDQTransform(cauterizePose.rot(), cauterizePose.scale(), cauterizePose.trans());
 
@@ -119,7 +120,7 @@ void CauterizedModel::updateClusterMatrices() {
             glm::vec4(0.0f, 0.0001f, 0.0f, 0.0f),
             glm::vec4(0.0f, 0.0f, 0.0001f, 0.0f),
             glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
-        auto cauterizeMatrix = _rig.getJointTransform(_rig.indexOfJoint("Neck")) * zeroScale;
+        auto cauterizeMatrix = _rig.getJointTransform(_rig.indexOfJoint("Head")) * zeroScale;
 
         for (int skinDeformerIndex = 0; skinDeformerIndex < (int) _cauterizeMeshStates.size(); skinDeformerIndex++) {
             Model::MeshState& nonCauterizedState = _meshStates[skinDeformerIndex];
@@ -202,7 +203,7 @@ void CauterizedModel::updateRenderItems() {
                     const auto& cauterizedMeshState = self->getCauterizeMeshState(skinDeformerIndex);
 
                     transaction.updateItem<ModelMeshPartPayload>(itemID,
-                        [modelTransform, shapeState, meshState, useDualQuaternionSkinning, cauterizedMeshState, invalidatePayloadShapeKey,
+                        [modelTransform, meshState, useDualQuaternionSkinning, cauterizedMeshState, invalidatePayloadShapeKey,
                             primitiveMode, renderItemKeyGlobalFlags, enableCauterization](ModelMeshPartPayload& mmppData) {
                         CauterizedMeshPartPayload& data = static_cast<CauterizedMeshPartPayload&>(mmppData);
                         if (useDualQuaternionSkinning) {
@@ -217,7 +218,12 @@ void CauterizedModel::updateRenderItems() {
                        // }
                         data.updateTransform(renderTransform);
                         data.updateTransformForCauterizedMesh(renderTransform);
-                        data.updateTransformAndBound(modelTransform.worldTransform(shapeState._rootFromJointTransform));
+                        // the whole body's clusters, not the cauterized ones: the bound is for every view
+                        if (useDualQuaternionSkinning) {
+                            data.updateSkinnedBound(modelTransform, meshState.clusterDualQuaternions);
+                        } else {
+                            data.updateSkinnedBound(modelTransform, meshState.clusterMatrices);
+                        }
 
                         data.setEnableCauterization(enableCauterization);
                         data.updateKey(renderItemKeyGlobalFlags);

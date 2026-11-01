@@ -12,6 +12,8 @@
 #ifndef hifi_ModelCache_h
 #define hifi_ModelCache_h
 
+#include <QtCore/QStringList>
+
 #include <DependencyManager.h>
 #include <ResourceCache.h>
 
@@ -52,6 +54,12 @@ public:
     void setTextures(const QVariantMap& textureMap);
 
     virtual bool areTexturesLoaded() const;
+    // the model's textures that failed to load, one line each ("<file>: <reason>"), for build mode; empty when none has
+    QStringList failedTextures() const;
+
+    // The textures of the model's materials not yet loaded load at this priority for this owner (a model the textures
+    // are drawn on) until they first arrive, then go back to their own (the mips' order).
+    void setTextureLoadPriority(QObject* owner, float priority) const;
     const QUrl& getAnimGraphOverrideUrl() const { return _animGraphOverrideUrl; }
     const QVariantHash& getMapping() const { return _mapping; }
 
@@ -135,6 +143,8 @@ public:
     int getResourceDownloadAttemptsRemaining() { return _resource ? _resource->getDownloadAttemptsRemaining() : 0; }
 
     QUrl getPreviewImageURL() const { return _resource->getPreviewImageURL(); }
+    // why the model's file failed to load (Resource::getFailureReason), empty when it has not
+    QString getFailureReason() const { return _resource ? _resource->getFailureReason() : QString(); }
 
 private:
     void startWatching();

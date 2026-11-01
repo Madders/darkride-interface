@@ -12,6 +12,7 @@
 #ifndef hifi_AssetResourceRequest_h
 #define hifi_AssetResourceRequest_h
 
+#include <QTimer>
 #include <QUrl>
 
 #include <PortableHighResolutionClock.h>
@@ -34,6 +35,7 @@ protected:
 
 private slots:
     void onDownloadProgress(qint64 bytesReceived, qint64 bytesTotal);
+    void onMappingTimeout();
 
 private:
     static bool urlIsAssetHash(const QUrl& url);
@@ -42,6 +44,7 @@ private:
     void requestHash(const AssetUtils::AssetHash& hash);
 
     GetMappingRequest* _assetMappingRequest { nullptr };
+    QTimer* _mappingTimer { nullptr };   // a mapping that is never answered fails as a Timeout, so the caller can retry
     AssetRequest* _assetRequest { nullptr };
 
     p_high_resolution_clock::time_point _lastProgressDebug;

@@ -48,6 +48,10 @@ static JSValue hookEntityLoad = JS_UNDEFINED;       /* (payload) -> null or an e
 static JSValue hookEntityUnload = JS_UNDEFINED;     /* (payload) */
 static JSValue hookEntityHas = JS_UNDEFINED;        /* (payload) -> 0 or 1 */
 static JSValue hookEntityCall = JS_UNDEFINED;       /* (payload) -> the method's result */
+static JSValue hookAfterInterruption = JS_UNDEFINED; /* () -> the entity script that was running, state reset */
+
+/* The entity script that was running when the host interrupted a call, until the host takes it (interrupted_entity). */
+static char interruptedEntity[64];
 
 /* --- logging and errors ---------------------------------------------------------------------------------------- */
 
@@ -59,9 +63,44 @@ static void log_string(int level, const char* text) {
     log_text(level, text, strlen(text));
 }
 
-/* The pending exception, logged as "<message>\n<stack>" at the error level, and cleared. */
+/* The pending exception, logged as "<message>\n<stack>" at the error level, and cleared. An interruption (the host
+   said to stop: QuickJS's only uncatchable error) is a debug line: the host reports why. */
+static int interrupt_handler(JSRuntime* runtime, void* opaque);
+
+/* After an interruption unwound a call: the shim says which entity script was running and resets what the
+   unwinding skipped (no catch or finally runs for an uncatchable error). The host may still be saying "stop"
+   (the limit is still passed), so the interrupt handler is off while the shim answers. */
+static void after_interruption(void) {
+    if (!ctx || !JS_IsFunction(ctx, hookAfterInterruption)) {
+        return;
+    }
+    JS_SetInterruptHandler(rt, NULL, NULL);
+    JSValue entity = JS_Call(ctx, hookAfterInterruption, JS_UNDEFINED, 0, NULL);
+    JS_SetInterruptHandler(rt, interrupt_handler, NULL);
+    if (JS_IsException(entity)) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return;
+    }
+    if (JS_IsString(entity) && interruptedEntity[0] == 0) {
+        size_t length = 0;
+        const char* text = JS_ToCStringLen(ctx, &length, entity);
+        if (text && length > 0 && length < sizeof(interruptedEntity)) {
+            memcpy(interruptedEntity, text, length);
+            interruptedEntity[length] = 0;
+        }
+        if (text) JS_FreeCString(ctx, text);
+    }
+    JS_FreeValue(ctx, entity);
+}
+
 static void report_exception(const char* where) {
     JSValue exception = JS_GetException(ctx);
+    if (JS_IsUncatchableError(exception)) {
+        JS_FreeValue(ctx, exception);
+        log_string(DR_LOG_DEBUG, "interrupted by the host");
+        after_interruption();
+        return;
+    }
     const char* message = NULL;
     const char* stack = NULL;
     size_t messageLength = 0;
@@ -101,6 +140,12 @@ static void report_exception(const char* where) {
     if (stack) JS_FreeCString(ctx, stack);
     JS_FreeValue(ctx, stackValue);
     JS_FreeValue(ctx, exception);
+}
+
+static int interrupt_handler(JSRuntime* runtime, void* opaque) {
+    (void)runtime;
+    (void)opaque;
+    return dr_interrupted() != 0;
 }
 
 /* Promise reactions and other jobs queued while the guest ran, run to completion. */
@@ -465,8 +510,49 @@ static JSValue decode_item(cbor_reader* r, cbor_item* item) {
     }
 }
 
-/* The bytes a host function returned: decoded and freed. A top-level error record becomes a thrown Error
-   whose name is the record's type. */
+/* An error of the record's type: a real TypeError, SyntaxError and so on for JavaScript's own types (instanceof
+   works, as it did for QtScript's errors), otherwise an Error whose name is the type. */
+static JSValue make_error_of_type(JSValueConst type, JSValueConst message) {
+    static const char* const STANDARD[] = { "Error", "TypeError", "SyntaxError", "RangeError", "ReferenceError", "EvalError", "URIError", NULL };
+    JSValue text = JS_IsUndefined(message) ? JS_NewString(ctx, "") : JS_DupValue(ctx, message);
+    JSValue error = JS_UNDEFINED;
+    if (JS_IsString(type)) {
+        const char* name = JS_ToCString(ctx, type);
+        int standard = 0;
+        for (int i = 0; name && STANDARD[i]; i++) {
+            if (strcmp(name, STANDARD[i]) == 0) {
+                standard = 1;
+                break;
+            }
+        }
+        if (standard) {
+            JSValue global = JS_GetGlobalObject(ctx);
+            JSValue constructor = JS_GetPropertyStr(ctx, global, name);
+            JS_FreeValue(ctx, global);
+            if (JS_IsConstructor(ctx, constructor)) {
+                error = JS_CallConstructor(ctx, constructor, 1, &text);
+                if (JS_IsException(error)) {
+                    JS_FreeValue(ctx, JS_GetException(ctx));
+                    error = JS_UNDEFINED;
+                }
+            }
+            JS_FreeValue(ctx, constructor);
+        }
+        if (name) JS_FreeCString(ctx, name);
+    }
+    if (JS_IsUndefined(error)) {
+        error = JS_NewError(ctx);
+        JS_DefinePropertyValueStr(ctx, error, "message", JS_DupValue(ctx, text), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+        if (JS_IsString(type)) {
+            JS_DefinePropertyValueStr(ctx, error, "name", JS_DupValue(ctx, type), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+        }
+    }
+    JS_FreeValue(ctx, text);
+    return error;
+}
+
+/* The bytes a host function returned: decoded and freed. A top-level error record becomes a thrown error of the
+   record's type. */
 static JSValue take_result(int64_t packed) {
     dr_bytes bytes = dr_unpack(packed);
     if (!bytes.data) {
@@ -482,11 +568,7 @@ static JSValue take_result(int64_t packed) {
     if (JS_IsObject(record)) {
         JSValue type = JS_GetPropertyStr(ctx, record, "type");
         JSValue message = JS_GetPropertyStr(ctx, record, "message");
-        JSValue error = JS_NewError(ctx);
-        JS_DefinePropertyValueStr(ctx, error, "message", JS_IsUndefined(message) ? JS_NewString(ctx, "") : JS_DupValue(ctx, message), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-        if (JS_IsString(type)) {
-            JS_DefinePropertyValueStr(ctx, error, "name", JS_DupValue(ctx, type), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-        }
+        JSValue error = make_error_of_type(type, message);
         JS_FreeValue(ctx, type);
         JS_FreeValue(ctx, message);
         JS_FreeValue(ctx, record);
@@ -605,6 +687,95 @@ static JSValue js_set(JSContext* c, JSValueConst thisValue, int argc, JSValueCon
     }
     JS_FreeValue(ctx, result);
     return JS_UNDEFINED;
+}
+
+/* host.method(name), host.getter(name) and host.setter(name): a native function bound to a member's name and called
+   with the host object as `this`. A script's call reaches the host with no JavaScript function in between and with
+   its arguments encoded where they are, not copied into an array first: the shim builds every host object's
+   methods and accessors from these. */
+static JSValue js_method_call(JSContext* c, JSValueConst thisValue, int argc, JSValueConst* argv, int magic, JSValueConst* data) {
+    (void)c; (void)magic;
+    int32_t handle = argument_handle(thisValue);
+    size_t nameLength = 0;
+    const char* name = JS_ToCStringLen(ctx, &nameLength, data[0]);
+    if (!name) {
+        return JS_EXCEPTION;
+    }
+    cbor_writer w;
+    cw_init(&w);
+    cw_array(&w, (size_t)argc);
+    for (int i = 0; i < argc; ++i) {
+        if (!encode_value(&w, argv[i], 1)) {
+            cw_free(&w);
+            JS_FreeCString(ctx, name);
+            return JS_EXCEPTION;
+        }
+    }
+    int64_t packed = dr_call(handle, name, (int32_t)nameLength, w.data, (int32_t)w.length);
+    cw_free(&w);
+    JS_FreeCString(ctx, name);
+    return take_result(packed);
+}
+
+static JSValue js_getter_call(JSContext* c, JSValueConst thisValue, int argc, JSValueConst* argv, int magic, JSValueConst* data) {
+    (void)c; (void)argc; (void)argv; (void)magic;
+    int32_t handle = argument_handle(thisValue);
+    size_t nameLength = 0;
+    const char* name = JS_ToCStringLen(ctx, &nameLength, data[0]);
+    if (!name) {
+        return JS_EXCEPTION;
+    }
+    int64_t packed = dr_get(handle, name, (int32_t)nameLength);
+    JS_FreeCString(ctx, name);
+    return take_result(packed);
+}
+
+static JSValue js_setter_call(JSContext* c, JSValueConst thisValue, int argc, JSValueConst* argv, int magic, JSValueConst* data) {
+    (void)c; (void)magic;
+    int32_t handle = argument_handle(thisValue);
+    size_t nameLength = 0;
+    const char* name = JS_ToCStringLen(ctx, &nameLength, data[0]);
+    if (!name) {
+        return JS_EXCEPTION;
+    }
+    cbor_writer w;
+    cw_init(&w);
+    if (!encode_value(&w, argc > 0 ? argv[0] : JS_UNDEFINED, 0)) {
+        cw_free(&w);
+        JS_FreeCString(ctx, name);
+        return JS_EXCEPTION;
+    }
+    int64_t packed = dr_set(handle, name, (int32_t)nameLength, w.data, (int32_t)w.length);
+    cw_free(&w);
+    JS_FreeCString(ctx, name);
+    JSValue result = take_result(packed);
+    if (JS_IsException(result)) {
+        return result;
+    }
+    JS_FreeValue(ctx, result);
+    return JS_UNDEFINED;
+}
+
+static JSValue bind_member(int argc, JSValueConst* argv, JSCFunctionData* function, int length, const char* usage) {
+    if (argc < 1 || !JS_IsString(argv[0])) {
+        return JS_ThrowTypeError(ctx, "%s", usage);
+    }
+    return JS_NewCFunctionData(ctx, function, length, 0, 1, argv);
+}
+
+static JSValue js_method(JSContext* c, JSValueConst thisValue, int argc, JSValueConst* argv) {
+    (void)c; (void)thisValue;
+    return bind_member(argc, argv, js_method_call, 0, "method(name)");
+}
+
+static JSValue js_getter(JSContext* c, JSValueConst thisValue, int argc, JSValueConst* argv) {
+    (void)c; (void)thisValue;
+    return bind_member(argc, argv, js_getter_call, 0, "getter(name)");
+}
+
+static JSValue js_setter(JSContext* c, JSValueConst thisValue, int argc, JSValueConst* argv) {
+    (void)c; (void)thisValue;
+    return bind_member(argc, argv, js_setter_call, 1, "setter(name)");
 }
 
 static JSValue js_connect(JSContext* c, JSValueConst thisValue, int argc, JSValueConst* argv) {
@@ -727,6 +898,9 @@ static const JSCFunctionListEntry hostFunctions[] = {
     JS_CFUNC_DEF("call", 3, js_call),
     JS_CFUNC_DEF("get", 2, js_get),
     JS_CFUNC_DEF("set", 3, js_set),
+    JS_CFUNC_DEF("method", 1, js_method),
+    JS_CFUNC_DEF("getter", 1, js_getter),
+    JS_CFUNC_DEF("setter", 1, js_setter),
     JS_CFUNC_DEF("connect", 2, js_connect),
     JS_CFUNC_DEF("disconnect", 1, js_disconnect),
     JS_CFUNC_DEF("release", 1, js_release),
@@ -767,7 +941,7 @@ static void teardown(void) {
     JS_FreeValue(ctx, hookEntityHas);
     JS_FreeValue(ctx, hookEntityCall);
     hookWrapObject = hookRegisterCallback = hookOnSignal = hookOnCallback = hookStart = hookStop = JS_UNDEFINED;
-    hookEntityLoad = hookEntityUnload = hookEntityHas = hookEntityCall = JS_UNDEFINED;
+    hookEntityLoad = hookEntityUnload = hookEntityHas = hookEntityCall = hookAfterInterruption = JS_UNDEFINED;
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
     ctx = NULL;
@@ -789,6 +963,9 @@ void script_start(void) {
     }
     JS_SetMaxStackSize(rt, JS_STACK_SIZE);
     JS_SetHostPromiseRejectionTracker(rt, on_promise_rejection, NULL);
+    /* the host runs this module with cooperative interruption: no deadline checks in its loops, so QuickJS asks
+       the host whether to stop (every 10,000 steps of the interpreter, and in long regular expressions) */
+    JS_SetInterruptHandler(rt, interrupt_handler, NULL);
     JS_NewClassID(rt, &hostObjectClassId);
     JS_NewClass(rt, hostObjectClassId, &hostObjectClass);
     ctx = JS_NewContext(rt);
@@ -837,6 +1014,7 @@ void script_start(void) {
     hookEntityUnload = take_hook(hooks, "entityUnload");
     hookEntityHas = take_hook(hooks, "entityHas");
     hookEntityCall = take_hook(hooks, "entityCall");
+    hookAfterInterruption = take_hook(hooks, "afterInterruption");
     JS_FreeValue(ctx, hooks);
 
     JSValue started = JS_Call(ctx, hookStart, JS_UNDEFINED, 0, NULL);
@@ -986,6 +1164,20 @@ int64_t entity_call(uint8_t* payload, int32_t length) {
     JSValue result = call_with_payload(hookEntityCall, payload, length, "an entity script's method");
     int64_t packed = pack_result(result);
     JS_FreeValue(ctx, result);
+    return packed;
+}
+
+/* The entity script that was running when the host last interrupted a call (the time limit), as a packed CBOR
+   text the host frees; 0 when it was the script itself or nothing was interrupted. Taken once. */
+int64_t interrupted_entity(void) DARKRIDE_EXPORT("interrupted_entity");
+int64_t interrupted_entity(void) {
+    if (!ctx || interruptedEntity[0] == 0) {
+        return 0;
+    }
+    JSValue text = JS_NewString(ctx, interruptedEntity);
+    interruptedEntity[0] = 0;
+    int64_t packed = pack_result(text);
+    JS_FreeValue(ctx, text);
     return packed;
 }
 
