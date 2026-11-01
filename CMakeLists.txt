@@ -151,6 +151,12 @@ if (NOT DEFINED SERVER_ONLY)
   set(SERVER_ONLY 0)
 endif()
 
+if (ANDROID OR UWP)
+  set(MOBILE 1)
+else()
+  set(MOBILE 0)
+endif()
+
 # Use default time server if none defined in environment
 set_from_env(TIMESERVER_URL TIMESERVER_URL "http://sha256timestamp.ws.symantec.com/sha256/timestamp")
 
@@ -163,6 +169,12 @@ set(BUILD_TOOLS_OPTION ON)
 set(BUILD_INSTALLER_OPTION ON)
 set(GLES_OPTION OFF)
 
+if (ANDROID OR UWP)
+  set(BUILD_SERVER_OPTION OFF)
+  set(BUILD_TOOLS_OPTION OFF)
+  set(BUILD_INSTALLER OFF)
+endif()
+
 if (CLIENT_ONLY)
   set(BUILD_SERVER_OPTION OFF)
 endif()
@@ -172,7 +184,39 @@ if (SERVER_ONLY)
   set(BUILD_TESTS_OPTION OFF)
 endif()
 
-set(PLATFORM_QT_COMPONENTS WebEngine Xml)
+if (ANDROID)
+  set(GLES_OPTION ON)
+  set(PLATFORM_QT_COMPONENTS AndroidExtras WebView)
+  add_definitions(-DHIFI_ANDROID_APP=\"${HIFI_ANDROID_APP}\")
+  if (
+      (${HIFI_ANDROID_APP} STREQUAL "questInterface") OR
+      (${HIFI_ANDROID_APP} STREQUAL "questFramePlayer") OR
+      (${HIFI_ANDROID_APP} STREQUAL "framePlayer")
+    )
+    # We know the quest hardware has this extension, so we can force the use of instanced stereo
+    add_definitions(-DHAVE_EXT_clip_cull_distance)
+    # We can also use multiview stereo techniques
+    add_definitions(-DHAVE_OVR_multiview2)
+    add_definitions(-DHAVE_OVR_multiview)
+    # We can also use our own foveated textures
+    add_definitions(-DHAVE_QCOM_texture_foveated)
+
+    # if set, the application itself or some library it depends on MUST implement
+    # `DisplayPluginList getDisplayPlugins()` and `InputPluginList getInputPlugins()`
+    add_definitions(-DCUSTOM_INPUT_PLUGINS)
+    add_definitions(-DCUSTOM_DISPLAY_PLUGINS)
+    set(PLATFORM_PLUGIN_LIBRARIES oculusMobile oculusMobilePlugin)
+  endif()
+
+  # Allow client code to use preprocessor macros to distinguish between quest and non-quest builds
+  if (${HIFI_ANDROID_APP} STREQUAL "questInterface")
+    add_definitions(-DANDROID_APP_QUEST_INTERFACE)
+  elseif(${HIFI_ANDROID_APP} STREQUAL "interface")
+    add_definitions(-DANDROID_APP_INTERFACE)
+  endif()
+else ()
+  set(PLATFORM_QT_COMPONENTS WebEngine Xml)
+endif ()
 
 option(HIFI_USE_OPTIMIZED_IK "Use optimized IK" ${HIFI_USE_OPTIMIZED_IK_OPTION})
 option(BUILD_CLIENT "Build client components" ${BUILD_CLIENT_OPTION})
@@ -269,6 +313,17 @@ setup_externals_binary_dir()
 
 option(USE_NSIGHT "Attempt to find the nSight libraries" 1)
 
+# FIXME hack to work on the proper Android toolchain
+if (ANDROID)
+  add_subdirectory(android/apps/${HIFI_ANDROID_APP})
+  return()
+endif()
+
+if (BUILD_GPU_FRAME_PLAYER_ONLY)
+    # This is for CI build testing
+    add_subdirectory(tools/gpu-frame-player)
+else()
+
 # add subdirectories for all targets
 if (BUILD_SERVER)
   add_subdirectory(assignment-client)
@@ -293,6 +348,8 @@ endif()
 add_subdirectory(tools)
 
 add_subdirectory(tivoli-scripts)
+
+endif()
 
 if (BUILD_TESTS)
   # Turn on testing so that add_test works

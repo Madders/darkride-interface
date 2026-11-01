@@ -18,6 +18,7 @@
 
 import hifi_singleton
 import hifi_utils
+import hifi_android
 import hifi_vcpkg
 import hifi_qt
 
@@ -88,6 +89,7 @@ def parse_args():
     defaultPortsPath = hifi_utils.scriptRelative('cmake', 'ports')
     from argparse import ArgumentParser
     parser = ArgumentParser(description='Prepare build dependencies.')
+    parser.add_argument('--android', type=str)
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--force-bootstrap', action='store_true')
     parser.add_argument('--force-build', action='store_true')
@@ -100,7 +102,10 @@ def parse_args():
     parser.add_argument('--build-root', required=True, type=str, help='The location of the cmake build')
     parser.add_argument('--ports-path', type=str, default=defaultPortsPath)
     parser.add_argument('--ci-build', action='store_true', default=os.getenv('CI_BUILD') is not None)
-    args = parser.parse_args()
+    if True:
+        args = parser.parse_args()
+    else:
+        args = parser.parse_args(['--android', 'questInterface', '--build-root', 'C:/git/tivoli/android/apps/questInterface/.externalNativeBuild/cmake/debug/arm64-v8a'])
     return args
 
 def main():
@@ -128,13 +133,14 @@ def main():
             hifi_utils.downloadAndExtract('https://cdn.tivolicloud.com/dependencies/NSIS-hifi-plugins-1.0.tgz', "C:/Program Files (x86)")
 
     qtInstallPath = ''
-    qt = hifi_qt.QtDownloader(args)
-    qtInstallPath = qt.cmakePath
-    with hifi_singleton.Singleton(qt.lockFile) as lock:
-        with timer('Qt'):
-            qt.installQt()
-            qt.writeConfig()
-
+    # If not android, install our Qt build
+    if not args.android:
+        qt = hifi_qt.QtDownloader(args)
+        qtInstallPath = qt.cmakePath
+        with hifi_singleton.Singleton(qt.lockFile) as lock:
+            with timer('Qt'):
+                qt.installQt()
+                qt.writeConfig()
 
     # Only allow one instance of the program to run at a time
     pm = hifi_vcpkg.VcpkgRepo(args)
