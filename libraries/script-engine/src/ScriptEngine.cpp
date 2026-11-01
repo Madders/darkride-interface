@@ -236,6 +236,9 @@ ScriptEngine::ScriptEngine(Context context, const QString& scriptContents, const
     _arrayBufferClass(new ArrayBufferClass(this)),
     _assetScriptingInterface(new AssetScriptingInterface(this))
 {
+    // held for the engine's life: what the agent's scripts include later never changes it
+    _agentScriptIsLocal = _context == AGENT_SCRIPT &&
+                          (fileNameString.isEmpty() || ScriptNetworkPolicy::isLocalOrigin(QUrl(fileNameString)));
     switch (_context) {
         case Context::CLIENT_SCRIPT:
             _type = Type::CLIENT;
@@ -651,7 +654,17 @@ bool ScriptEngine::entityScriptsMayBeLocal() const {
 }
 
 bool ScriptEngine::worldIsLocal() const {
+    if (!isClientSide()) {
+        return false;   // a server is in no world of a visitor's
+    }
     return _context == ENTITY_CLIENT_SCRIPT ? entityScriptsMayBeLocal() : ScriptNetworkPolicy::isWorldLocal();
+}
+
+QUrl ScriptEngine::ruledOrigin(const QUrl& origin) const {
+    if (isClientSide() || !ScriptNetworkPolicy::isLocalOrigin(origin)) {
+        return origin;
+    }
+    return QUrl(_context == AGENT_SCRIPT ? "about:agent" : "about:entity-server");
 }
 
 QUrl ScriptEngine::effectiveSandbox(const QUrl& sandbox) const {
@@ -1133,6 +1146,7 @@ GuardedObjectClass* ScriptEngine::guardClass() {
         gate.deniesMethod = &ScriptApiPolicy::deniesMethod;
         gate.deniesPropertyWrite = &ScriptApiPolicy::deniesPropertyWrite;
         gate.deniesPropertyRead = &ScriptApiPolicy::deniesPropertyRead;
+        gate.deniesSignal = &ScriptApiPolicy::deniesSignal;
         gate.refusalLine = &ScriptApiPolicy::refusalLine;
         _guardClass = std::make_unique<GuardedObjectClass>(this, std::move(gate));
     }
@@ -2081,17 +2095,21 @@ QVariantMap ScriptEngine::fetchModuleSource(const QString& modulePath, const boo
     using UrlMap = QMap<QUrl, QString>;
     auto scriptCache = DependencyManager::get<ScriptCache>();
     QVariantMap req;
-    if (isClientSide()) {
+    // one of the app's own scripts (canonical, inside its scripts folder) is no request to the network
+    const bool appModule = QUrl(modulePath).isLocalFile() && ScriptNetworkPolicy::isAppScript(QUrl(modulePath));
+    if (networkRuled() && !appModule) {
         // the network rule for a script's own requests: a module's download is a request too (a JSON module comes
         // back to the script as data)
         QString reason;
-        if (!ScriptNetworkPolicy::decideBlocking(QUrl(modulePath), currentScriptOrigin(), reason, worldIsLocal())) {
+        if (!ScriptNetworkPolicy::decideBlocking(QUrl(modulePath), ruledOrigin(currentScriptOrigin()), reason, worldIsLocal())) {
             scriptWarningMessage(ScriptNetworkPolicy::refusalLine(currentScriptOrigin(), QUrl(modulePath), reason));
             req["url"] = modulePath;
             req["status"] = "Refused";
             req["success"] = false;
             return req;
         }
+        // and its download goes to the address judged (each hop judged again)
+        scriptCache->ruleFetch(QUrl(modulePath), ruledOrigin(currentScriptOrigin()), worldIsLocal());
     }
     qCDebug(scriptengine_module) << "require.fetchModuleSource: " << QUrl(modulePath).fileName() << QThread::currentThread();
 
@@ -2311,10 +2329,17 @@ void ScriptEngine::include(const QStringList& includeFiles, QScriptValue callbac
                                 + "outside of original entity script" + sandbox.toString());
         } else {
             QString reason;
-            if (isClientSide() && !ScriptNetworkPolicy::decideBlocking(thisURL, currentScriptOrigin(), reason, worldIsLocal())) {
+            // one of the app's own scripts (canonical, inside its scripts folder) is no request to the network
+            const bool appScript = thisURL.isLocalFile() && ScriptNetworkPolicy::isAppScript(thisURL);
+            if (networkRuled() && !appScript &&
+                !ScriptNetworkPolicy::decideBlocking(thisURL, ruledOrigin(currentScriptOrigin()), reason, worldIsLocal())) {
                 // the network rule for a script's own requests: an include's download is a request too
                 scriptWarningMessage(ScriptNetworkPolicy::refusalLine(currentScriptOrigin(), thisURL, reason));
                 continue;
+            }
+            if (networkRuled() && !appScript) {
+                // and its download goes to the address judged (each hop judged again)
+                DependencyManager::get<ScriptCache>()->ruleFetch(thisURL, ruledOrigin(currentScriptOrigin()), worldIsLocal());
             }
             // We could also check here for CORS, but we don't yet.
             // It turns out that QUrl.resolve will not change hosts and copy authority, so we don't need to check that here.

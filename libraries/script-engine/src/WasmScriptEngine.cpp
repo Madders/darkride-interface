@@ -539,6 +539,7 @@ WasmScriptEngine::ModuleInstancePointer WasmScriptEngine::makeInstance(const QSt
         gate.deniesMethod = &ScriptApiPolicy::deniesMethod;
         gate.deniesPropertyWrite = &ScriptApiPolicy::deniesPropertyWrite;
         gate.deniesPropertyRead = &ScriptApiPolicy::deniesPropertyRead;
+        gate.deniesSignal = &ScriptApiPolicy::deniesSignal;
         gate.refusalLine = &ScriptApiPolicy::refusalLine;
         instance->host->setMemberGate(std::move(gate));
     }
@@ -1454,9 +1455,10 @@ QVariantMap WasmScriptEngine::resolveInclude(const QString& file, const QString&
         result["reason"] = "outside of original entity script " + sandbox.toString();
         return result;
     }
-    if (isClientSide()) {
+    // one of the app's own scripts (canonical, inside its scripts folder) is no request to the network
+    if (networkRuled() && !(thisURL.isLocalFile() && ScriptNetworkPolicy::isAppScript(thisURL))) {
         // the network rule for a script's own requests: an include's download is a request too
-        const QUrl origin = sandbox.isEmpty() ? currentScriptOrigin() : sandbox;
+        const QUrl origin = ruledOrigin(sandbox.isEmpty() ? currentScriptOrigin() : sandbox);
         QString reason;
         if (!ScriptNetworkPolicy::decideBlocking(thisURL, origin, reason, worldIsLocal())) {
             result["reason"] = ScriptNetworkPolicy::refusalLine(origin, thisURL, reason);
@@ -1526,10 +1528,11 @@ QVariantMap WasmScriptEngine::resolveModule(const QString& moduleId, const QStri
             return fail("path is not a file: " + url.toLocalFile());
         }
     }
-    if (isClientSide()) {
+    // one of the app's own scripts (canonical, inside its scripts folder) is no request to the network
+    if (networkRuled() && !(url.isLocalFile() && ScriptNetworkPolicy::isAppScript(url))) {
         // the network rule for a script's own requests: a module's download is a request too (a JSON module comes
         // back to the script as data)
-        const QUrl origin = sandbox.isEmpty() ? currentScriptOrigin() : sandbox;
+        const QUrl origin = ruledOrigin(sandbox.isEmpty() ? currentScriptOrigin() : sandbox);
         QString reason;
         if (!ScriptNetworkPolicy::decideBlocking(url, origin, reason, worldIsLocal())) {
             scriptWarningMessage(ScriptNetworkPolicy::refusalLine(origin, url, reason));
@@ -1567,7 +1570,10 @@ QVariantMap WasmScriptEngine::fetchScript(const QString& url, bool forceDownload
             reason = "a file of this machine outside the script's own place";
         }
     }
-    if (reason.isEmpty() && isClientSide() && !ScriptNetworkPolicy::decideBlocking(target, origin, reason, worldIsLocal())) {
+    // one of the app's own scripts (canonical, inside its scripts folder) is no request to the network
+    const bool appScript = target.isLocalFile() && ScriptNetworkPolicy::isAppScript(target);
+    if (reason.isEmpty() && networkRuled() && !appScript &&
+        !ScriptNetworkPolicy::decideBlocking(target, ruledOrigin(origin), reason, worldIsLocal())) {
         // the network rule for a script's own requests
     }
     if (!reason.isEmpty()) {
@@ -1578,6 +1584,10 @@ QVariantMap WasmScriptEngine::fetchScript(const QString& url, bool forceDownload
     auto scriptCache = DependencyManager::get<ScriptCache>();
     if (forceDownload) {
         scriptCache->deleteScript(url);
+    }
+    if (networkRuled() && !appScript) {
+        // the download goes to the address judged (each hop judged again)
+        scriptCache->ruleFetch(target, ruledOrigin(origin), worldIsLocal());
     }
     BatchLoader* loader = new BatchLoader(QList<QUrl>({ QUrl(url) }));
     connect(loader, &BatchLoader::finished, this, [this, url, result](const QMap<QUrl, QString>& data, const QMap<QUrl, QString>& status) {

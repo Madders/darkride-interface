@@ -14,6 +14,10 @@
 #include <QtCore/QTemporaryDir>
 #include <QtTest/QtTest>
 
+class WindowScriptingInterface : public QObject {
+    Q_OBJECT
+};
+
 class VerifiedSandboxTests : public QObject {
     Q_OBJECT
 private slots:
@@ -29,8 +33,12 @@ private slots:
     void testWorldRuleOnRequests();
     void testRefusalAtLoad();
     void testAppScriptsFolder();
+    void testAppScriptsForAWorldFromTheNetwork();
     void testResourcesNotForWorlds();
     void testInputAndPrivacyNotForWorlds();
+    void testSignalsNotForWorlds();
+    void testServerEnginesAreRuled();
+    void testWorldMappingDestinations();
 
 private:
     QTemporaryDir _dir;

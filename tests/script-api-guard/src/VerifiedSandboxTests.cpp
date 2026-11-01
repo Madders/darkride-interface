@@ -18,11 +18,17 @@
 
 #include "VerifiedSandboxTests.h"
 
+#include <QtNetwork/QHostInfo>
+#include <QtNetwork/QNetworkAccessManager>
+#include <QtNetwork/QNetworkReply>
+#include <QtCore/QEventLoop>
+#include <QtCore/QTimer>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 
 #include <AddressManager.h>
+#include <AudioScriptingInterface.h>
 #include <DependencyManager.h>
 #include <NodeList.h>
 #include <PathUtils.h>
@@ -31,6 +37,11 @@
 
 #include <HttpRequestObject.h>
 #include <ScriptApiPolicy.h>
+#include <controllers/impl/endpoints/InputEndpoint.h>
+#include <controllers/impl/endpoints/ActionEndpoint.h>
+#include <controllers/impl/RouteBuilderProxy.h>
+#include <controllers/UserInputMapper.h>
+#include <ScriptCaller.h>
 #include <controllers/ScriptingInterface.h>
 #include <ScriptNetworkPolicy.h>
 #include <WasmScriptEngine.h>
@@ -538,4 +549,117 @@ void VerifiedSandboxTests::testInputAndPrivacyNotForWorlds() {
     for (const char* member : { "newMapping", "enableMapping", "getValue", "getActionNames", "getPoseValue" }) {
         QVERIFY2(!ScriptApiPolicy::deniesMethod(controller, member), member);
     }
+}
+
+void VerifiedSandboxTests::testSignalsNotForWorlds() {
+    // the microphone's samples, and when the visitor speaks or clips (AudioScriptingInterface's, and Audio's on it)
+    const QMetaObject* audio = &AudioScriptingInterface::staticMetaObject;
+    for (const char* member : { "inputReceived", "noiseGateOpened", "noiseGateClosed" }) {
+        QVERIFY2(ScriptApiPolicy::deniesSignal(audio, member), member);
+    }
+    QVERIFY(!ScriptApiPolicy::deniesSignal(audio, "mutedByMixer"));
+    QVERIFY(!ScriptApiPolicy::deniesSignal(audio, "isStereoInputChanged"));
+    // the app's own classes are listed by name (the test does not link the app)
+    QVERIFY(ScriptApiPolicy::allowsClass(&WindowScriptingInterface::staticMetaObject));
+    for (const char* member : { "browseChanged", "browseDirChanged", "saveFileChanged", "assetsDirChanged", "promptTextChanged",
+                                "stillSnapshotTaken", "snapshot360Taken", "snapshotShared", "processingGifStarted",
+                                "processingGifCompleted" }) {
+        QVERIFY2(ScriptApiPolicy::deniesSignal(&WindowScriptingInterface::staticMetaObject, member), member);
+    }
+    QVERIFY(!ScriptApiPolicy::deniesSignal(&WindowScriptingInterface::staticMetaObject, "domainChanged"));
+    QVERIFY(!ScriptApiPolicy::deniesSignal(&WindowScriptingInterface::staticMetaObject, "geometryChanged"));
+    // a class a world doesn't get: none of its signals
+    QVERIFY(ScriptApiPolicy::deniesSignal(&QObject::staticMetaObject, "destroyed"));
+}
+
+void VerifiedSandboxTests::testServerEnginesAreRuled() {
+    // the entity script server's engine: always, its scripts counted as the network's whatever their address
+    WasmScriptEngine entityServer(ScriptEngine::ENTITY_SERVER_SCRIPT, NO_SCRIPT, "about:Entities 1");
+    QVERIFY(entityServer.networkRuled());
+    QVERIFY(!entityServer.worldIsLocal());
+    QCOMPARE(entityServer.ruledOrigin(QUrl("http://127.0.0.1:8797/a.js")), QUrl("about:entity-server"));
+    QCOMPARE(entityServer.ruledOrigin(QUrl("https://example.com/a.js")), QUrl("https://example.com/a.js"));
+    // an agent: by its assigned script, once; the operator's own (the domain server's upload, this machine, its
+    // network) keeps every address
+    WasmScriptEngine ownAgent(ScriptEngine::AGENT_SCRIPT, NO_SCRIPT, "http://127.0.0.1:8797/body.js");
+    QVERIFY(!ownAgent.networkRuled());
+    WasmScriptEngine uploadedAgent(ScriptEngine::AGENT_SCRIPT, NO_SCRIPT, "");
+    QVERIFY(!uploadedAgent.networkRuled());
+    WasmScriptEngine networkAgent(ScriptEngine::AGENT_SCRIPT, NO_SCRIPT, "https://example.com/agent.js");
+    QVERIFY(networkAgent.networkRuled());
+    QVERIFY(!networkAgent.worldIsLocal());
+    QCOMPARE(networkAgent.ruledOrigin(QUrl("http://127.0.0.1/included.js")), QUrl("about:agent"));
+    // a client's engines, as before
+    WasmScriptEngine client(ScriptEngine::CLIENT_SCRIPT, NO_SCRIPT, "https://example.invalid/client.js");
+    QVERIFY(client.networkRuled());
+    QCOMPARE(client.ruledOrigin(QUrl("http://127.0.0.1/x.js")), QUrl("http://127.0.0.1/x.js"));
+}
+
+void VerifiedSandboxTests::testAppScriptsForAWorldFromTheNetwork() {
+    // a world from the network may include and require the app's own libraries (the seats' utils.js): they are no
+    // request to the network; anything else of this machine stays refused, a path that climbs out of the folder too
+    setWorld(PUBLIC_WORLD);
+    EntitiesEngine engine;
+    engine.addEntityScript(NETWORK_SCRIPT, EntityScriptStatus::RUNNING);
+    Warnings warnings(engine);
+    const QString network = NETWORK_SCRIPT.toString();
+    const QString appLibrary = QUrl::fromLocalFile(_root + "/app/scripts/entities/helper.js").toString();
+    QCOMPARE(engine.resolveInclude("/~/entities/helper.js", network, network).value("url").toString(), appLibrary);
+    QCOMPARE(engine.resolveModule(appLibrary, QString(), network, network).value("url").toString(), appLibrary);
+    // (the fetch itself is shown in-engine: a fetch that downloads runs an event loop this fixture can't host)
+    // refused: a file outside the folder, and a path that only starts in it
+    const QString outside = QUrl::fromLocalFile(_root + "/outside/other.js").toString();
+    for (const QString& target : { outside, "file://" + _root + "/app/scripts/../../outside/other.js" }) {
+        QCOMPARE(engine.fetchScript(target, false, network).value("status").toString(), QString("Refused"));
+    }
+    QVERIFY(!engine.resolveInclude("/~/../../outside/other.js", network, network).contains("url"));
+    // a backslash spelling: where it is a separator it climbs and is refused; where it is a name it stays in the folder
+    const QVariantMap backslashed = engine.resolveInclude("/~/..\\..\\outside/other.js", network, network);
+    if (backslashed.contains("url")) {
+        QVERIFY2(ScriptNetworkPolicy::isAppScript(QUrl(backslashed.value("url").toString())),
+                 qPrintable(backslashed.value("url").toString()));
+    }
+    // a link in the folder that points out of it: refused (compared on canonical paths)
+    QVERIFY(QFile::link(_root + "/outside", _root + "/app/scripts/out-link"));
+    QVERIFY(!engine.resolveInclude("/~/out-link/other.js", network, network).contains("url"));
+    QCOMPARE(engine.fetchScript(QUrl::fromLocalFile(_root + "/app/scripts/out-link/other.js").toString(), false, network)
+                 .value("status").toString(), QString("Refused"));
+    QFile::remove(_root + "/app/scripts/out-link");
+}
+
+void VerifiedSandboxTests::testWorldMappingDestinations() {
+    // a world's mapping routes to its functions and the movement, vehicle, pose and face actions; never to the app's
+    // own UI actions or a device's endpoint (security finding #29)
+    using namespace controller;
+    auto action = [](Action a) {
+        return Endpoint::Pointer(std::make_shared<ActionEndpoint>(Input(UserInputMapper::ACTIONS_DEVICE, toInt(a), ChannelType::AXIS)));
+    };
+    for (Action a : { Action::TOGGLE_MUTE, Action::TOGGLE_PUSHTOTALK, Action::CONTEXT_MENU, Action::CYCLE_CAMERA,
+                      Action::TOGGLE_OVERLAY, Action::RETICLE_CLICK, Action::RETICLE_X, Action::RETICLE_Y, Action::RETICLE_LEFT,
+                      Action::RETICLE_DOWN, Action::UI_NAV_LATERAL, Action::UI_NAV_SELECT, Action::UI_NAV_BACK,
+                      Action::LEFT_HAND_CLICK, Action::RIGHT_HAND_CLICK }) {
+        QVERIFY2(!RouteBuilderProxy::worldMayRouteTo(action(a)), qPrintable(QString::number(toInt(a))));
+    }
+    for (Action a : { Action::TRANSLATE_Z, Action::YAW, Action::DELTA_YAW, Action::STEP_YAW, Action::LONGITUDINAL_FORWARD,
+                      Action::YAW_LEFT, Action::BOOM_IN, Action::SPRINT, Action::LEFT_HAND, Action::HEAD, Action::LEFT_ARM,
+                      Action::RIGHT_HAND_INDEX1, Action::TRACKED_OBJECT_03, Action::EYEBLINK_L, Action::HEAD_TURN,
+                      Action::ACTION1, Action::ACTION2, Action::SHIFT }) {
+        QVERIFY2(RouteBuilderProxy::worldMayRouteTo(action(a)), qPrintable(QString::number(toInt(a))));
+    }
+    // a device's endpoint (the visitor's own controller scripts read the Standard ones), and nothing
+    QVERIFY(!RouteBuilderProxy::worldMayRouteTo(std::make_shared<InputEndpoint>(Input(UserInputMapper::STANDARD_DEVICE, 0, ChannelType::BUTTON))));
+    QVERIFY(!RouteBuilderProxy::worldMayRouteTo(Endpoint::Pointer()));
+
+    // the guards' mark of a world's call: nested, and gone after
+    QVERIFY(!ScriptCaller::isWorld());
+    {
+        ScriptCaller::WorldScope world(true);
+        QVERIFY(ScriptCaller::isWorld());
+        {
+            ScriptCaller::WorldScope inner(false);
+            QVERIFY(ScriptCaller::isWorld());   // an inner call of a world's call is still the world's
+        }
+        QVERIFY(ScriptCaller::isWorld());
+    }
+    QVERIFY(!ScriptCaller::isWorld());
 }
