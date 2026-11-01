@@ -2,7 +2,7 @@
 # Copies the server programs out of a CMake build tree into one self-contained directory:
 #
 #   <dest>/domain-server, assignment-client, ice-server
-#   <dest>/resources/   the domain server's web interface and settings description
+#   <dest>/resources/   the domain server's web interface and settings description, and wasm/darkride-js.wasm
 #   <dest>/plugins/     the assignment client's codec plugins
 #   <dest>/lib/         the tree's own shared libraries (Qt and the rest come from the system)
 #
@@ -18,6 +18,9 @@ mkdir -p "$DEST/lib" "$DEST/plugins"
 cp "$BUILD_DIR/domain-server/domain-server" "$DEST/"
 cp -rL "$BUILD_DIR/domain-server/resources" "$DEST/"
 cp "$BUILD_DIR/assignment-client/assignment-client" "$DEST/"
+# The JavaScript guest, which the build puts beside the assignment client; without it scripts run on QtScript.
+mkdir -p "$DEST/resources/wasm"
+cp "$BUILD_DIR/assignment-client/resources/wasm/darkride-js.wasm" "$DEST/resources/wasm/"
 if [ -d "$BUILD_DIR/assignment-client/plugins" ]; then
     cp "$BUILD_DIR/assignment-client/plugins/"*.so "$DEST/plugins/" 2>/dev/null || true
 fi
