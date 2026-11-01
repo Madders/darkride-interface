@@ -97,7 +97,8 @@ jobs:
       - name: Native build
         timeout-minutes: 240
         run: |
-          docker run --rm -v "$WORK:/work" -v "$GITHUB_WORKSPACE:/src" "$BUILDER" \
+          # past errors, so a failed run shows them all (it still fails)
+          docker run --rm -e KEEP_GOING=1 -v "$WORK:/work" -v "$GITHUB_WORKSPACE:/src" "$BUILDER" \
             bash /src/android/docker/build-native.sh
 
       # Saved when vcpkg built something new, even if Darkride's build then failed, so the next run starts further on
