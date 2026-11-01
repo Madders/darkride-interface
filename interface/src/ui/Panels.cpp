@@ -316,22 +316,34 @@ void Panels::change(const QString& name, Change how) {
 }
 
 #if defined(Q_OS_ANDROID)
-void Panels::changeOnPhone(const QString& name, Change how) {
+PhonePanels* Panels::phone() {
     if (!_phone) {
         _phone = new PhonePanels(this);
         connect(_phone, &PhonePanels::openChanged, this, &Panels::setOpen);
     }
-    if (how == Change::Close || (how == Change::Toggle && _phone->isOpen(name))) {
-        _phone->close(name);
+    return _phone;
+}
+
+void Panels::changeOnPhone(const QString& name, Change how) {
+    if (how == Change::Close || (how == Change::Toggle && phone()->isOpen(name))) {
+        phone()->close(name);
+        return;
+    }
+    if (name == CHAT) {
+        phone()->openChat();
         return;
     }
     for (const auto& panel : QML_PANELS) {
         if (panel.name == name) {
-            _phone->openQml(name, QUrl(panel.source));
+            phone()->openQml(name, QUrl(panel.source));
             return;
         }
     }
     qCWarning(interfaceapp) << "There is no panel called" << name << "on the phone";
+}
+
+void Panels::openChatOnPhone(const QString& link) {
+    QMetaObject::invokeMethod(this, [this, link] { phone()->openChat(link); });
 }
 #endif
 

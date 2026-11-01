@@ -24,6 +24,7 @@
 #include <OffscreenUi.h>
 #include <VirtualPadManager.h>
 
+#include "AndroidChatPage.h"
 #include "InterfaceLogging.h"
 
 namespace {
@@ -31,6 +32,7 @@ namespace {
     const QUrl HOST_SOURCE { "qrc:///qml/darkride/PanelHost.qml" };
     // Android's dp: the screen's pixels per 1/160 inch
     const qreal DP_PER_INCH = 160.0;
+    const QString CHAT = "Chat";
 
     QPointer<PhonePanels> thePanels;
     // whether a QML panel shows, for the phone's back, which asks on Android's UI thread
@@ -49,7 +51,7 @@ PhonePanels::~PhonePanels() {
 }
 
 bool PhonePanels::isOpen(const QString& name) const {
-    return !name.isEmpty() && name == _showing;
+    return !name.isEmpty() && (name == _showing || name == _webShowing);
 }
 
 void PhonePanels::openQml(const QString& name, const QUrl& source) {
@@ -60,6 +62,11 @@ void PhonePanels::openQml(const QString& name, const QUrl& source) {
     } else {
         makeHost();
     }
+}
+
+void PhonePanels::openChat(const QString& link) {
+    AndroidChatPage::instance()->open(link);
+    setWebShowing(CHAT);
 }
 
 void PhonePanels::makeHost() {
@@ -103,6 +110,11 @@ void PhonePanels::showWanted() {
 }
 
 void PhonePanels::close(const QString& name) {
+    if (name == CHAT && _webShowing == CHAT) {
+        // closed once the app says so (webPanelClosed)
+        AndroidChatPage::instance()->close();
+        return;
+    }
     if (name == _wanted) {
         _wanted.clear();
     }
@@ -143,6 +155,32 @@ void PhonePanels::setShowing(const QString& name) {
     }
 }
 
+void PhonePanels::setWebShowing(const QString& name) {
+    QString was = _webShowing;
+    if (was == name) {
+        return;
+    }
+    _webShowing = name;
+    if (!was.isEmpty()) {
+        emit openChanged(was, false);
+    }
+    if (!name.isEmpty()) {
+        emit openChanged(name, true);
+    }
+}
+
+void PhonePanels::webPanelClosed(const QString& name) {
+    QMetaObject::invokeMethod(qApp, [name] {
+        if (name == CHAT) {
+            AndroidChatPage::instance()->closed();
+        }
+        // (one replaced by another has said so already)
+        if (thePanels && thePanels->_webShowing == name) {
+            thePanels->setWebShowing(QString());
+        }
+    }, Qt::QueuedConnection);
+}
+
 QQuickItem* PhonePanels::page(const QString& name) const {
     if (!_host || name.isEmpty() || _host->property("panelName").toString() != name) {
         return nullptr;
@@ -169,6 +207,11 @@ bool PhonePanels::back() {
         }
     }, Qt::QueuedConnection);
     return true;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_io_highfidelity_hifiinterface_web_WebPanel_nativeClosed(JNIEnv*, jclass, jstring name) {
+    PhonePanels::webPanelClosed(QAndroidJniObject(name).toString());
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

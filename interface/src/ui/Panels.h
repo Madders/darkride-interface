@@ -113,6 +113,11 @@ public:
     /// the bar's panels closed, floating at their first places (View > Layouts > Reset to Default)
     void resetDocks();
 
+#if defined(Q_OS_ANDROID)
+    /// the phone's chat, at a link inside it ("/dm/<username>": People's Message), over the panel showing
+    void openChatOnPhone(const QString& link);
+#endif
+
 signals:
     /**jsdoc
      * Triggered when a panel opens or closes, however that happened (its close box, View > Panels, a script).
@@ -132,6 +137,7 @@ private:
 #if defined(Q_OS_ANDROID)
     // the phone has no docks: one panel at a time, over the world (android/PhonePanels.h)
     void changeOnPhone(const QString& name, Change how);
+    PhonePanels* phone();   // made the first time it's asked for
     PhonePanels* _phone { nullptr };
 #endif
 

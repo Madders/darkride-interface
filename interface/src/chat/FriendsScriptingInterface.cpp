@@ -11,17 +11,30 @@
 
 #include <ChatService.h>
 #include <FriendsService.h>
+#if defined(Q_OS_ANDROID)
+#include <AccountManager.h>
+#endif
 
 #include "DiscoverabilityManager.h"
 #include "InterfaceLogging.h"
 #include "chat/ChatWindow.h"
+#if defined(Q_OS_ANDROID)
+#include "ui/Panels.h"
+#endif
 
 FriendsScriptingInterface::FriendsScriptingInterface() {
     auto friends = DependencyManager::get<FriendsService>();
     connect(friends.data(), &FriendsService::changed, this, &FriendsScriptingInterface::updateRequests);
     connect(friends.data(), &FriendsService::availabilityChanged, this, &FriendsScriptingInterface::updateAvailability);
+#if defined(Q_OS_ANDROID)
+    // the phone's chat is the web page, which signs itself in (android/AndroidChatPage.h): anyone signed in can message
+    auto account = DependencyManager::get<AccountManager>();
+    connect(account.data(), &AccountManager::loginComplete, this, &FriendsScriptingInterface::updateCanMessage);
+    connect(account.data(), &AccountManager::logoutComplete, this, &FriendsScriptingInterface::updateCanMessage);
+#else
     auto chat = DependencyManager::get<ChatService>();
     connect(chat.data(), &ChatService::stateChanged, this, &FriendsScriptingInterface::updateCanMessage);
+#endif
     updateRequests();
     updateAvailability();
     updateCanMessage();
@@ -56,7 +69,11 @@ void FriendsScriptingInterface::openDirectMessage(const QString& username) {
     if (username.trimmed().isEmpty()) {
         return;
     }
+#if defined(Q_OS_ANDROID)
+    DependencyManager::get<Panels>()->openChatOnPhone("/dm/" + username.trimmed());
+#else
     QMetaObject::invokeMethod(this, [username] { ChatWindow::openDirectMessage(username.trimmed()); });
+#endif
 }
 
 void FriendsScriptingInterface::refresh() {
@@ -96,8 +113,12 @@ void FriendsScriptingInterface::updateAvailability() {
 }
 
 void FriendsScriptingInterface::updateCanMessage() {
+#if defined(Q_OS_ANDROID)
+    bool canMessage = DependencyManager::get<AccountManager>()->isLoggedIn();
+#else
     auto state = DependencyManager::get<ChatService>()->state();
     bool canMessage = state == ChatService::State::Ready || state == ChatService::State::SigningIn;
+#endif
     {
         QMutexLocker lock(&_mutex);
         if (canMessage == _canMessage) {
