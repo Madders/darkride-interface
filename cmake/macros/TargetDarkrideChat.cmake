@@ -20,6 +20,11 @@
 #
 macro(TARGET_DARKRIDE_CHAT)
     set(DARKRIDE_CHAT_NATIVE_DIR "${CMAKE_SOURCE_DIR}/libraries/chat/native")
+    if (ANDROID AND NOT TARGET darkride_chat)
+        # the Android app has no Rust build yet: the C interface without the library, so chat shows as unavailable
+        add_library(darkride_chat STATIC "${CMAKE_SOURCE_DIR}/libraries/chat/android/darkride_chat_unavailable.c")
+        target_include_directories(darkride_chat PUBLIC "${DARKRIDE_CHAT_NATIVE_DIR}/ffi/include")
+    endif()
     if (NOT TARGET darkride_chat)
         # the toolchain the library was built and measured with, unless the builder chose one
         find_program(DARKRIDE_CHAT_RUSTUP rustup HINTS "$ENV{CARGO_HOME}/bin" "$ENV{HOME}/.cargo/bin")
