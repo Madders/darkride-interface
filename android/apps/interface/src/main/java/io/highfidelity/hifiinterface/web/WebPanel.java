@@ -130,6 +130,29 @@ public class WebPanel {
             "  });" +
             "})();";
 
+    // while the keyboard is up (the page's window a good deal shorter than it's been), the chat page's room header goes:
+    // held sideways it was a quarter of what the keyboard left, which was hard to read a message in to reply to. A
+    // constructed sheet, as the page's content security policy refuses a <style> of ours; switched on and off rather
+    // than a class on the page's own elements, which it may set itself
+    private static final String CHAT_KEYBOARD_SCRIPT =
+            "(function() {" +
+            "  if (window.top !== window || !document.adoptedStyleSheets) { return; }" +
+            "  var sheet = new CSSStyleSheet();" +
+            "  sheet.replaceSync('.room-header { display: none !important; }');" +
+            "  sheet.disabled = true;" +
+            "  document.adoptedStyleSheets = document.adoptedStyleSheets.concat([sheet]);" +
+            "  var tallest = 0;" +
+            "  function update() {" +
+            "    var height = window.visualViewport ? window.visualViewport.height : window.innerHeight;" +
+            "    tallest = Math.max(tallest, height);" +
+            "    sheet.disabled = height > tallest * 0.75;" +
+            "  }" +
+            "  window.addEventListener('orientationchange', function() { tallest = 0; });" +
+            "  window.addEventListener('resize', update);" +
+            "  if (window.visualViewport) { window.visualViewport.addEventListener('resize', update); }" +
+            "  update();" +
+            "})();";
+
     // the app's own pages (the radio's), served from its assets' html folder, and nothing else of them, at an https
     // address of their own
     private static final String APP_PAGES_ORIGIN = "https://" + WebViewAssetLoader.DEFAULT_DOMAIN;
@@ -301,6 +324,7 @@ public class WebPanel {
             Set<String> chatOrigin = Collections.singleton(originRule(mOrigin));
             WebViewCompat.addDocumentStartJavaScript(mWebView, CHAT_BRIDGE_SCRIPT, chatOrigin);
             WebViewCompat.addDocumentStartJavaScript(mWebView, CHAT_VIEWPORT_SCRIPT, chatOrigin);
+            WebViewCompat.addDocumentStartJavaScript(mWebView, CHAT_KEYBOARD_SCRIPT, chatOrigin);
             WebViewCompat.addWebMessageListener(mWebView, CHAT_BRIDGE_OBJECT, chatOrigin,
                     (view, message, sourceOrigin, isMainFrame, replyProxy) -> {
                         // the chat server's page itself: never a frame in it, a page it led to, or one gone
