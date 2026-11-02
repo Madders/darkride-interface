@@ -22,7 +22,6 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.core.graphics.Insets;
@@ -37,13 +36,13 @@ import androidx.webkit.WebViewFeature;
 
 import org.qtproject.qt5.android.QtNative;
 
+import java.lang.ref.WeakReference;
 import java.util.Collections;
 import java.util.Set;
 
 import io.highfidelity.hifiinterface.R;
 import io.highfidelity.hifiinterface.theme.Theme;
 import io.highfidelity.hifiinterface.theme.ThemeManager;
-import io.highfidelity.hifiinterface.theme.ThemeStyler;
 
 /**
  * A web page full-screen over the world, with a close box: Darkride chat's web client, and the radio's page. It's a
@@ -109,6 +108,9 @@ public class WebPanel {
 
     // the one showing (UI thread)
     private static WebPanel sShowing;
+    // the screen in front that isn't the world's (the Places screen, MainActivity), which the panels open over; the
+    // world's activity when there is none (set on the UI thread, read on the engine's)
+    private static volatile WeakReference<Activity> sHost;
 
     private final Activity mActivity;
     private final String mName;
@@ -121,9 +123,28 @@ public class WebPanel {
     private boolean mClosed;
     private boolean mReplaced;               // by another of the same name: the engine has the new one already
 
+    /** From a screen of the app's own as it comes to the front: the panels open over it until it leaves. */
+    public static void setHost(Activity activity) {
+        sHost = new WeakReference<>(activity);
+    }
+
+    /** From that screen as it goes from the front. */
+    public static void leaveHost(Activity activity) {
+        WeakReference<Activity> host = sHost;
+        if (host != null && host.get() == activity) {
+            sHost = null;
+        }
+    }
+
+    private static Activity host() {
+        WeakReference<Activity> host = sHost;
+        Activity activity = host != null ? host.get() : null;
+        return activity != null && !activity.isFinishing() ? activity : QtNative.activity();
+    }
+
     /** From the engine: chat's page at an address the engine made, with its bridge code, on the chat server's origin. */
     public static void openChat(String title, String url, String origin) {
-        Activity activity = QtNative.activity();
+        Activity activity = host();
         if (activity == null) {
             nativeClosed(CHAT);
             return;
@@ -142,7 +163,7 @@ public class WebPanel {
 
     /** From the engine: one of the app's own pages, by its path in the assets' html folder (the radio's). */
     public static void openAppPage(String name, String title, String path) {
-        Activity activity = QtNative.activity();
+        Activity activity = host();
         if (activity == null) {
             nativeClosed(name);
             return;
@@ -153,7 +174,7 @@ public class WebPanel {
 
     /** From the engine: closes the panel if it's the one showing. */
     public static void close(String name) {
-        Activity activity = QtNative.activity();
+        Activity activity = host();
         if (activity == null) {
             return;
         }
@@ -166,7 +187,7 @@ public class WebPanel {
 
     /** From the engine: a message for the chat page (EventBridge.scriptEventReceived's callbacks), as JSON text. */
     public static void sendToChat(String json) {
-        Activity activity = QtNative.activity();
+        Activity activity = host();
         if (activity == null) {
             return;
         }
@@ -208,31 +229,25 @@ public class WebPanel {
         Theme theme = ThemeManager.get(mActivity);
         float density = mActivity.getResources().getDisplayMetrics().density;
 
+        // the page, and beside it on the right a narrow rail with the close box: the phone is held sideways, so a
+        // header across the top took a sixth of the page's height (the title is the close box's description)
         LinearLayout root = new LinearLayout(mActivity);
-        root.setOrientation(LinearLayout.VERTICAL);
+        root.setOrientation(LinearLayout.HORIZONTAL);
         root.setBackgroundColor(theme.surface);
 
-        // as the Settings panel's header (InterfaceActivity)
-        LinearLayout header = new LinearLayout(mActivity);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        int padding = (int) (16 * density);
-        header.setPadding(padding, padding / 2, padding / 2, padding / 2);
-        TextView title = new TextView(mActivity);
-        title.setText(titleText);
-        title.setTextColor(theme.text);
-        title.setTextSize(20);
-        ThemeStyler.styleDisplay(title, theme);
-        header.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        LinearLayout rail = new LinearLayout(mActivity);
+        rail.setOrientation(LinearLayout.VERTICAL);
+        rail.setGravity(Gravity.CENTER_HORIZONTAL);
+        int padding = (int) (4 * density);
+        rail.setPadding(padding, padding * 2, padding, padding);
         ImageButton close = new ImageButton(mActivity);
         close.setImageResource(R.drawable.ic_close);
         close.setScaleType(ImageButton.ScaleType.FIT_CENTER);
         close.setBackground(null);
-        close.setContentDescription(mActivity.getString(R.string.cancel));
+        close.setContentDescription(mActivity.getString(R.string.cancel) + " " + titleText);
         close.setOnClickListener(view -> mDialog.dismiss());
-        int closeSize = (int) (40 * density);
-        header.addView(close, new LinearLayout.LayoutParams(closeSize, closeSize));
-        root.addView(header);
+        int closeSize = (int) (36 * density);
+        rail.addView(close, new LinearLayout.LayoutParams(closeSize, closeSize));
 
         mWebView = new WebView(mActivity);
         WebSettings settings = mWebView.getSettings();
@@ -267,7 +282,9 @@ public class WebPanel {
                         nativeChatMessage(data);
                     });
         }
-        root.addView(mWebView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        root.addView(mWebView, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1));
+        root.addView(rail, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
 
         mDialog = new Dialog(mActivity, android.R.style.Theme_DeviceDefault_NoActionBar);
         mDialog.setContentView(root);
@@ -282,6 +299,9 @@ public class WebPanel {
             WindowInsetsControllerCompat bars = WindowCompat.getInsetsController(window, window.getDecorView());
             bars.setAppearanceLightStatusBars(theme.isLight());
             bars.setAppearanceLightNavigationBars(theme.isLight());
+            // full screen as the world is: the system bars come back for a moment with a swipe from the edge
+            bars.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            bars.hide(WindowInsetsCompat.Type.systemBars());
         }
         ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
             Insets room = insets.getInsets(WindowInsetsCompat.Type.systemBars() |

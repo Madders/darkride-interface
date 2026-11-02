@@ -42,6 +42,7 @@ import io.highfidelity.hifiinterface.theme.Theme;
 import io.highfidelity.hifiinterface.theme.ThemeManager;
 import io.highfidelity.hifiinterface.theme.ThemeStyler;
 import io.highfidelity.hifiinterface.theme.ThemeWalker;
+import io.highfidelity.hifiinterface.web.WebPanel;
 
 public class MainActivity extends AppCompatActivity implements NavigationView.OnNavigationItemSelectedListener,
                                                                 HomeFragment.OnHomeInteractionListener,
@@ -59,6 +60,8 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
     public native void logout();
     public native void setUsernameChangedListener(Activity usernameChangedListener);
     public native String getUsername();
+    // Darkride chat over this screen, outside any world (interface/src/android/PhonePanels.cpp)
+    private native void nativeOpenChat();
 
     private DrawerLayout mDrawerLayout;
     private Toolbar mToolbar;
@@ -350,6 +353,9 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
             case R.id.action_people:
                 loadPeopleFragment();
                 return true;
+            case R.id.action_chat:
+                nativeOpenChat();
+                return false;   // a panel over this screen: the menu's selection stays where it was
             case R.id.action_profile:
                 loadProfileFragment();
                 break;
@@ -365,6 +371,19 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         super.onStart();
         setUsernameChangedListener(this);
         updateLoginMenu();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // the engine's web panels (chat) open over this screen while it's in front
+        WebPanel.setHost(this);
+    }
+
+    @Override
+    protected void onPause() {
+        WebPanel.leaveHost(this);
+        super.onPause();
     }
 
     @Override

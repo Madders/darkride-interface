@@ -26,10 +26,12 @@
 
 #include "AndroidChatPage.h"
 #include "InterfaceLogging.h"
+#include "ui/Panels.h"
 
 namespace {
-    // the frame's +android_interface file: there is none for the desktop
-    const QUrl HOST_SOURCE { "qrc:///qml/darkride/PanelHost.qml" };
+    // the frame's +android_interface file, by its own path: there is none for the desktop, and loaded by the plain
+    // name through the file selector its "../panel" import was looked for beside qml/darkride, not inside it
+    const QUrl HOST_SOURCE { "qrc:///qml/darkride/+android_interface/PanelHost.qml" };
     // Android's dp: the screen's pixels per 1/160 inch
     const qreal DP_PER_INCH = 160.0;
     const QString CHAT = "Chat";
@@ -234,6 +236,14 @@ Java_io_highfidelity_hifiinterface_web_WebPanel_nativeClosed(JNIEnv*, jclass, js
 extern "C" JNIEXPORT jboolean JNICALL
 Java_io_highfidelity_hifiinterface_InterfaceActivity_nativeClosePanel(JNIEnv*, jobject) {
     return PhonePanels::back();
+}
+
+// the Places screen's Chat (MainActivity): chat over that screen, outside any world, as the Panels card opens it
+extern "C" JNIEXPORT void JNICALL
+Java_io_highfidelity_hifiinterface_MainActivity_nativeOpenChat(JNIEnv*, jobject) {
+    QMetaObject::invokeMethod(qApp, [] {
+        DependencyManager::get<Panels>()->open(CHAT);
+    }, Qt::QueuedConnection);
 }
 
 #endif

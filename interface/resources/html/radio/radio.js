@@ -31,6 +31,8 @@
     var FRAME_MS = 1000 / 30;
     var MAIN_HEIGHT = 116;                       // Webamp's main window
     var PLAYLIST_HEIGHT = 116;                   // its playlist at its smallest; it grows in steps of 29
+    var WINDOW_WIDTH = 275;                      // each window's width, the playlist's at its narrowest
+    var PLAYLIST_WIDTH_STEP = 25;                // it widens in steps of 25
     var PLAYLIST_STEP = 29;
     var KEY = "darkride.radio.";
     // the Radio Browser directory (security's rules, 10-31): these hosts only, tried in order (the round-robin name,
@@ -527,18 +529,54 @@
     // listed, not loaded: nothing connects to a station until it's played (Webamp's initialTracks would load the first)
     webamp.appendTracks(stationTracks.concat(ownStations.map(ownTrack)));
 
-    // the playlist as tall as the panel allows, under the main window
+    // the playlist as tall as the panel allows, under the main window; in a panel wide enough for both side by side (a
+    // phone held sideways), beside it instead, as wide and tall as the rest of the panel
     function layout() {
-        var room = window.innerHeight - 16 - MAIN_HEIGHT - PLAYLIST_HEIGHT;
+        var wide = window.innerWidth - 16 >= 2 * WINDOW_WIDTH;
+        var room = window.innerHeight - 16 - PLAYLIST_HEIGHT - (wide ? 0 : MAIN_HEIGHT);
         var steps = Math.max(0, Math.floor(room / PLAYLIST_STEP));
-        playerElement.style.height = MAIN_HEIGHT + PLAYLIST_HEIGHT + steps * PLAYLIST_STEP + "px";
-        webamp.store.dispatch({ type: "WINDOW_SIZE_CHANGED", windowId: "playlist", size: [0, steps] });
+        var playlistHeight = PLAYLIST_HEIGHT + steps * PLAYLIST_STEP;
+        var across = wide ? Math.floor((window.innerWidth - 16 - 2 * WINDOW_WIDTH) / PLAYLIST_WIDTH_STEP) : 0;
+        playerElement.style.width = (wide ? 2 * WINDOW_WIDTH + across * PLAYLIST_WIDTH_STEP : WINDOW_WIDTH) + "px";
+        playerElement.style.height = (wide ? playlistHeight : MAIN_HEIGHT + playlistHeight) + "px";
+        webamp.store.dispatch({ type: "WINDOW_SIZE_CHANGED", windowId: "playlist", size: [across, steps] });
         webamp.store.dispatch({
             type: "UPDATE_WINDOW_POSITIONS",
-            positions: { main: { x: 0, y: 0 }, playlist: { x: 0, y: MAIN_HEIGHT } },
+            positions: { main: { x: 0, y: 0 }, playlist: wide ? { x: WINDOW_WIDTH, y: 0 } : { x: 0, y: MAIN_HEIGHT } },
             absolute: false,
         });
     }
+
+    // On a touch screen one tap on a station plays it (a double tap is Webamp's way, which a phone rarely sends): the
+    // tap's own double click, made here, is let through and a real one isn't, so a station doesn't start twice
+    if (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) {
+        document.addEventListener("click", function (event) {
+            var row = event.target.closest && event.target.closest("#webamp .playlist-tracks .track-cell");
+            if (row) {
+                var tap = new MouseEvent("dblclick", { bubbles: true, cancelable: true, view: window });
+                tap.darkrideTap = true;
+                row.dispatchEvent(tap);
+            }
+        }, true);
+        document.addEventListener("dblclick", function (event) {
+            if (!event.darkrideTap && event.target.closest && event.target.closest("#webamp .playlist-tracks")) {
+                event.stopPropagation();
+            }
+        }, true);
+    }
+    // Play with no station loaded plays the one picked in the list, or the first (Webamp's own Play does nothing then)
+    document.addEventListener("click", function (event) {
+        if (!(event.target.closest && event.target.closest("#webamp #play"))) {
+            return;
+        }
+        var playlist = webamp.store.getState().playlist;
+        if (playlist.currentTrack != null || playlist.trackOrder.length === 0) {
+            return;
+        }
+        var picked = playlist.trackOrder.find(function (id) { return playlist.selectedTracks.indexOf(id) >= 0; });
+        event.stopPropagation();
+        webamp.store.dispatch({ type: "PLAY_TRACK", id: picked != null ? picked : playlist.trackOrder[0] });
+    }, true);
     var layoutTimer = null;
     function layoutSoon() {
         clearTimeout(layoutTimer);
