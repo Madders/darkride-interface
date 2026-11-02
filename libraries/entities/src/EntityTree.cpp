@@ -10,6 +10,7 @@
 //
 
 #include "EntityTree.h"
+#include "EntityContentAddresses.h"
 #include <QtCore/QDateTime>
 #include <QtCore/QQueue>
 
@@ -36,6 +37,7 @@
 #include "EntityDynamicFactoryInterface.h"
 #include "WebEntityItem.h"
 #include "ScriptAddressCheck.h"
+#include "ScriptCaller.h"
 
 static const quint64 DELETED_ENTITIES_EXTRA_USECS_TO_CONSIDER = USECS_PER_MSEC * 50;
 const float EntityTree::DEFAULT_MAX_TMP_ENTITY_LIFETIME = 60 * 60; // 1 hour
@@ -78,6 +80,28 @@ OctreeElementPointer EntityTree::createNewElement(unsigned char* octalCode) {
     return std::static_pointer_cast<OctreeElement>(newElement);
 }
 
+QVector<EntityItemID> EntityTree::getWorldsAvatarEntityIDs() const {
+    QVector<EntityItemID> ids;
+    QReadLocker locker(&_entityMapLock);
+    for (const auto& entity : _entityMap) {
+        if (entity && entity->isMyAvatarEntity() && entity->getLocalOwner() == entity::LocalOwner::WORLD) {
+            ids.push_back(entity->getEntityItemID());
+        }
+    }
+    return ids;
+}
+
+QVector<EntityItemID> EntityTree::getKeptEntityIDsWithScripts() const {
+    QVector<EntityItemID> ids;
+    QReadLocker locker(&_entityMapLock);
+    for (const auto& entity : _entityMap) {
+        if (entity && entity->isKeptOnWorldChange() && !entity->getScript().isEmpty()) {
+            ids.push_back(entity->getEntityItemID());
+        }
+    }
+    return ids;
+}
+
 void EntityTree::eraseDomainAndNonOwnedEntities() {
     emit clearingEntities();
 
@@ -97,7 +121,7 @@ void EntityTree::eraseDomainAndNonOwnedEntities() {
                 element->cleanupDomainAndNonOwnedEntities();
             }
             if (!getIsServer()) {
-                if (entity->isLocalEntity() || entity->isMyAvatarEntity()) {
+                if (entity->isKeptOnWorldChange()) {
                     savedEntities[entity->getEntityItemID()] = entity;
                 } else {
                     int32_t spaceIndex = entity->getSpaceIndex();
@@ -120,7 +144,7 @@ void EntityTree::eraseDomainAndNonOwnedEntities() {
 
         foreach (EntityItemWeakPointer entityItem, _needsParentFixup) {
             auto entity = entityItem.lock();
-            if (entity && (entity->isLocalEntity() || entity->isMyAvatarEntity())) {
+            if (entity && entity->isKeptOnWorldChange()) {
                 needParentFixup.push_back(entityItem);
             }
         }
@@ -186,6 +210,36 @@ void EntityTree::readBitstreamToTree(const unsigned char* bitstream,
     }
 }
 
+void EntityTree::setRefusesContentFromThisComputer(bool refuses) {
+    if (_refusesContentFromThisComputer.exchange(refuses) != refuses) {
+        QMutexLocker locker(&_refusedAddressesWarnedLock);
+        _refusedAddressesWarned.clear();
+    }
+}
+
+void EntityTree::warnRefusedAddresses(const EntityItemID& entityID, const QStringList& propertyNames) {
+    if (propertyNames.isEmpty()) {
+        return;
+    }
+    _refusedAddressesCount += propertyNames.size();
+    QStringList fresh;
+    {
+        QMutexLocker locker(&_refusedAddressesWarnedLock);
+        const QString id = entityID.toString();
+        for (const QString& name : propertyNames) {
+            const QString key = id + "/" + name;
+            if (!_refusedAddressesWarned.contains(key)) {
+                _refusedAddressesWarned.insert(key);
+                fresh << name;
+            }
+        }
+    }
+    if (!fresh.isEmpty()) {
+        qCWarning(entities) << "Entity" << entityID << ":" << fresh.join(", ")
+                            << "name a file on the builder's computer, not on this one; not loaded";
+    }
+}
+
 int EntityTree::readEntityDataFromBuffer(const unsigned char* data, int bytesLeftToRead, ReadBitstreamToTreeParams& args) {
     const unsigned char* dataAt = data;
     int bytesRead = 0;
@@ -193,6 +247,8 @@ int EntityTree::readEntityDataFromBuffer(const unsigned char* data, int bytesLef
     int expectedBytesPerEntity = EntityItem::expectedBytes();
 
     args.elementsPerPacket++;
+    args.refusesContentFromThisComputer = _refusesContentFromThisComputer.load();
+    args.refusedAddresses.clear();
 
     if (bytesLeftToRead >= (int)sizeof(numberOfEntities)) {
         // read our entities in....
@@ -216,6 +272,10 @@ int EntityTree::readEntityDataFromBuffer(const unsigned char* data, int bytesLef
                     quint64 entityScriptTimestampBefore = entity->getScriptTimestamp();
 
                     bytesForThisEntity = entity->readEntityDataFromBuffer(dataAt, bytesLeftToRead, args);
+                    if (!args.refusedAddresses.isEmpty()) {
+                        warnRefusedAddresses(entityItemID, args.refusedAddresses);
+                        args.refusedAddresses.clear();
+                    }
                     if (args.readFailed) {
                         // a field claimed more than the packet holds: the fields read whole before it stand, the
                         // rest of the packet is abandoned (its cursor can't be trusted)
@@ -253,6 +313,10 @@ int EntityTree::readEntityDataFromBuffer(const unsigned char* data, int bytesLef
                     entity = EntityTypes::constructEntityItem(dataAt, bytesLeftToRead);
                     if (entity) {
                         bytesForThisEntity = entity->readEntityDataFromBuffer(dataAt, bytesLeftToRead, args);
+                        if (!args.refusedAddresses.isEmpty()) {
+                            warnRefusedAddresses(entityItemID, args.refusedAddresses);
+                            args.refusedAddresses.clear();
+                        }
                         if (args.readFailed) {
                             // a new entity whose data passes the end of its packet is not added, and the rest of
                             // the packet is abandoned
@@ -453,6 +517,12 @@ bool EntityTree::updateEntity(EntityItemPointer entity, const EntityItemProperti
                     }
                     // else: We assume the sender really did believe it was the simulation owner when it sent
                 } else if (submittedID == senderID) {
+                    // Only the physics server simulates at its priority: a bid at or above it from any other node is
+                    // taken at one below, so the server's cars and vehicles stay its own (vehicle master plan entry 16).
+                    if (properties.getSimulationOwner().getPriority() >= SERVER_SIMULATION_PRIORITY &&
+                            (!senderNode || senderNode->getType() != NodeType::PhysicsServer)) {
+                        properties.setSimulationPriority(SERVER_SIMULATION_PRIORITY - 1);
+                    }
                     // the sender is trying to take or continue ownership
                     if (entity->getSimulatorID().isNull()) {
                         // the sender is taking ownership
@@ -478,8 +548,10 @@ bool EntityTree::updateEntity(EntityItemPointer entity, const EntityItemProperti
                         // (3) VOLUNTEER priority is promoted to RECRUIT
                         uint8_t oldPriority = entity->getSimulationPriority();
                         uint8_t newPriority = properties.getSimulationOwner().getPriority();
+                        // an equal bid wins once the lockout the entity keeps for its current owner has run out
+                        // (SimulationOwner::updateExpiry at each change of owner)
                         if (newPriority > oldPriority ||
-                             (newPriority == oldPriority && properties.getSimulationOwner().hasExpired())) {
+                             (newPriority == oldPriority && entity->getSimulationOwner().hasExpired())) {
                             simulationBlocked = false;
                             if (properties.getSimulationOwner().getPriority() == VOLUNTEER_SIMULATION_PRIORITY) {
                                 properties.setSimulationPriority(RECRUIT_SIMULATION_PRIORITY);
@@ -732,6 +804,12 @@ EntityItemPointer EntityTree::addEntity(const EntityItemID& entityID, const Enti
         return nullptr;
     }
 
+    if (ScriptCaller::isRetired()) {
+        // a world that was left makes nothing more, whichever way it asks (security #32)
+        ScriptCaller::logRetiredRefusal("Entities", "addEntity");
+        return nullptr;
+    }
+
     // construct the instance of the entity
     EntityTypes::EntityType type = props.getType();
     EntityItemPointer result = EntityTypes::constructEntityItem(type, entityID, props);
@@ -739,6 +817,15 @@ EntityItemPointer EntityTree::addEntity(const EntityItemID& entityID, const Enti
     if (result) {
         if (recordCreationTime) {
             result->recordCreationTime();
+        }
+        if (result->isLocalEntity()) {
+            // who made it, before anything else can see it: a world's script (the guards mark its calls on its own
+            // thread) or the visitor's side (the app, the visitor's own scripts)
+            result->setLocalOwner(ScriptCaller::isWorld() ? entity::LocalOwner::WORLD : entity::LocalOwner::VISITOR);
+        } else if (result->isMyAvatarEntity() && ScriptCaller::isWorld()) {
+            // an avatar entity a world's script made (a hat the world hands out) is the world's: it may change it
+            // while the visitor is there, and it is never saved with the visitor's avatar (MyAvatar)
+            result->setLocalOwner(entity::LocalOwner::WORLD);
         }
         // Recurse the tree and store the entity in the correct tree element
         AddEntityOperator theOperator(getThisPointer(), result);
@@ -3217,6 +3304,12 @@ bool EntityTree::readFromMap(QVariantMap& map, const bool isImport) {
                 quint64 created = QDateTime::fromString(entityMap["created"].toString().trimmed(), Qt::ISODate).toMSecsSinceEpoch() * 1000;
                 properties.setCreated(created);
             }
+        }
+
+        // a world file from a link, or an import into a world that isn't local: an address naming a file on this
+        // computer is emptied as it would be from the wire
+        if (_refusesContentFromThisComputer.load()) {
+            warnRefusedAddresses(entityItemID, EntityContentAddresses::clearThisComputer(properties));
         }
 
         EntityItemPointer entity = addEntity(entityItemID, properties, isImport);

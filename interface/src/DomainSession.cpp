@@ -21,6 +21,7 @@
 #include <QProcessEnvironment>
 #include <AccountManager.h>
 #include <AddressManager.h>
+#include <ContentAddresses.h>
 #include <AssetClient.h>
 #include <EntityNodeData.h>
 #include <OctreeSceneStats.h>
@@ -161,6 +162,13 @@ std::map<QString, QString> DomainSession::prepareServerlessDomainContents(QUrl d
     EntityTreePointer tmpTree(new EntityTree());
     tmpTree->setIsServerlessMode(true);
     tmpTree->createRootElement();
+    // a world file from a link (http, atp) isn't local: an address in it that names a file on this computer is
+    // emptied as it is read; a world file on this computer is the visitor's own and keeps every address
+    const bool ownFile = ContentAddresses::isOnThisComputer(domainURL.toString());
+    tmpTree->setRefusesContentFromThisComputer(!ownFile);
+    qCDebug(interfaceapp) << "Serverless world" << domainURL.toString(QUrl::RemoveQuery)
+                          << ": content addresses naming a file on this computer"
+                          << (ownFile ? "allowed (the world is a file here)" : "refused (the world is a link)");
     auto myAvatar = getMyAvatar();
     tmpTree->setMyAvatar(myAvatar);
     bool success = tmpTree->readFromByteArray(domainURL.toString(), data);
@@ -386,7 +394,19 @@ void DomainSession::queryOctree(
         static constexpr float MIN_LOD_ADJUST = -20.0f;
         _octreeQuery.setBoundaryLevelAdjust(MIN_LOD_ADJUST);
     } else {
-        _octreeQuery.setConicalViews(qApp->getViewState().conicalViews());
+        ConicalViewFrustums views = qApp->getViewState().conicalViews();
+        // the load zone (a Zone's culling mode "Cull Outside, Don't Load", ZONE-CULLING.md): while the avatar stands in
+        // it, each view reaches no further than the zone's farthest corner, so the entity server sends nothing beyond
+        // the zone from then on; what the client already holds stays (hidden by the culling), and leaving the zone
+        // widens the view again. Never below the server's 3 m keyhole, and never an empty view list.
+        const auto& zoneCull = DependencyManager::get<EntityTreeRenderer>()->getZoneCullState();
+        if (zoneCull.dontLoad) {
+            static const float LOAD_ZONE_MIN_REACH = 3.0f;
+            for (auto& view : views) {
+                view.clampFarClip(std::max(zoneCull.reachFrom(view.getPosition()), LOAD_ZONE_MIN_REACH));
+            }
+        }
+        _octreeQuery.setConicalViews(views);
         auto lodManager = DependencyManager::get<LODManager>();
         _octreeQuery.setOctreeSizeScale(lodManager->getOctreeSizeScale());
         _octreeQuery.setBoundaryLevelAdjust(lodManager->getBoundaryLevelAdjust());
@@ -428,7 +448,8 @@ void DomainSession::queryOctree(
         static const bool QUERY_DIAG = QProcessEnvironment::systemEnvironment().contains("TIVOLI_QUERY_DIAG");
         if (QUERY_DIAG && serverType == NodeType::EntityServer) {
             QString views;
-            for (const auto& view : qApp->getViewState().conicalViews()) {
+            const ConicalViewFrustums sentViews = _octreeQuery.getConicalViews();  // as sent: the load zone may have narrowed them
+            for (const auto& view : sentViews) {
                 const auto& p = view.getPosition();
                 const auto& d = view.getDirection();
                 views += QString(" [pos %1 %2 %3 dir %4 %5 %6 angle %7 far %8 radius %9]")
@@ -437,7 +458,7 @@ void DomainSession::queryOctree(
                     .arg(glm::degrees(view.getAngle()), 0, 'f', 1).arg(view.getFarClip(), 0, 'f', 0).arg(view.getRadius(), 0, 'f', 2);
             }
             qCDebug(interfaceapp).noquote() << "entity query:" << (isModifiedQuery ? "initial-sphere" : "views")
-                << "views" << qApp->getViewState().conicalViews().size() << views
+                << "views" << sentViews.size() << views
                 << "lodAdjust" << _octreeQuery.getBoundaryLevelAdjust() << "sizeScale" << _octreeQuery.getOctreeSizeScale()
                 << "pps" << _octreeQuery.getMaxQueryPacketsPerSecond() << "bytes" << packetSize;
         }

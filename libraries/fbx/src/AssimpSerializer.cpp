@@ -17,6 +17,7 @@
 #include <BlendshapeConstants.h>
 #include <ResourceManager.h>
 #include <PathUtils.h>
+#include <hfm/HFMModelMath.h>
 #include <hfm/ModelFormatLogging.h>
 
 #include <assimp/Importer.hpp>
@@ -112,6 +113,13 @@ MediaType AssimpSerializer::getMediaType() const {
         // qDebug(modelformat) << "Available format:" << ext; 
         mediaType.extensions.push_back(ext.toStdString());
         // mediaType.webMediaTypes.push_back("");
+    }
+    // a VRM avatar is a binary glTF: listed here when the Assimp built here reads .glb but does not name .vrm itself, and
+    // read as a .glb (read)
+    auto& extensions = mediaType.extensions;
+    if (std::find(extensions.begin(), extensions.end(), "glb") != extensions.end() &&
+        std::find(extensions.begin(), extensions.end(), "vrm") == extensions.end()) {
+        extensions.push_back("vrm");
     }
 
     return mediaType;
@@ -692,6 +700,18 @@ void AssimpSerializer::processMeshes(const hifi::VariantHash& mapping) {
                 }
             }
         }
+
+        // the reader's last check, the one the FBX and OBJ readers make (hfm::sanitizeMesh): the passes after a reader
+        // index the vertices with the parts' and the blendshapes' indices unchecked, so a face naming a vertex the
+        // mesh does not have, a per-vertex list of the wrong length or a blendshape that does not hold together is
+        // left out here, with its blendshape slot kept (the channels are numbered by it)
+        const hfm::MeshSanitizeResult sanitized = hfm::sanitizeMesh(*meshPtr);
+        if (sanitized.changed()) {
+            qCWarning(modelformat) << "AssimpSerializer::read" << url.fileName() << "mesh" << meshIndex << ":"
+                                   << sanitized.facesRemoved << "faces with a vertex past the mesh's" << meshPtr->vertices.size()
+                                   << "or cut short left out," << sanitized.listsCleared << "lists of the wrong length cleared,"
+                                   << sanitized.blendshapesCleared << "blendshapes emptied";
+        }
     }
 
     // the own blend shapes' starting weights
@@ -1228,6 +1248,11 @@ HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi
 
     // what follows the last dot, as the format registry chose this reader by: Blender's Tree.001.glb is a "glb"
     ext = QFileInfo(url.path()).suffix();
+    // a VRM is a binary glTF (glTF 2.0 with VRM's own extensions, which the reader leaves aside): it is read as a .glb,
+    // with glTF's materials and extras
+    if (ext.compare("vrm", Qt::CaseInsensitive) == 0) {
+        ext = "glb";
+    }
 
     // qCDebug(modelformat) << "AssimpSerializer::read url"<<url<<ext;
 

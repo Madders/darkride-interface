@@ -23,6 +23,8 @@
 #ifndef hifi_EntityTreeRenderer_h
 #define hifi_EntityTreeRenderer_h
 
+#include <atomic>
+
 #include <QtCore/QSet>
 #include <QtCore/QStack>
 #include <QtGui/QMouseEvent>
@@ -66,13 +68,8 @@ class EntityTreeRenderer : public OctreeProcessor, public Dependency {
     Q_OBJECT
 public:
 
-    QVector<QUuid> _zoneCullSkipList; // the final ZCL to be used
-    QList<EntityItemID> _zoneCullingStack;
-    QList<EntityItemID> _prevZoneCullingStack;
     QList<EntityItemID> _currentlySelectedEntities; // selected by edit
-    
-    bool _zoneCullingActive = false;
-    bool _updateStaticEntities = false;
+
     bool _isEditMode = false;
     bool _ghostingAllowed = true;
     bool _disableWebEntities = false;
@@ -82,7 +79,6 @@ public:
     bool isAnythingSelected() { return !_currentlySelectedEntities.isEmpty(); }
     void clearEntitySelections() { _currentlySelectedEntities.clear(); }
 
-    void updateStaticEntities(bool value) { _updateStaticEntities = value; }
     void setSceneIsReady(bool value) { _sceneIsReady = value; }
     bool getSceneIsReady() { return _sceneIsReady; }
 
@@ -90,16 +86,35 @@ public:
     bool getDisableWebEntities() { return _disableWebEntities; }
     
     void setIsEditMode(bool modeState) { _isEditMode = modeState; }
-    // while suspended nothing is zone-culled (build mode shows everything); every renderable looks again when
-    // this changes, so the culled come back, and are culled again once it ends
+    // while suspended nothing is zone-culled (build mode shows everything); the decision is made again when this
+    // changes, so the culled come back, and are culled again once it ends
     void setZoneCullingSuspended(bool suspended);
     bool getGhostingAllowed() { return _ghostingAllowed; }
 
-    ReadWriteLockable _getZoneCullSkiplistGuard;
-    QVector<QUuid> getZoneCullSkiplist();
-    void evaluateZoneCullingStack();  // We'll look at all the culling masks for each zone
-    bool getZoneCullStatus() { return _zoneCullingActive; }
-    void updateZoneContentsLists(EntityItemID& zoneItem, bool hasCompoundShape);
+    // Zone culling (ZONE-CULLING.md; master plan entry 13). While the avatar stands in a zone whose culling mode is
+    // "outside", the world's entities outside that zone are not drawn. The innermost zone whose mode is not "inherit"
+    // decides, as for a zone's other settings. The decision is made once, when that changes (decideZoneCulling sets a
+    // flag on each renderer); the renderers whose flag flipped are refreshed through a time-boxed lane beside the
+    // render-update budget (drainZoneCullFlips, nearest first); and an entity that updates while a zone is active
+    // (it moved, or it is new) tests itself against the zone's box. A world without a culling zone pays nothing.
+    struct ZoneCullState {
+        bool active { false };      // entities outside the zone are hidden
+        bool dontLoad { false };    // and the entity query stops at the zone (the load zone, entry 13 (g))
+        QUuid zoneId;
+        glm::vec3 position { 0.0f };        // the zone's box: its world centre, orientation and half dimensions
+        glm::quat rotation;
+        glm::vec3 halfDimensions { 0.0f };
+        // whether a sphere touches the box: the test in the zone's own frame, so a turned zone culls by its true shape
+        bool touches(const glm::vec3& center, float radius) const;
+        // how far the box reaches from a point: the distance to its farthest corner (the load zone's query limit)
+        float reachFrom(const glm::vec3& point) const;
+    };
+    const ZoneCullState& getZoneCullState() const { return _zoneCullState; }
+    // the entities zone culling may hide: the world's own, never the app's local ones, worn ones, or a zone, gizmo,
+    // grid or material
+    static bool isZoneCullable(const EntityItemPointer& entity);
+    // a zone's culling mode, place or shape changed: the decision is made again at the next check
+    void zoneCullingZoneChanged(const EntityItemID& id);
 
     bool _bypassPrioritySorting = false;
     bool getBypassPrioritySorting() { return _bypassPrioritySorting; }
@@ -245,11 +260,18 @@ public:
     uint64_t getLastMovingAssemblyInViewTime() const { return _lastMovingAssemblyInView; }
 
 signals:
+    /// The world `world` (its entities engine's id, ScriptCaller::world() on its thread) was left, at a world change or
+    /// a content reload, before its scripts unload and its engine stops: its code gets nothing more done
+    /// (ScriptCaller::retireWorld), and what its scripts made outside the engine (tagged with that id) goes now, each
+    /// owner removing its own.
+    void worldLeft(int world);
+    /// The entities engine of the world `world` has stopped (or was given up on): nothing of that world's scripts runs
+    /// any more. Its owners remove what they hold of the world again (nothing, as the world's calls are refused since
+    /// worldLeft).
+    void worldScriptsStopped(int world);
     void enterEntity(const EntityItemID& entityItemID);
     void leaveEntity(const EntityItemID& entityItemID);
     void collisionWithEntity(const EntityItemID& idA, const EntityItemID& idB, const Collision& collision);
-    // void requestSpecialUpdate(const EntityItemID& entityItemID);
-    void updateStaticEntities();
 
 public slots:
     void addingEntity(const EntityItemID& entityID);
@@ -259,6 +281,9 @@ public slots:
     void updateEntityRenderStatus(bool shouldRenderEntities);
     void updateZone(const EntityItemID& id);
     void connectedToDomain();
+    // the tree refuses content addresses that name a file on this computer unless the world is local
+    // (ScriptNetworkPolicy::isWorldLocal, the connected socket's address); decided again at every domain change
+    void updateContentFromThisComputer();
 
     // optional slots that can be wired to menu items
     void setDisplayModelBounds(bool value) { _displayModelBounds = value; }
@@ -284,6 +309,12 @@ private:
     render::ItemID renderableIdForEntity(const EntityItemPointer& entity) const { return renderableIdForEntityId(entity->getID()); }
 
     void resetEntitiesScriptEngine();
+    void replaceEntitiesScriptEngine();
+    void retireEntitiesScriptEngine(const ScriptEnginePointer& old);
+    void markWorldLeft(int world);
+    void entitiesEngineStopped(int world);
+    void interruptIfStillRunning(QWeakPointer<ScriptEngine> old, int attempt);
+    void restartKeptEntityScripts();
 
     void findBestZoneAndMaybeContainingEntities(QSet<EntityItemID>& entitiesContainingAvatar);
 
@@ -306,12 +337,20 @@ private:
     glm::vec3 _avatarPosition { 0.0f };
     bool _forceRecheckEntities { true };
     bool _zoneCullingSuspended { false };
-    bool _refreshAllRenderables { false };   // the next evaluation of the zone culling updates every renderable
+    ZoneCullState _zoneCullState;
+    bool _zoneCullDirty { false };                    // the deciding zone moved, turned, resized or changed mode
+    std::vector<EntityRendererPointer> _zoneCullFlips; // renderers whose flag flipped, nearest first, not yet refreshed
+    size_t _zoneCullFlipsNext { 0 };
+    void updateZoneCullState();
+    void decideZoneCulling();
+    void drainZoneCullFlips(const render::ScenePointer& scene, render::Transaction& transaction);
+    void resetZoneCulling();
     bool _sceneIsReady = false;
     QSet<EntityItemID> _currentEntitiesInside;
 
     bool _wantScripts;
     ScriptEnginePointer _entitiesScriptEngine;
+    QSet<int> _entitiesEnginesStopping;  // the world ids of engines of worlds left not stopped yet (retireEntitiesScriptEngine)
 
     void playEntityCollisionSound(const EntityItemPointer& entity, const Collision& collision);
 
@@ -339,8 +378,6 @@ private:
     unsigned int _mouseRayPickID;
     std::function<RayToEntityIntersectionResult(unsigned int)> _getPrevRayPickResultOperator;
     std::function<void(unsigned int, bool)> _setPrecisionPickingOperator;
-
-    bool _mouseAndPreloadSignalHandlersConnected { false };
 
     class LayeredZone {
     public:
@@ -394,6 +431,7 @@ private:
     int _maxDeferredFramesLastSecond { 0 };
     uint64_t _countersSecondStart { 0 };
     uint64_t _lastMovingAssemblyInView { 0 };
+    std::atomic<int> _contentFromThisComputerLogged { -1 };   // the last decision logged (-1 none, 0 allowed, 1 refused)
     uint64_t _lastMovingAssemblyTest { 0 };
 
     std::unordered_set<EntityRendererPointer> _renderablesToUpdate;
