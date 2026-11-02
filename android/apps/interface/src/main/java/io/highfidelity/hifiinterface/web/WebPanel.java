@@ -101,6 +101,35 @@ public class WebPanel {
             "  };" +
             "})();";
 
+    // the chat page's phone layout is for a window up to this wide (its "max-width: 760px" rules); held sideways in a
+    // world the phone is wider than that, and the page showed its desktop layout, squashed. So on a screen that wide
+    // the page is laid out this wide and scaled to fit (its viewport tag, rewritten as it's parsed; the WebView takes
+    // a page's viewport width only with wide viewports on, set for chat)
+    private static final int CHAT_PHONE_WIDTH = 760;
+    private static final String CHAT_VIEWPORT_SCRIPT =
+            "(function() {" +
+            "  if (window.top !== window || screen.width <= " + CHAT_PHONE_WIDTH + ") { return; }" +
+            "  var content = 'width=" + CHAT_PHONE_WIDTH + ", viewport-fit=cover';" +
+            "  function fix() {" +
+            "    var meta = document.querySelector('meta[name=viewport]');" +
+            "    if (!meta) { return false; }" +
+            "    if (meta.content !== content) { meta.content = content; }" +
+            "    return true;" +
+            "  }" +
+            "  if (fix()) { return; }" +
+            "  var watch = new MutationObserver(function() { if (fix()) { watch.disconnect(); } });" +
+            "  watch.observe(document, { childList: true, subtree: true });" +
+            "  document.addEventListener('DOMContentLoaded', function() {" +
+            "    watch.disconnect();" +
+            "    if (!fix()) {" +
+            "      var meta = document.createElement('meta');" +
+            "      meta.name = 'viewport';" +
+            "      meta.content = content;" +
+            "      document.head.appendChild(meta);" +
+            "    }" +
+            "  });" +
+            "})();";
+
     // the app's own pages (the radio's), served from its assets' html folder, and nothing else of them, at an https
     // address of their own
     private static final String APP_PAGES_ORIGIN = "https://" + WebViewAssetLoader.DEFAULT_DOMAIN;
@@ -257,7 +286,11 @@ public class WebPanel {
         settings.setAllowContentAccess(false);
         // a new window (a link's target) is a navigation here, which the client sends to the browser
         settings.setSupportMultipleWindows(false);
-        if (!mChat) {
+        if (mChat) {
+            // the page's own viewport width (CHAT_VIEWPORT_SCRIPT's), fitted to the view
+            settings.setUseWideViewPort(true);
+            settings.setLoadWithOverviewMode(true);
+        } else {
             // the radio plays http:// streams too, from its https page
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
         }
@@ -267,6 +300,7 @@ public class WebPanel {
         if (mChat) {
             Set<String> chatOrigin = Collections.singleton(originRule(mOrigin));
             WebViewCompat.addDocumentStartJavaScript(mWebView, CHAT_BRIDGE_SCRIPT, chatOrigin);
+            WebViewCompat.addDocumentStartJavaScript(mWebView, CHAT_VIEWPORT_SCRIPT, chatOrigin);
             WebViewCompat.addWebMessageListener(mWebView, CHAT_BRIDGE_OBJECT, chatOrigin,
                     (view, message, sourceOrigin, isMainFrame, replyProxy) -> {
                         // the chat server's page itself: never a frame in it, a page it led to, or one gone
