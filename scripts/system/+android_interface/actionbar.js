@@ -17,6 +17,11 @@ var settingsButton;
 var panelsButton;
 var panelChooser;
 
+// the buttons' size in the screen's pixels, and the icon centred in it (the label is empty)
+var BUTTON_SIZE = 170;
+var ICON_SIZE = 110;
+var ICON_BOTTOM = 22;
+
 var logEnabled = true;
 
 function printd(str) {
@@ -47,6 +52,11 @@ function init() {
     });
     backButton = actionbar.addButton({
         text: "",
+        width: BUTTON_SIZE,
+        height: BUTTON_SIZE,
+        iconSize: ICON_SIZE,
+        textSize: 1,
+        bottomMargin: ICON_BOTTOM,
         bgOpacity: 0.0,
         hoverBgOpacity: 0.0,
         activeBgOpacity: 0.0
@@ -58,6 +68,11 @@ function init() {
     // Settings, over the world (InterfaceActivity's settings panel)
     settingsButton = actionbar.addButton({
         text: "",
+        width: BUTTON_SIZE,
+        height: BUTTON_SIZE,
+        iconSize: ICON_SIZE,
+        textSize: 1,
+        bottomMargin: ICON_BOTTOM,
         bgOpacity: 0.0,
         hoverBgOpacity: 0.0,
         activeBgOpacity: 0.0
@@ -68,6 +83,11 @@ function init() {
     // Darkride's panels (World settings, Avatar, People, Explore, Radio, Chat), chosen from a card over the world
     panelsButton = actionbar.addButton({
         text: "",
+        width: BUTTON_SIZE,
+        height: BUTTON_SIZE,
+        iconSize: ICON_SIZE,
+        textSize: 1,
+        bottomMargin: ICON_BOTTOM,
         bgOpacity: 0.0,
         hoverBgOpacity: 0.0,
         activeBgOpacity: 0.0

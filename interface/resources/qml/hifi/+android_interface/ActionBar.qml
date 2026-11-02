@@ -12,10 +12,9 @@ Item {
     id: actionBar
     x:0
     y:0
-    // the back and settings buttons one above the other, and the Panels button beside the back one (under the
-    // settings one is the joystick's)
-    width: 610
-    height: 640
+    // back, settings and Panels in one column down the left edge, above the joystick
+    width: 180
+    height: 560
     z: -1
 
     signal sendToScript(var message);
@@ -44,8 +43,8 @@ Item {
         // put on bottom
         x = 7;
         y = 7;
-        width = 610;
-        height = 640;
+        width = 180;
+        height = 560;
     }
     
     // Messages from the bar's script (sendToQml, on this thread): {buttons: [properties, ...]} sets the properties of
