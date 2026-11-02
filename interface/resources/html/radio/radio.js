@@ -32,7 +32,6 @@
     var MAIN_HEIGHT = 116;                       // Webamp's main window
     var PLAYLIST_HEIGHT = 116;                   // its playlist at its smallest; it grows in steps of 29
     var WINDOW_WIDTH = 275;                      // each window's width, the playlist's at its narrowest
-    var PLAYLIST_WIDTH_STEP = 25;                // it widens in steps of 25
     var PLAYLIST_STEP = 29;
     var KEY = "darkride.radio.";
     // the Radio Browser directory (security's rules, 10-31): these hosts only, tried in order (the round-robin name,
@@ -530,16 +529,17 @@
     webamp.appendTracks(stationTracks.concat(ownStations.map(ownTrack)));
 
     // the playlist as tall as the panel allows, under the main window; in a panel wide enough for both side by side (a
-    // phone held sideways), beside it instead, as wide and tall as the rest of the panel
+    // phone held sideways), beside it instead, the two the same width and the player scaled up to fill the panel
     function layout() {
         var wide = window.innerWidth - 16 >= 2 * WINDOW_WIDTH;
-        var room = window.innerHeight - 16 - PLAYLIST_HEIGHT - (wide ? 0 : MAIN_HEIGHT);
+        var zoom = wide ? (window.innerWidth - 16) / (2 * WINDOW_WIDTH) : 1;
+        var room = (window.innerHeight - 16) / zoom - PLAYLIST_HEIGHT - (wide ? 0 : MAIN_HEIGHT);
         var steps = Math.max(0, Math.floor(room / PLAYLIST_STEP));
         var playlistHeight = PLAYLIST_HEIGHT + steps * PLAYLIST_STEP;
-        var across = wide ? Math.floor((window.innerWidth - 16 - 2 * WINDOW_WIDTH) / PLAYLIST_WIDTH_STEP) : 0;
-        playerElement.style.width = (wide ? 2 * WINDOW_WIDTH + across * PLAYLIST_WIDTH_STEP : WINDOW_WIDTH) + "px";
+        playerElement.style.zoom = zoom === 1 ? "" : String(zoom);
+        playerElement.style.width = (wide ? 2 * WINDOW_WIDTH : WINDOW_WIDTH) + "px";
         playerElement.style.height = (wide ? playlistHeight : MAIN_HEIGHT + playlistHeight) + "px";
-        webamp.store.dispatch({ type: "WINDOW_SIZE_CHANGED", windowId: "playlist", size: [across, steps] });
+        webamp.store.dispatch({ type: "WINDOW_SIZE_CHANGED", windowId: "playlist", size: [0, steps] });
         webamp.store.dispatch({
             type: "UPDATE_WINDOW_POSITIONS",
             positions: { main: { x: 0, y: 0 }, playlist: wide ? { x: WINDOW_WIDTH, y: 0 } : { x: 0, y: MAIN_HEIGHT } },

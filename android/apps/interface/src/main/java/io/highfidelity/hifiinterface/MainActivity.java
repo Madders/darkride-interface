@@ -354,6 +354,7 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
                 loadPeopleFragment();
                 return true;
             case R.id.action_chat:
+                closeDrawer();
                 nativeOpenChat();
                 return false;   // a panel over this screen: the menu's selection stays where it was
             case R.id.action_profile:
