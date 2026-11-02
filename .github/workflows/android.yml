@@ -117,6 +117,19 @@ jobs:
           path: /mnt/work/vcpkg-archives
           key: android-vcpkg-${{ hashFiles('cmake/ports/**', 'hifi_vcpkg.py') }}-${{ github.run_id }}
 
+      # the desktop's nametags are Tivoli scripts in TypeScript (tivoli-scripts/scripts): compiled here, outside the
+      # builder image, which has no Node; the APK step copies tivoli-scripts/dist into the scripts (build.gradle)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Tivoli scripts
+        working-directory: tivoli-scripts/scripts
+        run: |
+          npm install --no-save --no-audit --no-fund
+          npm run build
+          ls ../dist/tivoli
+
       - name: APK
         run: |
           docker run --rm -v "$WORK:/work" -v "$GITHUB_WORKSPACE:/src" \

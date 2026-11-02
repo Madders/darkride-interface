@@ -499,6 +499,22 @@ void Application::setupProcess() {
     QFontDatabase::addApplicationFont(PathUtils::resourcesPath() + "fonts/RobotoCondensed-Bold.ttf");
     QFontDatabase::addApplicationFont(PathUtils::resourcesPath() + "fonts/RobotoCondensed-Light.ttf");
     QFontDatabase::addApplicationFont(PathUtils::resourcesPath() + "fonts/RobotoCondensed-Regular.ttf");
+#if defined(Q_OS_ANDROID)
+    // A character the font lacks is looked for, on Android, only in the families QT_ANDROID_FONTS names (Qt's Java
+    // sets Roboto, Droid Sans and Droid Sans Fallback), so the panels' symbols (✓ ↺ ⌃ ⌄) were empty boxes on a
+    // phone: the phone's own symbol fonts, read from /system/fonts like the rest, are added to the end of that list
+    // before any text is laid out. (Not its colour emoji: Qt 5's FreeType can't draw them.)
+    {
+        QStringList fallbacks = QString::fromLocal8Bit(qgetenv("QT_ANDROID_FONTS")).split(';', Qt::SkipEmptyParts);
+        for (const QString& family : QFontDatabase().families()) {
+            if ((family.startsWith("Noto Sans Symbols") || family == "Noto Sans Math") && !fallbacks.contains(family)) {
+                fallbacks.append(family);
+            }
+        }
+        qputenv("QT_ANDROID_FONTS", fallbacks.join(';').toLocal8Bit());
+        qCDebug(interfaceapp) << "Fonts: fallbacks" << fallbacks;
+    }
+#endif
     
     QFontDatabase::addApplicationFont(PathUtils::resourcesPath() + "fonts/RobotoMono-Regular.ttf");
 

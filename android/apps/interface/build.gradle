@@ -114,6 +114,18 @@ android {
                 }
             }
 
+            // the Tivoli scripts the workflow compiled (tivoli-scripts/dist: the nametags), into the scripts as on the
+            // desktop (interface/CMakeLists.txt); a build without them has no nametags
+            copy {
+                from new File(repoRoot, 'tivoli-scripts/dist')
+                into new File(outputDir, 'scripts')
+                duplicatesStrategy DuplicatesStrategy.INCLUDE
+                eachFile { details ->
+                    youngestLastModified = Math.max(youngestLastModified, details.lastModified)
+                    assetList.add('scripts/' + details.path)
+                }
+            }
+
             // the radio's page, which the phone shows in Android's WebView (WebPanel) straight from the assets
             copy {
                 from new File(repoRoot, 'interface/resources/html/radio')

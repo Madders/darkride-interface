@@ -207,7 +207,10 @@ public class LoginMenuActivity extends AppCompatActivity
                 super.onBackPressed();
             }
         } else if (finishOnBack){
-            finishAffinity();
+            // to the background, as Home does, rather than finishAffinity: that ended the world's activity, whose
+            // onDestroy stops the engine on this thread and exits the process, and opened again before that was
+            // done the app stopped on its first screen (PermissionChecker) until it was swiped away
+            moveTaskToBack(true);
         } else {
             finish();
         }

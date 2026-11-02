@@ -18,6 +18,7 @@ var DEFAULT_SCRIPTS_COMBINED = [
     "system/+android_interface/actionbar.js",
     "system/+android_interface/audio.js" ,
     "system/+android_interface/modes.js",
+    "system/+android_interface/nametags.js", // the desktop's nametags, by World settings' switch
     "system/makeUserConnection.js"/*,
     "system/away.js",
     "system/controllers/controllerDisplayManager.js",
