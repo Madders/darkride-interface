@@ -137,8 +137,13 @@ void Application::initializeUi() {
         StartupProfiler::Scope step("initializeUi: the system tablet");
         auto tabletScriptingInterface = DependencyManager::get<TabletScriptingInterface>();
         auto systemTablet = tabletScriptingInterface->getTablet(SYSTEM_TABLET);
-        // the bar's buttons on a side of the window, when Settings puts them there (ui/SystemToolbar.h)
+        // the bar's buttons on a side of the window, when Settings puts them there (ui/SystemToolbar.h); not on a
+        // phone, whose buttons are its own action bar and Panels card
+#if !defined(Q_OS_ANDROID)
         SystemToolbar::instance()->attach(_window, systemTablet);
+#else
+        Q_UNUSED(systemTablet);
+#endif
     }
     // the skin chosen last time, now the main window and the bar exist (ui/Skins.h)
     DependencyManager::get<Skins>()->start(_window);
