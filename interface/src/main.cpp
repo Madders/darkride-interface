@@ -44,9 +44,12 @@ int main(int argc, const char* argv[]) {
     StartupProfiler::start();
     // Windows and Linux: the interface follows the display's scale (at 150 % on a 4K screen everything was a third of
     // its size), at the exact factor rather than rounded to a whole one; before the QApplication. macOS scales on its
-    // own and is unchanged
+    // own and is unchanged. Not on Android: the phone's interface is laid out in its screen's pixels, and scaled by its
+    // density (2.6 on a Galaxy S25) the buttons were huge and the 3D view showed a magnified corner of the world
+#if !defined(Q_OS_ANDROID)
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
+#endif
     StartupProfiler::phase("main: surface format, application name, command line");
 #ifdef Q_OS_MACOS
     // before anything of AppKit's runs: AutoFill is set up when the app first becomes active
