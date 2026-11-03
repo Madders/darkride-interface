@@ -501,14 +501,20 @@ void Application::setupProcess() {
     QFontDatabase::addApplicationFont(PathUtils::resourcesPath() + "fonts/RobotoCondensed-Regular.ttf");
 #if defined(Q_OS_ANDROID)
     // A character the font lacks is looked for, on Android, only in the families QT_ANDROID_FONTS names (Qt's Java
-    // sets Roboto, Droid Sans and Droid Sans Fallback), so the panels' symbols (✓ ↺ ⌃ ⌄) were empty boxes on a
-    // phone: the phone's own symbol fonts, read from /system/fonts like the rest, are added to the end of that list
-    // before any text is laid out. (Not its colour emoji: Qt 5's FreeType can't draw them.)
+    // sets Roboto, Droid Sans and Droid Sans Fallback), so the panels' symbols (✓ ↺ ⌃ ⌄ ♥) were empty boxes on a
+    // phone. The phone's own symbol fonts were no help: a Galaxy S25 has two files that both call themselves Noto Sans
+    // Symbols, and Qt took the one without them. So the app brings its own, subsets of Noto Sans Symbols, Symbols 2
+    // and Math (arrows, technical symbols, shapes, symbols and dingbats; OFL, fonts/DarkrideSymbols-OFL.txt) under
+    // names of their own, added to the end of that list before any text is laid out
     {
         QStringList fallbacks = QString::fromLocal8Bit(qgetenv("QT_ANDROID_FONTS")).split(';', Qt::SkipEmptyParts);
-        for (const QString& family : QFontDatabase().families()) {
-            if ((family.startsWith("Noto Sans Symbols") || family == "Noto Sans Math") && !fallbacks.contains(family)) {
-                fallbacks.append(family);
+        for (const char* file : { "fonts/DarkrideSymbolsA-Regular.ttf", "fonts/DarkrideSymbolsB-Regular.ttf",
+                                  "fonts/DarkrideSymbolsC-Regular.ttf" }) {
+            const int id = QFontDatabase::addApplicationFont(PathUtils::resourcesPath() + file);
+            for (const QString& family : QFontDatabase::applicationFontFamilies(id)) {
+                if (!fallbacks.contains(family)) {
+                    fallbacks.append(family);
+                }
             }
         }
         qputenv("QT_ANDROID_FONTS", fallbacks.join(';').toLocal8Bit());
