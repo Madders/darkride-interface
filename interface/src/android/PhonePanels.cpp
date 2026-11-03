@@ -161,7 +161,7 @@ void PhonePanels::setShowing(const QString& name) {
     // the virtual pad under a panel would still be drawn over it, and the panel takes its touches
     auto& pad = VirtualPad::Manager::instance();
     if (was.isEmpty()) {
-        _padWasHidden = pad.isHidden();
+        _padWasHidden = pad.isHiddenByRequest();
         pad.hide(true);
     } else if (name.isEmpty()) {
         pad.hide(_padWasHidden);

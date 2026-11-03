@@ -28,8 +28,12 @@ import android.os.Vibrator;
 import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.Log;
+import android.hardware.input.InputManager;
 import android.view.Gravity;
+import android.view.InputDevice;
+import android.view.KeyEvent;
 import android.view.LayoutInflater;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
@@ -91,6 +95,11 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
     private native void nativeEnterForeground();
     private native long nativeOnExitVr();
     private native void nativeInitAfterAppLoaded();
+    // a game controller (AndroidGamepad.cpp): connected or not, its sticks, triggers and hat, and its buttons
+    private native void nativeGamepadConnected(boolean connected);
+    private native void nativeGamepadAxes(float leftX, float leftY, float rightX, float rightY,
+                                          float leftTrigger, float rightTrigger, float hatX, float hatY);
+    private native void nativeGamepadButton(int keyCode, boolean down);
     private native void nativeReloadTheme();
     // closes the Darkride panel over the world (Settings, People...), if one is showing, and says whether one was
     private native boolean nativeClosePanel();
@@ -282,6 +291,10 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
 
     @Override
     protected void onDestroy() {
+        if (mInputManager != null) {
+            mInputManager.unregisterInputDeviceListener(mGamepadListener);
+            mInputManager = null;
+        }
         nativeOnDestroy();
         /*
         cduarte https://highfidelity.manuscript.com/f/cases/16712/App-freezes-on-opening-randomly
@@ -541,12 +554,106 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
         }
         runOnUiThread(() -> {
             nativeInitAfterAppLoaded();
+            watchGamepads();
             if (mPendingDomainUrl != null) {
                 gotoWorld(mPendingDomainIntent, mPendingDomainUrl);
                 mPendingDomainUrl = null;
                 mPendingDomainIntent = null;
             }
         });
+    }
+
+    /*
+    Game controllers. Interface has no SDL2 on Android, so a controller's sticks, triggers, hat and buttons are passed
+    to its GamePad device here, once the app has loaded (the device lives in the engine). Its keys don't reach Qt or
+    Android: a controller's B, which some send as Back, is the gamepad's B, not the phone's Back.
+     */
+    private InputManager mInputManager;
+    private boolean mGamepadConnected;
+    private final InputManager.InputDeviceListener mGamepadListener = new InputManager.InputDeviceListener() {
+        @Override public void onInputDeviceAdded(int deviceId) { updateGamepadConnected(); }
+        @Override public void onInputDeviceRemoved(int deviceId) { updateGamepadConnected(); }
+        @Override public void onInputDeviceChanged(int deviceId) { updateGamepadConnected(); }
+    };
+
+    private static boolean isGamepad(InputDevice device) {
+        if (device == null || device.isVirtual()) {
+            return false;
+        }
+        int sources = device.getSources();
+        return (sources & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
+                (sources & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+    }
+
+    private void watchGamepads() {
+        if (mInputManager == null) {
+            mInputManager = (InputManager) getSystemService(Context.INPUT_SERVICE);
+            mInputManager.registerInputDeviceListener(mGamepadListener, null);
+        }
+        updateGamepadConnected();
+    }
+
+    private void updateGamepadConnected() {
+        boolean connected = false;
+        for (int id : InputDevice.getDeviceIds()) {
+            if (isGamepad(InputDevice.getDevice(id))) {
+                connected = true;
+                break;
+            }
+        }
+        if (connected != mGamepadConnected) {
+            mGamepadConnected = connected;
+            Log.d(TAG, "Game controller " + (connected ? "connected" : "disconnected"));
+            nativeGamepadConnected(connected);
+        }
+    }
+
+    // an axis the controller has, or 0
+    private static float axis(MotionEvent event, InputDevice device, int axis) {
+        return device.getMotionRange(axis, event.getSource()) != null ? event.getAxisValue(axis) : 0.0f;
+    }
+
+    @Override
+    public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        InputDevice device = event.getDevice();
+        if (!isLoading && mInputManager != null && isGamepad(device) &&
+                (event.getSource() & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK &&
+                event.getAction() == MotionEvent.ACTION_MOVE) {
+            if (!mGamepadConnected) {
+                updateGamepadConnected();
+            }
+            // the right stick is Z/RZ on most controllers, RX/RY on some; the triggers are L/RTRIGGER or BRAKE/GAS
+            boolean rightIsZ = device.getMotionRange(MotionEvent.AXIS_Z, event.getSource()) != null;
+            float leftTrigger = Math.max(axis(event, device, MotionEvent.AXIS_LTRIGGER),
+                    axis(event, device, MotionEvent.AXIS_BRAKE));
+            float rightTrigger = Math.max(axis(event, device, MotionEvent.AXIS_RTRIGGER),
+                    axis(event, device, MotionEvent.AXIS_GAS));
+            nativeGamepadAxes(axis(event, device, MotionEvent.AXIS_X), axis(event, device, MotionEvent.AXIS_Y),
+                    axis(event, device, rightIsZ ? MotionEvent.AXIS_Z : MotionEvent.AXIS_RX),
+                    axis(event, device, rightIsZ ? MotionEvent.AXIS_RZ : MotionEvent.AXIS_RY),
+                    leftTrigger, rightTrigger,
+                    axis(event, device, MotionEvent.AXIS_HAT_X), axis(event, device, MotionEvent.AXIS_HAT_Y));
+            return true;
+        }
+        return super.dispatchGenericMotionEvent(event);
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        InputDevice device = event.getDevice();
+        if (!isLoading && mInputManager != null && mSettingsPanel == null && isGamepad(device) &&
+                (KeyEvent.isGamepadButton(event.getKeyCode()) || event.getKeyCode() == KeyEvent.KEYCODE_BACK ||
+                 (event.getKeyCode() >= KeyEvent.KEYCODE_DPAD_UP && event.getKeyCode() <= KeyEvent.KEYCODE_DPAD_RIGHT))) {
+            if (!mGamepadConnected) {
+                updateGamepadConnected();
+            }
+            if (event.getRepeatCount() == 0 && (event.getAction() == KeyEvent.ACTION_DOWN ||
+                    event.getAction() == KeyEvent.ACTION_UP)) {
+                nativeGamepadButton(event.getKeyCode(), event.getAction() == KeyEvent.ACTION_DOWN);
+            }
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
     }
 
     public void performHapticFeedback(int duration) {

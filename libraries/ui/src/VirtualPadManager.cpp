@@ -76,7 +76,15 @@ namespace VirtualPad {
     }
 
     bool Manager::isHidden() {
+        return _hidden || _hiddenForController;
+    }
+
+    bool Manager::isHiddenByRequest() {
         return _hidden;
+    }
+
+    void Manager::hideForController(bool hide) {
+        _hiddenForController = hide;
     }
 
     int Manager::extraBottomMargin() {

@@ -40,8 +40,13 @@ namespace VirtualPad {
         Instance* getLeftVirtualPad();
         bool isEnabled();
         void enable(bool enable);
+        // hidden by a request (a panel over the world, a script), or while a game controller is connected
         bool isHidden();
         void hide(bool hide);
+        // what hide() last asked for, without the controller's part: what to put back after a panel
+        bool isHiddenByRequest();
+        // a connected game controller moves the avatar, so the pad isn't drawn and its corner takes no touches
+        void hideForController(bool hide);
         int extraBottomMargin();
         void setExtraBottomMargin(int margin);
 
@@ -73,7 +78,8 @@ namespace VirtualPad {
     private:
         Instance _leftVPadInstance;
         bool _enabled { true };
-        bool _hidden;
+        bool _hidden { false };
+        bool _hiddenForController { false };
         int _extraBottomMargin { 0 };
         std::map<Button, glm::vec2> _buttonsPositions;
     };
