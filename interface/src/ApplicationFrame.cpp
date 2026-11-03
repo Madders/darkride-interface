@@ -70,6 +70,7 @@
 #if defined(Q_OS_ANDROID)
 #include <android/log.h>
 #include "AndroidHelper.h"
+#include "android/AndroidGamepad.h"
 #endif
 
 using namespace std;
@@ -529,6 +530,10 @@ void Application::update(float deltaTime) {
                 inputPlugin->pluginUpdate(deltaTime, calibrationData);
             }
         }
+#if defined(Q_OS_ANDROID)
+        // not a plugin, so nothing above takes up its sticks and buttons
+        AndroidGamepad::updateConnected(deltaTime, calibrationData);
+#endif
 
         userInputMapper->setInputCalibrationData(calibrationData);
         userInputMapper->update(deltaTime);

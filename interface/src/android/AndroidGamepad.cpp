@@ -144,6 +144,12 @@ void AndroidGamepad::focusOutEvent() {
     _buttonPressedMap.clear();
 }
 
+void AndroidGamepad::updateConnected(float deltaTime, const controller::InputCalibrationData& inputCalibrationData) {
+    if (device) {
+        device->update(deltaTime, inputCalibrationData);
+    }
+}
+
 void AndroidGamepad::setConnected(bool connected) {
     if (!connected) {
         for (auto& axis : axes) {

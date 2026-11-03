@@ -32,6 +32,10 @@ public:
     void update(float deltaTime, const controller::InputCalibrationData& inputCalibrationData) override;
     void focusOutEvent() override;
 
+    // main thread, each frame before the input mapper: the connected controller takes up its state (it is no plugin,
+    // so nothing else updates it)
+    static void updateConnected(float deltaTime, const controller::InputCalibrationData& inputCalibrationData);
+
     // Android's thread: what the controller does now
     static void setConnected(bool connected);
     static void setAxes(float leftX, float leftY, float rightX, float rightY, float leftTrigger, float rightTrigger,
