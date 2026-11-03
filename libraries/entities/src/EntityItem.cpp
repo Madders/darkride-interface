@@ -10,6 +10,7 @@
 //
 
 #include "EntityItem.h"
+#include "EntityContentAddresses.h"
 
 #include <QtCore/QObject>
 #include <QtEndian>
@@ -721,6 +722,11 @@ int EntityItem::readEntityDataFromBuffer(const unsigned char* data, int bytesLef
     const unsigned char* dataAt = parser.data() + parser.offset();
     int bytesRead = (int)parser.offset();
 #endif
+    if (parser.overrun()) {
+        // the header passes the end of the packet: nothing of it is trusted, and the rest of the packet is abandoned
+        args.readFailed = true;
+        return bytesLeftToRead;
+    }
 
     auto nodeList = DependencyManager::get<NodeList>();
     const QUuid& myNodeID = nodeList->getSessionUUID();
@@ -730,7 +736,12 @@ int EntityItem::readEntityDataFromBuffer(const unsigned char* data, int bytesLef
     // even when we would otherwise ignore the rest of the packet.
 
     bool filterRejection = false;
-    if (propertyFlags.getHasProperty(PROP_SIMULATION_OWNER)) {
+    // read by hand, not by READ_ENTITY_PROPERTY, so checked by hand against the bytes left
+    if (propertyFlags.getHasProperty(PROP_SIMULATION_OWNER) &&
+        !OctreePacketData::fits(dataAt, bytesLeftToRead - bytesRead, QByteArray())) {
+        args.readFailed = true;
+    }
+    if (propertyFlags.getHasProperty(PROP_SIMULATION_OWNER) && !args.readFailed) {
         QByteArray simOwnerData;
         int bytes = OctreePacketData::unpackDataFromBytes(dataAt, simOwnerData);
         SimulationOwner newSimOwner;
@@ -845,9 +856,9 @@ int EntityItem::readEntityDataFromBuffer(const unsigned char* data, int bytesLef
     // READ_ENTITY_PROPERTY(PROP_LOCALLY_VISIBLE, bool, setLocallyVisible);  // not sent over the wire
     READ_ENTITY_PROPERTY(PROP_NAME, QString, setName);
     READ_ENTITY_PROPERTY(PROP_LOCKED, bool, setLocked);
-    READ_ENTITY_PROPERTY(PROP_USER_DATA, QString, setUserData);
+    READ_ENTITY_ADDRESSES_PROPERTY(PROP_USER_DATA, setUserData, EntityContentAddresses::clearUserData, "userData");
     READ_ENTITY_PROPERTY(PROP_PRIVATE_USER_DATA, QString, setPrivateUserData);
-    READ_ENTITY_PROPERTY(PROP_HREF, QString, setHref);
+    READ_ENTITY_ADDRESS_PROPERTY(PROP_HREF, setHref, EntityContentAddresses::isWorldFileOnThisComputer, "href");
     READ_ENTITY_PROPERTY(PROP_DESCRIPTION, QString, setDescription);
     {  // When we own the simulation we don't accept updates to the entity's transform/velocities
         // we also want to ignore any duplicate packets that have the same "recently updated" values
@@ -1017,7 +1028,9 @@ int EntityItem::readEntityDataFromBuffer(const unsigned char* data, int bytesLef
     READ_ENTITY_PROPERTY(PROP_COLLISIONLESS, bool, setCollisionless);
     READ_ENTITY_PROPERTY(PROP_COLLISION_MASK, uint16_t, setCollisionMask);
     READ_ENTITY_PROPERTY(PROP_DYNAMIC, bool, setDynamic);
-    READ_ENTITY_PROPERTY(PROP_COLLISION_SOUND_URL, QString, setCollisionSoundURL);
+    READ_ENTITY_ADDRESS_PROPERTY(PROP_COLLISION_SOUND_URL, setCollisionSoundURL,
+                                 EntityContentAddresses::isOnThisComputer,
+                                 "collisionSoundURL");
     READ_ENTITY_PROPERTY(PROP_ACTION_DATA, QByteArray, setDynamicData);
 
     // Cloning
@@ -3721,6 +3734,11 @@ bool EntityItem::isWearable() const {
 bool EntityItem::isMyAvatarEntity() const {
     return _hostType == entity::HostType::AVATAR && AVATAR_SELF_ID == _owningAvatarID;
 };
+
+bool EntityItem::isAvatarEntityOf(const QUuid& avatarID) const {
+    return _hostType == entity::HostType::AVATAR && !avatarID.isNull() && avatarID != AVATAR_SELF_ID &&
+        _owningAvatarID == avatarID;
+}
 
 QUuid EntityItem::getOwningAvatarIDForProperties() const {
     if (isMyAvatarEntity()) {

@@ -15,6 +15,19 @@
 //
 //  Distributed under the MIT License.
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: Application::isRideInView (a ride in view keeps the full rate while the window is unfocused) and, in
+// Application::idle, the frame trace's FrameTrace::beginFrame() and its frame.dt_ms / frame.idle_ms columns. The rest
+// of the frame loop here (idle, update, updateRenderArgs) shares the vehicle's per-frame time: a change to it counts as
+// touching the vehicle path.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
 
 #include "Application.h"
 #include "graphics/RenderEventHandler.h"
@@ -28,6 +41,7 @@
 #include <gl/Config.h>
 #include <QtQuick/QQuickWindow>
 #include <StatTracker.h>
+#include <FrameTrace.h>
 #include <AnimDebugDraw.h>
 #include <DebugDraw.h>
 #include <EntityScriptingInterface.h>
@@ -272,8 +286,19 @@ void setupCpuMonitorThread() {
 
 #endif
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void Application::idle() {
     PerformanceTimer perfTimer("idle");
+    // the main thread's frame time, for the refresh governor's fit (RefreshRateManager): the whole of idle, whichever
+    // way it returns
+    struct IdleClock {
+        uint64_t start;
+        std::atomic<uint64_t>& out;
+        ~IdleClock() { out = usecTimestampNow() - start; }
+    } idleClock { usecTimestampNow(), _lastIdleDurationUsecs };
+    // the frame trace (FrameTrace.h; team/performance/INSTRUMENTS-PLAN.md item 1): this frame's record opened, so
+    // everything the frame does can write its numbers to it; off, one atomic load
+    FrameTrace::beginFrame();
 
     auto offscreenUi = getOffscreenUI();
 
@@ -316,6 +341,7 @@ void Application::idle() {
 
     float secondsSinceLastUpdate = (float)_lastTimeUpdated.nsecsElapsed() / NSECS_PER_MSEC / MSECS_PER_SECOND;
     _lastTimeUpdated.start();
+    FrameTrace::set("frame.dt_ms", secondsSinceLastUpdate * 1000.0f);
 
     // If the offscreen Ui has something active that is NOT the root, then assume it has keyboard focus.
     if (offscreenUi && offscreenUi->getWindow()) {
@@ -388,6 +414,9 @@ void Application::idle() {
 
     _overlayConductor.update(secondsSinceLastUpdate);
 
+    if (FrameTrace::enabled()) {
+        FrameTrace::set("frame.idle_ms", _lastTimeUpdated.nsecsElapsed() * 1.0e-6);
+    }
     _gameLoopCounter.increment();
 }
 
@@ -890,6 +919,38 @@ void Application::update(float deltaTime) {
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
+bool Application::isRideInView() {
+    auto myAvatar = getMyAvatar();
+    if (myAvatar && (!myAvatar->getParentID().isNull() || myAvatar->isSeated())) {
+        return true;   // riding or seated myself
+    }
+    auto entities = getEntities();
+    if (entities && usecTimestampNow() - entities->getLastMovingAssemblyInViewTime() < USECS_PER_SECOND) {
+        return true;   // a vehicle, a train car, a frame or a platform moving in the view
+    }
+    // another avatar riding (parented to an entity) in the view; once a second, a copy of the avatar table
+    auto avatarManager = DependencyManager::get<AvatarManager>();
+    if (!avatarManager) {
+        return false;
+    }
+    const auto& views = getConicalViews();
+    const float AVATAR_RADIUS = 1.0f;
+    for (const auto& avatar : avatarManager->getHashCopy()) {
+        if (!avatar || avatar->getParentID().isNull()) {
+            continue;
+        }
+        const glm::vec3 position = avatar->getWorldPosition();
+        for (const auto& view : views) {
+            const glm::vec3 relative = position - view.getPosition();
+            if (view.intersects(relative, glm::length(relative), AVATAR_RADIUS)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void Application::updateRenderArgs(float deltaTime) {
     _graphicsEngine.editRenderArgs([this, deltaTime](AppRenderArgs& appRenderArgs) {
         PerformanceTimer perfTimer("editRenderArgs");
@@ -925,6 +986,9 @@ void Application::updateRenderArgs(float deltaTime) {
                 lodManager->getBoundaryLevelAdjust(), lodManager->getLODHalfAngleTan(), RenderArgs::DEFAULT_RENDER_MODE,
                 RenderArgs::MONO, RenderArgs::DEFERRED, RenderArgs::RENDER_DEBUG_NONE);
             appRenderArgs._renderArgs._scene = getMain3DScene();
+            appRenderArgs._traceFrame = FrameTrace::currentFrame();
+            appRenderArgs._mainFrameUsecs = _lastIdleDurationUsecs.load();
+            FrameTrace::set("governor.half", getRefreshRateManager().isHalfRate() ? 1.0 : 0.0);
             appRenderArgs._renderArgs._impostorAngleHalfTanSq = lodManager->getImpostorAngleHalfTanSq();
             appRenderArgs._renderArgs._impostorDebug = lodManager->getImpostorDebug();
             appRenderArgs._renderArgs._impostorCrossfade = lodManager->getImpostorCrossfade();

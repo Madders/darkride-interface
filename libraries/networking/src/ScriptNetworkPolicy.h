@@ -30,6 +30,7 @@
 #include <QtCore/QString>
 #include <QtCore/QUrl>
 #include <QtNetwork/QHostAddress>
+#include <QtNetwork/QNetworkRequest>
 
 class ScriptNetworkPolicy {
 public:
@@ -39,6 +40,7 @@ public:
         bool allowed { true };
         bool needsLookup { false };
         QString reason;
+        QHostAddress address;   // the name's checked address, the only one a request judged by it may connect to
     };
 
     /// Whether a script loaded from this URL counts as local (this machine, or an address on its network).
@@ -47,8 +49,13 @@ public:
     static bool isWorldLocal();
     /// Whether every script but the app's own is held to the rule (DARKRIDE_SCRIPT_NETWORK_STRICT=1).
     static bool isStrict();
-    /// Whether a script of this origin is held to the rule at all; false: it keeps every address.
-    static bool applies(const QUrl& origin);
+    /// Whether a script's address is one of the app's own scripts: qrc, or a file in the app's scripts folder with both
+    /// paths made canonical (links followed, "." and ".." resolved), so a path that only starts there doesn't count.
+    static bool isAppScript(const QUrl& scriptUrl);
+    /// Whether a script of this origin is held to the rule at all; false: it keeps every address. worldIsLocal: the
+    /// world the script is judged in, the one the client is in now unless the caller holds a script to its own world
+    /// (an entities engine, ScriptEngine::worldIsLocal), as in every judgement below.
+    static bool applies(const QUrl& origin, bool worldIsLocal = isWorldLocal());
 
     /// Loopback, link-local, private (RFC 1918), shared (100.64/10), unspecified, multicast, reserved: not public.
     static bool isPrivateAddress(const QHostAddress& address);
@@ -56,18 +63,24 @@ public:
     static bool isLocalHostName(const QString& host);
 
     /// The judgement before any name lookup.
-    static Decision check(const QUrl& target, const QUrl& origin);
+    static Decision check(const QUrl& target, const QUrl& origin, bool worldIsLocal = isWorldLocal());
     /// The judgement once the target's addresses are known: public, every one of them, or refused.
     static Decision checkAddresses(const QList<QHostAddress>& addresses);
     /// The whole judgement, lookup included. The callback runs on the context's thread: at once when no lookup is
     /// needed (so a request that was allowed yesterday goes out the same way today), later otherwise; never after
     /// the context is gone.
     static void decide(const QUrl& target, const QUrl& origin, QObject* context,
-                       std::function<void(const Decision&)> callback);
+                       std::function<void(const Decision&)> callback, bool worldIsLocal = isWorldLocal());
 
     /// The whole judgement on the calling thread, with the name lookup waited for (for Script.include and
     /// Script.require, which wait for their download anyway); reason is set when refused.
-    static bool decideBlocking(const QUrl& target, const QUrl& origin, QString& reason);
+    static bool decideBlocking(const QUrl& target, const QUrl& origin, QString& reason, bool worldIsLocal = isWorldLocal());
+
+    /// A request judged by the decision goes to its checked address and no other (no second lookup of the name): the
+    /// URL's host becomes that address, the Host header keeps the name (with a port that isn't the scheme's default),
+    /// and an https or wss request checks its certificate against, and names itself in the handshake by, the name. A
+    /// request to an address, or one the decision didn't look up, is left as it is.
+    static void pin(QNetworkRequest& request, const Decision& decision);
 
     /// The line for the log when a request is refused.
     static QString refusalLine(const QUrl& origin, const QUrl& target, const QString& reason);

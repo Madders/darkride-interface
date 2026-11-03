@@ -19,9 +19,11 @@
 #include <BlendshapeConstants.h>
 #include <ResourceManager.h>
 #include <PathUtils.h>
+#include <hfm/HFMModelMath.h>
 #include <hfm/ModelFormatLogging.h>
 
 #include <assimp/Importer.hpp>
+#include <assimp/importerdesc.h>
 #include <assimp/LogStream.hpp>
 #include <assimp/DefaultLogger.hpp>
 #include <assimp/postprocess.h>
@@ -33,15 +35,70 @@
 
 #include <QtGui/QImage>
 #include <QtCore/QBuffer>
-#include <QtCore/QTimer>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QSet>
 #include <QtCore/QtEndian>
+#include <QtCore/QTimer>
 
 // disabled because it causes crashes with Assimp::DefaultLogger::WriteToStreams
 // #define ENABLE_ASSIMP_LOGGING
+
+namespace {
+    // The model formats Darkride reads through Assimp: the common ones for worlds and avatars. Assimp has importers for
+    // dozens more, many old and little used; content from anywhere only reaches these. (FBX and OBJ have their own
+    // serializers.) Add a format here to support it. A VRM is a binary glTF: the Assimp built here reads it as a .glb,
+    // and newer ones also list .vrm.
+    const QStringList& allowedExtensions() {
+        static const QStringList ALLOWED_EXTENSIONS = { "gltf", "glb", "vrm", "dae", "3ds", "ply", "stl" };
+        return ALLOWED_EXTENSIONS;
+    }
+
+    // While a model is read, only the importers for those formats stay registered with the Importer reading it. Assimp
+    // picks an importer by the extension it is given and, when none claims it, by the file's first bytes, from every
+    // importer it was built with; the others are set aside for the read, so whatever the file holds only these see it.
+    // They go back before the Importer ends: it owns and deletes them, and UnregisterLoader only takes one off its list.
+    class AllowedImportersOnly {
+    public:
+        explicit AllowedImportersOnly(Assimp::Importer& importer) : _importer(importer) {
+            for (size_t i = importer.GetImporterCount(); i-- > 0;) {
+                const aiImporterDesc* info = importer.GetImporterInfo(i);
+                if (info && isAllowed(info->mFileExtensions)) {
+                    continue;
+                }
+                Assimp::BaseImporter* other = importer.GetImporter(i);
+                if (other && importer.UnregisterLoader(other) == AI_SUCCESS) {
+                    _setAside.push_back(other);
+                }
+            }
+        }
+        ~AllowedImportersOnly() {
+            for (Assimp::BaseImporter* other : _setAside) {
+                _importer.RegisterLoader(other);
+            }
+        }
+        AllowedImportersOnly(const AllowedImportersOnly&) = delete;
+        AllowedImportersOnly& operator=(const AllowedImportersOnly&) = delete;
+
+    private:
+        // an importer's extensions, space separated ("gltf glb")
+        static bool isAllowed(const char* extensions) {
+            if (!extensions) {
+                return false;
+            }
+            for (const QString& ext : QString(extensions).split(' ', Qt::SkipEmptyParts)) {
+                if (allowedExtensions().contains(ext.toLower())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        Assimp::Importer& _importer;
+        std::vector<Assimp::BaseImporter*> _setAside;
+    };
+}
 
 MediaType AssimpSerializer::getMediaType() const {
     MediaType mediaType;
@@ -50,22 +107,22 @@ MediaType AssimpSerializer::getMediaType() const {
     aiString aiExts;
     importer.GetExtensionList(aiExts);
 
-    // The model formats Darkride reads through Assimp: the common ones for worlds and avatars. Assimp has importers for
-    // dozens more, many old and little used; content from anywhere only reaches these. (FBX and OBJ have their own
-    // serializers.) Add a format here to support it.
-    static const QStringList ALLOWED_EXTENSIONS = { "gltf", "glb", "dae", "3ds", "ply", "stl" };
-
     auto exts = QString(aiExts.C_Str()).split(";");
     for (QString anyExt : exts) {
         QString ext = anyExt.replace("*.", "");
-        if (!ALLOWED_EXTENSIONS.contains(ext.toLower())) continue;
+        if (!allowedExtensions().contains(ext.toLower())) continue;
 
         // qDebug(modelformat) << "Available format:" << ext; 
         mediaType.extensions.push_back(ext.toStdString());
         // mediaType.webMediaTypes.push_back("");
     }
-    // VRM avatars are glTF binaries (VRMReader)
-    mediaType.extensions.push_back("vrm");
+    // a VRM avatar is a binary glTF: listed here when the Assimp built here reads .glb but does not name .vrm itself, and
+    // read as a .glb (read)
+    auto& extensions = mediaType.extensions;
+    if (std::find(extensions.begin(), extensions.end(), "glb") != extensions.end() &&
+        std::find(extensions.begin(), extensions.end(), "vrm") == extensions.end()) {
+        extensions.push_back("vrm");
+    }
 
     return mediaType;
 }
@@ -74,62 +131,153 @@ std::unique_ptr<hfm::Serializer::Factory> AssimpSerializer::getFactory() const {
     return std::make_unique<hfm::Serializer::SimpleFactory<AssimpSerializer>>();
 }
 
-// A file a model refers to (a glTF's .bin, an .mtl, a texture), downloaded once when Assimp opens it and then read
-// from memory like a file
-class TivoliIOStream : public Assimp::IOStream {
-public:
-    explicit TivoliIOStream(QByteArray data) : _data(std::move(data)) {}
-    ~TivoliIOStream() {}
+// A model's side files (a glTF's .bin and textures, an OBJ's .mtl): fetched once each, within a time limit and a
+// size limit, and served to Assimp as the stream it asked for (its size, its position, reads of exactly what was
+// asked), from the same place as the model and nowhere else.
+namespace {
+    const int SIDE_FILE_TIMEOUT_MS = 30 * 1000;
+    const qint64 MAX_SIDE_FILE_BYTES = 512LL * 1024 * 1024;
+    // one model's side files together (all of them sit in memory while it is decoded): a ceiling, a warning on the
+    // way up, and a ceiling on their number so hundreds of small ones cannot become thousands of requests
+    const qint64 MAX_MODEL_SIDE_BYTES = 1024LL * 1024 * 1024;
+    const qint64 WARN_MODEL_SIDE_BYTES = 256LL * 1024 * 1024;
+    const int MAX_SIDE_FILES = 1024;
+}
 
+class TivoliIOSystem;
+
+class TivoliIOStream : public Assimp::IOStream {
+    friend class TivoliIOSystem;
+
+protected:
+    hifi::URL url;
+    TivoliIOSystem* owner { nullptr };
+    QByteArray data;
+    bool fetched { false };
+    bool ok { false };
+    size_t pos { 0 };
+
+    TivoliIOStream(hifi::URL url, TivoliIOSystem* owner) : url(url), owner(owner) {}
+    bool account(qint64 bytes);
+
+    bool fetch() {
+        if (fetched) {
+            return ok;
+        }
+        fetched = true;
+        auto request = DependencyManager::get<ResourceManager>()->createResourceRequest(
+            nullptr, url, true, -1, "TivoliIOStream::fetch"
+        );
+        if (!request) {
+            return false;
+        }
+        QEventLoop loop;
+        QTimer timer;
+        timer.setSingleShot(true);
+        QObject::connect(request, &ResourceRequest::finished, &loop, &QEventLoop::quit);
+        QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+        timer.start(SIDE_FILE_TIMEOUT_MS);
+        request->send();
+        loop.exec();
+        if (request->getState() == ResourceRequest::Finished && request->getResult() == ResourceRequest::Success) {
+            data = request->getData();
+            ok = data.size() <= MAX_SIDE_FILE_BYTES && account(data.size());
+            if (!ok) {
+                qCWarning(modelformat) << "Model side file too large, not read:" << url << data.size() << "bytes";
+                data.clear();
+            }
+        } else {
+            qCWarning(modelformat) << "Model side file not read (" << (request->getState() == ResourceRequest::Finished ? "failed" : "timed out") << "):" << url;
+        }
+        request->deleteLater();
+        return ok;
+    }
+
+public:
+    ~TivoliIOStream() {}
     size_t Read(void* pvBuffer, size_t pSize, size_t pCount) override {
-        if (pSize == 0 || pCount == 0 || _position >= (size_t)_data.size()) {
+        if (!fetch() || pSize == 0 || !pvBuffer) {
             return 0;
         }
-        // whole items only, and never more than the caller asked for or than is left
-        size_t remaining = (size_t)_data.size() - _position;
-        size_t items = std::min(pCount, remaining / pSize);
-        size_t bytes = items * pSize;
-        memcpy(pvBuffer, _data.constData() + _position, bytes);
-        _position += bytes;
-        return items;
+        const size_t size = (size_t)data.size();
+        const size_t available = size > pos ? size - pos : 0;
+        const size_t count = std::min(pCount, available / pSize);
+        const size_t bytes = count * pSize;
+        if (bytes > 0) {
+            memcpy(pvBuffer, data.constData() + pos, bytes);
+            pos += bytes;
+        }
+        return count;
     }
     size_t Write(const void* pvBuffer, size_t pSize, size_t pCount) override {
         return 0;
     }
     aiReturn Seek(size_t pOffset, aiOrigin pOrigin) override {
-        // as Assimp's own MemoryIOStream: from the start, from here, or back from the end, never outside the file
-        size_t size = (size_t)_data.size();
-        if (pOrigin == aiOrigin_SET && pOffset <= size) {
-            _position = pOffset;
-        } else if (pOrigin == aiOrigin_CUR && pOffset <= size - _position) {
-            _position += pOffset;
-        } else if (pOrigin == aiOrigin_END && pOffset <= size) {
-            _position = size - pOffset;
-        } else {
+        if (!fetch()) {
             return aiReturn_FAILURE;
         }
+        const size_t size = (size_t)data.size();
+        size_t base = 0;
+        switch (pOrigin) {
+            case aiOrigin_SET: base = 0; break;
+            case aiOrigin_CUR: base = pos; break;
+            case aiOrigin_END: base = size; break;
+            default: return aiReturn_FAILURE;
+        }
+        if (pOffset > size || base > size - pOffset) {
+            return aiReturn_FAILURE;
+        }
+        pos = base + pOffset;
         return aiReturn_SUCCESS;
     }
     size_t Tell() const override {
-        return _position;
+        return pos;
     }
     size_t FileSize() const override {
-        return (size_t)_data.size();
+        return const_cast<TivoliIOStream*>(this)->fetch() ? (size_t)data.size() : 0;
     }
     void Flush () override {
     }
-
-private:
-    QByteArray _data;
-    size_t _position { 0 };
 };
 
 class TivoliIOSystem : public Assimp::IOSystem {
 public:
     hifi::URL originalUrl;
+    qint64 totalBytes { 0 };     // the model's side files so far, together
+    int opened { 0 };            // how many side files it has asked for
+    bool warned { false };
 
     TivoliIOSystem(hifi::URL originalUrl) : originalUrl(originalUrl) {}
     ~TivoliIOSystem() {}
+
+    // a side file's bytes counted toward the model's ceiling; false when the model would pass it
+    bool account(qint64 bytes) {
+        if (totalBytes + bytes > MAX_MODEL_SIDE_BYTES) {
+            qCWarning(modelformat) << "Model's side files pass" << (MAX_MODEL_SIDE_BYTES >> 20) << "MB together, the rest not read:" << originalUrl;
+            return false;
+        }
+        totalBytes += bytes;
+        if (!warned && totalBytes > WARN_MODEL_SIDE_BYTES) {
+            warned = true;
+            qCWarning(modelformat) << "Model's side files pass" << (WARN_MODEL_SIDE_BYTES >> 20) << "MB together:" << originalUrl;
+        }
+        return true;
+    }
+
+    // a side file comes from where the model came from: the same scheme, and for a web model the same host
+    bool allowed(const hifi::URL& side) const {
+        if (!side.isValid() || side.scheme() != originalUrl.scheme()) {
+            return false;
+        }
+        const auto scheme = side.scheme();
+        if (scheme == "http" || scheme == "https") {
+            return side.host().compare(originalUrl.host(), Qt::CaseInsensitive) == 0;
+        }
+        return true;
+    }
+    hifi::URL resolve(const char* pFile) const {
+        return originalUrl.resolved(QString::fromLocal8Bit(pFile));
+    }
 
     bool Exists(const char* pFile) const override {
         return allowed(resolve(pFile));
@@ -138,60 +286,27 @@ public:
         return '/';
     }
     Assimp::IOStream* Open(const char* pFile, const char* pMode) override {
-        hifi::URL url = resolve(pFile);
-        if (!allowed(url)) {
-            qCWarning(modelformat) << "AssimpSerializer: not fetching" << url << "for" << originalUrl;
+        auto side = resolve(pFile);
+        if (!allowed(side)) {
+            qCWarning(modelformat) << "Model side file not from the model's place, not read:" << side << "for" << originalUrl;
             return nullptr;
         }
-
-        auto request = DependencyManager::get<ResourceManager>()->createResourceRequest(
-            nullptr, url, true, -1, "TivoliIOSystem::Open"
-        );
-        if (!request) {
+        if (++opened > MAX_SIDE_FILES) {
+            if (opened == MAX_SIDE_FILES + 1) {
+                qCWarning(modelformat) << "Model asks for more than" << MAX_SIDE_FILES << "side files, the rest not read:" << originalUrl;
+            }
             return nullptr;
         }
-
-        QEventLoop loop;
-        QTimer timeout;
-        timeout.setSingleShot(true);
-        QObject::connect(request, &ResourceRequest::finished, &loop, &QEventLoop::quit);
-        QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
-        request->send();
-        timeout.start(MAX_FETCH_MSECS);
-        loop.exec();
-
-        bool ok = timeout.isActive() && request->getResult() == ResourceRequest::Success;
-        QByteArray data = ok ? request->getData() : QByteArray();
-        request->deleteLater();
-        if (!ok || data.size() > MAX_FILE_BYTES) {
-            qCWarning(modelformat) << "AssimpSerializer: couldn't fetch" << url << "for" << originalUrl;
-            return nullptr;
-        }
-        return new TivoliIOStream(std::move(data));
+        return new TivoliIOStream(side, this);
     }
     void Close(Assimp::IOStream* pFile) override {
         delete pFile;
     }
-
-private:
-    static constexpr int MAX_FETCH_MSECS = 30 * 1000;
-    static constexpr int MAX_FILE_BYTES = 256 * 1024 * 1024;
-
-    hifi::URL resolve(const char* pFile) const {
-        return originalUrl.resolved(QString::fromLocal8Bit(pFile));
-    }
-
-    // A model's files come the same way as the model: over its own scheme, and never from a network share
-    bool allowed(const hifi::URL& url) const {
-        if (url.scheme() != originalUrl.scheme()) {
-            return false;
-        }
-        if (url.isLocalFile() && !url.host().isEmpty()) {
-            return false;
-        }
-        return true;
-    }
 };
+
+bool TivoliIOStream::account(qint64 bytes) {
+    return owner ? owner->account(bytes) : true;
+}
 
 bool isEmptyVec3(glm::vec3 v) { return v.x == 0 && v.y == 0 && v.z == 0; }
 
@@ -524,17 +639,24 @@ void AssimpSerializer::processMeshes(const hifi::VariantHash& mapping) {
             }
         }
 
+        // a triangle with a vertex the mesh doesn't have is left out: the passes after the reader index the vertices
+        // with it unchecked
+        size_t trianglesLeftOut = 0;
         for (size_t faceIndex = 0; faceIndex < mMesh->mNumFaces; faceIndex++) {
-            aiFace face = mMesh->mFaces[faceIndex];
+            const aiFace& face = mMesh->mFaces[faceIndex];
             if (face.mNumIndices != 3) continue; // must be a triangle
-            // and of the mesh's own vertices
             if (face.mIndices[0] >= mMesh->mNumVertices || face.mIndices[1] >= mMesh->mNumVertices ||
                 face.mIndices[2] >= mMesh->mNumVertices) {
+                trianglesLeftOut++;
                 continue;
             }
             for (size_t i = 0; i < face.mNumIndices; i++) {
                 meshPartPtr->triangleIndices.push_back(face.mIndices[i]);
             }
+        }
+        if (trianglesLeftOut > 0) {
+            qCWarning(modelformat) << "AssimpSerializer::read" << url.fileName() << "mesh" << meshIndex << ":" << trianglesLeftOut
+                                   << "triangles with a vertex past the mesh's" << mMesh->mNumVertices << "left out";
         }
 
         hifi::VariantHash blendshapeMappings = FSTReader::getBlendshapeMappings(mapping);
@@ -655,6 +777,18 @@ void AssimpSerializer::processMeshes(const hifi::VariantHash& mapping) {
                     fillBlendshape(meshPtr->blendshapes[index], mMesh, animMesh, 1.0f);
                 }
             }
+        }
+
+        // the reader's last check, the one the FBX and OBJ readers make (hfm::sanitizeMesh): the passes after a reader
+        // index the vertices with the parts' and the blendshapes' indices unchecked, so a face naming a vertex the
+        // mesh does not have, a per-vertex list of the wrong length or a blendshape that does not hold together is
+        // left out here, with its blendshape slot kept (the channels are numbered by it)
+        const hfm::MeshSanitizeResult sanitized = hfm::sanitizeMesh(*meshPtr);
+        if (sanitized.changed()) {
+            qCWarning(modelformat) << "AssimpSerializer::read" << url.fileName() << "mesh" << meshIndex << ":"
+                                   << sanitized.facesRemoved << "faces with a vertex past the mesh's" << meshPtr->vertices.size()
+                                   << "or cut short left out," << sanitized.listsCleared << "lists of the wrong length cleared,"
+                                   << sanitized.blendshapesCleared << "blendshapes emptied";
         }
     }
 
@@ -864,12 +998,13 @@ void AssimpSerializer::processAnimations() {
             //     extractTranslation(joint->globalTransform) -
             //     asVec3(positionKey.mValue);
             
-            // a channel with fewer keys than the longest holds its last one
+            // a channel with fewer keys than the longest one holds its last key; one with none is left as the joint is
             if (channel->mNumRotationKeys == 0 || jointIndex < 0 || jointIndex >= animationFrame->rotations.size()) {
                 continue;
             }
-            auto rotationKey = channel->mRotationKeys[std::min(frame, (size_t)channel->mNumRotationKeys - 1)];
-            animationFrame->rotations[jointIndex] = asQuat(rotationKey.mValue);
+            auto keyIndex = std::min<size_t>(frame, channel->mNumRotationKeys - 1);
+            auto rotationKey = channel->mRotationKeys[keyIndex];
+            animationFrame->rotations[jointIndex] = asQuat(rotationKey.mValue);            
         }
     }
 }
@@ -1222,6 +1357,11 @@ HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi
     // what follows the last dot, as the format registry chose this reader by: Blender's Tree.001.glb is a "glb"
     ext = QFileInfo(url.path()).suffix();
     vrm = readVRM(data);
+    // a VRM is a binary glTF (glTF 2.0 with VRM's own extensions, which the reader leaves aside): it is read as a .glb,
+    // with glTF's materials and extras
+    if (ext.compare("vrm", Qt::CaseInsensitive) == 0) {
+        ext = "glb";
+    }
 
     // qCDebug(modelformat) << "AssimpSerializer::read url"<<url<<ext;
 
@@ -1242,6 +1382,7 @@ HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi
 
     Assimp::Importer importer;
     importer.SetIOHandler(new TivoliIOSystem(url));
+    AllowedImportersOnly allowedImportersOnly(importer);
     
     // we don't support lights and cameras over models
     importer.SetPropertyInteger(AI_CONFIG_PP_RVC_FLAGS, aiComponent_LIGHTS | aiComponent_CAMERAS);
@@ -1261,7 +1402,7 @@ HFMModel::Pointer AssimpSerializer::read(const hifi::ByteArray& data, const hifi
     scene = importer.ReadFileFromMemory(
         glb.constData(), glb.size(),
         // aiProcess_CalcTangentSpace |
-        aiProcess_ValidateDataStructure | // refuses scenes whose indices or counts don't add up
+        aiProcess_ValidateDataStructure |   // a scene whose indices or counts do not hold together is refused
         aiProcess_Triangulate |
         aiProcess_RemoveComponent |
         aiProcess_GenNormals | 

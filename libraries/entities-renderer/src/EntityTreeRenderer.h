@@ -7,9 +7,23 @@
 //  Modified by Caitlyn Meeks on 12/25/19
 //  Copyright 2019 Tivoli Cloud VR
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: updateChangedEntities, the render-update budget's counters and getters (getPrevNumEntityUpdates through
+// getLastMovingAssemblyInViewTime) and the members the budget keeps (_avgRenderableUpdateCost through
+// _priorityRenderablesToUpdate).
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
 
 #ifndef hifi_EntityTreeRenderer_h
 #define hifi_EntityTreeRenderer_h
+
+#include <atomic>
 
 #include <QtCore/QSet>
 #include <QtCore/QStack>
@@ -54,13 +68,8 @@ class EntityTreeRenderer : public OctreeProcessor, public Dependency {
     Q_OBJECT
 public:
 
-    QVector<QUuid> _zoneCullSkipList; // the final ZCL to be used
-    QList<EntityItemID> _zoneCullingStack;
-    QList<EntityItemID> _prevZoneCullingStack;
     QList<EntityItemID> _currentlySelectedEntities; // selected by edit
-    
-    bool _zoneCullingActive = false;
-    bool _updateStaticEntities = false;
+
     bool _isEditMode = false;
     bool _ghostingAllowed = true;
     bool _disableWebEntities = false;
@@ -70,7 +79,6 @@ public:
     bool isAnythingSelected() { return !_currentlySelectedEntities.isEmpty(); }
     void clearEntitySelections() { _currentlySelectedEntities.clear(); }
 
-    void updateStaticEntities(bool value) { _updateStaticEntities = value; }
     void setSceneIsReady(bool value) { _sceneIsReady = value; }
     bool getSceneIsReady() { return _sceneIsReady; }
 
@@ -78,16 +86,35 @@ public:
     bool getDisableWebEntities() { return _disableWebEntities; }
     
     void setIsEditMode(bool modeState) { _isEditMode = modeState; }
-    // while suspended nothing is zone-culled (build mode shows everything); every renderable looks again when
-    // this changes, so the culled come back, and are culled again once it ends
+    // while suspended nothing is zone-culled (build mode shows everything); the decision is made again when this
+    // changes, so the culled come back, and are culled again once it ends
     void setZoneCullingSuspended(bool suspended);
     bool getGhostingAllowed() { return _ghostingAllowed; }
 
-    ReadWriteLockable _getZoneCullSkiplistGuard;
-    QVector<QUuid> getZoneCullSkiplist();
-    void evaluateZoneCullingStack();  // We'll look at all the culling masks for each zone
-    bool getZoneCullStatus() { return _zoneCullingActive; }
-    void updateZoneContentsLists(EntityItemID& zoneItem, bool hasCompoundShape);
+    // Zone culling (ZONE-CULLING.md; master plan entry 13). While the avatar stands in a zone whose culling mode is
+    // "outside", the world's entities outside that zone are not drawn. The innermost zone whose mode is not "inherit"
+    // decides, as for a zone's other settings. The decision is made once, when that changes (decideZoneCulling sets a
+    // flag on each renderer); the renderers whose flag flipped are refreshed through a time-boxed lane beside the
+    // render-update budget (drainZoneCullFlips, nearest first); and an entity that updates while a zone is active
+    // (it moved, or it is new) tests itself against the zone's box. A world without a culling zone pays nothing.
+    struct ZoneCullState {
+        bool active { false };      // entities outside the zone are hidden
+        bool dontLoad { false };    // and the entity query stops at the zone (the load zone, entry 13 (g))
+        QUuid zoneId;
+        glm::vec3 position { 0.0f };        // the zone's box: its world centre, orientation and half dimensions
+        glm::quat rotation;
+        glm::vec3 halfDimensions { 0.0f };
+        // whether a sphere touches the box: the test in the zone's own frame, so a turned zone culls by its true shape
+        bool touches(const glm::vec3& center, float radius) const;
+        // how far the box reaches from a point: the distance to its farthest corner (the load zone's query limit)
+        float reachFrom(const glm::vec3& point) const;
+    };
+    const ZoneCullState& getZoneCullState() const { return _zoneCullState; }
+    // the entities zone culling may hide: the world's own, never the app's local ones, worn ones, or a zone, gizmo,
+    // grid or material
+    static bool isZoneCullable(const EntityItemPointer& entity);
+    // a zone's culling mode, place or shape changed: the decision is made again at the next check
+    void zoneCullingZoneChanged(const EntityItemID& id);
 
     bool _bypassPrioritySorting = false;
     bool getBypassPrioritySorting() { return _bypassPrioritySorting; }
@@ -197,15 +224,46 @@ public:
     static bool addMaterialToAvatar(const QUuid& avatarID, graphics::MaterialLayer material, const std::string& parentMaterialName);
     static bool removeMaterialFromAvatar(const QUuid& avatarID, graphics::MaterialPointer material, const std::string& parentMaterialName);
 
+    // FROZEN (vehicle path): see the note at the top of this file.
     int getPrevNumEntityUpdates() const { return _prevNumEntityUpdates; }
     int getPrevTotalNeededEntityUpdates() const { return _prevTotalNeededEntityUpdates; }
 
+    // The render-update budget's counters (team/performance/INSTRUMENTS-PLAN.md, item 2), a few integers kept every
+    // frame: the last pass's values, and the maxima over the last whole second for a Stats line that holds still.
+    // "Needed" and "done" above are the budgeted lane (AUTOMATIC entities, with the last frame's leftovers); the
+    // carried lane (a moving entity's parts, refreshed with it outside the budget), the avatars' lane and the
+    // PRIORITIZED lane are counted apart. Main thread.
+    uint64_t getRenderUpdateFrame() const { return _renderUpdateFrame; }
+    int getPrevNumCarriedEntityUpdates() const { return _prevNumCarriedEntityUpdates; }
+    int getPrevNumAvatarChildUpdates() const { return _prevNumAvatarChildUpdates; }
+    int getPrevNumPriorityEntityUpdates() const { return _prevNumPriorityEntityUpdates; }
+    int getPrevNumDeferredEntityUpdates() const { return _prevNumDeferredEntityUpdates; }
+    int getPrevOldestDeferredFrames() const { return _prevOldestDeferredFrames; }
+    int getMaxDeferredEntityUpdatesLastSecond() const { return _maxDeferredLastSecond; }
+    int getMaxDeferredFramesLastSecond() const { return _maxDeferredFramesLastSecond; }
+    // An entity's staleness for the inspector: how many frames it has waited for its render update, 0 when it is
+    // drawn as its entity is, -1 when it has no renderable (not drawn); and how many frames late its last refresh
+    // came. Main thread, no lock (the map is the main thread's own); cheap enough to poll.
+    int getRenderUpdateFramesBehind(const EntityItemID& id) const;
+    int getRenderUpdateLastLateFrames(const EntityItemID& id) const;
+    // when a moving assembly (a vehicle, a train car, a frame, a platform: a moving entity with parts, the carried
+    // lane) was last refreshed inside the view, usecTimestampNow(); 0 when never. The refresh regime reads it: a ride
+    // in view keeps the full rate while the window is unfocused (Caity, 2026-10-31). Main thread.
+    uint64_t getLastMovingAssemblyInViewTime() const { return _lastMovingAssemblyInView; }
+
 signals:
+    /// The world `world` (its entities engine's id, ScriptCaller::world() on its thread) was left, at a world change or
+    /// a content reload, before its scripts unload and its engine stops: its code gets nothing more done
+    /// (ScriptCaller::retireWorld), and what its scripts made outside the engine (tagged with that id) goes now, each
+    /// owner removing its own.
+    void worldLeft(int world);
+    /// The entities engine of the world `world` has stopped (or was given up on): nothing of that world's scripts runs
+    /// any more. Its owners remove what they hold of the world again (nothing, as the world's calls are refused since
+    /// worldLeft).
+    void worldScriptsStopped(int world);
     void enterEntity(const EntityItemID& entityItemID);
     void leaveEntity(const EntityItemID& entityItemID);
     void collisionWithEntity(const EntityItemID& idA, const EntityItemID& idB, const Collision& collision);
-    // void requestSpecialUpdate(const EntityItemID& entityItemID);
-    void updateStaticEntities();
 
 public slots:
     void addingEntity(const EntityItemID& entityID);
@@ -215,6 +273,9 @@ public slots:
     void updateEntityRenderStatus(bool shouldRenderEntities);
     void updateZone(const EntityItemID& id);
     void connectedToDomain();
+    // the tree refuses content addresses that name a file on this computer unless the world is local
+    // (ScriptNetworkPolicy::isWorldLocal, the connected socket's address); decided again at every domain change
+    void updateContentFromThisComputer();
 
     // optional slots that can be wired to menu items
     void setDisplayModelBounds(bool value) { _displayModelBounds = value; }
@@ -234,11 +295,18 @@ protected:
 
 private:
     void addPendingEntities(const render::ScenePointer& scene, render::Transaction& transaction);
+    // FROZEN (vehicle path): see the note at the top of this file.
     void updateChangedEntities(const render::ScenePointer& scene, render::Transaction& transaction);
     EntityRendererPointer renderableForEntity(const EntityItemPointer& entity) const { return renderableForEntityId(entity->getID()); }
     render::ItemID renderableIdForEntity(const EntityItemPointer& entity) const { return renderableIdForEntityId(entity->getID()); }
 
     void resetEntitiesScriptEngine();
+    void replaceEntitiesScriptEngine();
+    void retireEntitiesScriptEngine(const ScriptEnginePointer& old);
+    void markWorldLeft(int world);
+    void entitiesEngineStopped(int world);
+    void interruptIfStillRunning(QWeakPointer<ScriptEngine> old, int attempt);
+    void restartKeptEntityScripts();
 
     void findBestZoneAndMaybeContainingEntities(QSet<EntityItemID>& entitiesContainingAvatar);
 
@@ -258,12 +326,20 @@ private:
     glm::vec3 _avatarPosition { 0.0f };
     bool _forceRecheckEntities { true };
     bool _zoneCullingSuspended { false };
-    bool _refreshAllRenderables { false };   // the next evaluation of the zone culling updates every renderable
+    ZoneCullState _zoneCullState;
+    bool _zoneCullDirty { false };                    // the deciding zone moved, turned, resized or changed mode
+    std::vector<EntityRendererPointer> _zoneCullFlips; // renderers whose flag flipped, nearest first, not yet refreshed
+    size_t _zoneCullFlipsNext { 0 };
+    void updateZoneCullState();
+    void decideZoneCulling();
+    void drainZoneCullFlips(const render::ScenePointer& scene, render::Transaction& transaction);
+    void resetZoneCulling();
     bool _sceneIsReady = false;
     QSet<EntityItemID> _currentEntitiesInside;
 
     bool _wantScripts;
     ScriptEnginePointer _entitiesScriptEngine;
+    QSet<int> _entitiesEnginesStopping;  // the world ids of engines of worlds left not stopped yet (retireEntitiesScriptEngine)
 
     void playEntityCollisionSound(const EntityItemPointer& entity, const Collision& collision);
 
@@ -291,8 +367,6 @@ private:
     unsigned int _mouseRayPickID;
     std::function<RayToEntityIntersectionResult(unsigned int)> _getPrevRayPickResultOperator;
     std::function<void(unsigned int, bool)> _setPrecisionPickingOperator;
-
-    bool _mouseAndPreloadSignalHandlersConnected { false };
 
     class LayeredZone {
     public:
@@ -327,12 +401,27 @@ private:
     const uint64_t ZONE_CHECK_INTERVAL = USECS_PER_MSEC * 1000; // ~100hz
     const float ZONE_CHECK_DISTANCE = 0.001f;
 
+    // FROZEN (vehicle path): see the note at the top of this file.
     float _avgRenderableUpdateCost { 0.0f };
 
     ReadWriteLockable _changedEntitiesGuard;
     std::unordered_set<EntityItemID> _changedEntities;
     int _prevNumEntityUpdates { 0 };
     int _prevTotalNeededEntityUpdates { 0 };
+    uint64_t _renderUpdateFrame { 0 };   // one per updateChangedEntities pass (one a frame)
+    int _prevNumCarriedEntityUpdates { 0 };
+    int _prevNumAvatarChildUpdates { 0 };
+    int _prevNumPriorityEntityUpdates { 0 };
+    int _prevNumDeferredEntityUpdates { 0 };
+    int _prevOldestDeferredFrames { 0 };
+    int _maxDeferredThisSecond { 0 };
+    int _maxDeferredFramesThisSecond { 0 };
+    int _maxDeferredLastSecond { 0 };
+    int _maxDeferredFramesLastSecond { 0 };
+    uint64_t _countersSecondStart { 0 };
+    uint64_t _lastMovingAssemblyInView { 0 };
+    std::atomic<int> _contentFromThisComputerLogged { -1 };   // the last decision logged (-1 none, 0 allowed, 1 refused)
+    uint64_t _lastMovingAssemblyTest { 0 };
 
     std::unordered_set<EntityRendererPointer> _renderablesToUpdate;
     std::unordered_set<EntityRendererPointer> _priorityRenderablesToUpdate;

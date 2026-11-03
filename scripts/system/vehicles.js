@@ -25,6 +25,18 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: the driver's camera and seat: the CAMERA_* and AIR_CAMERA_* numbers, takeHelm, leaveHelm, sit and
+//   stand.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 
 (function() {
     Script.include("/~/system/libraries/flightAssist.js");
@@ -35,6 +47,7 @@
     var SIT_ANIMATION_FIRST_FRAME = 1;
     var SIT_ANIMATION_LAST_FRAME = 350;
     var REACH = 4.0;             // m from the avatar to the vehicle's surface, to get in
+    // FROZEN (vehicle path): see the note at the top of this file.
     var CAMERA_BACK = 7.0;       // m behind the vehicle
     var CAMERA_UP = 2.5;         // m above it
     var CAMERA_RATE = 6.0;       // per second: how fast the camera settles behind the vehicle
@@ -46,6 +59,7 @@
     var DRIVE_KEYS = [DriveKeys.TRANSLATE_X, DriveKeys.TRANSLATE_Y, DriveKeys.TRANSLATE_Z, DriveKeys.YAW, DriveKeys.STEP_YAW,
                       DriveKeys.STEP_TRANSLATE_X, DriveKeys.STEP_TRANSLATE_Y, DriveKeys.STEP_TRANSLATE_Z];
 
+    // FROZEN (vehicle path): see the note at the top of this file.
     var AIR_CAMERA_BACK = 14.0;  // m behind an aircraft
     var AIR_CAMERA_UP = 4.0;     // m above it
     var AIR_CAMERA_RATE = 4.0;   // per second
@@ -106,6 +120,7 @@
         return properties;
     }
 
+    // FROZEN (vehicle path): see the note at the top of this file.
     // the helm of an airship, or the stick of an aircraft (round 8, the same keys: Space and C tilt its nacelles up toward
     // hover and down toward forward flight while held): the crew stands on the deck in the ship's own world (the physics
     // makes the avatar a member of the frame by where it stands), so taking the helm is walking to it and taking the
@@ -143,6 +158,7 @@
         }
     }
 
+    // FROZEN (vehicle path): see the note at the top of this file.
     function leaveHelm() {
         var vehicleID = seated.vehicleID;
         if (seated.aircraft) {
@@ -170,9 +186,10 @@
         print("vehicles.js: left the helm of " + vehicleID);
     }
 
+    // FROZEN (vehicle path): see the note at the top of this file.
     function sit(vehicle, seat) {
         var isDriver = !!seat.driver;
-        seated = { vehicleID: vehicle.id, seat: seat, driver: isDriver };
+        seated = { vehicleID: vehicle.id, seat: seat, driver: isDriver, world: worldNow() };
         MyAvatar.collisionsEnabled = false;
         MyAvatar.hmdLeanRecenterEnabled = false;
         var roles = rolesToOverride();
@@ -207,7 +224,11 @@
         print("vehicles.js: sitting in " + (seat.name || "a seat") + " of " + vehicle.id + (isDriver ? " as the driver" : " (the driver is " + vehicle.vehicle.driver + ")"));
     }
 
-    function stand() {
+    // FROZEN (vehicle path): see the note at the top of this file.
+    // worldChanged: the vehicle stayed behind in the world just left (the engine has already dropped the avatar's
+    // parent and stood it where the seat carried it: vehicle master plan entry 12), so the avatar's own state is
+    // restored and nothing else: no step beside a vehicle that is not there, no edit of its driver
+    function stand(worldChanged) {
         if (!seated) {
             return;
         }
@@ -219,22 +240,26 @@
         var wasDriver = seated.driver;
         seated = null;
         Script.update.disconnect(update);
-        Entities.clearVehicleControls(vehicleID);
-        if (wasDriver) {
-            var properties = Entities.getEntityProperties(vehicleID, ["vehicle"]);
-            if (properties && properties.vehicle && properties.vehicle.driver === MyAvatar.sessionUUID) {
-                Entities.editEntity(vehicleID, { vehicle: { driver: Uuid.NULL } });
+        if (worldChanged) {
+            MyAvatar.parentID = Uuid.NULL;   // dropped by the engine already; nothing if so
+        } else {
+            Entities.clearVehicleControls(vehicleID);
+            if (wasDriver) {
+                var properties = Entities.getEntityProperties(vehicleID, ["vehicle"]);
+                if (properties && properties.vehicle && properties.vehicle.driver === MyAvatar.sessionUUID) {
+                    Entities.editEntity(vehicleID, { vehicle: { driver: Uuid.NULL } });
+                }
             }
+            // step out beside the vehicle, upright whatever way up the vehicle lies: the level right of where the seat
+            // faces, half a metre up. goToLocation, not setting position and orientation: those race the physics step,
+            // which hands back the pose the avatar had in the seat (a tilted one in a car on its side); goToLocation is
+            // applied between steps and finds a free spot if the one asked for is inside something
+            var position = MyAvatar.position;
+            var level = Quat.cancelOutRollAndPitch(MyAvatar.orientation);
+            var right = Quat.getRight(level);
+            MyAvatar.parentID = Uuid.NULL;
+            MyAvatar.goToLocation(Vec3.sum(position, Vec3.sum(Vec3.multiply(1.5, right), { x: 0, y: 0.5, z: 0 })), true, level, false);
         }
-        // step out beside the vehicle, upright whatever way up the vehicle lies: the level right of where the seat
-        // faces, half a metre up. goToLocation, not setting position and orientation: those race the physics step,
-        // which hands back the pose the avatar had in the seat (a tilted one in a car on its side); goToLocation is
-        // applied between steps and finds a free spot if the one asked for is inside something
-        var position = MyAvatar.position;
-        var level = Quat.cancelOutRollAndPitch(MyAvatar.orientation);
-        var right = Quat.getRight(level);
-        MyAvatar.parentID = Uuid.NULL;
-        MyAvatar.goToLocation(Vec3.sum(position, Vec3.sum(Vec3.multiply(1.5, right), { x: 0, y: 0.5, z: 0 })), true, level, false);
         for (var i = 0; i < DRIVE_KEYS.length; i++) {
             MyAvatar.enableDriveKey(DRIVE_KEYS[i]);
         }
@@ -249,7 +274,13 @@
             Camera.mode = previousCameraMode;
             previousCameraMode = null;
         }
-        print("vehicles.js: standing up from " + vehicleID);
+        print("vehicles.js: standing up from " + vehicleID + (worldChanged ? " (left behind in another world)" : ""));
+    }
+
+    // the world the avatar sat down in, as a world change is told apart from a vehicle deleted under the avatar: the
+    // address changes the moment a new world is asked for, before its entities arrive
+    function worldNow() {
+        return location.hostname + "|" + location.domainID;
     }
 
     // metres from the aircraft's belly to whatever is below it (not itself or its parts)
@@ -294,7 +325,9 @@
         }
         var properties = Entities.getEntityProperties(seated.vehicleID, ["id", "position", "rotation", "velocity", "vehicle", "dimensions"]);
         if (!properties || properties.id !== seated.vehicleID) {
-            stand();   // the vehicle is gone (a deleted entity's properties come back as defaults, a null id among them)
+            // the vehicle is gone (a deleted entity's properties come back as defaults, a null id among them), or the
+            // avatar left for another world and the vehicle stayed behind
+            stand(seated.world !== worldNow());
             return;
         }
         if (seated.airship && Vec3.distance(MyAvatar.position, properties.position) > HELM_REACH) {

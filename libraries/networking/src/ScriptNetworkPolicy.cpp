@@ -11,18 +11,23 @@
 
 #include <cstring>
 
+#include <QtCore/QDir>
+#include <QtCore/QFileInfo>
 #include <QtCore/QStringList>
 #include <QtNetwork/QHostInfo>
 
 #include <DependencyManager.h>
 #include <PathUtils.h>
+#include <ScriptCaller.h>
 
+#include "NetworkLogging.h"
 #include "NodeList.h"
 
 namespace {
 
 const QStringList WEB_SCHEMES { "http", "https", "ws", "wss" };
 const QString ASSET_SCHEME = "atp";
+const QString WORLD_LEFT = "the world the script belongs to was left";
 
 bool inIPv4Block(quint32 address, quint32 block, int bits) {
     const quint32 mask = bits == 0 ? 0 : (0xffffffffu << (32 - bits));
@@ -133,29 +138,54 @@ bool ScriptNetworkPolicy::isStrict() {
     return strict;
 }
 
-// The app's own scripts (its scripts folder, its resources): the client's interface, which the strict switch must
-// not take apart.
-static bool isAppScript(const QUrl& origin) {
-    if (origin.scheme().toLower() == "qrc") {
+// A file's path with links followed and "." and ".." resolved; a path that names no file is cleaned by its spelling.
+static QString canonicalPath(const QString& path) {
+    const QString canonical = QFileInfo(path).canonicalFilePath();
+    return canonical.isEmpty() ? QDir::cleanPath(path) : canonical;
+}
+
+bool ScriptNetworkPolicy::isAppScript(const QUrl& scriptUrl) {
+    if (scriptUrl.scheme().toLower() == "qrc") {
         return true;
     }
-    if (!origin.isLocalFile()) {
+    if (!scriptUrl.isLocalFile()) {
         return false;
     }
     const QUrl defaults = PathUtils::defaultScriptsLocation();
-    return !defaults.isEmpty() && defaults.isParentOf(origin);
+    if (!defaults.isLocalFile()) {
+        return false;
+    }
+    // both paths canonical, so that a path which only starts in the folder ("scripts/../..") doesn't count; the app's
+    // own paths never hold a backslash (a separator on Windows, a plain character elsewhere)
+    const QString local = scriptUrl.toLocalFile();
+    if (local.contains('\\')) {
+        return false;
+    }
+    const QString folder = canonicalPath(defaults.toLocalFile());
+    const QString path = canonicalPath(local);
+    if (folder.isEmpty() || folder == "/") {
+        return false;
+    }
+    return path.compare(folder, PathUtils::getFSCaseSensitivity()) == 0 ||
+           path.startsWith(folder + "/", PathUtils::getFSCaseSensitivity());
 }
 
-bool ScriptNetworkPolicy::applies(const QUrl& origin) {
+bool ScriptNetworkPolicy::applies(const QUrl& origin, bool worldIsLocal) {
     if (isStrict()) {
         return !isAppScript(origin);
     }
-    return !isLocalOrigin(origin) && !isWorldLocal();
+    return !isLocalOrigin(origin) && !worldIsLocal;
 }
 
-ScriptNetworkPolicy::Decision ScriptNetworkPolicy::check(const QUrl& target, const QUrl& origin) {
+ScriptNetworkPolicy::Decision ScriptNetworkPolicy::check(const QUrl& target, const QUrl& origin, bool worldIsLocal) {
     Decision decision;
-    if (!applies(origin)) {
+    if (ScriptCaller::isRetired()) {
+        // a script of a world that was left reaches nothing more, wherever it came from (security #32)
+        decision.allowed = false;
+        decision.reason = WORLD_LEFT;
+        return decision;
+    }
+    if (!applies(origin, worldIsLocal)) {
         return decision;
     }
     const QString scheme = target.scheme().toLower();
@@ -200,22 +230,60 @@ ScriptNetworkPolicy::Decision ScriptNetworkPolicy::checkAddresses(const QList<QH
     }
     for (const QHostAddress& address : addresses) {
         if (isPrivateAddress(address)) {
+            // one private answer among public ones refuses the name: a name that answers both ways is a sign of rebinding
             decision.allowed = false;
             decision.reason = "the name leads to an address on this machine or its network (" + address.toString() + ")";
             return decision;
         }
     }
+    // an IPv4 answer first when there is one: a machine without working IPv6 would fail on an IPv6 one, where the
+    // network manager used to try the next
+    decision.address = addresses.first();
+    for (const QHostAddress& address : addresses) {
+        if (address.protocol() == QAbstractSocket::IPv4Protocol) {
+            decision.address = address;
+            break;
+        }
+    }
     return decision;
 }
 
+void ScriptNetworkPolicy::pin(QNetworkRequest& request, const Decision& decision) {
+    if (!decision.allowed || decision.address.isNull()) {
+        return;
+    }
+    QUrl url = request.url();
+    const QString name = url.host();
+    if (name.isEmpty() || !QHostAddress(name).isNull()) {
+        return;
+    }
+    url.setHost(decision.address.toString());   // an IPv6 address gets its brackets from QUrl
+    request.setUrl(url);
+    qCDebug(networking) << "a script's request to" << name << "pinned to" << decision.address.toString();
+    const int port = url.port(-1);
+    request.setRawHeader("Host", (port == -1 ? name : name + ":" + QString::number(port)).toUtf8());
+    const QString scheme = url.scheme().toLower();
+    if (scheme == "https" || scheme == "wss") {
+        request.setPeerVerifyName(name);
+    }
+}
+
 void ScriptNetworkPolicy::decide(const QUrl& target, const QUrl& origin, QObject* context,
-                                 std::function<void(const Decision&)> callback) {
-    const Decision first = check(target, origin);
+                                 std::function<void(const Decision&)> callback, bool worldIsLocal) {
+    const Decision first = check(target, origin, worldIsLocal);
     if (!first.needsLookup) {
         callback(first);
         return;
     }
     QHostInfo::lookupHost(target.host(), context, [callback](const QHostInfo& info) {
+        if (ScriptCaller::isRetired()) {
+            // the world was left while the name was looked up (the callback runs on the script's own thread)
+            Decision decision;
+            decision.allowed = false;
+            decision.reason = WORLD_LEFT;
+            callback(decision);
+            return;
+        }
         if (info.error() != QHostInfo::NoError) {
             Decision decision;
             decision.allowed = false;
@@ -227,8 +295,8 @@ void ScriptNetworkPolicy::decide(const QUrl& target, const QUrl& origin, QObject
     });
 }
 
-bool ScriptNetworkPolicy::decideBlocking(const QUrl& target, const QUrl& origin, QString& reason) {
-    Decision decision = check(target, origin);
+bool ScriptNetworkPolicy::decideBlocking(const QUrl& target, const QUrl& origin, QString& reason, bool worldIsLocal) {
+    Decision decision = check(target, origin, worldIsLocal);
     if (decision.needsLookup) {
         const QHostInfo info = QHostInfo::fromName(target.host());
         if (info.error() != QHostInfo::NoError) {

@@ -78,6 +78,11 @@
 #include "AssetScriptingInterface.h"
 #include "BatchLoader.h"
 #include <ScriptNetworkPolicy.h>
+#include "GuardedObject.h"
+#include "WorldMessages.h"
+#include "RefusedGlobal.h"
+#include "ScriptApiPolicy.h"
+#include "ScriptCaller.h"
 #include "BaseScriptEngine.h"
 #include "DataViewClass.h"
 #include "EventTypes.h"
@@ -119,6 +124,15 @@ Q_DECLARE_METATYPE(QScriptEngine::FunctionSignature)
 int functionSignatureMetaID = qRegisterMetaType<QScriptEngine::FunctionSignature>();
 
 int scriptEnginePointerMetaID = qRegisterMetaType<ScriptEnginePointer>();
+
+// Entities.getMultipleEntityProperties is a plain function on the Entities object, not one of its guarded members, so
+// the guard doesn't mark a world's call to it: it is marked here, so that the entities a world's script may not see
+// stay hidden from it (security #28).
+static QScriptValue getMultipleEntityPropertiesMarked(QScriptContext* context, QScriptEngine* engine) {
+    auto scriptEngine = qobject_cast<ScriptEngine*>(engine);
+    ScriptCaller::WorldScope caller(scriptEngine && scriptEngine->isEntityClientScript());
+    return EntityScriptingInterface::getMultipleEntityProperties(context, engine);
+}
 
 static QScriptValue debugPrint(QScriptContext* context, QScriptEngine* engine) {
     QString message = "";
@@ -232,6 +246,9 @@ ScriptEngine::ScriptEngine(Context context, const QString& scriptContents, const
     _arrayBufferClass(new ArrayBufferClass(this)),
     _assetScriptingInterface(new AssetScriptingInterface(this))
 {
+    // held for the engine's life: what the agent's scripts include later never changes it
+    _agentScriptIsLocal = _context == AGENT_SCRIPT &&
+                          (fileNameString.isEmpty() || ScriptNetworkPolicy::isLocalOrigin(QUrl(fileNameString)));
     switch (_context) {
         case Context::CLIENT_SCRIPT:
             _type = Type::CLIENT;
@@ -561,6 +578,10 @@ void ScriptEngine::waitTillDoneRunning() {
     }
 }
 
+bool ScriptEngine::worldWasLeft() const {
+    return ScriptCaller::isRetired(_worldId);
+}
+
 QString ScriptEngine::getFilename() const {
     QStringList fileNameParts = _fileNameString.split("/");
     QString lastPart;
@@ -621,17 +642,66 @@ QUrl ScriptEngine::currentScriptOrigin() const {
             return QUrl("about:EmbeddedEntityScript");   // the code itself, as a javascript: URL
         }
         if (!scheme.isEmpty()) {
-            return currentSandboxURL;
+            return effectiveSandbox(currentSandboxURL);
         }
         // an entity script given as code in the script property keeps that code as its sandbox (entityScriptContentAvailable)
         const QString text = currentSandboxURL.toString();
-        return text.startsWith('/') ? QUrl::fromLocalFile(text) : QUrl("about:EmbeddedEntityScript");
+        return text.startsWith('/') ? effectiveSandbox(QUrl::fromLocalFile(text)) : QUrl("about:EmbeddedEntityScript");
     }
     QUrl url(_fileNameString);
     if (url.scheme().isEmpty() && !_fileNameString.isEmpty()) {
         url = QUrl::fromLocalFile(_fileNameString);
     }
     return url;
+}
+
+bool ScriptEngine::entityScriptsMayBeLocal() const {
+    if (_context != ENTITY_CLIENT_SCRIPT || _servedNonLocalWorld) {
+        return false;
+    }
+    // decided by the world the engine serves, never by anything a script passes
+    if (ScriptNetworkPolicy::isStrict() || !ScriptNetworkPolicy::isWorldLocal()) {
+        _servedNonLocalWorld = true;
+        return false;
+    }
+    return true;
+}
+
+bool ScriptEngine::worldIsLocal() const {
+    if (!isClientSide()) {
+        return false;   // a server is in no world of a visitor's
+    }
+    return _context == ENTITY_CLIENT_SCRIPT ? entityScriptsMayBeLocal() : ScriptNetworkPolicy::isWorldLocal();
+}
+
+QUrl ScriptEngine::ruledOrigin(const QUrl& origin) const {
+    if (isClientSide() || !ScriptNetworkPolicy::isLocalOrigin(origin)) {
+        return origin;
+    }
+    return QUrl(_context == AGENT_SCRIPT ? "about:agent" : "about:entity-server");
+}
+
+QUrl ScriptEngine::effectiveSandbox(const QUrl& sandbox) const {
+    if (_context != ENTITY_CLIENT_SCRIPT || !ScriptNetworkPolicy::isLocalOrigin(sandbox) || entityScriptsMayBeLocal()) {
+        return sandbox;
+    }
+    return QUrl("about:Entities");
+}
+
+QString ScriptEngine::entityScriptRefusal(const QString& entityScript) const {
+    if (_context != ENTITY_CLIENT_SCRIPT || entityScriptsMayBeLocal()) {
+        return QString();
+    }
+    // the address as the script cache reads it: code given as the script, or a javascript: URL, is no address; an
+    // address the cache takes as a file here (a file URL, a path, an unknown scheme) is judged as that file
+    if (ScriptCache::isInlineScript(entityScript) || QUrl(entityScript).scheme().toLower() == "javascript") {
+        return QString();
+    }
+    const QUrl url = DependencyManager::get<ResourceManager>()->normalizeURL(QUrl(entityScript));
+    if (!url.isLocalFile() || ScriptNetworkPolicy::isAppScript(url)) {
+        return QString();
+    }
+    return "a file of this machine, in a world that isn't served from it or its network";
 }
 
 void ScriptEngine::scriptErrorMessage(const QString& message) {
@@ -929,12 +999,14 @@ void ScriptEngine::registerStandardGlobals() {
     registerGlobalObject("Audio", DependencyManager::get<AudioScriptingInterface>().data());
 
     registerGlobalObject("Entities", DependencyManager::get<EntityScriptingInterface>().data());
-    registerFunction("Entities", "getMultipleEntityProperties", EntityScriptingInterface::getMultipleEntityProperties);
+    registerFunction("Entities", "getMultipleEntityProperties", getMultipleEntityPropertiesMarked);
     registerGlobalObject("Quat", &_quatLibrary);
     registerGlobalObject("Vec3", &_vec3Library);
     registerGlobalObject("Mat4", &_mat4Library);
     registerGlobalObject("Uuid", &_uuidLibrary);
-    registerGlobalObject("Messages", DependencyManager::get<MessagesClient>().data());
+    // a world's entity scripts get their own Messages: the world's send path, the app's channels refused (WorldMessages)
+    registerGlobalObject("Messages", isEntityClientScript() ? static_cast<QObject*>(new WorldMessages(this))
+                                                            : DependencyManager::get<MessagesClient>().data());
     registerGlobalObject("File", new FileScriptingInterface(this));
     registerGlobalObject("console", &_consoleScriptingInterface);
     registerFunction("console", "info", ConsoleScriptingInterface::info, currentContext()->argumentCount());
@@ -1014,7 +1086,14 @@ void ScriptEngine::registerGlobalObject(const QString& name, QObject* object) {
 
     if (!globalObject().property(name).isValid()) {
         if (object) {
+            if (isEntityClientScript() && !ScriptApiPolicy::allowsGlobal(name)) {
+                // a world's entity scripts don't get this one: a stand-in of the same name, with no members
+                object = new RefusedGlobal(name, this);
+            }
             QScriptValue value = newQObject(object, QScriptEngine::QtOwnership, DEFAULT_QOBJECT_WRAP_OPTIONS);
+            if (isEntityClientScript()) {
+                value = guardClass()->wrap(value);   // a world's scripts see the guard, never the wrapper
+            }
             globalObject().setProperty(name, value);
         } else {
             globalObject().setProperty(name, QScriptValue());
@@ -1037,6 +1116,11 @@ void ScriptEngine::registerFunction(const QString& name, QScriptEngine::Function
     qCDebug(scriptengine) << "ScriptEngine::registerFunction() called on thread [" << QThread::currentThread() << "] name:" << name;
 #endif
 
+    if (isEntityClientScript() && !ScriptApiPolicy::allowsGlobal(name)) {
+        // a world's entity scripts don't get this one (the QML and web window constructors): the stand-in, as for objects
+        registerGlobalObject(name, new RefusedGlobal(name, this));
+        return;
+    }
     QScriptValue scriptFun = newFunction(functionSignature, numArguments);
     globalObject().setProperty(name, scriptFun);
 }
@@ -1058,9 +1142,43 @@ void ScriptEngine::registerFunction(const QString& parent, const QString& name, 
 
     QScriptValue object = globalObject().property(parent);
     if (object.isValid()) {
-        QScriptValue scriptFun = newFunction(functionSignature, numArguments);
+        if (isEntityClientScript() && !ScriptApiPolicy::allowsGlobal(parent)) {
+        return;   // a world's entity scripts don't get the parent, so not its functions either
+    }
+    QScriptValue scriptFun = newFunction(functionSignature, numArguments);
         object.setProperty(name, scriptFun);
     }
+}
+
+GuardedObjectClass* ScriptEngine::guardClass() {
+    if (!isEntityClientScript()) {
+        return nullptr;
+    }
+    if (!_guardClass) {
+        HostInterface::MemberGate gate;
+        gate.allowsClass = &ScriptApiPolicy::allowsClass;
+        gate.deniesMethod = &ScriptApiPolicy::deniesMethod;
+        gate.deniesPropertyWrite = &ScriptApiPolicy::deniesPropertyWrite;
+        gate.deniesPropertyRead = &ScriptApiPolicy::deniesPropertyRead;
+        gate.deniesSignal = &ScriptApiPolicy::deniesSignal;
+        gate.checksDelivery = &ScriptApiPolicy::checksDelivery;
+        gate.holdsBackDelivery = &ScriptApiPolicy::holdsBackDelivery;
+        gate.refusalLine = &ScriptApiPolicy::refusalLine;
+        gate.allowsAfterWorldLeft = &ScriptApiPolicy::allowsAfterWorldLeft;
+        _guardClass = std::make_unique<GuardedObjectClass>(this, std::move(gate));
+    }
+    return _guardClass.get();
+}
+
+static QScriptValue guardedGetter(QScriptContext* context, QScriptEngine* engine) {
+    auto getter = reinterpret_cast<QScriptEngine::FunctionSignature>(
+        reinterpret_cast<void*>(context->callee().data().toVariant().value<quintptr>()));
+    QScriptValue result = getter ? getter(context, engine) : QScriptValue();
+    ScriptEngine* scriptEngine = qobject_cast<ScriptEngine*>(engine);
+    if (result.isQObject() && scriptEngine && scriptEngine->guardClass()) {
+        result = scriptEngine->guardClass()->wrap(result);
+    }
+    return result;
 }
 
 void ScriptEngine::registerGetterSetter(const QString& name, QScriptEngine::FunctionSignature getter,
@@ -1081,8 +1199,16 @@ void ScriptEngine::registerGetterSetter(const QString& name, QScriptEngine::Func
     qCDebug(scriptengine) << "ScriptEngine::registerGetterSetter() called on thread [" << QThread::currentThread() << "] name:" << name << "parent:" << parent;
 #endif
 
+    if (isEntityClientScript() && !ScriptApiPolicy::allowsGlobal(parent.isEmpty() ? name : parent)) {
+        return;   // a world's entity scripts don't get this global
+    }
     QScriptValue setterFunction = newFunction(setter, 1);
     QScriptValue getterFunction = newFunction(getter);
+    if (isEntityClientScript()) {
+        // what the getter hands back (location: the address manager) goes behind the guard too
+        getterFunction = newFunction(guardedGetter);
+        getterFunction.setData(newVariant(QVariant::fromValue(quintptr(reinterpret_cast<void*>(getter)))));
+    }
 
     if (!parent.isNull() && !parent.isEmpty()) {
         QScriptValue object = globalObject().property(parent);
@@ -1326,6 +1452,10 @@ void ScriptEngine::run() {
     if (QThread::currentThread() != qApp->thread() && _context == Context::ENTITY_CLIENT_SCRIPT) {
         // a world's scripts: APIs that act on the user's own installation refuse calls from this thread
         hifi::scripting::setRestrictedScriptThread(true);
+        // this thread runs only the world's entity scripts: whatever is called on it is a world's script's, also a
+        // call no guard marks (ScriptCaller). Nothing clears the mark: the thread is this engine's own (runInThread
+        // makes a new one for each engine, never from a pool) and ends with it.
+        ScriptCaller::markThreadAsWorld(_worldId);
     }
 
     auto filenameParts = _fileNameString.split("/");
@@ -1545,6 +1675,22 @@ void ScriptEngine::stopAllTimersForEntityScript(const EntityItemID& entityID) {
 
 }
 
+void ScriptEngine::interruptRunningCall() {
+    // on the engine's own thread: a script in a long call handles queued calls every second (setProcessEventsInterval),
+    // so this runs inside the stuck call and ends it there. A signal handler's call is not an evaluation to abort
+    // (QScriptEngine::isEvaluating is false): an error is thrown into it instead, again each second while it runs on
+    QMetaObject::invokeMethod(this, [this] {
+        if (!isStopping()) {
+            return;
+        }
+        if (isEvaluating()) {
+            abortEvaluation();
+        } else if (auto context = currentContext()) {
+            context->throwError("Stopped: the script's engine was stopped");
+        }
+    }, Qt::QueuedConnection);
+}
+
 void ScriptEngine::stop(bool marshal) {
     _isStopping = true; // this can be done on any thread
 
@@ -1604,6 +1750,12 @@ void ScriptEngine::timerFired() {
             scriptWarningMessage("Script.timerFired() while shutting down is ignored... parent script:" + getFilename());
             return; // bail early
         }
+    }
+
+    // an entities engine being stopped or whose world was left calls no more timers: a world's code ends with the
+    // world, and a script stuck in a loop in one would start it again after each interruption
+    if (_context == ENTITY_CLIENT_SCRIPT && (_isStopping || worldWasLeft())) {
+        return;
     }
 
     QTimer* callingTimer = reinterpret_cast<QTimer*>(sender());
@@ -1893,12 +2045,13 @@ QString ScriptEngine::_requireResolve(const QString& moduleId, const QString& re
             canonical.setPath(file.canonicalFilePath());
         }
 
-        bool disallowOutsideFiles = !PathUtils::defaultScriptsLocation().isParentOf(canonical) && !currentSandboxURL.isLocalFile();
-        if (disallowOutsideFiles && !PathUtils::isDescendantOf(canonical, currentSandboxURL)) {
+        const QUrl sandbox = effectiveSandbox(currentSandboxURL);
+        bool disallowOutsideFiles = !ScriptNetworkPolicy::isAppScript(canonical) && !sandbox.isLocalFile();
+        if (disallowOutsideFiles && !PathUtils::isDescendantOf(canonical, sandbox)) {
             return throwResolveError(makeError(message.arg(
                 QString("path '%1' outside of origin script '%2' '%3'")
                     .arg(PathUtils::stripFilename(url))
-                    .arg(PathUtils::stripFilename(currentSandboxURL))
+                    .arg(PathUtils::stripFilename(sandbox))
                     .arg(canonical.toString())
             )));
         }
@@ -1990,17 +2143,21 @@ QVariantMap ScriptEngine::fetchModuleSource(const QString& modulePath, const boo
     using UrlMap = QMap<QUrl, QString>;
     auto scriptCache = DependencyManager::get<ScriptCache>();
     QVariantMap req;
-    if (isClientSide()) {
+    // one of the app's own scripts (canonical, inside its scripts folder) is no request to the network
+    const bool appModule = QUrl(modulePath).isLocalFile() && ScriptNetworkPolicy::isAppScript(QUrl(modulePath));
+    if (networkRuled() && !appModule) {
         // the network rule for a script's own requests: a module's download is a request too (a JSON module comes
         // back to the script as data)
         QString reason;
-        if (!ScriptNetworkPolicy::decideBlocking(QUrl(modulePath), currentScriptOrigin(), reason)) {
+        if (!ScriptNetworkPolicy::decideBlocking(QUrl(modulePath), ruledOrigin(currentScriptOrigin()), reason, worldIsLocal())) {
             scriptWarningMessage(ScriptNetworkPolicy::refusalLine(currentScriptOrigin(), QUrl(modulePath), reason));
             req["url"] = modulePath;
             req["status"] = "Refused";
             req["success"] = false;
             return req;
         }
+        // and its download goes to the address judged (each hop judged again)
+        scriptCache->ruleFetch(QUrl(modulePath), ruledOrigin(currentScriptOrigin()), worldIsLocal());
     }
     qCDebug(scriptengine_module) << "require.fetchModuleSource: " << QUrl(modulePath).fileName() << QThread::currentThread();
 
@@ -2041,10 +2198,10 @@ QVariantMap ScriptEngine::fetchModuleSource(const QString& modulePath, const boo
             loop->quit();
         });
 
-        // this helps detect the case where stop() is invoked during the download
+        // this helps detect the case where stop() is invoked (or the world is left) during the download
         //  but not seen in time to abort processing in onload()...
         connect(monitor.get(), &QTimer::timeout, this, [this, loop] {
-            if (isStopping()) {
+            if (isStopping() || worldWasLeft()) {
                 loop->exit(-1);
             }
         });
@@ -2204,8 +2361,7 @@ void ScriptEngine::include(const QStringList& includeFiles, QScriptValue callbac
         bool isStandardLibrary = false;
         if (file.startsWith("/~/")) {
             thisURL = expandScriptUrl(QUrl::fromLocalFile(expandScriptPath(file)));
-            QUrl defaultScriptsLoc = PathUtils::defaultScriptsLocation();
-            if (!defaultScriptsLoc.isParentOf(thisURL)) {
+            if (!ScriptNetworkPolicy::isAppScript(thisURL)) {
                 scriptWarningMessage("Script.include() -- skipping" + file + "-- outside of standard libraries");
                 continue;
             }
@@ -2214,16 +2370,24 @@ void ScriptEngine::include(const QStringList& includeFiles, QScriptValue callbac
             thisURL = resolvePath(file);
         }
 
-        bool disallowOutsideFiles = thisURL.isLocalFile() && !isStandardLibrary && !currentSandboxURL.isLocalFile();
-        if (disallowOutsideFiles && !PathUtils::isDescendantOf(thisURL, currentSandboxURL)) {
+        const QUrl sandbox = effectiveSandbox(currentSandboxURL);
+        bool disallowOutsideFiles = thisURL.isLocalFile() && !isStandardLibrary && !sandbox.isLocalFile();
+        if (disallowOutsideFiles && !PathUtils::isDescendantOf(thisURL, sandbox)) {
             scriptWarningMessage("Script.include() ignoring file path" + thisURL.toString()
-                                + "outside of original entity script" + currentSandboxURL.toString());
+                                + "outside of original entity script" + sandbox.toString());
         } else {
             QString reason;
-            if (isClientSide() && !ScriptNetworkPolicy::decideBlocking(thisURL, currentScriptOrigin(), reason)) {
+            // one of the app's own scripts (canonical, inside its scripts folder) is no request to the network
+            const bool appScript = thisURL.isLocalFile() && ScriptNetworkPolicy::isAppScript(thisURL);
+            if (networkRuled() && !appScript &&
+                !ScriptNetworkPolicy::decideBlocking(thisURL, ruledOrigin(currentScriptOrigin()), reason, worldIsLocal())) {
                 // the network rule for a script's own requests: an include's download is a request too
                 scriptWarningMessage(ScriptNetworkPolicy::refusalLine(currentScriptOrigin(), thisURL, reason));
                 continue;
+            }
+            if (networkRuled() && !appScript) {
+                // and its download goes to the address judged (each hop judged again)
+                DependencyManager::get<ScriptCache>()->ruleFetch(thisURL, ruledOrigin(currentScriptOrigin()), worldIsLocal());
             }
             // We could also check here for CORS, but we don't yet.
             // It turns out that QUrl.resolve will not change hosts and copy authority, so we don't need to check that here.
@@ -2241,6 +2405,11 @@ void ScriptEngine::include(const QStringList& includeFiles, QScriptValue callbac
     QUrl capturedSandboxURL = currentSandboxURL;
 
     auto evaluateScripts = [=](const QMap<QUrl, QString>& data, const QMap<QUrl, QString>& status) {
+        if (isWorldEnding()) {
+            // came after the world's engine was stopped or its world left: nothing of it runs
+            loader->deleteLater();
+            return;
+        }
         auto parentURL = _parentURL;
         for (QUrl url : urls) {
             QString contents = data[url];
@@ -2283,9 +2452,18 @@ void ScriptEngine::include(const QStringList& includeFiles, QScriptValue callbac
 
     loader->start(processLevelMaxRetries);
 
-    if (!callback.isFunction() && !loader->isFinished()) {
+    if (!callback.isFunction() && !loader->isFinished() && !isWorldEnding()) {
+        // the script's queued callbacks run while it waits: a world's script's wait ends when its engine stops or its
+        // world is left (checked every 500 ms, as Script.require does), and what comes later is not evaluated
         QEventLoop loop;
+        QTimer monitor;
         QObject::connect(loader, &BatchLoader::finished, &loop, &QEventLoop::quit);
+        QObject::connect(&monitor, &QTimer::timeout, &loop, [this, &loop] {
+            if (isWorldEnding()) {
+                loop.exit(-1);
+            }
+        });
+        monitor.start(500);
         loop.exec();
     }
 }
@@ -2516,6 +2694,14 @@ void ScriptEngine::loadEntityScript(const EntityItemID& entityID, const QString&
         newDetails.errorInfo = "a WebAssembly entity script needs the entities engine on WebAssembly (untick Developer > Scripting > Run JavaScript on QtScript)";
         setEntityScriptDetails(entityID, newDetails);
         scriptWarningMessage(QString("entity script %1 (%2): %3").arg(entityScript, entityID.toString(), newDetails.errorInfo));
+        return;
+    }
+    const QString refusal = entityScriptRefusal(entityScript);
+    if (!refusal.isEmpty()) {
+        newDetails.status = EntityScriptStatus::ERROR_LOADING_SCRIPT;
+        newDetails.errorInfo = "not run: " + refusal;
+        setEntityScriptDetails(entityID, newDetails);
+        scriptWarningMessage(QString("entity script %1 (%2) %3").arg(entityScript, entityID.toString(), newDetails.errorInfo));
         return;
     }
     newDetails.status = EntityScriptStatus::LOADING;
@@ -2827,27 +3013,6 @@ void ScriptEngine::unloadEntityScript(const EntityItemID& entityID, bool shouldR
 
         stopAllTimersForEntityScript(entityID);
     }
-}
-
-void ScriptEngine::unloadEntityScriptsOfGoneEntities() {
-    if (QThread::currentThread() != thread()) {
-        QMetaObject::invokeMethod(this, "unloadEntityScriptsOfGoneEntities", Qt::QueuedConnection);
-        return;
-    }
-    QList<EntityItemID> entityIDs;
-    {
-        QReadLocker locker { &_entityScriptsLock };
-        entityIDs = _entityScripts.keys();
-    }
-    int unloaded = 0;
-    for (const auto& entityID : entityIDs) {
-        if (entityIsGone(_context, entityID)) {
-            unloadEntityScript(entityID, true);
-            unloaded++;
-        }
-    }
-    qCDebug(scriptengine) << "after a world was left: of" << entityIDs.size() << "entity scripts listed," << unloaded
-                         << "were of entities that are gone, and are unloaded";
 }
 
 QList<EntityItemID> ScriptEngine::getListOfEntityScriptIDs() {

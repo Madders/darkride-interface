@@ -5,9 +5,20 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: the whole file (the display's refresh signal the presents are paced by).
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
 
 #include "DisplayLink.h"
 
+#include <algorithm>
 #include <chrono>
 
 #include <QtCore/QtGlobal>
@@ -33,6 +44,15 @@ DisplayLink& DisplayLink::instance() {
 
 DisplayLink::~DisplayLink() {
     stop();
+}
+
+bool DisplayLink::isQuiet(int64_t nowNs) const {
+    static const int64_t QUIET_NS = 500000000;
+    if (!_running) {
+        return false;
+    }
+    int64_t last = std::max(_lastCallbackNs.load(), _startedNs.load());
+    return last > 0 && nowNs - last > QUIET_NS;
 }
 
 bool DisplayLink::nextRefresh(int64_t nowNs, int64_t& refreshNs, int64_t& periodNs) const {
@@ -127,6 +147,7 @@ void DisplayLink::start(uint32_t displayId) {
     }
     _link = link;
     _displayId = id;
+    _startedNs = steadyNowNs();
     _running = true;
     CVTime nominal = CVDisplayLinkGetNominalOutputVideoRefreshPeriod(link);
     double nominalHz = (!(nominal.flags & kCVTimeIsIndefinite) && nominal.timeValue > 0) ? (double)nominal.timeScale / (double)nominal.timeValue : 0.0;

@@ -99,7 +99,7 @@ QString processID(const QString& id) {
     return id.mid(id.lastIndexOf(':') + 1);
 }
 
-QString getModelName(const QVariantList& properties) {
+QString getModelName(const FBXPropertyList& properties) {
     QString name;
     if (properties.size() == 3) {
         name = properties.value(1).toString();
@@ -110,7 +110,7 @@ QString getModelName(const QVariantList& properties) {
     return name;
 }
 
-QString getMaterialName(const QVariantList& properties) {
+QString getMaterialName(const FBXPropertyList& properties) {
     QString name;
     if (properties.size() == 1 || properties.value(1).toString().isEmpty()) {
         name = properties.value(0).toString();
@@ -121,7 +121,7 @@ QString getMaterialName(const QVariantList& properties) {
     return name;
 }
 
-QString getID(const QVariantList& properties, int index = 0) {
+QString getID(const FBXPropertyList& properties, int index = 0) {
     return processID(properties.value(index).toString());
 }
 
@@ -210,7 +210,7 @@ void printNode(const FBXNode& node, int indentLevel) {
     QDebug nodeDebug = qDebug(modelformat);
 
     nodeDebug.nospace() << spaces.data() << node.name.data() << ": ";
-    foreach (const QVariant& property, node.properties) {
+    foreach (const FBXProperty& property, node.properties) {
         nodeDebug << property;
     }
 
@@ -279,8 +279,12 @@ void addBlendshapes(const ExtractedBlendshape& extracted, const QList<WeightedIn
         extractedMesh.blendshapeIndexMaps.resize(extractedMesh.mesh.blendshapes.size());
         HFMBlendshape& blendshape = extractedMesh.mesh.blendshapes[index.first];
         QHash<int, int>& blendshapeIndexMap = extractedMesh.blendshapeIndexMaps[index.first];
-        for (int i = 0; i < extracted.blendshape.indices.size(); i++) {
+        // a blendshape whose lists of indices, positions and normals differ in length is read as far as its
+        // indices and positions both go; normals it lacks count as none
+        const int blendshapeCount = std::min(extracted.blendshape.indices.size(), extracted.blendshape.vertices.size());
+        for (int i = 0; i < blendshapeCount; i++) {
             int oldIndex = extracted.blendshape.indices.at(i);
+            const glm::vec3 blendNormal = i < extracted.blendshape.normals.size() ? extracted.blendshape.normals.at(i) : glm::vec3();
             for (QMultiHash<int, int>::const_iterator it = extractedMesh.newIndices.constFind(oldIndex);
                     it != extractedMesh.newIndices.constEnd() && it.key() == oldIndex; it++) {
                 QHash<int, int>::iterator blendshapeIndex = blendshapeIndexMap.find(it.value());
@@ -288,10 +292,10 @@ void addBlendshapes(const ExtractedBlendshape& extracted, const QList<WeightedIn
                     blendshapeIndexMap.insert(it.value(), blendshape.indices.size());
                     blendshape.indices.append(it.value());
                     blendshape.vertices.append(extracted.blendshape.vertices.at(i) * index.second);
-                    blendshape.normals.append(extracted.blendshape.normals.at(i) * index.second);
+                    blendshape.normals.append(blendNormal * index.second);
                 } else {
                     blendshape.vertices[*blendshapeIndex] += extracted.blendshape.vertices.at(i) * index.second;
-                    blendshape.normals[*blendshapeIndex] += extracted.blendshape.normals.at(i) * index.second;
+                    blendshape.normals[*blendshapeIndex] += blendNormal * index.second;
                 }
             }
         }
@@ -1519,6 +1523,14 @@ HFMModel* FBXSerializer::extractHFMModel(const hifi::VariantHash& mapping, const
         meshIDsToMeshIndices.insert(meshID, meshIndex);
         hfmModel.meshes.push_back(extracted.mesh);
         hfm::Mesh& mesh = hfmModel.meshes.back();
+        // the reader's last check: the passes after it index the vertices with the parts' indices unchecked
+        const hfm::MeshSanitizeResult sanitized = hfm::sanitizeMesh(mesh);
+        if (sanitized.changed()) {
+            qCWarning(modelformat) << "FBXSerializer:" << url << "mesh" << meshIndex << ":" << sanitized.facesRemoved
+                                   << "faces with a vertex past the mesh's" << mesh.vertices.size() << "or cut short left out,"
+                                   << sanitized.listsCleared << "lists of the wrong length cleared,"
+                                   << sanitized.blendshapesCleared << "blendshapes emptied";
+        }
 
         std::vector<QString> instanceModelIDs = getModelIDsForMeshID(meshID, fbxModels, _connectionParentMap);
         // meshShapes will be added to hfmModel at the very end
@@ -1658,7 +1670,8 @@ HFMModel* FBXSerializer::extractHFMModel(const hifi::VariantHash& mapping, const
                     skinCluster.indices.reserve(indexWeightPairs);
                     skinCluster.weights.reserve(indexWeightPairs);
 
-                    for (int j = 0; j < fbxCluster.indices.size(); j++) {
+                    // a cluster with fewer weights than indices (or the other way round) is read as far as both go
+                    for (int j = 0; j < (int)indexWeightPairs; j++) {
                         int oldIndex = fbxCluster.indices.at(j);
                         float weight = fbxCluster.weights.at(j);
                         for (QMultiHash<int, int>::const_iterator it = extracted.newIndices.constFind(oldIndex);

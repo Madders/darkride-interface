@@ -81,13 +81,16 @@ QStringList FileScriptingInterface::unzipFile(QString path, QString tempDir) {
     qCDebug(scriptengine) << "Directory to unzip: " << dirName;
     QString target = tempDir + "/model_repo";
 
-    // every file in the archive lands inside the folder it's unzipped to: an archive naming a path outside it
-    // (absolute, or climbing out with "..") isn't unzipped at all
-    const QString targetRoot = QDir::cleanPath(QDir(target).absolutePath()) + "/";
-    for (const QString& entry : JlCompress::getFileList(dirName)) {
-        QString landing = QDir::cleanPath(QDir(target).absoluteFilePath(entry));
-        if (QDir::isAbsolutePath(entry) || entry.contains('\\') || !(landing + "/").startsWith(targetRoot)) {
-            qCWarning(scriptengine) << "Not unzipping" << dirName << ": it has a file outside its folder," << entry;
+    // every entry has to land inside the target folder: an archive whose entry names climb out of it (../, an absolute
+    // path, a drive letter) would write wherever they point, so such an archive is refused whole
+    const QString targetPath = QDir::cleanPath(QDir(target).absolutePath());
+    const QString targetRoot = targetPath + "/";
+    const QStringList entries = JlCompress::getFileList(dirName);
+    for (const QString& entry : entries) {
+        const QString landing = QDir::cleanPath(QDir(target).absoluteFilePath(entry));
+        if (entry.contains('\\') || entry.contains(':') || (landing != targetPath && !landing.startsWith(targetRoot))) {
+            qCWarning(scriptengine) << "Refused to unzip" << dirName << ": the entry" << entry.left(200)
+                                    << "would land outside the target folder";
             return QStringList();
         }
     }

@@ -32,19 +32,14 @@ void CalculateMeshTangentsTask::run(const baker::BakeContextPointer& context, co
             tangentsOut = std::vector<glm::vec3>(tangentsIn.begin(), tangentsIn.end());
         } else if (!normals.empty() && mesh.vertices.size() <= mesh.texCoords.size()) {
             tangentsOut.resize(normals.size());
-            // a triangle that names a vertex the mesh doesn't have adds to a scratch tangent instead
-            glm::vec3 scratch;
             baker::calculateTangents(mesh,
-            [&mesh, &normals, &tangentsOut, &scratch](int firstIndex, int secondIndex, glm::vec3* outVertices, glm::vec2* outTexCoords, glm::vec3& outNormal) {
-                auto inRange = [&](int index) {
-                    return index >= 0 && index < (int)mesh.vertices.size() && index < (int)normals.size() &&
-                        index < (int)mesh.texCoords.size() && index < (int)tangentsOut.size();
-                };
-                if (!inRange(firstIndex) || !inRange(secondIndex)) {
-                    outVertices[0] = outVertices[1] = glm::vec3();
-                    outTexCoords[0] = outTexCoords[1] = glm::vec2();
-                    outNormal = glm::vec3();
-                    return &scratch;
+            [&mesh, &normals, &tangentsOut](int firstIndex, int secondIndex, glm::vec3* outVertices, glm::vec2* outTexCoords, glm::vec3& outNormal) -> glm::vec3* {
+                // an index the mesh does not have (a broken file) is skipped by the caller
+                const int vertexCount = (int)mesh.vertices.size();
+                if (firstIndex < 0 || secondIndex < 0 || firstIndex >= vertexCount || secondIndex >= vertexCount ||
+                    firstIndex >= (int)normals.size() || firstIndex >= (int)tangentsOut.size() ||
+                    firstIndex >= (int)mesh.texCoords.size() || secondIndex >= (int)mesh.texCoords.size()) {
+                    return nullptr;
                 }
                 outVertices[0] = mesh.vertices[firstIndex];
                 outVertices[1] = mesh.vertices[secondIndex];

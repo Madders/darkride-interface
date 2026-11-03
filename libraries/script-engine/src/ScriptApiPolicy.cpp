@@ -1,0 +1,341 @@
+//
+//  ScriptApiPolicy.cpp
+//
+//  Created by scripting on 2026-10-30.
+//  Copyright 2026 Darkride.
+//
+//  Distributed under the MIT License.
+//
+
+#include "ScriptApiPolicy.h"
+
+#include <QtCore/QUuid>
+#include <QtCore/QVariant>
+#include <QtCore/QVector>
+
+#include <DependencyManager.h>
+#include <EntityItemID.h>
+#include <EntityScriptingInterface.h>
+#include <ScriptCaller.h>
+
+#include <QtCore/QHash>
+#include <QtCore/QMetaObject>
+#include <QtCore/QSet>
+
+namespace {
+
+// The globals a world's entity scripts get. Not here, so a stand-in: ScriptDiscoveryService (install, stop, reload the
+// visitor's scripts), Menu, Users (ignore, mute, kick), Snapshot, Impostors, Recording, Clipboard, DialogsManager,
+// Account/GlobalServices/AccountServices, AvatarBookmarks, LocationBookmarks, DiskCache, Keyboard, Render, LODManager,
+// Performance, Workload, Scene, Reticle, Friends, Toolbars, File, AvatarInputs, Panels, AudioScope,
+// DesktopPreviewProvider, OffscreenFlags, Test, Desktop and the OverlayWindow/OverlayWebWindow/QmlFragment
+// constructors (QML and web windows on the visitor's desktop), StackTest, Resources (for the visitor's own scripts),
+// Paths, ResourceRequestObserver.
+const QSet<QString> ALLOWED_GLOBALS {
+    // the engine's own
+    "Script", "Vec3", "Quat", "Mat4", "Uuid", "console", "print", "atob", "btoa", "TREE_SCALE", "debugEntityID",
+    "XMLHttpRequest", "WebSocket", "request", "AudioEffectOptions",
+    "Http", "Sockets",                 // the WebAssembly engine's factories under XMLHttpRequest and WebSocket (the guest hides them)
+    // the world and its content
+    "Entities", "Messages", "Audio", "Assets", "Resource", "Model", "DebugDraw", "Overlays", "Picks",
+    "Pointers", "RayPick", "LaserPointers", "Selection", "Camera", "Graphics", "TextToSpeech", "SoundCache",
+    "AnimationCache", "TextureCache", "MaterialCache", "ModelCache",
+    // the visitor as the world sees them
+    "MyAvatar", "AvatarList", "AvatarManager", "Controller", "HMD",
+    // the app, the part a page would get
+    "Window", "Window.location", "Tablet", "tabletInterface", "AddressManager", "location", "Chat", "Settings",
+    // reads
+    "Stats", "Rates", "AudioStats", "PlatformInfo", "About", "EntityScriptServerLog"
+};
+
+// The classes whose objects a world's script may use (by ancestry). The globals' classes, and the classes their
+// allowed members hand back.
+const QSet<QByteArray> ALLOWED_CLASSES {
+    // the globals
+    "ScriptEngine", "Vec3", "Quat", "Mat4", "ScriptUUID", "ConsoleScriptingInterface", "AudioEffectOptions",
+    "EntityScriptingInterface", "WorldMessages", "AudioScriptingInterface", "AssetScriptingInterface",
+    "ScriptableResourceCache", "ModelScriptingInterface", "DebugDraw", "Overlays",
+    "PickScriptingInterface", "PointerScriptingInterface", "RayPickScriptingInterface",
+    "LaserPointerScriptingInterface", "SelectionScriptingInterface", "Camera", "GraphicsScriptingInterface",
+    "TTSScriptingInterface", "SoundCacheScriptingInterface", "AnimationCacheScriptingInterface",
+    "TextureCacheScriptingInterface", "MaterialCacheScriptingInterface", "ModelCacheScriptingInterface",
+    "MyAvatar", "AvatarManager", "controller::ScriptingInterface", "HMDScriptingInterface",
+    "WindowScriptingInterface", "TabletScriptingInterface", "AddressManager", "ChatScriptingInterface",
+    "ScriptSettingsInterface", "Stats", "RatesScriptingInterface", "AudioStats", "PlatformInfoScriptingInterface",
+    "AboutUtil", "EntityScriptServerLogClient",
+    // what allowed members hand back
+    "QTimer",                                                       // Script.setTimeout / setInterval
+    "TabletProxy",                                                  // Tablet.getTablet
+    "controller::MappingBuilderProxy", "controller::RouteBuilderProxy",  // Controller.newMapping and its chain
+    "ScriptAudioInjector",                                          // Audio.playSound
+    "ScriptableResource",                                           // the caches' prefetch
+    "ScriptAvatarData",                                             // AvatarList.getAvatar
+    "AssetRequest", "AssetUpload", "GetMappingRequest", "SetMappingRequest", "DeleteMappingsRequest",
+    "RenameMappingRequest", "GetAllMappingsRequest",                // Assets
+    "ModalDialogListener",                                          // Window.promptAsync
+    "HttpRequestObject", "WebSocketObject",                         // the WebAssembly engine's XMLHttpRequest / WebSocket
+    "HttpRequestFactory", "WebSocketFactory", "AudioEffectOptionsFactory", "ResourceStates",  // its internal globals
+    "AnimationObject", "AnimationFrameObject",                      // AnimationCache
+    "scriptable::ScriptableModel", "scriptable::ScriptableMesh", "scriptable::ScriptableMeshPart",  // Graphics
+    "Overlay",                                                      // Overlays.getOverlayObject
+    "RefusedGlobal",                                                // the stand-in: its name only, for the refusal message
+    "SoundScriptingInterface"                                       // SoundCache.getSound: a sound (downloaded, duration, ready)
+};
+
+// Kept classes with an ALLOW-list of methods: anything else on them is refused.
+const QHash<QByteArray, QSet<QByteArray>> ALLOWED_METHODS {
+    { "WindowScriptingInterface", {
+        // the app's own dialogs, as a web page may; sizes and focus reads; physics and loading reads
+        "alert", "confirm", "prompt", "promptAsync", "hasFocus", "isPhysicsEnabled", "checkForPhysics", "getDeviceSize",
+        "getInnerWidth", "getInnerHeight", "getX", "getY", "isPointOnDesktopWindow", "getActiveDisplayPlugin",
+        "getDisplayPluginCount", "getDisplayPluginName", "isDisplayPluginHmd", "getWorldLoading",
+        "domainLoadingProgress", "getLastDomainConnectionError" } },
+    { "TabletScriptingInterface", { "getTablet", "playSound" } },
+    { "TabletProxy", {
+        // a world's page in the visitor's tablet (a pop-up; later with item 7's prompt); not the buttons, not QML,
+        // not a message into whatever page the tablet shows
+        "gotoWebScreen", "loadWebScreenOnTop", "popFromStack", "returnToPreviousApp", "gotoHomeScreen", "onHomeScreen",
+        "isPathLoaded", "isMessageDialogOpen", "closeDialog", "getLandscape" } },
+    { "HMDScriptingInterface", {
+        "calculateRayUICollisionPoint", "overlayFromWorldPoint", "worldPointFromOverlay", "sphericalToOverlay",
+        "overlayToSpherical", "isHMDAvailable", "isHeadControllerAvailable", "isHandControllerAvailable",
+        "isSubdeviceContainingNameAvailable", "isKeyboardVisible", "shouldShowHandControllers", "isHMDMode",
+        "getHUDLookAtPosition2DValue", "getHUDLookAtPosition3DValue" } },
+    { "scripting::Audio", {
+        // sounds and reverb are content; mute, devices, volumes and recordings are the visitor's
+        "playSound", "playSystemSound", "playLocalSound", "setReverb", "setReverbOptions", "isStereoInput",
+        "getAvatarGain", "getInjectorGain", "getLocalInjectorGain", "getSystemInjectorGain",
+        "getPushingToTalkOutputGainDesktop", "getRecording", "getPTT", "getPushingToTalk", "loudnessToLevel" } },
+    { "AddressManager", {
+        // a world may send you to another world (portals); not your clipboard or history
+        "handleLookupString", "goToUser", "goToEntry", "goToViewpointForPath", "isConnected", "getHost" } },
+    { "ChatScriptingInterface", { "showMessage" } }
+};
+
+// Kept classes with a DENY-list of methods instead: too large and too much of them content's to allow-list, so a
+// member added later is reachable until it is judged. MyAvatar: what persists the visitor's avatar identity and
+// points the loaders at a world's content on every start. Controller: the recordings on the visitor's disk, and taking
+// the visitor's input for itself (keys, mouse, wheel, touch, joysticks, clicks on entities, the avatar's actions); a
+// world's script may still hear the 3D view's keys and use mappings.
+const QHash<QByteArray, QSet<QByteArray>> DENIED_METHODS {
+    { "MyAvatar", {
+        "setSkeletonModelURL", "setSkeletonModelURLFromScript", "useFullAvatarURL", "setAnimGraphUrl",
+        "setAnimGraphOverrideUrl", "setCollisionSoundURL", "attach", "detachOne", "detachAll", "setAttachmentData",
+        "setAttachmentsVariant", "setAvatarEntityData", "updateAvatarEntity", "clearAvatarEntity", "saveData",
+        "loadData", "setDisplayName" } },
+    { "controller::ScriptingInterface", {
+        "startInputRecording", "stopInputRecording", "startInputPlayback", "stopInputPlayback", "saveInputRecording",
+        "loadInputRecording", "getInputRecorderSaveDirectory", "captureMouseEvents", "releaseMouseEvents",
+        "captureTouchEvents", "releaseTouchEvents", "captureWheelEvents", "releaseWheelEvents", "captureActionEvents",
+        "releaseActionEvents",
+        // a mapping from JSON is built without RouteBuilderProxy::to, where a world's routes are judged
+        "parseMapping", "loadMapping" } },
+    { "ControllerScriptingInterface", {
+        "captureKeyEvents", "releaseKeyEvents", "captureJoystick", "releaseJoystick", "captureEntityClickEvents",
+        "releaseEntityClickEvents" } }
+};
+
+// Properties a world's script may write on an allow-listed class (every other write on such a class is refused).
+const QHash<QByteArray, QSet<QByteArray>> ALLOWED_PROPERTY_WRITES {
+    { "AddressManager", { "href" } }    // a teleport
+};
+
+// What a script of a world that was left may still use (security #32); every other member of every class is refused.
+// An empty set: every member. Add an entry only with its reason. What the app takes down itself when a world is left
+// (its mappings, pointers, picks, 2D overlays, local entities) needs none.
+const QHash<QByteArray, QSet<QByteArray>> ALLOWED_AFTER_WORLD_LEFT {
+    // its own sound (a world holds only the injectors Audio.playSound handed it back): nothing else stops it yet
+    { "ScriptAudioInjector", { "stop" } },
+    // sums on the values given, reaching nothing: a world's ending code often works out what it takes down with them
+    { "Vec3", {} }, { "Quat", {} }, { "Mat4", {} }, { "ScriptUUID", {} },
+    // writes to the visitor's own log only, where a creator sees that the ending code ran
+    { "ConsoleScriptingInterface", {} }
+};
+
+// Properties a world's script may not write on a deny-listed class.
+const QHash<QByteArray, QSet<QByteArray>> DENIED_PROPERTY_WRITES {
+    { "MyAvatar", { "skeletonModelURL", "attachmentData", "collisionSoundURL", "displayName" } }
+};
+
+// Properties a world's script may not read.
+const QHash<QByteArray, QSet<QByteArray>> DENIED_PROPERTY_READS {
+    { "scripting::Audio", { "devices" } },   // the visitor's audio devices
+    { "TabletProxy", { "buttons" } }          // the visitor's buttons
+};
+
+// Signals of allowed classes a world's script may not hear: they carry the visitor's own data.
+const QHash<QByteArray, QSet<QByteArray>> DENIED_SIGNALS {
+    // the microphone's samples and level, and when the visitor speaks or clips
+    { "AudioScriptingInterface", { "inputReceived", "noiseGateOpened", "noiseGateClosed" } },
+    { "scripting::Audio", { "inputLevelChanged", "clippingChanged" } },
+    // the app's own dialogs' answers (the full local path of what the visitor picks, the prompt's text) and the
+    // visitor's snapshots
+    { "WindowScriptingInterface", {
+        "browseChanged", "browseDirChanged", "saveFileChanged", "assetsDirChanged", "promptTextChanged",
+        "stillSnapshotTaken", "snapshot360Taken", "snapshotShared", "processingGifStarted", "processingGifCompleted" } }
+};
+
+// Signals that carry an entity's id, and which of their arguments are ids: a world's script hears such a signal only
+// about the entities it may see (a click or a hover on the visitor's own or the app's local entities, the VR
+// keyboard's keys among them, never reaches it), and a Web entity's events only from the world's own entities.
+// Checked at each delivery (holdsBackDelivery).
+struct DeliveryRule {
+    QVector<int> ids;          // the arguments that are entity ids
+    bool worldsOwnOnly { false };  // only from an entity the world may change, not one it only reads
+};
+const QHash<QByteArray, QHash<QByteArray, DeliveryRule>> CHECKED_DELIVERIES {
+    { "EntityScriptingInterface", {
+        { "mousePressOnEntity", { { 0 } } }, { "mouseDoublePressOnEntity", { { 0 } } },
+        { "mouseMoveOnEntity", { { 0 } } }, { "mouseReleaseOnEntity", { { 0 } } },
+        { "clickDownOnEntity", { { 0 } } }, { "holdingClickOnEntity", { { 0 } } }, { "clickReleaseOnEntity", { { 0 } } },
+        { "hoverEnterEntity", { { 0 } } }, { "hoverOverEntity", { { 0 } } }, { "hoverLeaveEntity", { { 0 } } },
+        { "enterEntity", { { 0 } } }, { "leaveEntity", { { 0 } } },
+        { "addingEntity", { { 0 } } }, { "deletingEntity", { { 0 } } },
+        { "collisionWithEntity", { { 0, 1 } } },
+        { "webEventReceived", { { 0 }, true } }, { "fromQml", { { 0 }, true } } } },
+    // the 3D overlays are local entities (Overlays is the app's own class, listed by name)
+    { "Overlays", {
+        { "mousePressOnOverlay", { { 0 } } }, { "mouseDoublePressOnOverlay", { { 0 } } },
+        { "mouseReleaseOnOverlay", { { 0 } } }, { "mouseMoveOnOverlay", { { 0 } } },
+        { "hoverEnterOverlay", { { 0 } } }, { "hoverOverOverlay", { { 0 } } }, { "hoverLeaveOverlay", { { 0 } } },
+        { "overlayDeleted", { { 0 } } } } },
+    // the entity the app or the visitor's own scripts turned hand touch off for (MyAvatar is the app's own class)
+    { "MyAvatar", { { "disableHandTouchForIDChanged", { { 0 } } } } },
+    // an entity script finished loading in this engine: the visitor's own entities' scripts share the world's engine
+    { "ScriptEngine", { { "entityScriptPreloadFinished", { { 0 } } } } }
+};
+// Checked and left as they are: the domain's id (AddressManager.possibleDomainChangeRequired*), the sender's session
+// id (Chat.messageReceived, Messages.messageReceived/dataReceived), the visitor's worn entities (addingWearable,
+// deletingWearable: avatar entities, which a world reads anyway).
+
+const DeliveryRule* deliveryRuleFor(const QMetaObject* meta, const QByteArray& name) {
+    for (const QMetaObject* cls = meta; cls; cls = cls->superClass()) {
+        auto found = CHECKED_DELIVERIES.constFind(QByteArray(cls->className()));
+        if (found != CHECKED_DELIVERIES.constEnd()) {
+            auto rule = found->constFind(name);
+            return rule != found->constEnd() ? &rule.value() : nullptr;
+        }
+    }
+    return nullptr;
+}
+
+// An id as a signal carries it: an EntityItemID or a QUuid (the WebAssembly host's relay), or its text (QtScript)
+QUuid idOf(const QVariant& value) {
+    if (value.userType() == qMetaTypeId<EntityItemID>()) {
+        return value.value<EntityItemID>();
+    }
+    if (value.userType() == QMetaType::QUuid) {
+        return value.toUuid();
+    }
+    return QUuid(value.toString());
+}
+
+template <typename Table>
+const QSet<QByteArray>* entryFor(const Table& table, const QMetaObject* meta, const QMetaObject** owner = nullptr) {
+    for (const QMetaObject* cls = meta; cls; cls = cls->superClass()) {
+        auto found = table.constFind(QByteArray(cls->className()));
+        if (found != table.constEnd()) {
+            if (owner) {
+                *owner = cls;
+            }
+            return &found.value();
+        }
+    }
+    return nullptr;
+}
+
+template <typename Table>
+bool listed(const Table& table, const QMetaObject* meta, const QByteArray& name) {
+    for (const QMetaObject* cls = meta; cls; cls = cls->superClass()) {
+        auto found = table.constFind(QByteArray(cls->className()));
+        if (found != table.constEnd() && found->contains(name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+bool ScriptApiPolicy::allowsGlobal(const QString& name) {
+    return ALLOWED_GLOBALS.contains(name);
+}
+
+bool ScriptApiPolicy::allowsClass(const QMetaObject* meta) {
+    for (const QMetaObject* cls = meta; cls; cls = cls->superClass()) {
+        if (ALLOWED_CLASSES.contains(QByteArray(cls->className()))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ScriptApiPolicy::deniesMethod(const QMetaObject* meta, const QByteArray& name) {
+    if (!allowsClass(meta)) {
+        return true;
+    }
+    if (entryFor(ALLOWED_METHODS, meta)) {
+        return !listed(ALLOWED_METHODS, meta, name);
+    }
+    return listed(DENIED_METHODS, meta, name);
+}
+
+bool ScriptApiPolicy::deniesPropertyWrite(const QMetaObject* meta, const QByteArray& name) {
+    if (!allowsClass(meta)) {
+        return true;
+    }
+    if (entryFor(ALLOWED_METHODS, meta)) {
+        return !listed(ALLOWED_PROPERTY_WRITES, meta, name);
+    }
+    return listed(DENIED_PROPERTY_WRITES, meta, name);
+}
+
+bool ScriptApiPolicy::deniesPropertyRead(const QMetaObject* meta, const QByteArray& name) {
+    return !allowsClass(meta) || listed(DENIED_PROPERTY_READS, meta, name);
+}
+
+bool ScriptApiPolicy::deniesSignal(const QMetaObject* meta, const QByteArray& name) {
+    return !allowsClass(meta) || listed(DENIED_SIGNALS, meta, name);
+}
+
+bool ScriptApiPolicy::checksDelivery(const QMetaObject* meta, const QByteArray& name) {
+    return deliveryRuleFor(meta, name) != nullptr;
+}
+
+bool ScriptApiPolicy::holdsBackDelivery(const QMetaObject* meta, const QByteArray& name, const QVariantList& arguments) {
+    const DeliveryRule* rule = deliveryRuleFor(meta, name);
+    auto entities = DependencyManager::get<EntityScriptingInterface>();
+    if (!rule || !entities) {
+        return false;
+    }
+    // asked as the world's script the delivery is for (it runs on that script's thread, outside any call of its own)
+    ScriptCaller::WorldScope world(true);
+    if (ScriptCaller::isRetired()) {
+        return true;    // a world that was left hears nothing more
+    }
+    for (int index : rule->ids) {
+        const QUuid id = idOf(arguments.value(index));
+        if (id.isNull()) {
+            continue;
+        }
+        if (entities->forWorldRead(id).isNull() || (rule->worldsOwnOnly && !entities->worldMayUse(id))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ScriptApiPolicy::allowsAfterWorldLeft(const QMetaObject* meta, const QByteArray& name) {
+    for (const QMetaObject* cls = meta; cls; cls = cls->superClass()) {
+        auto found = ALLOWED_AFTER_WORLD_LEFT.constFind(QByteArray(cls->className()));
+        if (found != ALLOWED_AFTER_WORLD_LEFT.constEnd()) {
+            return found->isEmpty() || found->contains(name);
+        }
+    }
+    return false;
+}
+
+QString ScriptApiPolicy::refusalLine(const QString& object, const QString& member) {
+    return QString("%1%2 is for the visitor's own scripts; a world's script may not use it")
+        .arg(object, member.isEmpty() ? QString() : "." + member);
+}

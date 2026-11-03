@@ -12,6 +12,17 @@
 //
 //  Distributed under the MIT License.
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: Application::eventFilter's refresh-regime lines (a click, key or wheel ends the unfocused regime through
+// resetInactiveTimer; the return from minimized).
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
 
 #ifdef _WIN32
 // winsock2.h before anything includes Windows.h, which would pull in the old winsock.h
@@ -38,6 +49,7 @@
 #include "editor/Editor.h"
 #if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
 #endif
+#include "ui/LoginDialog.h"
 #include "ui/StandAloneJSConsole.h"
 #if defined(Q_OS_ANDROID)
 #include <android/log.h>
@@ -123,7 +135,8 @@ bool Application::event(QEvent* event) {
     }
 
     // Allow focused Entities to handle keyboard input
-    if (isKeyEvent(event->type()) && _keyboardFocus.deliverKeyEvent(event)) {
+    // not while a sign-in page is shown: keys go only to it, never to a Web entity holding the keyboard focus
+    if (isKeyEvent(event->type()) && !LoginDialog::isShown() && _keyboardFocus.deliverKeyEvent(event)) {
         return true;
     }
 
@@ -214,6 +227,7 @@ bool Application::event(QEvent* event) {
     return QApplication::event(event);
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 bool Application::eventFilter(QObject* object, QEvent* event) {
     auto eventType = event->type();
 
@@ -254,7 +268,9 @@ bool Application::eventFilter(QObject* object, QEvent* event) {
 
     if (eventType == QEvent::KeyPress || eventType == QEvent::KeyRelease || eventType == QEvent::MouseMove ||
         eventType == QEvent::MouseButtonPress || eventType == QEvent::Wheel) {
-        getRefreshRateManager().resetInactiveTimer();
+        // a press, a key or the wheel is deliberate: it also brings the client back from the unfocused regime, which
+        // a right click does not do through the window's activation (macOS leaves the window inactive for it)
+        getRefreshRateManager().resetInactiveTimer(eventType != QEvent::MouseMove);
     }
 
     if (event->type() == QEvent::Leave) {
@@ -326,7 +342,8 @@ bool Application::eventFilter(QObject* object, QEvent* event) {
         QWidget* focusWidget = QApplication::focusWidget();
         bool viewHasKeyboard = !focusWidget || focusWidget == getPrimaryWidget() || focusWidget == getWindow();
         if (key->key() == Qt::Key_Tab && viewHasKeyboard) {
-            if (key->isAutoRepeat() == false) {
+            // while a sign-in page is shown, keys go only to it
+            if (key->isAutoRepeat() == false && !LoginDialog::isShown()) {
                 _controllerScriptingInterface->tabKeyEvent(event->type() == QEvent::KeyPress);
             }
             return true; 
@@ -337,15 +354,25 @@ bool Application::eventFilter(QObject* object, QEvent* event) {
 }
 
 void Application::keyPressEvent(QKeyEvent* event) {
-    if (!event->isAutoRepeat()) {
+    // while a sign-in page is shown, keys go only to it: no script hears them, and the keyboard device takes none, so
+    // mappings, Controller.getValue and the avatar's actions read nothing; keys held before it showed are let go at
+    // the first key pressed while it shows (their releases always reach the device, so none stays down)
+    const bool signInShown = LoginDialog::isShown();
+    if (signInShown) {
+        synthesizeKeyReleasEvents();
+    }
+    if (!event->isAutoRepeat() && !signInShown) {
         _keysPressed.insert(event->key(), *event);
     }
 
-    if (DependencyManager::get<Editor>()->handleKeyPress(event)) {
+    // Build mode's keys too (its shortcuts and fly camera) wait while a sign-in page is shown
+    if (!signInShown && DependencyManager::get<Editor>()->handleKeyPress(event)) {
         return;
     }
 
-    _controllerScriptingInterface->emitKeyPressEvent(event); // send events to any registered scripts
+    if (!signInShown) {
+        _controllerScriptingInterface->emitKeyPressEvent(event); // send events to any registered scripts
+    }
     // if one of our scripts have asked to capture this event, then stop processing it
     if (_controllerScriptingInterface->isKeyCaptured(event) || isInterstitialMode()) {
         return;
@@ -379,7 +406,7 @@ void Application::keyPressEvent(QKeyEvent* event) {
                 break;
         }
     } else if (hasFocus()) {
-        if (_keyboardMouseDevice->isActive()) {
+        if (_keyboardMouseDevice->isActive() && !signInShown) {
             _keyboardMouseDevice->keyPressEvent(event);
         }
 
@@ -539,11 +566,14 @@ void Application::keyReleaseEvent(QKeyEvent* event) {
         AndroidHelper::instance().requestActivity("Home", false);
     }
 #endif
-    _controllerScriptingInterface->emitKeyReleaseEvent(event); // send events to any registered scripts
+    // while a sign-in page is shown, no script hears keys; the release still reaches the keyboard device
+    if (!LoginDialog::isShown()) {
+        _controllerScriptingInterface->emitKeyReleaseEvent(event); // send events to any registered scripts
 
-    // if one of our scripts have asked to capture this event, then stop processing it
-    if (_controllerScriptingInterface->isKeyCaptured(event)) {
-        return;
+        // if one of our scripts have asked to capture this event, then stop processing it
+        if (_controllerScriptingInterface->isKeyCaptured(event)) {
+            return;
+        }
     }
 
     if (_keyboardMouseDevice->isActive()) {

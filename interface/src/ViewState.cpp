@@ -13,6 +13,20 @@
 //
 //  Distributed under the MIT License.
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: these functions, the cameras (every camera mode is part of the vehicle): updateCamera (first person,
+//   first person look at, look at, third person, selfie, mirror, entity, independent and the headset),
+//   collideCameraBoom, allowedBoomLength, updateChaseCamera, traceCamera, each with everything it calls on the
+//   vehicle's path.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 
 #include "ViewState.h"
 
@@ -29,6 +43,7 @@
 #include <display-plugins/CompositorHelper.h>
 #include <EntityMotionState.h>
 #include <EntityScriptingInterface.h>
+#include <FrameTrace.h>
 #include <ObjectMotionState.h>
 #include <PhysicsCollisionGroups.h>
 #include <PhysicsEngine.h>
@@ -40,6 +55,8 @@
 #include "avatar/MyHead.h"
 #include "editor/Editor.h"
 #include "LODManager.h"
+#include <NumericalConstants.h>
+#include <SharedUtil.h>
 
 static const float MIRROR_FULLSCREEN_DISTANCE = 0.789f;
 
@@ -48,46 +65,111 @@ static std::shared_ptr<MyAvatar> getMyAvatar() {
     return DependencyManager::get<AvatarManager>()->getMyAvatar();
 }
 
-// TIVOLI_CAMERA_TRACE=<file>, a test switch (off unless set): while the avatar sits in a vehicle, one line per frame for
-// the chase camera's judder at speed (physics, 2026-10-26): the time, the frame's dt, the camera as this frame shows it,
-// the vehicle as drawn this frame, the substeps simulated so far, the leftover time past the last one and the correction
-// still being blended in. Written at the end of updateCamera, so camera and vehicle are the frame's own pair.
-static void traceVehicleCamera(const Camera& camera, float deltaTime) {
-    static FILE* file = nullptr;
-    static bool opened = false;
-    if (!opened) {
-        opened = true;
-        QByteArray path = qgetenv("TIVOLI_CAMERA_TRACE");
-        if (!path.isEmpty() && (file = fopen(path.constData(), "w"))) {
-            fprintf(file, "# t_us dt mode cam_x cam_y cam_z cam_qw cam_qx cam_qy cam_qz "
-                "veh_x veh_y veh_z veh_qw veh_qx veh_qy veh_qz substeps leftover correction\n");
+// FROZEN (vehicle path): see the note at the top of this file.
+// The camera and the ride (team/performance/INSTRUMENTS-PLAN.md, items 7 and 11), at the end of updateCamera, so the
+// camera and the ride are the frame's own pair. Into the frame trace (FrameTrace) when it is on: the camera as this
+// frame shows it (cam.x/y/z_m, cam.qw/qx/qy/qz, cam.mode), who placed it (cam.source: 0 the engine in updateCamera,
+// 1 a script since the last frame, on its own thread's clock) and its world step since the last frame (cam.step_mm:
+// 84 mm at 6 m/s and 72 Hz; a 0 then a double is a hitch); while the avatar is carried by a frame or a vehicle (a
+// monorail car, a kart, a seat's vehicle: the avatar's frame, else the top of its parent chain), that entity as this
+// frame draws it (ride.id, ride.x/y/z_m, ride.qw/qx/qy/qz), the correction it is still blending in
+// (ride.correction_m), and the camera in that entity's frame (cam.ride_x/y/z_m) with its step there since the last
+// frame (cam.ride_step_mm: 0 standing still whatever the car does, a smooth arc while the camera turns; anything else
+// is the camera and the vehicle out of sync, in one number). The steps are kept every frame, trace or not, for the
+// Stats panel (getCameraRideStepMaxMm, getCameraStepMinMm/MaxMm: the last whole second's). The boom's columns
+// (boom.*) are written where the boom is placed. Until 2026-10-31 this was TIVOLI_CAMERA_TRACE, a file of the same
+// pair for vehicles only (physics, 10-26: the chase camera's judder at speed); the substeps and the leftover time it
+// carried are the physics step's own columns (physics.*).
+void ViewState::traceCamera() {
+    glm::vec3 cameraPosition = _camera.getPosition();
+    glm::quat cameraRotation = _camera.getOrientation();
+    bool setOutside = _camera.takeSetOutside();
+    bool traced = FrameTrace::enabled();
+    float stepMm = _cameraLastValid ? glm::distance(cameraPosition, _cameraLastPosition) * 1000.0f : -1.0f;
+    _cameraLastPosition = cameraPosition;
+    _cameraLastValid = true;
+    if (traced) {
+        FrameTrace::set("cam.x_m", cameraPosition.x);
+        FrameTrace::set("cam.y_m", cameraPosition.y);
+        FrameTrace::set("cam.z_m", cameraPosition.z);
+        FrameTrace::set("cam.qw", cameraRotation.w);
+        FrameTrace::set("cam.qx", cameraRotation.x);
+        FrameTrace::set("cam.qy", cameraRotation.y);
+        FrameTrace::set("cam.qz", cameraRotation.z);
+        FrameTrace::set("cam.mode", (double)_camera.getMode());
+        FrameTrace::set("cam.source", setOutside ? 1.0 : 0.0);
+        if (stepMm >= 0.0f) {
+            FrameTrace::set("cam.step_mm", stepMm);
         }
     }
-    if (!file) {
-        return;
-    }
-    QUuid parentID = getMyAvatar()->getParentID();
+    EntityItemPointer ride;
+    auto myAvatar = getMyAvatar();
     EntityTreePointer tree = qApp->getEntities()->getTree();
-    EntityItemPointer vehicle = (tree && !parentID.isNull()) ? tree->findEntityByID(parentID) : nullptr;
-    while (vehicle && !vehicle->isVehicle()) {   // a seat that is a child of the vehicle
-        vehicle = tree->findEntityByID(vehicle->getParentID());
+    // the tree's read lock once a frame, only while riding (findEntityByID takes it for a null id too): the same lock
+    // the avatar's own parenting takes each frame
+    bool riding = myAvatar && (!myAvatar->getFrameID().isNull() || !myAvatar->getParentID().isNull());
+    if (riding && tree) {
+        if (!myAvatar->getFrameID().isNull()) {
+            ride = tree->findEntityByID(myAvatar->getFrameID());
+        }
+        if (!ride) {   // parented to something that is not a frame (a seat): what carries the chain is the ride
+            QUuid id = myAvatar->getParentID();
+            const int MAX_DEPTH = 16;
+            for (int depth = 0; !id.isNull() && depth < MAX_DEPTH; depth++) {
+                EntityItemPointer entity = tree->findEntityByID(id);
+                if (!entity) {
+                    break;
+                }
+                ride = entity;
+                id = entity->getParentID();
+            }
+        }
     }
-    if (!vehicle) {
-        return;
+    float rideStepMm = 0.0f;
+    if (ride) {
+        glm::vec3 position = ride->getWorldPosition();
+        glm::quat rotation = ride->getWorldOrientation();
+        glm::vec3 inRide = glm::inverse(rotation) * (cameraPosition - position);
+        bool sameRide = ride->getID() == _cameraRideLast;
+        rideStepMm = sameRide ? glm::distance(inRide, _cameraRideLastLocal) * 1000.0f : 0.0f;
+        _cameraRideLast = ride->getID();
+        _cameraRideLastLocal = inRide;
+        if (traced) {
+            FrameTrace::setText("ride.id", ride->getID().toString());
+            FrameTrace::set("ride.x_m", position.x);
+            FrameTrace::set("ride.y_m", position.y);
+            FrameTrace::set("ride.z_m", position.z);
+            FrameTrace::set("ride.qw", rotation.w);
+            FrameTrace::set("ride.qx", rotation.x);
+            FrameTrace::set("ride.qy", rotation.y);
+            FrameTrace::set("ride.qz", rotation.z);
+            auto motionState = static_cast<EntityMotionState*>(ride->getPhysicsInfo());
+            FrameTrace::set("ride.correction_m", motionState ? motionState->getCorrectionDistance() : 0.0f);
+            FrameTrace::set("cam.ride_x_m", inRide.x);
+            FrameTrace::set("cam.ride_y_m", inRide.y);
+            FrameTrace::set("cam.ride_z_m", inRide.z);
+            if (sameRide) {
+                FrameTrace::set("cam.ride_step_mm", rideStepMm);
+            }
+        }
+    } else {
+        _cameraRideLast = QUuid();
     }
-    glm::vec3 cameraPosition = camera.getPosition();
-    glm::quat cameraRotation = camera.getOrientation();
-    glm::vec3 position = vehicle->getWorldPosition();
-    glm::quat rotation = vehicle->getWorldOrientation();
-    auto motionState = static_cast<EntityMotionState*>(vehicle->getPhysicsInfo());
-    PhysicsEnginePointer physicsEngine = qApp->getPhysicsEngine();
-    fprintf(file, "%llu %.6f %d %.4f %.4f %.4f %.6f %.6f %.6f %.6f %.4f %.4f %.4f %.6f %.6f %.6f %.6f %u %.6f %.4f\n",
-        (unsigned long long)usecTimestampNow(), deltaTime, (int)camera.getMode(),
-        cameraPosition.x, cameraPosition.y, cameraPosition.z, cameraRotation.w, cameraRotation.x, cameraRotation.y, cameraRotation.z,
-        position.x, position.y, position.z, rotation.w, rotation.x, rotation.y, rotation.z,
-        physicsEngine ? physicsEngine->getNumSubsteps() : 0u, ObjectMotionState::getLeftoverTime(),
-        motionState ? motionState->getCorrectionDistance() : 0.0f);
-    fflush(file);
+    uint64_t now = usecTimestampNow();
+    if (now - _cameraWindowStart >= USECS_PER_SECOND) {
+        _cameraRideStepMaxLastSecond = _cameraRideStepMax;
+        _cameraStepMinLastSecond = _cameraStepMin;
+        _cameraStepMaxLastSecond = _cameraStepMax;
+        _cameraRideStepMax = 0.0f;
+        _cameraStepMin = -1.0f;
+        _cameraStepMax = 0.0f;
+        _cameraWindowStart = now;
+    }
+    _cameraRideStepMax = glm::max(_cameraRideStepMax, rideStepMm);
+    if (stepMm >= 0.0f) {
+        _cameraStepMin = _cameraStepMin < 0.0f ? stepMm : glm::min(_cameraStepMin, stepMm);
+        _cameraStepMax = glm::max(_cameraStepMax, stepMm);
+    }
 }
 
 void ViewState::copyViewFrustum(ViewFrustum& viewOut) const {
@@ -262,9 +344,11 @@ void ViewState::addSecondaryCameraView() {
     _conicalViews.push_back(secondaryViewFrustum);
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void ViewState::updateCamera(RenderArgs& renderArgs, float deltaTime) {
     PROFILE_RANGE(render, __FUNCTION__);
     PerformanceTimer perfTimer("updateCamera");
+    Camera::Placing placing(_camera);   // the camera's setters are the engine's from here on, not a script's (item 11)
 
     glm::vec3 boomOffset;
     auto myAvatar = getMyAvatar();
@@ -415,7 +499,7 @@ void ViewState::updateCamera(RenderArgs& renderArgs, float deltaTime) {
     if (!qApp->isHMDMode()) {
         _camera.update();
     }
-    traceVehicleCamera(_camera, deltaTime);
+    traceCamera();
 
     renderArgs._cameraMode = (int8_t)_camera.getMode();
     _mirrored = renderArgs._mirrored;
@@ -449,10 +533,14 @@ private:
     const QSet<QUuid>& _ignored;
 };
 
+// FROZEN (vehicle path): see the note at the top of this file.
 float ViewState::allowedBoomLength(const glm::vec3& pivot, const glm::vec3& wanted, const QVector<QUuid>& ignore,
-                                   glm::vec3* clearPivot) const {
+                                   glm::vec3* clearPivot, QUuid* holder) const {
     if (clearPivot) {
         *clearPivot = pivot;
+    }
+    if (holder) {
+        *holder = QUuid();
     }
     float wantedLength = glm::distance(pivot, wanted);
     PhysicsEnginePointer physicsEngine = qApp->getPhysicsEngine();
@@ -499,16 +587,26 @@ float ViewState::allowedBoomLength(const glm::vec3& pivot, const glm::vec3& want
     }
     float fraction = 1.0f;
     RayHit hit;
+    ObjectMotionState* stop = nullptr;   // what held the probe, for the trace
     if (physicsEngine->castSphereClosestAllWorlds(start - offset, wanted - offset, radius, group, mask, &filter, hit)) {
         fraction = hit.fraction;
+        stop = hit.motionState;
     }
     if (physicsEngine->castRayClosestAllWorlds(start - offset, wanted - offset, group, mask, &filter, hit)) {
-        fraction = glm::min(fraction, hit.fraction - radius / startLength);
+        float rayFraction = hit.fraction - radius / startLength;
+        if (rayFraction < fraction) {
+            fraction = rayFraction;
+            stop = hit.motionState;
+        }
+    }
+    if (holder && fraction < 1.0f && stop && stop->getType() == MOTIONSTATE_TYPE_ENTITY) {
+        *holder = static_cast<EntityMotionState*>(stop)->getEntity()->getID();
     }
     // as a length from the pivot the caller gave (the start is at most a few centimetres from it)
     return glm::clamp(fraction, 0.0f, 1.0f) * (clearPivot ? startLength : wantedLength);
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 glm::vec3 ViewState::collideCameraBoom(const glm::vec3& pivot, const glm::vec3& wanted, float deltaTime) {
     const float EASE_OUT_TIME = 0.12f;   // s, the time constant of the way back out: 95 % in about 0.35 s
     glm::vec3 boom = wanted - pivot;
@@ -519,7 +617,23 @@ glm::vec3 ViewState::collideCameraBoom(const glm::vec3& pivot, const glm::vec3& 
         return wanted;
     }
     glm::vec3 start = pivot;   // the pivot moved out of a wall it was pressed against
-    float allowed = allowedBoomLength(pivot, wanted, QVector<QUuid>(), &start);
+    // The cast passes through the frame or vehicle the avatar rides and its parts (a car's walls and rails, a seat's
+    // vehicle): nothing of the thing you ride is a wall between you and your own camera, and a sweep that clipped a
+    // rail pulled the camera inside the car at every turn of the view (Caity's monorail ride, 2026-10-31). The chase
+    // camera passes through the chased entity the same way.
+    QVector<QUuid> ride;
+    if (auto myAvatar = getMyAvatar()) {
+        EntityTreePointer tree = qApp->getEntities()->getTree();
+        QUuid id = myAvatar->getParentID();
+        const int MAX_DEPTH = 16;
+        for (int depth = 0; tree && !id.isNull() && depth < MAX_DEPTH; depth++) {
+            ride.append(id);
+            EntityItemPointer entity = tree->findEntityByID(id);
+            id = entity ? entity->getParentID() : QUuid();
+        }
+    }
+    QUuid holder;
+    float allowed = allowedBoomLength(pivot, wanted, ride, &start, &holder);
     boom = wanted - start;
     wantedLength = glm::length(boom);
     if (wantedLength < EPSILON) {
@@ -534,9 +648,16 @@ glm::vec3 ViewState::collideCameraBoom(const glm::vec3& pivot, const glm::vec3& 
     }
     const float SETTLED = 0.01f;   // m
     _boomHeldIn = _boomLength < wantedLength - SETTLED;
+    if (FrameTrace::enabled()) {   // the boom's columns of the frame trace (item 7; traceCamera has the rest)
+        FrameTrace::set("boom.wanted_m", wantedLength);
+        FrameTrace::set("boom.allowed_m", allowed);
+        FrameTrace::set("boom.current_m", _boomLength);
+        FrameTrace::setText("boom.holder", holder.isNull() ? QString() : holder.toString());
+    }
     return start + (boom / wantedLength) * _boomLength;
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 // The chase camera behind an entity (Camera.setChaseTarget; vehicles.js's for the vehicle you drive), worked out every
 // frame from the entity as this frame draws it. vehicles.js placed it from its own update, on the script's thread at 60
 // a second, so on a 144 Hz display the camera stood still for two frames in three and then jumped: steps of 0, 23 and
@@ -584,7 +705,8 @@ bool ViewState::updateChaseCamera(float deltaTime) {
     float length = glm::length(boom);
     glm::vec3 shown = _chasePosition;
     if (length > EPSILON) {
-        float allowed = allowedBoomLength(pivot, _chasePosition, QVector<QUuid>{ chase.entityID });
+        QUuid holder;
+        float allowed = allowedBoomLength(pivot, _chasePosition, QVector<QUuid>{ chase.entityID }, nullptr, &holder);
         if (_chaseBoom < 0.0f || allowed <= _chaseBoom || !_chaseHeldIn) {
             _chaseBoom = allowed;   // in at once, and the chase's own movement followed as it is
         } else {
@@ -594,6 +716,12 @@ bool ViewState::updateChaseCamera(float deltaTime) {
         const float SETTLED = 0.01f;   // m
         _chaseHeldIn = _chaseBoom < length - SETTLED;
         shown = pivot + boom * (_chaseBoom / length);
+        if (FrameTrace::enabled()) {   // the chase's boom in the frame trace's boom columns (one boom a frame)
+            FrameTrace::set("boom.wanted_m", length);
+            FrameTrace::set("boom.allowed_m", allowed);
+            FrameTrace::set("boom.current_m", _chaseBoom);
+            FrameTrace::setText("boom.holder", holder.isNull() ? QString() : holder.toString());
+        }
     }
     _camera.setPosition(shown);
 

@@ -27,6 +27,7 @@
 #include "NetworkingConstants.h"
 #include "RedirectCache.h"
 #include "ResourceCache.h"
+#include "ResourceSizeLimit.h"
 #include "NetworkLogging.h"
 
 HTTPResourceRequest::~HTTPResourceRequest() {
@@ -83,6 +84,12 @@ void HTTPResourceRequest::doSend() {
     _viaRedirectCache = false;
     if (_withAccessToken) {
         _requestUrl = _accessTokenUrl;
+    } else if (_ruled) {
+        // a script's own download: each address judged and pinned, so no remembered redirect target is used
+        _hopUrl = _url;
+        _hops = 0;
+        judgeAndSend();
+        return;
     } else if (!_triedOriginal) {
         QUrl remembered = RedirectCache::target(_url);
         if (!remembered.isEmpty()) {
@@ -91,10 +98,62 @@ void HTTPResourceRequest::doSend() {
         }
     }
 
+    sendNow();
+}
+
+void HTTPResourceRequest::judgeAndSend() {
+    const int judging = ++_judging;
+    ScriptNetworkPolicy::decide(_hopUrl, _ruleOrigin, this, [this, judging](const ScriptNetworkPolicy::Decision& decision) {
+        if (judging != _judging || _state != InProgress) {
+            return;
+        }
+        if (!decision.allowed) {
+            finishRefused(decision.reason);
+            return;
+        }
+        _hopDecision = decision;
+        _requestUrl = _hopUrl;
+        sendNow();
+    }, _ruleWorldIsLocal);
+}
+
+void HTTPResourceRequest::finishRefused(const QString& reason) {
+    qCDebug(networking) << ScriptNetworkPolicy::refusalLine(_ruleOrigin, _hopUrl, reason);
+    _result = AccessDenied;
+    _state = Finished;
+    emit finished();
+}
+
+bool HTTPResourceRequest::followRedirect() {
+    // a ruled download's redirect: the next hop, relative to this one by its name, judged and pinned as the first was
+    const QUrl next = _hopUrl.resolved(QUrl::fromEncoded(_reply->rawHeader("Location")));
+    _reply->disconnect(this);
+    _reply->deleteLater();
+    _reply = nullptr;
+    if (++_hops > QNetworkRequest().maximumRedirectsAllowed()) {
+        finishRefused("too many redirects");
+        return true;
+    }
+    if (_hopUrl.scheme().toLower() == "https" && next.scheme().toLower() != "https") {
+        _hopUrl = next;
+        finishRefused("a redirect from https to a plain address");
+        return true;
+    }
+    _hopUrl = next;
+    judgeAndSend();
+    return true;
+}
+
+void HTTPResourceRequest::sendNow() {
     QNetworkRequest networkRequest(_requestUrl);
     // with the player's login, no redirect is followed: Qt would send the login on to wherever it led (a private file
     // is passed through by the files host, never redirected)
-    networkRequest.setAttribute(QNetworkRequest::FollowRedirectsAttribute, !_withAccessToken);
+    networkRequest.setAttribute(QNetworkRequest::FollowRedirectsAttribute, !_withAccessToken && !_ruled);
+    if (_ruled && !_withAccessToken) {
+        // to the address the rule checked and no other; a redirect comes back to onRequestFinished
+        networkRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+        ScriptNetworkPolicy::pin(networkRequest, _hopDecision);
+    }
     // not HTTP/2: Qt 5.15's implementation made cold loads slower on this link, with 64 KB windows and with 32 MB
     // ones (measured 10-23, ARCHITECTURE.md §6 phase 2b); six HTTP/1.1 connections per host it is
     networkRequest.setHeader(QNetworkRequest::UserAgentHeader, TIVOLI_CLOUD_VR_USER_AGENT);
@@ -182,11 +241,24 @@ void HTTPResourceRequest::onRequestFinished() {
 
     const int statusCode = _reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     _statusCode = statusCode;
+    if (_ruled && !_withAccessToken && statusCode >= 300 && statusCode < 400 && _reply->hasRawHeader("Location") &&
+        (statusCode == 301 || statusCode == 302 || statusCode == 303 || statusCode == 307 || statusCode == 308)) {
+        followRedirect();
+        return;
+    }
     switch(_reply->error()) {
         case QNetworkReply::NoError:
             if (_withAccessToken && statusCode >= 300 && statusCode < 400) {
                 // redirects aren't followed with the login (doSend): a file that went public meanwhile, asked again
                 // next time without it
+                _result = Error;
+                break;
+            }
+            if (_reply->bytesAvailable() > ResourceSizeLimit::forPath(_url.path())) {
+                // a body past the limit for its kind (one the progress check didn't see, e.g. from the disk cache)
+                // isn't read at all
+                qWarning(networking) << "Refused a download over the size limit for its kind:" << _url.toString()
+                                     << _reply->bytesAvailable() << "bytes";
                 _result = Error;
                 break;
             }
@@ -227,8 +299,10 @@ void HTTPResourceRequest::onRequestFinished() {
                 auto contentEncoding = _reply->rawHeader("Content-Encoding");
                 if (contentEncoding.size() > 0) {
                     QByteArray decompressedData;
+                    // what it unpacks to has the same limit as a download of its kind
+                    const int maxSize = ResourceSizeLimit::forPath(_url.path());
                     if (contentEncoding.compare("gzip", Qt::CaseInsensitive) == 0) {
-                        if (gunzip(_data, decompressedData)) {
+                        if (gunzip(_data, decompressedData, maxSize)) {
                             _data = decompressedData;
                         } else if (!_data.startsWith("\x1f\x8b")) {
                             // not gzip after all: a cached copy that a request with Qt's own decompression saved
@@ -238,7 +312,7 @@ void HTTPResourceRequest::onRequestFinished() {
                             _result = Error;
                         }
                     } else if (contentEncoding.compare("br", Qt::CaseInsensitive) == 0) {
-                        if (brotliDecompress(_data, decompressedData)) {
+                        if (brotliDecompress(_data, decompressedData, maxSize)) {
                             _data = decompressedData;
                         } else {
                             qWarning(networking) << "Failed to decompress brotli for: " << _url;
@@ -309,7 +383,9 @@ void HTTPResourceRequest::onRequestFinished() {
     // where the request ended, after the redirects Qt followed, is remembered for the next request of this URL; a
     // remembered target that failed is forgotten and the original URL asked once more, in this same request
     const QUrl finalUrl = _reply->url();
-    if (_result == Success) {
+    if (_ruled) {
+        // a ruled download's hops were judged one by one: nothing to remember (its URL is a checked address)
+    } else if (_result == Success) {
         if (finalUrl != _url) {
             RedirectCache::remember(_url, finalUrl);
         }
@@ -346,7 +422,28 @@ void HTTPResourceRequest::onRequestFinished() {
 
 void HTTPResourceRequest::onDownloadProgress(qint64 bytesReceived, qint64 bytesTotal) {
     Q_ASSERT(_state == InProgress);
-    
+
+    // past the size limit for its kind (or announced past it), the download stops here and the request fails, as a
+    // timeout does: nothing more is received or held
+    const qint64 maxSize = ResourceSizeLimit::forPath(_url.path());
+    if (bytesReceived > maxSize || bytesTotal > maxSize) {
+        qWarning(networking) << "Stopped a download over the size limit for its kind:" << _url.toString()
+                             << qMax(bytesReceived, bytesTotal) << "bytes, limit" << maxSize;
+        _reply->disconnect(this);
+        _reply->abort();
+        _reply->deleteLater();
+        _reply = nullptr;
+
+        cleanupTimer();
+
+        _result = Error;
+        _state = Finished;
+        emit finished();
+
+        DependencyManager::get<StatTracker>()->incrementStat(STAT_HTTP_REQUEST_FAILED);
+        return;
+    }
+
     // We've received data, so reset the timer
     _sendTimer->start();
 

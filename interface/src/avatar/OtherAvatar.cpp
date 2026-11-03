@@ -19,6 +19,7 @@
 #include "DetailedMotionState.h"
 #include "DebugDraw.h"
 #include <AvatarConstants.h>
+#include <EntityContentAddresses.h>
 #include <QTimer>
 
 const float DISPLAYNAME_FADE_TIME = 0.5f;
@@ -589,8 +590,23 @@ void OtherAvatar::handleChangedAvatarEntityData() {
             // and seems safe (per Seth).
             properties.markAllChanged();
 
+            // when the world isn't local the tree refuses content addresses that name a file on this computer, and
+            // the same rule empties them in another visitor's entities before the tree sees them; one warning per
+            // entity per property (the tree's), not per blob update
+            if (entityTree->refusesContentFromThisComputer()) {
+                entityTree->warnRefusedAddresses(EntityItemID(entityID),
+                                                 EntityContentAddresses::clearThisComputer(properties));
+            }
+
             // try to build the entity
             EntityItemPointer entity = entityTree->findEntityByEntityItemID(EntityItemID(entityID));
+            if (entity && !entity->isAvatarEntityOf(getID())) {
+                // an entity under this id that isn't one this avatar wears (the world's, this computer's or another
+                // avatar's) is left as it is; this data isn't read again until it changes
+                stateItr.value().success = true;
+                stateItr.value().hash = newHash;
+                continue;
+            }
             bool success = true;
             if (entity) {
                 QUuid oldParentID = entity->getParentID();
@@ -662,9 +678,7 @@ void OtherAvatar::handleChangedAvatarEntityData() {
                     }
                 }
                 if (!idsToDelete.empty()) {
-                    bool force = true;
-                    bool ignoreWarnings = true;
-                    entityTree->deleteEntitiesByID(idsToDelete, force, ignoreWarnings);
+                    entityTree->deleteAvatarEntitiesOf(getID(), idsToDelete);
                 }
             }
 

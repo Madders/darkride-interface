@@ -5,6 +5,18 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: these functions: frameTrace, dumpFrameTrace, takeFrameTrace (the scripts' calls into the frame
+// trace, which the vehicle check's kits read the ride through). The rest of this file is not frozen.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 #include "TestScriptingInterface.h"
 
 #include <memory>
@@ -40,6 +52,7 @@
 #include <QtQuick/QQuickItem>
 #include <StatTracker.h>
 #include <Trace.h>
+#include <FrameTrace.h>
 #include <ui/TabletScriptingInterface.h>
 
 #include "Application.h"
@@ -532,6 +545,20 @@ bool TestScriptingInterface::hierarchyToggle(const QUuid& id, const QString& whi
         return result;
     }
     return DependencyManager::get<Editor>()->clickHierarchyToggle(which, id, onlyThis);
+}
+
+bool TestScriptingInterface::hierarchyStroke(const QString& which, const QVariantList& ids, bool onlyThis) {
+    if (QThread::currentThread() != thread()) {
+        bool result = false;
+        BLOCKING_INVOKE_METHOD(this, "hierarchyStroke", Q_RETURN_ARG(bool, result), Q_ARG(QString, which),
+                               Q_ARG(QVariantList, ids), Q_ARG(bool, onlyThis));
+        return result;
+    }
+    QList<QUuid> rows;
+    for (const auto& id : ids) {
+        rows << QUuid(id.toString());
+    }
+    return DependencyManager::get<Editor>()->strokeHierarchyToggle(which, rows, onlyThis);
 }
 
 QVariantMap TestScriptingInterface::hierarchyToggles(const QUuid& id) {
@@ -1175,6 +1202,34 @@ QVariantList TestScriptingInterface::takePresentTrace() {
             list << QVariant(QVariantList { (double)sample.time * 1.0e-3, (double)sample.frameIndex, sample.newFrame ? 1.0 : 0.0,
                                             (double)sample.presentUsecs * 1.0e-3, (double)sample.swapUsecs * 1.0e-3, (double)sample.gpuMs });
         }
+    }
+    return list;
+}
+
+// FROZEN (vehicle path): see the note at the top of this file.
+void TestScriptingInterface::frameTrace(bool on) {
+    if (on) {
+        FrameTrace::start();
+    } else {
+        FrameTrace::stop();
+    }
+}
+
+// FROZEN (vehicle path): see the note at the top of this file.
+int TestScriptingInterface::dumpFrameTrace(const QString& path) {
+    return FrameTrace::dump(path);
+}
+
+// FROZEN (vehicle path): see the note at the top of this file.
+QVariantList TestScriptingInterface::takeFrameTrace() {
+    QVariantList list;
+    QVariantList header;
+    for (const QString& column : FrameTrace::columns()) {
+        header << column;
+    }
+    list << QVariant(header);
+    for (const QVariantList& row : FrameTrace::take()) {
+        list << QVariant(row);
     }
     return list;
 }

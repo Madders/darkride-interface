@@ -24,8 +24,9 @@ WebSocketClass::WebSocketClass(QScriptEngine* engine, QString url) :
 {
     initialize();
     if (auto scriptEngine = qobject_cast<ScriptEngine*>(engine)) {
-        _origin = scriptEngine->currentScriptOrigin();
-        _ruled = scriptEngine->isClientSide();
+        _origin = scriptEngine->ruledOrigin(scriptEngine->currentScriptOrigin());
+        _ruled = scriptEngine->networkRuled();
+        _worldIsLocal = scriptEngine->worldIsLocal();
     }
     const QUrl target(url);
     if (!_ruled) {
@@ -39,7 +40,7 @@ WebSocketClass::WebSocketClass(QScriptEngine* engine, QString url) :
         } else {
             refuse(target, decision.reason);
         }
-    });
+    }, _worldIsLocal);
 }
 
 void WebSocketClass::refuse(const QUrl& target, const QString& reason) {
@@ -81,7 +82,22 @@ WebSocketClass::~WebSocketClass() {
     _webSocket->deleteLater();
 }
 
+bool WebSocketClass::closeIfWorldEnding() {
+    auto scriptEngine = qobject_cast<ScriptEngine*>(_engine);
+    if (!scriptEngine || !scriptEngine->isWorldEnding()) {
+        return false;
+    }
+    // a world's script whose engine stops or whose world was left: nothing more goes over its connections
+    if (_webSocket->state() != QAbstractSocket::UnconnectedState) {
+        _webSocket->close(QWebSocketProtocol::CloseCodeGoingAway, "the world was left");
+    }
+    return true;
+}
+
 void WebSocketClass::send(QScriptValue message) {
+    if (closeIfWorldEnding()) {
+        return;
+    }
     _webSocket->sendTextMessage(message.toString());
 }
 
@@ -110,6 +126,9 @@ void WebSocketClass::close(QWebSocketProtocol::CloseCode closeCode, QString reas
  * @property {boolean} wasClean - <code>true</code> if the connection closed cleanly, <code>false</code> if it didn't.
  */
 void WebSocketClass::handleOnClose() {
+    if (closeIfWorldEnding()) {
+        return;
+    }
     bool hasError = (_webSocket->error() != QAbstractSocket::UnknownSocketError);
     fireClose(hasError ? QWebSocketProtocol::CloseCodeAbnormalDisconnection : _webSocket->closeCode(),
               _webSocket->closeReason(), !hasError);
@@ -179,6 +198,9 @@ void WebSocketClass::fireClose(int code, const QString& reason, bool wasClean) {
  * @typedef {number} WebSocket.SocketError
  */
 void WebSocketClass::handleOnError(QAbstractSocket::SocketError error) {
+    if (closeIfWorldEnding()) {
+        return;
+    }
     if (_onErrorEvent.isFunction()) {
         _onErrorEvent.call();
     }
@@ -195,6 +217,9 @@ void WebSocketClass::handleOnError(QAbstractSocket::SocketError error) {
  * @property {string} data - The message content.
  */
 void WebSocketClass::handleOnMessage(const QString& message) {
+    if (_refused || closeIfWorldEnding()) {
+        return;
+    }
     if (_onMessageEvent.isFunction()) {
         QScriptValueList args;
         QScriptValue arg = _engine->newObject();
@@ -209,12 +234,16 @@ void WebSocketClass::handleOnMessage(const QString& message) {
  * @callback WebSocket~onOpenCallback
  */
 void WebSocketClass::handleOnOpen() {
-    if (_ruled && ScriptNetworkPolicy::applies(_origin) && ScriptNetworkPolicy::isPrivateAddress(_webSocket->peerAddress())) {
+    if (closeIfWorldEnding()) {
+        return;
+    }
+    if (_ruled && ScriptNetworkPolicy::applies(_origin, _worldIsLocal) && ScriptNetworkPolicy::isPrivateAddress(_webSocket->peerAddress())) {
         // the name led here after it was judged (an answer that changed): nothing goes over this connection
         if (auto scriptEngine = qobject_cast<ScriptEngine*>(_engine)) {
             scriptEngine->scriptWarningMessage(ScriptNetworkPolicy::refusalLine(_origin, _webSocket->requestUrl(),
                 "it connected to an address on this machine or its network (" + _webSocket->peerAddress().toString() + ")"));
         }
+        _refused = true;
         handleOnError(QAbstractSocket::SocketAccessError);
         _webSocket->close(QWebSocketProtocol::CloseCodePolicyViolated, "not allowed by the network rule");
         return;

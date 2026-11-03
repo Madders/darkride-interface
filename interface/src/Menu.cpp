@@ -749,7 +749,8 @@ Menu::Menu() {
     // display's rate without a wait and the compositor shows the newest at each refresh, which is even; on macOS the
     // GL swap's wait was measured at two refreshes with the odd frame queued at once, a ragged 72 Hz on a 144 Hz
     // panel (PHYSICS.md "The driver's stutter"). The setting is Render.vsyncEnabled; TIVOLI_VSYNC in the environment
-    // forces it.
+    // forces it. While the display link paces the presents (macOS) the setting is not applied, whatever it says
+    // (OpenGLDisplayPlugin::vsyncApplies): ticked on, it blinded the cadence governor (2026-10-31).
     action = addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::Vsync, 0,
         RenderScriptingInterface::getInstance()->getVsyncEnabled());
     connect(action, &QAction::triggered, [action] {
@@ -1206,7 +1207,7 @@ Menu::Menu() {
     // Reference, Changelog and Report a Bug are gone, Caity 10-29)
     action = addActionToQMenuAndActionHash(helpMenu, "Discord Server");
     connect(action, &QAction::triggered, qApp, [] {
-        QDesktopServices::openUrl(QUrl("https://discord.gg/fQqG7dT9wY"));
+        QDesktopServices::openUrl(QUrl("https://darkride.ai/discord"));   // the server redirects to the current invite
     });
 }
 

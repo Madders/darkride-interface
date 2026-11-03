@@ -12,6 +12,18 @@
 //
 //  Distributed under the MIT License.
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: Display::setDisplayPlugin's hand-over to the refresh-rate manager (the refresh operator, the present
+// cadence the governor reads, the ride-in-view source) and the regime changes on focus and on the display's rate
+// (followScreenRefreshRate, activeChanged, foregroundChanged, checkForeground).
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
 
 #include "Display.h"
 #include "TestClientIcon.h"
@@ -572,6 +584,7 @@ void Display::updateDisplayMode() {
     setDisplayPlugin(newDisplayPlugin);
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void Display::setDisplayPlugin(DisplayPluginPointer newDisplayPlugin) {
     if (newDisplayPlugin == _displayPlugin) {
         return;
@@ -640,6 +653,29 @@ void Display::setDisplayPlugin(DisplayPluginPointer newDisplayPlugin) {
 
         RefreshRateManager& refreshRateManager = qApp->getRefreshRateManager();
         refreshRateManager.setRefreshRateOperator(OpenGLDisplayPlugin::getRefreshRateOperator());
+        // the present cadence's last second, for the refresh governor
+        // a ride in view keeps the full rate through the unfocused regime (Caity, 2026-10-31)
+        refreshRateManager.setRideInViewSource([]() { return qApp->isRideInView(); });
+        refreshRateManager.setCadenceSource([counters = OpenGLDisplayPlugin::getCadenceCountersOperator()]() {
+            RefreshRateController::CadenceCounters c = counters();
+            RefreshRateManager::CadenceSample sample;
+            sample.displayRate = c.displayRefreshRate;
+            sample.presents = c.presents;
+            sample.repeated = c.repeated;
+            sample.onTwoOrMoreRefreshes = c.onTwoRefreshes + c.onThreeRefreshes + c.onMoreRefreshes;
+            sample.onOneRefresh = c.onOneRefresh;
+            sample.newFrames = c.newFrames;
+            sample.slowMainFrames = c.slowMainFrames;
+            sample.slowBuildFrames = c.slowBuildFrames;
+            sample.slowExecutes = c.slowExecutes;
+            sample.maxMainUs = c.maxMainUs;
+            sample.maxBuildUs = c.maxBuildUs;
+            sample.maxExecuteUs = c.maxExecuteUs;
+            sample.gpuMs = c.gpuMs;
+            sample.rolledAtNs = c.rolledAtNs;
+            sample.startedAtNs = c.startedAtNs;
+            return sample;
+        });
         bool isHmd = newDisplayPlugin->isHmd();
         RefreshRateManager::UXMode uxMode = isHmd ? RefreshRateManager::UXMode::VR :
             RefreshRateManager::UXMode::DESKTOP;
@@ -677,6 +713,7 @@ void Display::setDisplayPlugin(DisplayPluginPointer newDisplayPlugin) {
     Q_ASSERT_X(_displayPlugin, "Display::updateDisplayMode", "could not find an activated display plugin");
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void Display::followScreenRefreshRate() {
     QWindow* handle = qApp->getWindow() ? qApp->getWindow()->windowHandle() : nullptr;
     if (!handle || _screenChangedConnection) {
@@ -703,6 +740,7 @@ void Display::endHMDSession() {
     _autoSwitchDisplayModeSupportedHMDPlugin->endSession();
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void Display::activeChanged(Qt::ApplicationState state) {
     switch (state) {
         case Qt::ApplicationActive:
@@ -728,6 +766,7 @@ void Display::activeChanged(Qt::ApplicationState state) {
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void Display::foregroundChanged(bool inFront) {
     // a window of ours activated behind another app's gets "came to the front" too: only our own foreground window counts
     if (inFront && !isAppInFront()) {
@@ -742,6 +781,7 @@ void Display::foregroundChanged(bool inFront) {
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void Display::checkForeground() {
 #if defined(Q_OS_WIN)
     // one call to Windows; no decision before start-up has finished, while no window is in front (between two windows)

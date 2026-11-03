@@ -5,6 +5,18 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: these functions, the train on its track as each client follows it: startFromCar, adoptState, advance,
+//   drive, takePublications, isServerDriven, each with everything it calls on the vehicle's path.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 
 #include "TrackSimulation.h"
 
@@ -46,6 +58,7 @@ quint64 TrackSimulation::substepDomainTime() {
     return domainTime(substepTime ? substepTime : usecTimestampNow());
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 bool TrackSimulation::isServerDriven(const QUuid& trackID) const {
     auto it = _trains.find(trackID);
     if (it == _trains.end() || it->second.serverStateTime == 0) {
@@ -54,6 +67,7 @@ bool TrackSimulation::isServerDriven(const QUuid& trackID) const {
     return substepDomainTime() < it->second.serverStateTime + SERVER_STATE_TTL;
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void TrackSimulation::takePublications(std::vector<Publication>& publications) {
     publications.swap(_publications);
     _publications.clear();
@@ -94,6 +108,7 @@ void TrackSimulation::rebuild(Train& train, const TrackEntityItem& track) {
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void TrackSimulation::startFromCar(Train& train, const EntityItemPointer& car, const glm::vec3& trackPosition,
                                    const glm::quat& toTrack, uint32_t step) {
     // start driving from where the car is now: its nearest point on the curve, at its speed along it
@@ -115,9 +130,11 @@ void TrackSimulation::startFromCar(Train& train, const EntityItemPointer& car, c
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 // A state from the server (or, on the server, a state persisted by the entity server): the follower takes it and runs
 // it on to this substep in the same substeps the server took, so both agree; what this client showed meanwhile becomes
-// the residual, which decays over BLEND_TIME, or is dropped when it is too large to blend.
+// the residual, which closes slowly when it is small (the clocks' noise, CLOSE_RATE), decays over BLEND_TIME when it is
+// a desync, or is dropped when it is too large to blend.
 void TrackSimulation::adoptState(Train& train, const TrackEntityItem& track, const EntityItemPointer& car,
                                  const glm::vec3& trackPosition, const glm::quat& toTrack, quint64 stepTime, uint32_t step) {
     float shown;
@@ -159,7 +176,15 @@ void TrackSimulation::adoptState(Train& train, const TrackEntityItem& track, con
             << train.follower.state().s << "m, speed" << train.follower.state().speed << ", dwell" << train.follower.state().dwellRemaining
             << "; residual" << residual << (std::fabs(residual) > SNAP_DISTANCE ? "(snapped)" : "(blended)");
     }
-    if (!train.running || !std::isfinite(residual) || std::fabs(residual) > SNAP_DISTANCE) {
+    bool snapped = !std::isfinite(residual) || std::fabs(residual) > SNAP_DISTANCE;
+    if (train.running) {
+        // a running train's correction, counted and into the frame trace (item 6): the rate a small residual closes at
+        // (CLOSE_RATE, or less for one under a substep's worth), a desync's over BLEND_TIME, a snap's nothing
+        float size = std::isfinite(residual) ? std::fabs(residual) : 0.0f;
+        float closing = snapped ? 0.0f : (size <= BLEND_DISTANCE ? glm::min(size / PHYSICS_ENGINE_FIXED_SUBSTEP, CLOSE_RATE) : size / BLEND_TIME);
+        _corrections.note(size, closing, snapped);
+    }
+    if (!train.running || snapped) {
         residual = 0.0f;
     }
     train.residual = residual;
@@ -173,6 +198,7 @@ void TrackSimulation::adoptState(Train& train, const TrackEntityItem& track, con
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void TrackSimulation::advance(Train& train, uint32_t steps, bool watchEvents) {
     TrackFollower::State before = train.follower.state();
     for (uint32_t i = 0; i < steps; ++i) {
@@ -186,10 +212,15 @@ void TrackSimulation::advance(Train& train, uint32_t steps, bool watchEvents) {
             train.publishPending = true;   // a departure, an arrival, a turn at the end of an open track
         }
     }
-    // the residual closes exponentially; what it closed this step is a velocity the car reports
+    // the residual closes: a small one (the clocks' noise) at no more than CLOSE_RATE, a desync's exponentially over
+    // BLEND_TIME; what it closed this step is a velocity the car reports
     if (train.residual != 0.0f && steps > 0) {
         float dt = (float)steps * PHYSICS_ENGINE_FIXED_SUBSTEP;
         float remaining = train.residual * std::exp(-dt / BLEND_TIME);
+        if (std::fabs(train.residual) <= BLEND_DISTANCE) {
+            float closing = glm::min(std::fabs(train.residual), CLOSE_RATE * dt);
+            remaining = train.residual - std::copysign(closing, train.residual);
+        }
         if (std::fabs(remaining) < 1.0e-4f) {
             remaining = 0.0f;
         }
@@ -200,6 +231,7 @@ void TrackSimulation::advance(Train& train, uint32_t steps, bool watchEvents) {
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 bool TrackSimulation::drive(const EntityItemPointer& car, uint32_t step, bool mayDrive, glm::vec3& position,
                             glm::quat& rotation, glm::vec3& linearVelocity, glm::vec3& angularVelocity) {
     QUuid trackID = car->getTrackID();

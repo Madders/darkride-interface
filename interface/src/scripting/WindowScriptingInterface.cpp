@@ -11,6 +11,8 @@
 
 #include "WindowScriptingInterface.h"
 
+#include "InterfaceLogging.h"
+
 #include <QClipboard>
 #include <QtCore/QDir>
 #include <QMessageBox>
@@ -166,22 +168,21 @@ void WindowScriptingInterface::disconnectedFromDomain() {
 
 void WindowScriptingInterface::openUrl(const QUrl& url) {
     if (!url.isEmpty()) {
-        auto scheme = url.scheme();
-        if (scheme == URL_SCHEME_HIFI) {
+        auto scheme = url.scheme().toLower();
+        if (isWorldAddressScheme(scheme)) {   // hifi:, and Darkride's tivoli: and darkride: links
             DependencyManager::get<AddressManager>()->handleLookupString(url.toString());
+        } else if (scheme != "http" && scheme != "https") {
+            // a web page or a world address only: any other scheme (file:, a protocol handler, a custom URL) would
+            // hand the visitor's machine a command on a script's say-so
+            qCWarning(interfaceapp) << "Window.openUrl refused" << url.toDisplayString().left(200)
+                                    << ": only http, https and world addresses open";
         } else {
 #if defined(Q_OS_ANDROID)
             QMap<QString, QString> args;
             args["url"] = url.toString();
             AndroidHelper::instance().requestActivity("WebView", true, args);
 #else
-            // web pages and e-mail open straight away; anything else the system would open (a file, another app's
-            // link) asks the user first
-            if (scheme == "http" || scheme == "https" || scheme == "mailto") {
-                QDesktopServices::openUrl(url);
-            } else {
-                QMetaObject::invokeMethod(qApp, "showUrlHandler", Q_ARG(const QUrl&, url));
-            }
+            QDesktopServices::openUrl(url);
 #endif
         }
     }

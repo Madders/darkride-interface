@@ -21,6 +21,8 @@
 #include <QScriptValue>
 #include <QTimer>
 
+#include <ScriptNetworkPolicy.h>
+
 /*
 XMlHttpRequest object
 XMlHttpRequest.objectName string
@@ -295,12 +297,15 @@ signals:
     void requestComplete();
 
 private:
+    /// The requesting script is a world's whose engine is stopping or whose world was left (ScriptEngine::isWorldEnding).
+    bool isWorldEnding() const;
     void setReadyState(ReadyState readyState);
     /// Ends the request as refused by the network rule for a script's own requests (ScriptNetworkPolicy): a failed
     /// request, with the reason in the script's log.
     void refuse(const QString& reason);
-    /// Whether this script may use the URL's scheme: any for the user's own scripts, else http, https and atp.
-    bool isSchemeAllowed() const;
+    /// A ruled request's redirect: the next hop judged and pinned as the first was.
+    void followRedirect(int status);
+    bool isRedirectHop() const;
     void doSend();
     void connectToReply(QNetworkReply* reply);
     void disconnectFromReply(QNetworkReply* reply);
@@ -372,7 +377,13 @@ private:
     QNetworkReply::NetworkError _errorCode { QNetworkReply::NoError };
     QUrl _origin;                // where the script making the request came from
     bool _ruled { false };       // whether the network rule holds here (a person's client)
+    bool _worldIsLocal { false };    // the world the script is judged in (ScriptEngine::worldIsLocal), when it made the request
     bool _deciding { false };    // the rule is still judging (a name lookup)
+    // a ruled request goes to the address the rule checked, each hop judged again (HttpRequestObject's way)
+    QUrl _hopUrl;
+    ScriptNetworkPolicy::Decision _decision;
+    bool _byHand { false };
+    int _redirects { 0 };
     int _generation { 0 };       // abort() moves it on, so a judgement that comes late is dropped
 
     int _timeout { 0 };

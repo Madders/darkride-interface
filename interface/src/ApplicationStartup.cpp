@@ -1526,6 +1526,10 @@ void Application::installOperators() {
 
     DependencyManager::get<UsersScriptingInterface>()->setKickConfirmationOperator([this] (const QUuid& nodeID) { userKickConfirmation(nodeID); });
 
+    // the app's own QML surfaces made as local Web entities from C++: the only QML a local Web entity may show that
+    // was not made on a client script's thread (RenderableWebEntityItem.cpp)
+    render::entities::WebEntityRenderer::setTrustedQmlUrls({ TabletScriptingInterface::QML, LOGIN_DIALOG.toString(),
+                                                              AVATAR_INPUTS_BAR_QML.toString(), BUBBLE_ICON_QML.toString() });
     render::entities::WebEntityRenderer::setAcquireWebSurfaceOperator([=](const QString& url, bool htmlContent, QSharedPointer<OffscreenQmlSurface>& webSurface, bool& cachedWebSurface) {
         bool isTablet = url == TabletScriptingInterface::QML;
         if (htmlContent) {
@@ -1661,6 +1665,16 @@ void Application::init() {
         StartupProfiler::Scope step("init: entity tree renderer");
         getEntities()->init();
     }
+    // what a world's scripts made outside their entities engine goes when the world is left (a world change, a content
+    // reload), and again once that engine has stopped: their controller mappings, pointers, picks and 2D overlays
+    auto removeWorldsThings = [this](int world) {
+        DependencyManager::get<PointerManager>()->removeWorldPointers(world);
+        DependencyManager::get<PickManager>()->removeWorldPicks(world);
+        DependencyManager::get<controller::UserInputMapper>()->removeWorldMappings(world);
+        getOverlays().removeWorld2DOverlays(world);
+    };
+    connect(getEntities().data(), &EntityTreeRenderer::worldLeft, this, removeWorldsThings);
+    connect(getEntities().data(), &EntityTreeRenderer::worldScriptsStopped, this, removeWorldsThings);
     getEntities()->setEntityLoadingPriorityFunction([this, editor = DependencyManager::get<Editor>()](const EntityItem& item) {
         auto dims = item.getScaledDimensions();
         auto maxSize = glm::compMax(dims);

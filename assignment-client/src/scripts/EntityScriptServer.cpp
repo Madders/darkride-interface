@@ -28,6 +28,7 @@
 #include <ResourceScriptingInterface.h>
 #include <ScriptCache.h>
 #include <ScriptEngines.h>
+#include <ScriptAddressCheck.h>
 #include <SoundCacheScriptingInterface.h>
 #include <UUID.h>
 #include <WebSocketServerClass.h>
@@ -567,6 +568,12 @@ void EntityScriptServer::checkAndCallPreload(const EntityItemID& entityID, bool 
 
             QString scriptUrl = entity->getServerScriptsToRun();
             if (!scriptUrl.isEmpty()) {
+                // the same rule the entity server applies to an entity's server scripts
+                const QString refusal = script_address::refusalReason(scriptUrl);
+                if (!refusal.isEmpty()) {
+                    qCWarning(entity_script_server) << "Not loading the server scripts of" << entityID << "-" << refusal;
+                    return;
+                }
                 scriptUrl = DependencyManager::get<ResourceManager>()->normalizeURL(scriptUrl);
                 if (QUrl(scriptUrl).scheme() == URL_SCHEME_ATP) {
                     // an atp: script needs the asset server's link live: a mapping request sent before then goes
@@ -635,12 +642,18 @@ void EntityScriptServer::sendStatsPacket() {
 }
 
 void EntityScriptServer::handleOctreePacket(QSharedPointer<ReceivedMessage> message, SharedNodePointer senderNode) {
+    // World data is taken only from the world's own entity server: the node list's check names the sending node, not
+    // its type. A piggybacked packet inherits its carrier's sender.
+    if (!senderNode || senderNode->getType() != NodeType::EntityServer) {
+        return;
+    }
+
     auto packetType = message->getType();
 
     if (packetType == PacketType::OctreeStats) {
 
         int statsMessageLength = OctreeHeadlessViewer::parseOctreeStats(message, senderNode);
-        if (message->getSize() > statsMessageLength) {
+        if (statsMessageLength >= 0 && message->getSize() > statsMessageLength) {
             // pull out the piggybacked packet and create a new QSharedPointer<NLPacket> for it
             int piggyBackedSizeWithHeader = message->getSize() - statsMessageLength;
 
@@ -648,6 +661,9 @@ void EntityScriptServer::handleOctreePacket(QSharedPointer<ReceivedMessage> mess
             memcpy(buffer.get(), message->getRawMessage() + statsMessageLength, piggyBackedSizeWithHeader);
 
             auto newPacket = NLPacket::fromReceivedPacket(std::move(buffer), piggyBackedSizeWithHeader, message->getSenderSockAddr());
+            if (!newPacket) {
+                return; // too short for a packet's header: nothing to read
+            }
             message = QSharedPointer<ReceivedMessage>::create(*newPacket);
         } else {
             return; // bail since no piggyback data

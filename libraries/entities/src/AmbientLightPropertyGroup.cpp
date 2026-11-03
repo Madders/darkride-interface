@@ -10,6 +10,7 @@
 //
 
 #include "AmbientLightPropertyGroup.h"
+#include "EntityContentAddresses.h"
 
 #include <QJsonDocument>
 #include <OctreePacketData.h>
@@ -71,14 +72,14 @@ bool AmbientLightPropertyGroup::appendToEditPacket(OctreePacketData* packetData,
 }
 
 bool AmbientLightPropertyGroup::decodeFromEditPacket(EntityPropertyFlags& propertyFlags, const unsigned char*& dataAt,
-    int& processedBytes) {
+    int& processedBytes, int bytesToRead) {
         
     int bytesRead = 0;
     bool overwriteLocalData = true;
     bool somethingChanged = false;
     
-    READ_ENTITY_PROPERTY(PROP_AMBIENT_LIGHT_INTENSITY, float, setAmbientIntensity);
-    READ_ENTITY_PROPERTY(PROP_AMBIENT_LIGHT_URL, QString, setAmbientURL);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_AMBIENT_LIGHT_INTENSITY, float, setAmbientIntensity);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_AMBIENT_LIGHT_URL, QString, setAmbientURL);
     
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_AMBIENT_LIGHT_INTENSITY, AmbientIntensity);
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_AMBIENT_LIGHT_URL, AmbientURL);
@@ -150,7 +151,8 @@ int AmbientLightPropertyGroup::readEntitySubclassDataFromBuffer(const unsigned c
     const unsigned char* dataAt = data;
     
     READ_ENTITY_PROPERTY(PROP_AMBIENT_LIGHT_INTENSITY, float, setAmbientIntensity);
-    READ_ENTITY_PROPERTY(PROP_AMBIENT_LIGHT_URL, QString, setAmbientURL);
+    READ_ENTITY_ADDRESS_PROPERTY(PROP_AMBIENT_LIGHT_URL, setAmbientURL, EntityContentAddresses::isOnThisComputer,
+                                 "ambientLight.ambientURL");
 
     return bytesRead;
 }

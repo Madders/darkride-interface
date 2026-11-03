@@ -11,6 +11,7 @@
 
 #include "SettingsScriptingInterface.h"
 
+#include <SettingKey.h>
 #include <SettingHandle.h>
 #include <shared/LocalFileAccessGate.h>
 
@@ -47,7 +48,8 @@ void SettingsScriptingInterface::setValue(const QString& setting, const QVariant
     if (getValue(setting) == value) {
         return;
     }
-    if (setting.startsWith("private/")) {
+    // the key as it is stored, any case (Windows' registry ignores it)
+    if (Setting::normalizedKey(setting).startsWith("private/", Qt::CaseInsensitive)) {
         if (_restrictPrivateValues) {
             qWarning() << "SettingsScriptingInterface::setValue -- restricted write: " << setting << value;
             return;

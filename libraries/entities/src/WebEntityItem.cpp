@@ -7,6 +7,7 @@
 //
 
 #include "WebEntityItem.h"
+#include "EntityContentAddresses.h"
 
 #include <glm/gtx/transform.hpp>
 
@@ -15,6 +16,7 @@
 
 #include <ByteCountCoding.h>
 #include <GeometryUtil.h>
+#include <NetworkingConstants.h>
 #include <shared/LocalFileAccessGate.h>
 
 #include "EntitiesLogging.h"
@@ -106,9 +108,11 @@ int WebEntityItem::readEntitySubclassDataFromBuffer(const unsigned char* data, i
     });
     READ_ENTITY_PROPERTY(PROP_BILLBOARD_MODE, BillboardMode, setBillboardMode);
 
-    READ_ENTITY_PROPERTY(PROP_SOURCE_URL, QString, setSourceUrl);
+    READ_ENTITY_ADDRESS_PROPERTY(PROP_SOURCE_URL, setSourceUrl,
+                                 EntityContentAddresses::isPathOnThisComputer, "sourceUrl");
     READ_ENTITY_PROPERTY(PROP_DPI, uint16_t, setDPI);
-    READ_ENTITY_PROPERTY(PROP_SCRIPT_URL, QString, setScriptURL);
+    READ_ENTITY_ADDRESS_PROPERTY(PROP_SCRIPT_URL, setScriptURL,
+                                 EntityContentAddresses::isPathOnThisComputer, "scriptURL");
     READ_ENTITY_PROPERTY(PROP_MAX_FPS, uint8_t, setMaxFPS);
     READ_ENTITY_PROPERTY(PROP_INPUT_MODE, WebInputMode, setInputMode);
     READ_ENTITY_PROPERTY(PROP_SHOW_KEYBOARD_FOCUS_HIGHLIGHT, bool, setShowKeyboardFocusHighlight);
@@ -275,6 +279,16 @@ void WebEntityItem::setSourceUrl(const QString& value) {
         _needsRenderUpdate |= _sourceUrl != value;
         _sourceUrl = value;
     });
+}
+
+bool WebEntityItem::isWebPageUrl(const QString& url) {
+    if (url.isEmpty()) {
+        return true;
+    }
+    // the scheme as the client reads it (QUrl), so what passes here is always a web page there
+    const QString scheme = QUrl(url).scheme();
+    return scheme == HIFI_URL_SCHEME_HTTP || scheme == HIFI_URL_SCHEME_HTTPS || scheme == URL_SCHEME_DATA ||
+        scheme == HIFI_URL_SCHEME_ABOUT;
 }
 
 QString WebEntityItem::getSourceUrl() const { 

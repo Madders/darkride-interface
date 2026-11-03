@@ -27,12 +27,11 @@ void CalculateMeshNormalsTask::run(const baker::BakeContextPointer& context, con
             normalsOut = std::vector<glm::vec3>(mesh.normals.begin(), mesh.normals.end());
         } else {
             normalsOut.resize(mesh.vertices.size());
-            // a triangle that names a vertex the mesh doesn't have adds to a scratch normal instead
-            glm::vec3 scratch;
             baker::calculateNormals(mesh,
-                [&normalsOut, &scratch](int normalIndex) /* NormalAccessor */ {
+                [&normalsOut](int normalIndex) /* NormalAccessor */ -> glm::vec3* {
+                    // an index the mesh does not have (a broken file) is skipped by the caller
                     if (normalIndex < 0 || normalIndex >= (int)normalsOut.size()) {
-                        return &scratch;
+                        return nullptr;
                     }
                     return &normalsOut[normalIndex];
                 },

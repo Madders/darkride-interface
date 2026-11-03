@@ -7,6 +7,19 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: GraphicsEngine::render_performFrame's stamps on the frame handed to the display plugin (frame->mainTime,
+// frame->buildTime), which the refresh governor reads. The render loop here shares the vehicle's per-frame time: a
+// change to it counts as touching the vehicle path.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 #include "GraphicsEngine.h"
 
 #include <MeshPartPayload.h>
@@ -248,6 +261,7 @@ bool GraphicsEngine::checkPendingRenderEvent() {
     return (_renderEventHandler && static_cast<RenderEventHandler*>(_renderEventHandler)->_pendingRenderEvent.compare_exchange_strong(expected, true));
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void GraphicsEngine::render_performFrame() {
     // Some plugins process message events, allowing paintGL to be called reentrantly.
 
@@ -287,6 +301,8 @@ void GraphicsEngine::render_performFrame() {
     ViewFrustum viewFrustum;
 
     bool isStereo;
+    uint64_t traceFrame = 0;
+    uint64_t mainFrameUsecs = 0;
     glm::mat4  stereoEyeOffsets[2];
     glm::mat4  stereoEyeProjections[2];
 
@@ -303,6 +319,8 @@ void GraphicsEngine::render_performFrame() {
         eyeToWorld = _appRenderArgs._eyeToWorld;
         sensorToWorld = _appRenderArgs._sensorToWorld;
         isStereo = _appRenderArgs._isStereo;
+        traceFrame = _appRenderArgs._traceFrame;
+        mainFrameUsecs = _appRenderArgs._mainFrameUsecs;
         for_each_eye([&](Eye eye) {
             stereoEyeOffsets[eye] = _appRenderArgs._eyeOffsets[eye];
             stereoEyeProjections[eye] = _appRenderArgs._eyeProjections[eye];
@@ -438,6 +456,8 @@ void GraphicsEngine::render_performFrame() {
 
     auto frame = getGPUContext()->endFrame();
     frame->frameIndex = _renderFrameCount;
+    frame->traceFrame = traceFrame;
+    frame->mainTime = mainFrameUsecs;
     frame->framebuffer = finalFramebuffer;
     frame->framebufferRecycler = [](const gpu::FramebufferPointer& framebuffer) {
         auto frameBufferCache = DependencyManager::get<FramebufferCache>();
@@ -451,6 +471,7 @@ void GraphicsEngine::render_performFrame() {
         PROFILE_RANGE(render, "/pluginOutput");
         PerformanceTimer perfTimer("pluginOutput");
         _renderLoopCounter.increment();
+        frame->buildTime = usecTimestampNow() - lastPaintBegin;   // the render thread's build of this frame
         displayPlugin->submitFrame(frame);
     }
 

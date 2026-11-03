@@ -153,25 +153,35 @@ void SoundProcessor::run() {
         return;
     }
 
-    // Darkride plays mono, stereo and ambisonic (4-channel) sound, at ordinary sample rates
-    constexpr int MIN_SAMPLE_RATE = 4000;
-    constexpr int MAX_SAMPLE_RATE = 384000;
-    if (properties.numChannels != 1 && properties.numChannels != 2 && properties.numChannels != 4) {
-        qCWarning(audio) << "Unsupported number of channels" << properties.numChannels << "in" << fileName;
-        emit onError(300, "Failed to load sound file, reason: unsupported number of channels");
+    // what the file says comes from whoever made it: sounds play as mono, stereo or ambisonic (4 channels), and are
+    // resampled to 24 kHz from 4 kHz to 384 kHz (384 kHz is as far as a sound's pitch already takes the resampler)
+    const int MIN_SOUND_SAMPLE_RATE = 4000;
+    const int MAX_SOUND_SAMPLE_RATE = 384000;
+    if (properties.numChannels != AudioConstants::MONO && properties.numChannels != AudioConstants::STEREO &&
+        properties.numChannels != AudioConstants::AMBISONIC) {
+        qCWarning(audio) << "Sound file has" << properties.numChannels << "channels";
+        emit onError(300, "Failed to load sound file, reason: " + QString::number(properties.numChannels) +
+                              " channels (sounds can have 1, 2 or 4)");
         return;
     }
-    if (properties.sampleRate < MIN_SAMPLE_RATE || properties.sampleRate > MAX_SAMPLE_RATE) {
-        qCWarning(audio) << "Unsupported sample rate" << properties.sampleRate << "in" << fileName;
-        emit onError(300, "Failed to load sound file, reason: unsupported sample rate");
+    if (properties.sampleRate < MIN_SOUND_SAMPLE_RATE || properties.sampleRate > MAX_SOUND_SAMPLE_RATE) {
+        qCWarning(audio) << "Sound file's sample rate is" << properties.sampleRate;
+        emit onError(300, "Failed to load sound file, reason: sample rate of " + QString::number(properties.sampleRate) +
+                              " Hz (sounds can be 4000 to 384000 Hz)");
+        return;
+    }
+
+    // its size at 24 kHz, in 64 bits (a frame over for the resampler's rounding)
+    int64_t numFrames = outputAudioByteArray.size() / (properties.numChannels * AudioConstants::SAMPLE_SIZE);
+    int64_t bytesAtNetworkRate = (numFrames * AudioConstants::SAMPLE_RATE / properties.sampleRate + 1) *
+                                 properties.numChannels * AudioConstants::SAMPLE_SIZE;
+    if (bytesAtNetworkRate > AudioConstants::MAX_SOUND_BYTES) {
+        qCWarning(audio) << "Sound would be" << bytesAtNetworkRate << "bytes at 24 kHz";
+        emit onError(300, "Failed to load sound file, reason: too long");
         return;
     }
 
     auto data = downSample(outputAudioByteArray, properties);
-    if (data.isNull() && !outputAudioByteArray.isEmpty()) {
-        emit onError(300, "Failed to load sound file, reason: too long to resample");
-        return;
-    }
 
     int numSamples = data.size() / AudioConstants::SAMPLE_SIZE;
     auto audioData = AudioData::make(numSamples, properties.numChannels,
@@ -193,16 +203,11 @@ QByteArray SoundProcessor::downSample(const QByteArray& rawAudioByteArray,
     AudioSRC resampler(properties.sampleRate, AudioConstants::SAMPLE_RATE,
                        properties.numChannels);
 
-    // resize to max possible output, in 64-bit so a long sound can't overflow it; past 1 GB it's refused
+    // resize to max possible output (run() has checked it is within MAX_SOUND_BYTES, so these sizes fit an int)
     int numSourceFrames = rawAudioByteArray.size() / (properties.numChannels * AudioConstants::SAMPLE_SIZE);
-    qint64 maxDestinationFrames = (qint64)numSourceFrames * AudioConstants::SAMPLE_RATE / properties.sampleRate + 64;
-    qint64 maxDestinationBytes = maxDestinationFrames * properties.numChannels * AudioConstants::SAMPLE_SIZE;
-    constexpr qint64 MAX_SOUND_BYTES = 1024LL * 1024 * 1024;
-    if (maxDestinationBytes > MAX_SOUND_BYTES || resampler.getMaxOutput(numSourceFrames) > maxDestinationFrames) {
-        qCWarning(audio) << "Sound too long to resample:" << numSourceFrames << "frames at" << properties.sampleRate;
-        return QByteArray();
-    }
-    QByteArray data((int)maxDestinationBytes, Qt::Uninitialized);
+    int maxDestinationFrames = resampler.getMaxOutput(numSourceFrames);
+    int maxDestinationBytes = maxDestinationFrames * properties.numChannels * AudioConstants::SAMPLE_SIZE;
+    QByteArray data(maxDestinationBytes, Qt::Uninitialized);
 
     int numDestinationFrames = resampler.render((int16_t*)rawAudioByteArray.data(),
                                                 (int16_t*)data.data(),

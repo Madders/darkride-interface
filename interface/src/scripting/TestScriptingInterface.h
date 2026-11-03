@@ -673,6 +673,17 @@ public slots:
     Q_INVOKABLE QVariantMap hierarchyToggles(const QUuid& id);
 
     /**jsdoc
+     * A stroke along a build-mode Hierarchy toggle's column, as the mouse makes it: a press on the first row's toggle,
+     * a move over each row, a release on the last. Every row passed takes the first row's new state, one undo step.
+     * @function Test.hierarchyStroke
+     * @param {string} which - "hide", "pick", "lock" or "scripts".
+     * @param {Uuid[]} ids - The rows, in the order the stroke passes them (all in sight).
+     * @param {boolean} [onlyThis=false] - As with Alt held: the rows alone, not what's under them.
+     * @returns {boolean} <code>false</code> when a row isn't in sight.
+     */
+    Q_INVOKABLE bool hierarchyStroke(const QString& which, const QVariantList& ids, bool onlyThis = false);
+
+    /**jsdoc
      * Does what a click on the Hierarchy note's Show All does.
      * @function Test.hierarchyShowAll
      */
@@ -743,6 +754,35 @@ public slots:
      * @returns {Array<Array<number>>} The samples, oldest first.
      */
     Q_INVOKABLE QVariantList takePresentTrace();
+
+    /**jsdoc
+     * Starts or stops the frame trace (FrameTrace.h; team/performance/INSTRUMENTS-PLAN.md item 1): a ring buffer of the
+     * last frames (about 14 s), each a record of the named numbers the engine's instruments write while it is on (the
+     * frame's own times, the physics step, the camera boom, the avatar's carry in a vehicle, the entity render-update
+     * budget, the presents); off, each writer pays one check. Starting drops the records held so far. Thread-safe by
+     * construction, so no hop to the game loop.
+     * @function Test.frameTrace
+     * @param {boolean} on - Whether to record.
+     */
+    Q_INVOKABLE void frameTrace(bool on);
+
+    /**jsdoc
+     * Writes the frame trace's records as a CSV: a header of "frame", "t_us" and one column per name written, then one
+     * line per frame with blank cells where that frame has no value. The records stay.
+     * @function Test.dumpFrameTrace
+     * @param {string} path - The file to write.
+     * @returns {number} The rows written, or -1 when the file could not be written.
+     */
+    Q_INVOKABLE int dumpFrameTrace(const QString& path);
+
+    /**jsdoc
+     * Takes the frame trace's records: the column names first, then one row per frame, oldest first, in that order (a
+     * cell is a number, a string, or undefined where the frame has no value: test it with <code>cell == null</code>).
+     * The records are cleared in the same step; the trace stays on or off as it was.
+     * @function Test.takeFrameTrace
+     * @returns {Array<Array<number|string>>} [columns, row, row, ...].
+     */
+    Q_INVOKABLE QVariantList takeFrameTrace();
 
     /**jsdoc
      * Starts or stops recording the display's refreshes (macOS: the display link's callbacks, each with the instant

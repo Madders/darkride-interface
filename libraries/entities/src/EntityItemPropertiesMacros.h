@@ -48,9 +48,94 @@
             propertiesDidntFit -= P;                                \
         }
 
+// The entity readers (readEntityDataFromBuffer, readEntitySubclassDataFromBuffer, with bytesLeftToRead, bytesRead
+// and args in scope): a field that claims more bytes than are left is not read; the read is marked failed
+// (args.readFailed), every later field of the packet is skipped, and the tree abandons the rest of the packet
+// (EntityTree::readEntityDataFromBuffer). No field is ever read in part.
 #define READ_ENTITY_PROPERTY(P,T,S)                                                \
+        if (propertyFlags.getHasProperty(P) && !args.readFailed) {                 \
+            T fromBuffer;                                                          \
+            if (!OctreePacketData::fits(dataAt, bytesLeftToRead - bytesRead, fromBuffer)) { \
+                args.readFailed = true;                                            \
+            } else {                                                               \
+                int bytes = OctreePacketData::unpackDataFromBytes(dataAt, fromBuffer); \
+                dataAt += bytes;                                                   \
+                bytesRead += bytes;                                                \
+                if (overwriteLocalData) {                                          \
+                    S(fromBuffer);                                                 \
+                }                                                                  \
+                somethingChanged = true;                                           \
+            }                                                                      \
+        }
+
+// A content address read from the wire (a model, a picture, a page, ...) is emptied before the setter when the
+// tree refuses content from this computer and the address names it (ContentAddresses / EntityContentAddresses):
+// the entity never holds the address, and a copy, paste or export of it carries the empty value. CHECK is the
+// property's rule, NAME its script name, recorded for the tree's one-time warning. Only a property the packet
+// carries is looked at, once, as it arrives.
+#define READ_ENTITY_ADDRESS_PROPERTY(P,S,CHECK,NAME)                               \
+        if (propertyFlags.getHasProperty(P) && !args.readFailed) {                 \
+            QString fromBuffer;                                                    \
+            if (!OctreePacketData::fits(dataAt, bytesLeftToRead - bytesRead, fromBuffer)) { \
+                args.readFailed = true;                                            \
+            } else {                                                               \
+                int bytes = OctreePacketData::unpackDataFromBytes(dataAt, fromBuffer); \
+                dataAt += bytes;                                                   \
+                bytesRead += bytes;                                                \
+                if (args.refusesContentFromThisComputer && CHECK(fromBuffer)) {    \
+                    fromBuffer = QString();                                        \
+                    args.refusedAddresses << QStringLiteral(NAME);                 \
+                }                                                                  \
+                if (overwriteLocalData) {                                          \
+                    S(fromBuffer);                                                 \
+                }                                                                  \
+                somethingChanged = true;                                           \
+            }                                                                      \
+        }
+
+// The same for a property holding several addresses (textures, materialData, userData): CLEAR empties the ones that
+// name this computer inside the decoded value (EntityContentAddresses::clearTextures / clearMaterialData /
+// clearUserData) and says whether it did.
+#define READ_ENTITY_ADDRESSES_PROPERTY(P,S,CLEAR,NAME)                             \
+        if (propertyFlags.getHasProperty(P) && !args.readFailed) {                 \
+            QString fromBuffer;                                                    \
+            if (!OctreePacketData::fits(dataAt, bytesLeftToRead - bytesRead, fromBuffer)) { \
+                args.readFailed = true;                                            \
+            } else {                                                               \
+                int bytes = OctreePacketData::unpackDataFromBytes(dataAt, fromBuffer); \
+                dataAt += bytes;                                                   \
+                bytesRead += bytes;                                                \
+                if (args.refusesContentFromThisComputer && CLEAR(fromBuffer)) {    \
+                    args.refusedAddresses << QStringLiteral(NAME);                 \
+                }                                                                  \
+                if (overwriteLocalData) {                                          \
+                    S(fromBuffer);                                                 \
+                }                                                                  \
+                somethingChanged = true;                                           \
+            }                                                                      \
+        }
+
+#define SKIP_ENTITY_PROPERTY(P,T)                                                  \
+        if (propertyFlags.getHasProperty(P) && !args.readFailed) {                 \
+            T fromBuffer;                                                          \
+            if (!OctreePacketData::fits(dataAt, bytesLeftToRead - bytesRead, fromBuffer)) { \
+                args.readFailed = true;                                            \
+            } else {                                                               \
+                int bytes = OctreePacketData::unpackDataFromBytes(dataAt, fromBuffer); \
+                dataAt += bytes;                                                   \
+                bytesRead += bytes;                                                \
+            }                                                                      \
+        }
+
+// The property groups' edit decoders (decodeFromEditPacket, with bytesToRead the whole edit's length, processedBytes
+// the bytes before the group and bytesRead the group's own in scope): a field that claims more bytes than the edit
+// has left refuses the edit whole.
+#define READ_ENTITY_PROPERTY_FROM_EDIT(P,T,S)                                      \
         if (propertyFlags.getHasProperty(P)) {                                     \
             T fromBuffer;                                                          \
+            if (!OctreePacketData::fits(dataAt, bytesToRead - processedBytes - bytesRead, fromBuffer)) { \
+                return false;                                                      \
+            }                                                                      \
             int bytes = OctreePacketData::unpackDataFromBytes(dataAt, fromBuffer); \
             dataAt += bytes;                                                       \
             bytesRead += bytes;                                                    \
@@ -60,23 +145,20 @@
             somethingChanged = true;                                               \
         }
 
-#define SKIP_ENTITY_PROPERTY(P,T)                                                  \
-        if (propertyFlags.getHasProperty(P)) {                                     \
-            T fromBuffer;                                                          \
-            int bytes = OctreePacketData::unpackDataFromBytes(dataAt, fromBuffer); \
-            dataAt += bytes;                                                       \
-            bytesRead += bytes;                                                    \
-        }
-
 #define DECODE_GROUP_PROPERTY_HAS_CHANGED(P,N) \
         if (propertyFlags.getHasProperty(P)) {  \
             set##N##Changed(true); \
         }
 
 
+// The edit decoder (EntityItemProperties::decodeEntityEditPacket, with bytesToRead and processedBytes in scope): a
+// field that claims more bytes than the edit has left refuses the edit whole.
 #define READ_ENTITY_PROPERTY_TO_PROPERTIES(P,T,O)                                  \
         if (propertyFlags.getHasProperty(P)) {                                     \
             T fromBuffer;                                                          \
+            if (!OctreePacketData::fits(dataAt, bytesToRead - processedBytes, fromBuffer)) { \
+                return false;                                                      \
+            }                                                                      \
             int bytes = OctreePacketData::unpackDataFromBytes(dataAt, fromBuffer); \
             dataAt += bytes;                                                       \
             processedBytes += bytes;                                               \

@@ -37,6 +37,7 @@
 #include <PointerEvent.h>
 #include <ResourceCache.h>
 #include <ResourceManager.h>
+#include <ScriptCaller.h>
 #include <SettingHandle.h>
 #include <SharedUtil.h>
 #include <shared/LocalFileAccessGate.h>
@@ -48,6 +49,8 @@
 
 #include "BatchLoader.h"
 #include <ScriptNetworkPolicy.h>
+#include "RefusedGlobal.h"
+#include "ScriptApiPolicy.h"
 #include "HttpRequestObject.h"
 #include "ScriptCache.h"
 #include "ScriptEngineLogging.h"
@@ -329,6 +332,10 @@ void WasmScriptEngine::registerGlobalObject(const QString& name, QObject* object
         qCDebug(scriptengine) << "WasmScriptEngine: global" << name << "is null, not registered";
         return;
     }
+    if (isEntityClientScript() && !ScriptApiPolicy::allowsGlobal(name)) {
+        // a world's entity scripts don't get this one: a stand-in of the same name, with no members
+        object = new RefusedGlobal(name, this);
+    }
     if (_objects->global(name) == ObjectTable::NULL_HANDLE) {
         _objects->registerGlobal(name, object);
     }
@@ -459,7 +466,12 @@ void WasmScriptEngine::run() {
         hifi::scripting::setLocalAccessSafeThread(true);
     }
     if (QThread::currentThread() != qApp->thread() && _context == Context::ENTITY_CLIENT_SCRIPT) {
+        // a world's scripts: APIs that act on the user's own installation refuse calls from this thread
         hifi::scripting::setRestrictedScriptThread(true);
+        // this thread runs only the world's entity scripts: whatever is called on it is a world's script's, also a
+        // call no guard marks (ScriptCaller). Nothing clears the mark: the thread is this engine's own (runInThread
+        // makes a new one for each engine, never from a pool) and ends with it.
+        ScriptCaller::markThreadAsWorld(_worldId);
     }
     QSharedPointer<ScriptEngines> scriptEngines(_scriptEngines);
     if (!scriptEngines || scriptEngines->isStopped()) {
@@ -530,6 +542,20 @@ WasmScriptEngine::ModuleInstancePointer WasmScriptEngine::makeInstance(const QSt
         });
     }
     instance->host = std::make_unique<HostInterface>(*instance->instance, *_objects, *instance->codec, *_relay);
+    if (isEntityClientScript()) {
+        // a world's entity scripts: the script API policy, held by the host at describe, call, read and write
+        HostInterface::MemberGate gate;
+        gate.allowsClass = &ScriptApiPolicy::allowsClass;
+        gate.deniesMethod = &ScriptApiPolicy::deniesMethod;
+        gate.deniesPropertyWrite = &ScriptApiPolicy::deniesPropertyWrite;
+        gate.deniesPropertyRead = &ScriptApiPolicy::deniesPropertyRead;
+        gate.deniesSignal = &ScriptApiPolicy::deniesSignal;
+        gate.checksDelivery = &ScriptApiPolicy::checksDelivery;
+        gate.holdsBackDelivery = &ScriptApiPolicy::holdsBackDelivery;
+        gate.refusalLine = &ScriptApiPolicy::refusalLine;
+        gate.allowsAfterWorldLeft = &ScriptApiPolicy::allowsAfterWorldLeft;
+        instance->host->setMemberGate(std::move(gate));
+    }
     instance->host->setLogger([this](int level, const QString& text) {
         switch (level) {
             case HostInterface::Print:
@@ -901,8 +927,8 @@ int WasmScriptEngine::addTimer(const ScriptCallback& callback, int intervalMS, b
             _timers.erase(found);
             entry.timer->deleteLater();
         }
-        if (!_isFinished) {
-            // the callback knows its instance; it is called on this thread, the engine's
+        if (!_isFinished && !worldWasLeft()) {
+            // the callback knows its instance; it is called on this thread, the engine's (none for a world left)
             auto target = entry.callback.target.lock();
             if (target) {
                 QVariant result;
@@ -1013,6 +1039,14 @@ void WasmScriptEngine::loadEntityScript(const EntityItemID& entityID, const QStr
     }
     EntityScriptDetails newDetails;
     newDetails.scriptText = entityScript;
+    const QString refusal = entityScriptRefusal(entityScript);
+    if (!refusal.isEmpty()) {
+        newDetails.status = EntityScriptStatus::ERROR_LOADING_SCRIPT;
+        newDetails.errorInfo = "not run: " + refusal;
+        setEntityScriptDetails(entityID, newDetails);
+        scriptWarningMessage(QString("entity script %1 (%2) %3").arg(entityScript, entityID.toString(), newDetails.errorInfo));
+        return;
+    }
     newDetails.status = EntityScriptStatus::LOADING;
     newDetails.definingSandboxURL = currentSandboxURL;
     if (isWasmScript(entityScript) && !wasmEntityScriptsEnabled()) {
@@ -1400,7 +1434,7 @@ QUrl WasmScriptEngine::verifiedSandbox(const QString& claimed) const {
     for (auto it = _entityScripts.constBegin(); it != _entityScripts.constEnd(); ++it) {
         if ((it->status == EntityScriptStatus::RUNNING || it->status == EntityScriptStatus::LOADING) &&
             it->definingSandboxURL == url) {
-            return url;
+            return effectiveSandbox(url);   // and what its rights are in this world
         }
     }
     return QUrl("about:Entities");
@@ -1421,7 +1455,7 @@ QVariantMap WasmScriptEngine::resolveInclude(const QString& file, const QString&
     bool isStandardLibrary = false;
     if (normalized.startsWith("/~/")) {
         thisURL = expandScriptUrl(QUrl::fromLocalFile(expandScriptPath(normalized)));
-        if (!PathUtils::defaultScriptsLocation().isParentOf(thisURL)) {
+        if (!ScriptNetworkPolicy::isAppScript(thisURL)) {
             result["reason"] = "outside of standard libraries";
             return result;
         }
@@ -1434,11 +1468,12 @@ QVariantMap WasmScriptEngine::resolveInclude(const QString& file, const QString&
         result["reason"] = "outside of original entity script " + sandbox.toString();
         return result;
     }
-    if (isClientSide()) {
+    // one of the app's own scripts (canonical, inside its scripts folder) is no request to the network
+    if (networkRuled() && !(thisURL.isLocalFile() && ScriptNetworkPolicy::isAppScript(thisURL))) {
         // the network rule for a script's own requests: an include's download is a request too
-        const QUrl origin = sandbox.isEmpty() ? currentScriptOrigin() : sandbox;
+        const QUrl origin = ruledOrigin(sandbox.isEmpty() ? currentScriptOrigin() : sandbox);
         QString reason;
-        if (!ScriptNetworkPolicy::decideBlocking(thisURL, origin, reason)) {
+        if (!ScriptNetworkPolicy::decideBlocking(thisURL, origin, reason, worldIsLocal())) {
             result["reason"] = ScriptNetworkPolicy::refusalLine(origin, thisURL, reason);
             return result;
         }
@@ -1494,7 +1529,7 @@ QVariantMap WasmScriptEngine::resolveModule(const QString& moduleId, const QStri
         if (file.exists()) {
             canonical.setPath(file.canonicalFilePath());
         }
-        bool disallowOutsideFiles = !defaultScriptsLoc.isParentOf(canonical) && !sandbox.isLocalFile();
+        bool disallowOutsideFiles = !ScriptNetworkPolicy::isAppScript(canonical) && !sandbox.isLocalFile();
         if (disallowOutsideFiles && !PathUtils::isDescendantOf(canonical, sandbox)) {
             return fail(QString("path '%1' outside of origin script '%2' '%3'")
                             .arg(PathUtils::stripFilename(url), PathUtils::stripFilename(sandbox), canonical.toString()));
@@ -1506,12 +1541,13 @@ QVariantMap WasmScriptEngine::resolveModule(const QString& moduleId, const QStri
             return fail("path is not a file: " + url.toLocalFile());
         }
     }
-    if (isClientSide()) {
+    // one of the app's own scripts (canonical, inside its scripts folder) is no request to the network
+    if (networkRuled() && !(url.isLocalFile() && ScriptNetworkPolicy::isAppScript(url))) {
         // the network rule for a script's own requests: a module's download is a request too (a JSON module comes
         // back to the script as data)
-        const QUrl origin = sandbox.isEmpty() ? currentScriptOrigin() : sandbox;
+        const QUrl origin = ruledOrigin(sandbox.isEmpty() ? currentScriptOrigin() : sandbox);
         QString reason;
-        if (!ScriptNetworkPolicy::decideBlocking(url, origin, reason)) {
+        if (!ScriptNetworkPolicy::decideBlocking(url, origin, reason, worldIsLocal())) {
             scriptWarningMessage(ScriptNetworkPolicy::refusalLine(origin, url, reason));
             return fail("Refused: " + reason);
         }
@@ -1541,13 +1577,16 @@ QVariantMap WasmScriptEngine::fetchScript(const QString& url, bool forceDownload
     if (target.isLocalFile() || target.scheme().toLower() == "qrc") {
         // Script.include's rule for a file of this machine: the app's own scripts, any file for a script that is
         // itself a local file (or the engine's own code), a file under the entity script's own folder
-        const bool standardLibrary = target.isLocalFile() && PathUtils::defaultScriptsLocation().isParentOf(target);
+        const bool standardLibrary = target.isLocalFile() && ScriptNetworkPolicy::isAppScript(target);
         const bool ownCode = sandbox.isEmpty() && !_isEntitiesEngine;
         if (!standardLibrary && !ownCode && !sandbox.isLocalFile() && !PathUtils::isDescendantOf(target, sandbox)) {
             reason = "a file of this machine outside the script's own place";
         }
     }
-    if (reason.isEmpty() && isClientSide() && !ScriptNetworkPolicy::decideBlocking(target, origin, reason)) {
+    // one of the app's own scripts (canonical, inside its scripts folder) is no request to the network
+    const bool appScript = target.isLocalFile() && ScriptNetworkPolicy::isAppScript(target);
+    if (reason.isEmpty() && networkRuled() && !appScript &&
+        !ScriptNetworkPolicy::decideBlocking(target, ruledOrigin(origin), reason, worldIsLocal())) {
         // the network rule for a script's own requests
     }
     if (!reason.isEmpty()) {
@@ -1559,9 +1598,13 @@ QVariantMap WasmScriptEngine::fetchScript(const QString& url, bool forceDownload
     if (forceDownload) {
         scriptCache->deleteScript(url);
     }
+    if (networkRuled() && !appScript) {
+        // the download goes to the address judged (each hop judged again)
+        scriptCache->ruleFetch(target, ruledOrigin(origin), worldIsLocal());
+    }
     BatchLoader* loader = new BatchLoader(QList<QUrl>({ QUrl(url) }));
     connect(loader, &BatchLoader::finished, this, [this, url, result](const QMap<QUrl, QString>& data, const QMap<QUrl, QString>& status) {
-        if (isStopping()) {
+        if (isStopping() || worldWasLeft()) {
             (*result)["status"] = "Stopped";
             return;
         }
@@ -1578,7 +1621,7 @@ QVariantMap WasmScriptEngine::fetchScript(const QString& url, bool forceDownload
         QTimer monitor;
         connect(loader, &BatchLoader::finished, &loop, &QEventLoop::quit);
         connect(&monitor, &QTimer::timeout, this, [this, &loop] {
-            if (isStopping()) {
+            if (isStopping() || worldWasLeft()) {
                 loop.exit(-1);
             }
         });

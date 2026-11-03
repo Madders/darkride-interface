@@ -8,6 +8,18 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: RenderShadowSetup::run (the far cascades' turns and holds), RenderShadowCascadeSetup::run (a waiting
+// cascade culled by the frustum it holds) and RenderShadowMap::run (the cache check; a waiting cascade redrawn only
+// when one of its casters moved or left).
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
 
 #include "RenderShadowTask.h"
 
@@ -209,6 +221,7 @@ static void adjustNearFar(const AABox& inShapeBounds, ViewFrustum& shadowFrustum
     }
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void RenderShadowMap::run(const render::RenderContextPointer& renderContext, const Inputs& inputs) {
     assert(renderContext->args);
     assert(renderContext->args->hasViewFrustum());
@@ -226,28 +239,13 @@ void RenderShadowMap::run(const render::RenderContextPointer& renderContext, con
     }
 
     auto& cascade = shadow->getCascade(_cascadeIndex);
-    if (cascade.isHeld()) {
-        return;   // waiting for its turn: the map and its matrix stay as they were (RenderShadowSetup)
-    }
     auto& fbo = cascade.framebuffer;
 
     RenderArgs* args = renderContext->args;
-    auto adjustedShadowFrustum = args->getViewFrustum();
 
-    // Adjust the frustum near and far depths based on the rendered items bounding box to have
-    // the minimal Z range.
-    adjustNearFar(inShapeBounds, adjustedShadowFrustum);
-    // Reapply the frustum as it has been adjusted
-    shadow->setCascadeFrustum(_cascadeIndex, adjustedShadowFrustum);
-    args->popViewFrustum();
-    args->pushViewFrustum(adjustedShadowFrustum);
-
-    // With caching the map stays while it would show the same: the view it was drawn from, the same casters, and
-    // none of them changed or fading since (a stable fit keeps the view the same while the camera is still)
+    // The casters in this cascade's frustum, and whether any of them changed or is fading since its map was drawn
     const auto& scene = renderContext->_scene;
     const uint64_t frame = scene->getFrame();
-    const glm::mat4 view = adjustedShadowFrustum.getView();
-    const glm::mat4 projection = adjustedShadowFrustum.getProjection();
     _casterIds.clear();
     bool castersChanged = false;
     for (const auto& shapes : inShapes) {
@@ -259,6 +257,50 @@ void RenderShadowMap::run(const render::RenderContextPointer& renderContext, con
         }
     }
     std::sort(_casterIds.begin(), _casterIds.end());
+
+    // A far cascade waiting for its turn (RenderShadowSetup) keeps its map and the matrix the shaders read it by,
+    // unless one of its casters changed since the map was drawn: then the map is drawn again now, by the frustum the
+    // cascade holds (RenderShadowCascadeSetup culled by it and pushed it), so that a moving caster's shadow moves
+    // every frame wherever it falls, while a still scene keeps the saving. Until 2026-10-31 the hold was
+    // unconditional and the monorail car's shadow on the rail, in a far cascade with a low sun, moved every other
+    // frame while the car moved every frame (Caity: "the shadow beneath the carriage is juddering real bad").
+    // Nothing of a held cascade is touched before this return: its frustum must stay the one its map was drawn by.
+    // A mover that left the frustum this frame is not in the list, so its change would not be seen and its shadow
+    // would stay in the held map a frame longer: a caster of the drawn map now missing AND changed since the draw
+    // (a deleted one stamps its change frame too) counts as changed. Only a changed one: an item the nearer
+    // cascade's frustum came to cover (the anti-frustum moves with the camera) has not moved and is no reason to
+    // draw again. Both lists are sorted: one merge walk, getItem only for the missing ones.
+    if (cascade.isHeld() && !castersChanged) {
+        auto present = _casterIds.begin();
+        for (auto drawnId : _drawnCasters) {
+            while (present != _casterIds.end() && *present < drawnId) {
+                ++present;
+            }
+            if ((present == _casterIds.end() || *present != drawnId) && scene->getItem(drawnId).getChangeFrame() > _drawnFrame) {
+                castersChanged = true;
+                break;
+            }
+        }
+    }
+    if (cascade.isHeld() && !castersChanged) {
+        return;
+    }
+
+    auto adjustedShadowFrustum = args->getViewFrustum();
+    if (!cascade.isHeld()) {
+        // Adjust the frustum near and far depths based on the rendered items bounding box to have
+        // the minimal Z range.
+        adjustNearFar(inShapeBounds, adjustedShadowFrustum);
+        // Reapply the frustum as it has been adjusted
+        shadow->setCascadeFrustum(_cascadeIndex, adjustedShadowFrustum);
+        args->popViewFrustum();
+        args->pushViewFrustum(adjustedShadowFrustum);
+    }
+
+    // With caching the map stays while it would show the same: the view it was drawn from, the same casters, and
+    // none of them changed or fading since (a stable fit keeps the view the same while the camera is still)
+    const glm::mat4 view = adjustedShadowFrustum.getView();
+    const glm::mat4 projection = adjustedShadowFrustum.getProjection();
     if (shadow->isCacheCascades() && _drawn && !castersChanged && view == _drawnView && projection == _drawnProjection &&
             _casterIds == _drawnCasters) {
         return;
@@ -405,6 +447,7 @@ void RenderShadowSetup::setSlopeBias(int cascadeIndex, float value) {
     _bias[cascadeIndex]._slope = value;
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void RenderShadowSetup::run(const render::RenderContextPointer& renderContext, const Input& input, Output& output) {
     // Abort all jobs if not casting shadows
     auto lightStage = renderContext->_scene->getStage<LightStage>();
@@ -546,6 +589,7 @@ void RenderShadowSetup::run(const render::RenderContextPointer& renderContext, c
 
 const std::array<float, SHADOW_CASCADE_MAX_COUNT> RenderShadowCascadeSetup::DEFAULT_MIN_CASTER_TEXELS {{ 24.0f, 24.0f, 48.0f, 48.0f }};
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void RenderShadowCascadeSetup::run(const render::RenderContextPointer& renderContext, const Inputs& input, Outputs& output) {
     const auto shadowFrame = input;
 
@@ -558,14 +602,9 @@ void RenderShadowCascadeSetup::run(const render::RenderContextPointer& renderCon
 
         if (globalShadow && _cascadeIndex < globalShadow->getCascadeCount()) {
             auto& cascade = globalShadow->getCascade(_cascadeIndex);
+            // a far cascade waiting for its turn is culled too, by the frustum it holds, so that RenderShadowMap
+            // can tell whether one of its casters moved; its map and matrix stay unless one did
             auto& cascadeFrustum = cascade.getFrustum();
-            if (cascade.isHeld()) {
-                // a far cascade waiting for its turn: nothing is culled or drawn for it, and its map stays
-                output.edit0() = ItemFilter::Builder::nothing();
-                output.edit1() = cascadeFrustum;
-                output.edit2() = cullFunctor;
-                return;
-            }
             output.edit0() = _filter;
 
             // Set the keylight render args
@@ -653,6 +692,8 @@ void CullShadowBounds::run(const render::RenderContextPointer& renderContext, co
     };
 
     if (!filter.selectsNothing() && currentKeyLight) {
+        // Stats' shadow line (considered / out of view / too small / rendered) counts here, at the cull, so "rendered"
+        // includes the casters of a far cascade waiting for its turn, whose map is drawn only when one of them changed
         auto& details = args->_details.edit(RenderDetails::SHADOW);
         render::CullTest test(shadowCullFunctor, args, details, antiFrustum);
         auto scene = args->_scene;

@@ -1,3 +1,15 @@
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: the "Frame trace" box (root.frameTraceLines, the frame trace's live columns) only; the values
+// behind the other lines are Stats.cpp's (see its note). The rest of this file is not frozen.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 import Hifi 1.0 as Hifi
 import QtQuick 2.3
 import '.'
@@ -45,6 +57,7 @@ Item {
                 pingCol.widest = pingCol.width;
                 geoCol.widest = geoCol.width;
                 octreeCol.widest = octreeCol.width;
+                traceCol.widest = traceCol.width;
             }
         }
 
@@ -86,6 +99,10 @@ Item {
                     }
                     StatText {                        
                         text: "Bypass Priority Sorting: " + root.bypassPrioritySorting;
+                    }
+                    StatText {
+                        visible: root.expanded
+                        text: "Camera vs vehicle: step in the car max " + root.cameraRideStepMaxMm.toFixed(1) + " mm (last second); world step min/max " + root.cameraStepMinMm.toFixed(1) + "/" + root.cameraStepMaxMm.toFixed(1) + " mm"
                     }
                     StatText {
                         text: "Game Loop Rate (CPU): " + root.gameLoopRate
@@ -477,6 +494,35 @@ Item {
                     StatText {
                         visible: root.expanded
                         text: "Entity Updates: " + root.numEntityUpdates + " / " + root.numNeededEntityUpdates;
+                    }
+                }
+            }
+
+            // FROZEN (vehicle path): see the note at the top of this file.
+            // The frame trace's columns, live (team/performance/INSTRUMENTS-PLAN.md item 1): shown while the trace is
+            // on or holds records (Test.frameTrace, Developer > Recording Mode); an instrument's values appear here as
+            // soon as its owner writes them, before it has Stats lines of its own. Collapsed: the heading only.
+            Rectangle {
+                width: traceCol.widest + 8
+                height: traceCol.height + 8
+                color: root.bgColor;
+                visible: root.frameTraceLines.length > 0
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: { root.expanded = !root.expanded; }
+                    hoverEnabled: true
+                }
+                Column {
+                    id: traceCol
+                    property real widest: 0   // see narrowAgain
+                    onWidthChanged: widest = Math.max(widest, width)
+                    spacing: 4; x: 4; y: 4;
+                    Repeater {
+                        model: root.frameTraceLines
+                        StatText {
+                            visible: index === 0 || root.expanded
+                            text: modelData
+                        }
                     }
                 }
             }

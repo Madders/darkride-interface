@@ -13,6 +13,8 @@
 #define hifi_EntityTree_h
 
 #include <QSet>
+#include <QMutex>
+#include <atomic>
 #include <QVector>
 
 #include <Octree.h>
@@ -77,6 +79,10 @@ public:
 
 
     virtual void eraseDomainAndNonOwnedEntities() override;
+    /// The visitor's avatar entities a world's script made: they go when the visitor leaves the world.
+    QVector<EntityItemID> getWorldsAvatarEntityIDs() const;
+    /// The entities kept when the visitor leaves a world (EntityItem::isKeptOnWorldChange) that have a script.
+    QVector<EntityItemID> getKeptEntityIDsWithScripts() const;
     virtual void eraseAllOctreeElements(bool createNewRoot = true) override;
 
     virtual void readBitstreamToTree(const unsigned char* bitstream,
@@ -128,6 +134,9 @@ public:
     void deleteEntity(const EntityItemID& entityID, bool force = false, bool ignoreWarnings = true);
 
     void deleteEntitiesByID(const std::vector<EntityItemID>& entityIDs, bool force = false, bool ignoreWarnings = true);
+    // removes, on this computer only, those of the ids that are the given avatar's own avatar entities (with their local
+    // and my-avatar children, as any delete here); other ids are left as they are and nothing goes to the entity server
+    void deleteAvatarEntitiesOf(const QUuid& avatarID, const std::vector<EntityItemID>& entityIDs);
     void deleteEntitiesByPointer(const std::vector<EntityItemPointer>& entities);
 
     EntityItemPointer findEntityByID(const QUuid& id) const;
@@ -265,6 +274,18 @@ public:
     void setIsServerlessMode(bool value) { _serverlessDomain = value; }
     bool isServerlessMode() const { return _serverlessDomain; }
 
+    // The client's tree refuses content addresses that name a file on this computer (a model "file:///Users/me/car.glb"
+    // built on its maker's computer reads a file on the visitor's) when the world isn't local: the entity readers empty
+    // them as they arrive from the wire, readFromMap as a world file from a link is read, and the avatar paths through
+    // EntityContentAddresses::clearThisComputer. Servers, the baker and tools never set it. Any thread sets it, the
+    // packet thread reads it.
+    void setRefusesContentFromThisComputer(bool refuses);
+    bool refusesContentFromThisComputer() const { return _refusesContentFromThisComputer.load(); }
+    // one warning per entity per property per world, naming what was refused; the set is cleared with the flag
+    void warnRefusedAddresses(const EntityItemID& entityID, const QStringList& propertyNames);
+    // how many addresses were refused since the last take (every one, warned or not): an import's status line
+    int takeRefusedAddressesCount() { return _refusedAddressesCount.exchange(0); }
+
     static void setGetEntityObjectOperator(std::function<QObject*(const QUuid&)> getEntityObjectOperator) { _getEntityObjectOperator = getEntityObjectOperator; }
     static QObject* getEntityObject(const QUuid& id);
 
@@ -392,6 +413,10 @@ private:
     std::vector<int32_t> _staleProxies;
 
     bool _serverlessDomain { false };
+    std::atomic<bool> _refusesContentFromThisComputer { false };
+    std::atomic<int> _refusedAddressesCount { 0 };
+    QMutex _refusedAddressesWarnedLock;
+    QSet<QString> _refusedAddressesWarned;   // "<entity id>/<property>"
 
     std::map<QString, QString> _namedPaths;
 

@@ -12,6 +12,16 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: the whole file (see DisplayLink.cpp).
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
 
 #pragma once
 
@@ -31,6 +41,11 @@ public:
     void start(uint32_t displayId);
     void stop();
     bool isRunning() const { return _running; }
+    // the display the link runs on (a CGDirectDisplayID), 0 when it is not running
+    uint32_t displayId() const { return _running ? _displayId : 0; }
+    // running, yet no refresh callback for half a second (since the start, or since the last one): the display
+    // went quiet, or the link is on a display that is not refreshing; the plugin's watchdog restarts it
+    bool isQuiet(int64_t nowNs) const;
 
     // The next refresh's instant on std::chrono::steady_clock (nanoseconds since its epoch), predicted from the last
     // callback, and the refresh period; false when there is no recent refresh (none within a quarter second: the
@@ -54,6 +69,7 @@ private:
     std::atomic<int64_t> _nextRefreshNs { 0 };
     std::atomic<int64_t> _periodNs { 0 };
     std::atomic<int64_t> _lastCallbackNs { 0 };
+    std::atomic<int64_t> _startedNs { 0 };
     std::atomic<bool> _tracing { false };
     std::mutex _traceMutex;
     std::vector<uint64_t> _trace;

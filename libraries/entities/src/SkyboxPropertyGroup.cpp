@@ -10,6 +10,7 @@
 //
 
 #include "SkyboxPropertyGroup.h"
+#include "EntityContentAddresses.h"
 
 #include <OctreePacketData.h>
 
@@ -67,14 +68,14 @@ bool SkyboxPropertyGroup::appendToEditPacket(OctreePacketData* packetData,
 }
 
 
-bool SkyboxPropertyGroup::decodeFromEditPacket(EntityPropertyFlags& propertyFlags, const unsigned char*& dataAt , int& processedBytes) {
+bool SkyboxPropertyGroup::decodeFromEditPacket(EntityPropertyFlags& propertyFlags, const unsigned char*& dataAt , int& processedBytes, int bytesToRead) {
 
     int bytesRead = 0;
     bool overwriteLocalData = true;
     bool somethingChanged = false;
 
-    READ_ENTITY_PROPERTY(PROP_SKYBOX_COLOR, u8vec3Color, setColor);
-    READ_ENTITY_PROPERTY(PROP_SKYBOX_URL, QString, setURL);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_SKYBOX_COLOR, u8vec3Color, setColor);
+    READ_ENTITY_PROPERTY_FROM_EDIT(PROP_SKYBOX_URL, QString, setURL);
 
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_SKYBOX_COLOR, Color);
     DECODE_GROUP_PROPERTY_HAS_CHANGED(PROP_SKYBOX_URL, URL);
@@ -146,7 +147,7 @@ int SkyboxPropertyGroup::readEntitySubclassDataFromBuffer(const unsigned char* d
     const unsigned char* dataAt = data;
 
     READ_ENTITY_PROPERTY(PROP_SKYBOX_COLOR, u8vec3Color, setColor);
-    READ_ENTITY_PROPERTY(PROP_SKYBOX_URL, QString, setURL);
+    READ_ENTITY_ADDRESS_PROPERTY(PROP_SKYBOX_URL, setURL, EntityContentAddresses::isOnThisComputer, "skybox.url");
 
     return bytesRead;
 }

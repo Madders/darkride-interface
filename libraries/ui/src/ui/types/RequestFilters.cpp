@@ -43,6 +43,10 @@ namespace {
 
     // pages that are part of Darkride: its resources, or files in its install or default scripts folders
     bool isFirstPartySafe(const QUrl& url) {
+        // a request with no page behind it has an empty first-party URL, which QUrl counts as relative
+        if (url.isEmpty() || url.isRelative()) {
+            return false;
+        }
         if (PathUtils::isAppResourceUrl(url)) {
             return true;
         }

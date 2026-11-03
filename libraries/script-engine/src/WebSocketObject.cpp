@@ -14,9 +14,9 @@
 
 #include "ScriptEngine.h"
 
-WebSocketObject::WebSocketObject(const QString& url, const QUrl& origin, bool ruled, std::function<void(const QString&)> logger,
+WebSocketObject::WebSocketObject(const QString& url, const QUrl& origin, bool ruled, bool worldIsLocal, std::function<void(const QString&)> logger,
                                  QObject* parent) :
-    QObject(parent), _socket(new QWebSocket()), _requestedUrl(url), _origin(origin), _ruled(ruled), _logger(std::move(logger)) {
+    QObject(parent), _socket(new QWebSocket()), _requestedUrl(url), _origin(origin), _ruled(ruled), _worldIsLocal(worldIsLocal), _logger(std::move(logger)) {
     initialize();
     if (!_ruled) {
         _socket->open(_requestedUrl);
@@ -29,7 +29,7 @@ WebSocketObject::WebSocketObject(const QString& url, const QUrl& origin, bool ru
         } else {
             refuse(decision.reason);
         }
-    });
+    }, _worldIsLocal);
 }
 
 void WebSocketObject::refuse(const QString& reason) {
@@ -53,19 +53,24 @@ WebSocketObject::~WebSocketObject() {
 
 void WebSocketObject::initialize() {
     connect(_socket, &QWebSocket::connected, this, [this] {
-        if (_ruled && ScriptNetworkPolicy::applies(_origin) && ScriptNetworkPolicy::isPrivateAddress(_socket->peerAddress())) {
+        if (_ruled && ScriptNetworkPolicy::applies(_origin, _worldIsLocal) && ScriptNetworkPolicy::isPrivateAddress(_socket->peerAddress())) {
             // the name led here after it was judged (an answer that changed): nothing goes over this connection
             if (_logger) {
                 _logger(ScriptNetworkPolicy::refusalLine(_origin, _socket->requestUrl(),
                     "it connected to an address on this machine or its network (" + _socket->peerAddress().toString() + ")"));
             }
+            _refused = true;
             emit errored();
             _socket->close(QWebSocketProtocol::CloseCodePolicyViolated, "not allowed by the network rule");
             return;
         }
         emit opened();
     });
-    connect(_socket, &QWebSocket::textMessageReceived, this, &WebSocketObject::messageReceived);
+    connect(_socket, &QWebSocket::textMessageReceived, this, [this](const QString& message) {
+        if (!_refused) {
+            emit messageReceived(message);
+        }
+    });
     connect(_socket, static_cast<void (QWebSocket::*)(QAbstractSocket::SocketError)>(&QWebSocket::error), this,
             [this](QAbstractSocket::SocketError) { emit errored(); });
     connect(_socket, &QWebSocket::disconnected, this, [this] {
@@ -105,10 +110,11 @@ void WebSocketObject::close(int code, const QString& reason) {
 WebSocketFactory::WebSocketFactory(ScriptEngine* engine) : QObject(engine), _engine(engine) {}
 
 WebSocketObject* WebSocketFactory::createWebSocket(const QString& url, const QString& origin) {
-    const QUrl originUrl = _engine ? _engine->verifiedScriptOrigin(origin) : QUrl();
-    const bool ruled = _engine && _engine->isClientSide();
+    const QUrl originUrl = _engine ? _engine->ruledOrigin(_engine->verifiedScriptOrigin(origin)) : QUrl();
+    const bool ruled = !_engine || _engine->networkRuled();
+    const bool worldIsLocal = _engine && _engine->worldIsLocal();
     QPointer<ScriptEngine> engine(_engine);
-    return new WebSocketObject(url, originUrl, ruled, [engine](const QString& line) {
+    return new WebSocketObject(url, originUrl, ruled, worldIsLocal, [engine](const QString& line) {
         if (engine) {
             engine->scriptWarningMessage(line);
         }

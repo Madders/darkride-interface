@@ -8,6 +8,20 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: these functions, the carry of an avatar on a moving frame or vehicle and the camera's eye:
+//   prepareForPhysicsSimulation, harvestResultsFromPhysicsSimulation, updateFrameMembership, traceCarry,
+//   FollowHelper::prePhysicsUpdate, FollowHelper::postPhysicsUpdate, FollowHelper::getMaxTimeRemaining,
+//   getCameraEyesPosition (and getLookAtRotation in MyAvatar.h), each with everything it calls on the vehicle's path.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 
 #include "MyAvatar.h"
 
@@ -28,6 +42,7 @@
 #include <shared/QtHelpers.h>
 #include <scripting/HMDScriptingInterface.h>
 #include <AccountManager.h>
+#include <FrameTrace.h>
 #include <AddressManager.h>
 #include <AudioClient.h>
 #include <ClientTraitsHandler.h>
@@ -274,6 +289,9 @@ MyAvatar::MyAvatar(QThread* thread) :
 
     // when we leave a domain we lift whatever restrictions that domain may have placed on our scale
     connect(&domainHandler, &DomainHandler::disconnectedFromDomain, this, &MyAvatar::leaveDomain);
+    // a world change clears the entity tree on the domain handler's reset (queued ahead of disconnectedFromDomain):
+    // a frame or a seat the avatar rides stays behind, so the avatar leaves it first (vehicle master plan entry 12)
+    connect(&domainHandler, &DomainHandler::resetting, this, &MyAvatar::dropParentForWorldChange);
 
     _bodySensorMatrix = deriveBodyFromHMDSensor();
 
@@ -779,9 +797,14 @@ void MyAvatar::update(float deltaTime) {
     glm::vec3 halfBoundingBoxDimensions(_characterController.getCapsuleRadius(), _characterController.getCapsuleHalfHeight(), _characterController.getCapsuleRadius());
     // This might not be right! Isn't the capsule local offset in avatar space? -HRS 5/26/17
     halfBoundingBoxDimensions += _characterController.getCapsuleLocalOffset();
-    QMetaObject::invokeMethod(audio, "setAvatarBoundingBoxParameters",
-        Q_ARG(glm::vec3, (getWorldPosition() - halfBoundingBoxDimensions)),
-        Q_ARG(glm::vec3, (halfBoundingBoxDimensions*2.0f)));
+    // posted to the audio thread as a functor: by the method's name, each glm::vec3 argument would be copied through
+    // Qt 5's global metatype registry, whose lock loader threads can hold up for seconds (dropped, as before, if the
+    // audio client is gone first)
+    const glm::vec3 boundingBoxCorner = getWorldPosition() - halfBoundingBoxDimensions;
+    const glm::vec3 boundingBoxScale = halfBoundingBoxDimensions * 2.0f;
+    QMetaObject::invokeMethod(audio, [audio, boundingBoxCorner, boundingBoxScale] {
+        audio->setAvatarBoundingBoxParameters(boundingBoxCorner, boundingBoxScale);
+    });
 
     simulate(deltaTime, true);
 
@@ -1831,14 +1854,26 @@ bool MyAvatar::updateStaleAvatarEntityBlobs() const {
     int32_t numFound = 0;
     for (const auto& id : staleIDs) {
         bool found = false;
+        bool madeByWorld = false;
         EntityItemProperties properties;
         entityTree->withReadLock([&] {
             EntityItemPointer entity = entityTree->findEntityByID(id);
             if (entity) {
-                properties = entity->getProperties();
+                madeByWorld = entity->getLocalOwner() == entity::LocalOwner::WORLD;
+                if (!madeByWorld) {
+                    properties = entity->getProperties();
+                }
                 found = true;
             }
         });
+        if (madeByWorld) {
+            // an avatar entity a world's script made stays out of the cache that every save reads (settings, the
+            // carry-over to the next world, favourites): it is the world's, for while the visitor is there
+            _avatarEntitiesLock.withWriteLock([&] {
+                _cachedAvatarEntityBlobs.remove(id);
+            });
+            continue;
+        }
         if (found) {
             ++numFound;
             QByteArray blob;
@@ -1884,8 +1919,8 @@ AvatarEntityMap MyAvatar::getAvatarEntityData() const {
     });
     for (const auto& entityID : avatarEntityIDs) {
         auto entity = entityTree->findEntityByID(entityID);
-        if (!entity) {
-            continue;
+        if (!entity || entity->getLocalOwner() == entity::LocalOwner::WORLD) {
+            continue;  // a world's avatar entity: not the visitor's to keep
         }
 
         EncodeBitstreamParams params;
@@ -2635,8 +2670,8 @@ QVariantList MyAvatar::getAvatarEntitiesVariant() {
         });
         for (const auto& entityID : avatarEntityIDs) {
             auto entity = entityTree->findEntityByID(entityID);
-            if (!entity) {
-                continue;
+            if (!entity || entity->getLocalOwner() == entity::LocalOwner::WORLD) {
+                continue;  // a world's avatar entity: not the visitor's to keep
             }
             EncodeBitstreamParams params;
             auto desiredProperties = entity->getEntityProperties(params);
@@ -2927,6 +2962,7 @@ glm::quat MyAvatar::getFrameOrientation() const {
     return success ? parentTransform.getRotation() : Quaternions::IDENTITY;
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void MyAvatar::prepareForPhysicsSimulation() {
     relayDriveKeysToCharacterController();
     updateMotors();
@@ -2992,6 +3028,7 @@ void MyAvatar::nextAttitude(glm::vec3 position, glm::quat orientation) {
     updateAttitude(orientation);
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void MyAvatar::harvestResultsFromPhysicsSimulation(float deltaTime) {
     // In a frame, everything the character says is in the frame's coordinates, and goes into the avatar's
     // local pose; the renderer composes it with the frame's transform.
@@ -3029,8 +3066,64 @@ void MyAvatar::harvestResultsFromPhysicsSimulation(float deltaTime) {
     }
     _bodySensorMatrix = _follow.postPhysicsUpdate(*this, _bodySensorMatrix);
 
+    traceCarry(inFrame);
     updateFrameMembership();
 }
+
+// FROZEN (vehicle path): see the note at the top of this file.
+// The carry, as this frame has it (team/performance/INSTRUMENTS-PLAN.md, item 5): while the avatar is carried by a
+// frame (standing on a monorail car, a deck) or by a parent that is not a frame (a seat), the parent (carry.frame),
+// the avatar's position in the parent's coordinates (carry.local_x/y/z_m, the pose the renderer composes with the
+// parent's) and its step since the last frame (carry.step_mm: 0 standing still, whatever the frame does); in a frame,
+// how far the frame's presented pose is from its simulated one this frame (carry.lead_mm: the presentation's
+// interpolation, PHYSICS.md 4.x); and the follow helper's displacement of the body while it is active (follow.dx_m:
+// HMD only). Read from inside the frame loop, after the harvest: a script's reads of the same numbers come from
+// another thread, a frame off at random, and show glitches that are not there (physics, 2026-10-31). The counter
+// behind the Stats line (getCarryStepMaxMm) is kept whenever the avatar is carried; the rest only with the trace on.
+void MyAvatar::traceCarry(bool inFrame) {
+    QUuid parentID = getParentID();
+    if (parentID.isNull()) {
+        _carryLastParent = QUuid();
+        _carryStepMax = 0.0f;
+        _carryStepMaxLastSecond = 0.0f;
+        return;
+    }
+    glm::vec3 local = getLocalPosition();
+    bool sameParent = parentID == _carryLastParent;
+    float stepMm = sameParent ? glm::distance(local, _carryLastLocal) * 1000.0f : 0.0f;
+    _carryLastLocal = local;
+    _carryLastParent = parentID;
+    uint64_t now = usecTimestampNow();
+    if (now - _carryWindowStart >= USECS_PER_SECOND) {
+        _carryStepMaxLastSecond = _carryStepMax;
+        _carryStepMax = 0.0f;
+        _carryWindowStart = now;
+    }
+    _carryStepMax = glm::max(_carryStepMax, stepMm);
+    if (!FrameTrace::enabled()) {
+        return;
+    }
+    FrameTrace::setText("carry.frame", parentID.toString());
+    FrameTrace::set("carry.local_x_m", local.x);
+    FrameTrace::set("carry.local_y_m", local.y);
+    FrameTrace::set("carry.local_z_m", local.z);
+    if (sameParent) {
+        FrameTrace::set("carry.step_mm", stepMm);
+    }
+    PhysicsEnginePointer engine = _characterController.getPhysicsEngine();
+    if (inFrame && engine) {
+        glm::vec3 presented, simulated, linearVelocity, angularVelocity;
+        glm::quat rotation;
+        if (engine->getFrameTransform(parentID, presented, rotation, linearVelocity, angularVelocity, false) &&
+                engine->getFrameTransform(parentID, simulated, rotation, linearVelocity, angularVelocity, true)) {
+            FrameTrace::set("carry.lead_mm", glm::distance(presented, simulated) * 1000.0f);
+        }
+    }
+    if (_follow.isActive()) {
+        FrameTrace::set("follow.dx_m", glm::length(_characterController.getFollowLinearDisplacement()));
+    }
+}
+
 
 void MyAvatar::nextLocalAttitude(const glm::vec3& position, const glm::quat& orientation, const glm::vec3& velocity) {
     if (isNaN(position) || isNaN(orientation)) {
@@ -3044,6 +3137,7 @@ void MyAvatar::nextLocalAttitude(const glm::vec3& position, const glm::quat& ori
     updateAttitude(getWorldOrientation());
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 // The avatar belongs to the frame whose volume it stands in. Stepping in or out hands over the exact pose
 // and velocity, so nothing pops; the character follows into the new world at the next prepare.
 void MyAvatar::updateFrameMembership() {
@@ -3052,7 +3146,24 @@ void MyAvatar::updateFrameMembership() {
         return;
     }
     QUuid currentFrame = getFrameID();
-    if (currentFrame.isNull() && !getParentID().isNull()) {
+    QUuid parentID = getParentID();
+    if (!parentID.isNull()) {
+        // the pose the parent carries the avatar at, remembered for when the parent goes (entry 12)
+        bool success = false;
+        Transform carried = getTransform(success);
+        if (success) {
+            _carriedWorldPosition = carried.getTranslation();
+            _carriedWorldOrientation = carried.getRotation();
+            _carriedWorldPoseKnown = true;
+        } else {
+            // the parent cannot be found: the world changed and the tree was cleared, the car was deleted under the
+            // rider, or it left the interest set. Carried by nothing the avatar can go nowhere (every move fails on
+            // the missing parent), so it is stood where the parent last carried it.
+            dropParent("parent not found");
+            return;
+        }
+    }
+    if (currentFrame.isNull() && !parentID.isNull()) {
         // parented to something that is not a frame (a seat, a hand): that is a script's business
         return;
     }
@@ -3100,6 +3211,43 @@ void MyAvatar::updateFrameMembership() {
     setLocalTransformAndVelocities(local, localVelocity, getLocalAngularVelocity());
     _characterController.setFrame(targetFrame);
     _characterController.setLinearVelocity(localVelocity);
+}
+
+// Drops the parent that carries the avatar (a frame, or a seat a script parented it to) and stands the avatar, upright,
+// at the pose the parent last carried it to: the world is changing (the car stays behind; in another instance of the
+// same world an entity with the same ID would stand in for it), or the parent is gone. Vehicle master plan entry 12.
+void MyAvatar::dropParent(const char* reason) {
+    QUuid parentID = getParentID();
+    if (parentID.isNull()) {
+        return;
+    }
+    bool success = false;
+    Transform carried = getTransform(success);
+    if (success) {
+        _carriedWorldPosition = carried.getTranslation();
+        _carriedWorldOrientation = carried.getRotation();
+        _carriedWorldPoseKnown = true;
+    }
+    qCDebug(interfaceapp) << "MyAvatar: dropping parent" << parentID << "(" << reason << ")";
+    setParentID(QUuid());
+    if (_carriedWorldPoseKnown) {
+        glm::quat upright = cancelOutRollAndPitch(_carriedWorldOrientation);
+        if (isSeated()) {
+            endSit(_carriedWorldPosition, upright);
+        } else {
+            setWorldTransform(_carriedWorldPosition, upright);
+        }
+    } else if (isSeated()) {
+        endSit(getLocalPosition(), getLocalOrientation());
+    }
+    setWorldVelocity(glm::vec3(0.0f));
+    _characterController.setFrame(QUuid());
+    _characterController.setLinearVelocity(glm::vec3(0.0f));
+    _carriedWorldPoseKnown = false;
+}
+
+void MyAvatar::dropParentForWorldChange() {
+    dropParent("the world is changing");
 }
 
 QString MyAvatar::getScriptedMotorFrame() const {
@@ -3270,7 +3418,13 @@ QVector<AttachmentData> MyAvatar::getAttachmentData() const {
     _avatarEntitiesLock.withReadLock([&] {
         avatarEntityIDs = _packedAvatarEntityData.keys();
     });
+    auto treeRenderer = DependencyManager::get<EntityTreeRenderer>();
+    EntityTreePointer entityTree = treeRenderer ? treeRenderer->getTree() : nullptr;
     for (const auto& entityID : avatarEntityIDs) {
+        auto entity = entityTree ? entityTree->findEntityByID(entityID) : nullptr;
+        if (entity && entity->getLocalOwner() == entity::LocalOwner::WORLD) {
+            continue;  // a world's avatar entity: not the visitor's to keep
+        }
         auto properties = DependencyManager::get<EntityScriptingInterface>()->getEntityProperties(entityID);
         AttachmentData data = entityPropertiesToAttachmentData(properties);
         attachmentData.append(data);
@@ -4562,6 +4716,9 @@ void MyAvatar::leaveDomain() {
     clearScaleRestriction();
     saveAvatarScale();
     prepareResetTraitInstances();
+    // a frame or a seat the avatar rides stays in the world left behind (entry 12; normally dropped already when the
+    // domain handler reset, which comes first on a world change)
+    dropParent("left the world");
 }
 
 void MyAvatar::saveAvatarScale() {
@@ -4641,7 +4798,9 @@ void MyAvatar::goToLocation(const glm::vec3& newPosition,
     qCDebug(interfaceapp).nospace() << "MyAvatar goToLocation - moving to " << newPosition.x << ", "
         << newPosition.y << ", " << newPosition.z;
 
-    if (hasParent()) {
+    // by the parent ID, not the cached parent pointer: a parent that is gone (a car left behind in another world) has
+    // no pointer, and its ID would stay (entry 12)
+    if (!getParentID().isNull()) {
         qCDebug(interfaceapp) << "MyAvatar clearing parentID" << getParentID();
         setParentID(QUuid());
     }
@@ -5994,6 +6153,7 @@ bool MyAvatar::FollowHelper::isActive() const {
     return false;
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 float MyAvatar::FollowHelper::getMaxTimeRemaining() const {
     float max = 0.0f;
     for (int i = 0; i < NumFollowTypes; i++) {
@@ -6122,6 +6282,7 @@ bool MyAvatar::FollowHelper::shouldActivateVertical(const MyAvatar& myAvatar, co
     return returnValue;
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 void MyAvatar::FollowHelper::prePhysicsUpdate(MyAvatar& myAvatar, const glm::mat4& desiredBodyMatrix,
                                               const glm::mat4& currentBodyMatrix, bool hasDriveInput) {
 
@@ -6171,8 +6332,14 @@ void MyAvatar::FollowHelper::prePhysicsUpdate(MyAvatar& myAvatar, const glm::mat
         }
     }
 
-    glm::mat4 desiredWorldMatrix = myAvatar.getSensorToWorldMatrix() * desiredBodyMatrix;
-    glm::mat4 currentWorldMatrix = myAvatar.getSensorToWorldMatrix() * currentBodyMatrix;
+    // Into the coordinates the character steps in: the domain on the ground, the frame's own in a frame (vehicle master
+    // plan entry 11). The room relative to a frame (sensorToLocal) is constant while riding whatever the car does, as
+    // sensorToWorld is on the ground; built with sensorToWorld, the wanted pose carried the previous frame's presented
+    // car pose into a conversion with this step's simulated one, and the target lay behind the body by the car's
+    // motion over a frame, while the step came back in the frame's coordinates and was applied as a world one.
+    glm::mat4 sensorToWorldMatrix = myAvatar.getFollowSensorMatrix();
+    glm::mat4 desiredWorldMatrix = sensorToWorldMatrix * desiredBodyMatrix;
+    glm::mat4 currentWorldMatrix = sensorToWorldMatrix * currentBodyMatrix;
 
     AnimPose followWorldPose(currentWorldMatrix);
 
@@ -6203,16 +6370,18 @@ void MyAvatar::FollowHelper::prePhysicsUpdate(MyAvatar& myAvatar, const glm::mat
     myAvatar.getCharacterController()->setFollowParameters(followWorldPose, getMaxTimeRemaining());
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 glm::mat4 MyAvatar::FollowHelper::postPhysicsUpdate(MyAvatar& myAvatar, const glm::mat4& currentBodyMatrix) {
     if (isActive()) {
         float dt = myAvatar.getCharacterController()->getFollowTime();
         decrementTimeRemaining(dt);
 
-        // apply follow displacement to the body matrix.
+        // apply follow displacement to the body matrix: the step is in the coordinates the character stepped in (the
+        // frame's own in a frame), and so is the matrix it comes back into the room with (entry 11)
         glm::vec3 worldLinearDisplacement = myAvatar.getCharacterController()->getFollowLinearDisplacement();
         glm::quat worldAngularDisplacement = myAvatar.getCharacterController()->getFollowAngularDisplacement();
 
-        glm::mat4 sensorToWorldMatrix = myAvatar.getSensorToWorldMatrix();
+        glm::mat4 sensorToWorldMatrix = myAvatar.getFollowSensorMatrix();
         glm::mat4 worldToSensorMatrix = glm::inverse(sensorToWorldMatrix);
 
         glm::vec3 sensorLinearDisplacement = transformVectorFast(worldToSensorMatrix, worldLinearDisplacement);
@@ -6229,6 +6398,14 @@ glm::mat4 MyAvatar::FollowHelper::postPhysicsUpdate(MyAvatar& myAvatar, const gl
     } else {
         return currentBodyMatrix;
     }
+}
+
+// The sensor matrix the follow works in: into the coordinates the character steps in, so the domain on the ground and
+// the frame's own in a frame (sensorToLocal, the avatar's local pose x inverse(body in the room), kept by
+// updateSensorToWorldMatrix; constant while riding whatever the car does). Vehicle master plan entry 11.
+glm::mat4 MyAvatar::getFollowSensorMatrix() const {
+    PhysicsWorld* world = _characterController.getWorld();
+    return (world && !world->isRoot()) ? getSensorToLocalMatrix() : getSensorToWorldMatrix();
 }
 
 bool MyAvatar::FollowHelper::getForceActivateRotation() const {
@@ -7490,6 +7667,7 @@ glm::vec3 MyAvatar::getLookAtPivotPoint() {
     return yAxisEyePosition;
 }
 
+// FROZEN (vehicle path): see the note at the top of this file.
 glm::vec3 MyAvatar::getCameraEyesPosition(float deltaTime) {
     glm::vec3 defaultEyesPosition = getLookAtPivotPoint();
 

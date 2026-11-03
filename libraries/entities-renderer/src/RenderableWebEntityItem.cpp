@@ -51,6 +51,15 @@ static const uint32_t MAX_CONCURRENT_WEB_VIEWS = 20;
 
 static QTouchDevice _touchDevice;
 
+QStringList WebEntityRenderer::_trustedQmlUrls;
+
+// a web page's address: what a Web entity that is not the app's own may show
+static bool isWebPageUrl(const QString& urlString) {
+    const QString scheme = QUrl(urlString).scheme().toLower();
+    return scheme == HIFI_URL_SCHEME_HTTP || scheme == HIFI_URL_SCHEME_HTTPS || scheme == URL_SCHEME_DATA ||
+           scheme == HIFI_URL_SCHEME_ABOUT;
+}
+
 WebEntityRenderer::ContentType WebEntityRenderer::getContentType(const QString& urlString) {
     if (urlString.isEmpty()) {
         return ContentType::NoContent;
@@ -58,10 +67,16 @@ WebEntityRenderer::ContentType WebEntityRenderer::getContentType(const QString& 
 
     const QUrl url(urlString);
     auto path = url.path().toLower();
+    auto scheme = url.scheme();
 
-    // QML is Darkride's own interface code: a web entity shows it only from Darkride's own resources (the tablet,
-    // the mic bar). Any other address, wherever it points, is shown as a web page.
-    if (path.endsWith(".html") || path.endsWith(".htm") || !PathUtils::isAppResourceUrl(url)) {
+    if (
+        scheme == HIFI_URL_SCHEME_ABOUT ||
+        scheme == HIFI_URL_SCHEME_HTTP ||
+        scheme == HIFI_URL_SCHEME_HTTPS ||
+        scheme == URL_SCHEME_DATA ||
+        path.endsWith(".html") ||
+        path.endsWith(".htm")
+    ) {
         return ContentType::HtmlContent;
     }
 
@@ -152,6 +167,17 @@ void WebEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& scene
     auto newSourceURL = entity->getSourceUrl();
     {
         auto newContentType = getContentType(newSourceURL);
+        // The app's own Web entities are the local ones its scripts made (a client script's thread; the tablet) and
+        // the local ones it makes from C++ for its own QML surfaces (the login dialog, the avatar inputs bar, the
+        // bubble icon, listed by the app at start). Every other Web entity, a world's, another avatar's, or a local
+        // one a world's entity script made, shows a web page (http, https, data, about) or nothing: not QML, the
+        // app's own UI language with the app's objects in reach, and not a page from the visitor's own files.
+        const bool trusted = entity->isLocalEntity() &&
+            (entity->getLocalSafeContext() || _trustedQmlUrls.contains(newSourceURL));
+        const bool refused = !trusted && newContentType != ContentType::NoContent && !isWebPageUrl(newSourceURL);
+        if (refused) {
+            newContentType = ContentType::NoContent;
+        }
         ContentType currentContentType;
         withReadLock([&] {
             urlChanged = newSourceURL.isEmpty() || newSourceURL != _tryingToBuildURL;
@@ -159,6 +185,9 @@ void WebEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& scene
         currentContentType = _contentType;
 
         if (urlChanged) {
+            if (refused) {
+                qCWarning(entitiesrenderer) << "Web entity" << entity->getID() << "is not the app's own; only a web page is shown, not:" << newSourceURL;
+            }
             if (newContentType != ContentType::HtmlContent || currentContentType != ContentType::HtmlContent) {
                 destroyWebSurface();
             }

@@ -5,6 +5,16 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: the frameTraceLines, numEntityUpdates and numNeededEntityUpdates properties (see Stats.cpp).
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
 
 #ifndef hifi_Stats_h
 #define hifi_Stats_h
@@ -72,6 +82,9 @@ private: \
   * @property {boolean} bypassPrioritySorting - Whether or not the game loop spends CPU prioritizing what to draw, boolean.
  *     <em>Read-only.</em>
  * @property {number} gameLoopRate - The rate at which the game loop is running, in Hz.
+ * @property {string[]} frameTraceLines - The frame trace's columns, one line each with the newest finished frame's value
+ *     and the number's maximum over the last second, while the trace is on or holds records (Test.frameTrace).
+ *     <em>Read-only.</em>
  *     <em>Read-only.</em>
  * @property {number} refreshRateTarget - The current target refresh rate, in Hz, per the current <code>refreshRateMode</code> 
  *     and <code>refreshRateRegime</code> if in desktop mode; a higher rate if in VR mode. 
@@ -505,8 +518,13 @@ class Stats : public QQuickItem {
     STATS_PROPERTY(QString, refreshRateMode, QString())
     STATS_PROPERTY(QString, refreshRateRegime, QString())
     STATS_PROPERTY(QString, uxMode, QString())
+    // FROZEN (vehicle path): see the note at the top of this file.
+    STATS_PROPERTY(QStringList, frameTraceLines, QStringList())
     STATS_PROPERTY(int, heroAvatarCount, 0)
     STATS_PROPERTY(int, physicsObjectCount, 0)
+    STATS_PROPERTY(float, cameraRideStepMaxMm, 0)
+    STATS_PROPERTY(float, cameraStepMinMm, 0)
+    STATS_PROPERTY(float, cameraStepMaxMm, 0)
     STATS_PROPERTY(int, updatedAvatarCount, 0)
     STATS_PROPERTY(int, updatedHeroAvatarCount, 0)
     STATS_PROPERTY(int, notUpdatedAvatarCount, 0)
@@ -577,6 +595,7 @@ class Stats : public QQuickItem {
     STATS_PROPERTY(int, lodAngle, 0)
     STATS_PROPERTY(int, lodTargetFramerate, 0)
     STATS_PROPERTY(QString, lodStatus, QString())
+    // FROZEN (vehicle path): see the note at the top of this file.
     STATS_PROPERTY(int, numEntityUpdates, 0)
     STATS_PROPERTY(int, numNeededEntityUpdates, 0)
     STATS_PROPERTY(QString, timingStats, QString())
@@ -817,6 +836,7 @@ signals:
      * @returns {Signal}
      */
     void uxModeChanged();
+    void frameTraceLinesChanged();
 
     /**jsdoc
      * Triggered when the value of the <code>heroAvatarCount</code> property changes.
@@ -831,6 +851,12 @@ signals:
      * @returns {Signal}
      */
     void physicsObjectCountChanged();
+
+    // the camera against the vehicle, the last whole second's (item 11): the camera's max step in the ridden
+    // entity's frame and its min and max world step, in mm
+    void cameraRideStepMaxMmChanged();
+    void cameraStepMinMmChanged();
+    void cameraStepMaxMmChanged();
 
     /**jsdoc
      * Triggered when the value of the <code>updatedAvatarCount</code> property changes.

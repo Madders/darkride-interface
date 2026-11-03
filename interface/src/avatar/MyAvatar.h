@@ -8,6 +8,17 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
+// FROZEN: DARKRIDE VEHICLE PATH (2026-10-31). DO NOT EDIT WITHOUT THE MASTER PLAN.
+// Frozen here: getLookAtRotation, the camera's look direction.
+// This code is tuned to the millisecond. The monorail, karts and every ride depend on it, and small "harmless"
+// changes here have broken the ride before (strobing, judder, frame drops). Before changing anything frozen:
+//   1. the physics, performance and rendering owners work on it together, all three on Claude Fable (not a
+//      lighter model), with one written master plan agreed before any code;
+//   2. run the full vehicle check (team/VEHICLE-PERFORMANCE.md), ending with Caity's own ride at the display's
+//      real rate in a heavy world;
+//   3. release merges it only as checked.
+// When unsure whether a change counts, it counts.
+//
 
 #ifndef hifi_MyAvatar_h
 #define hifi_MyAvatar_h
@@ -1469,6 +1480,10 @@ public:
     // The moving reference frame the avatar is in (PHYSICS.md 4.1): its parent, when that is a frame entity;
     // null in the domain itself. The character then moves in that frame's physics world, in its coordinates.
     QUuid getFrameID() const;
+    // the carry's counter for the Stats line (team/performance/INSTRUMENTS-PLAN.md, item 5): the largest step of the
+    // avatar's local position in one frame over the last second, in mm, while it is carried by a frame or a parent;
+    // 0 when it is not. Standing still on a car it reads 0; a step that is not the avatar's own walking is a carry fault
+    float getCarryStepMaxMm() const { return _carryStepMaxLastSecond; }
     // The frame's world orientation; identity outside a frame. The camera, the look-at yaw and the motors are world
     // rotations, and the character in a frame moves in the frame's coordinates: the inverse takes them there.
     glm::quat getFrameOrientation() const;
@@ -1826,6 +1841,10 @@ public:
     // results are in sensor frame (-z forward)
     glm::mat4 deriveBodyFromHMDSensor() const;
 
+    // the sensor matrix the follow works in: sensorToWorld on the ground, sensorToLocal in a frame (vehicle master
+    // plan entry 11: the room is fixed to the car, so the follow sees in a car what it sees on the ground)
+    glm::mat4 getFollowSensorMatrix() const;
+
     glm::mat4 getSpine2RotationRigSpace() const;
 
     glm::vec3 computeCounterBalance();
@@ -1960,6 +1979,7 @@ public:
      */
     Q_INVOKABLE bool setPointAt(const glm::vec3& pointAtTarget);
 
+    // FROZEN (vehicle path): see the note at the top of this file.
     glm::quat getLookAtRotation() { return _lookAtYaw * _lookAtPitch; }
 
     /**jsdoc
@@ -2767,6 +2787,7 @@ signals:
 
 private slots:
     void leaveDomain();
+    void dropParentForWorldChange();
     void updateCollisionCapsuleCache();
 
 protected:
@@ -2896,6 +2917,19 @@ private:
     void nextLocalAttitude(const glm::vec3& position, const glm::quat& orientation, const glm::vec3& velocity);
     // steps into or out of a frame when the avatar's position says so, with an exact handover of pose and velocity
     void updateFrameMembership();
+    // drops the parent that carries the avatar (a frame or a seat) and stands it at the pose it was carried to: the
+    // world is changing, or the parent is gone (vehicle master plan entry 12)
+    void dropParent(const char* reason);
+    glm::vec3 _carriedWorldPosition { 0.0f };
+    glm::quat _carriedWorldOrientation;
+    bool _carriedWorldPoseKnown { false };
+    // the frame trace's carry columns (item 5) and the carry's counter, after the frame's harvest each frame
+    void traceCarry(bool inFrame);
+    glm::vec3 _carryLastLocal { 0.0f };
+    QUuid _carryLastParent;
+    float _carryStepMax { 0.0f };            // mm, the window being filled
+    float _carryStepMaxLastSecond { 0.0f };  // mm, the last whole second's
+    uint64_t _carryWindowStart { 0 };
 
     MyCharacterController _characterController;
     int32_t _previousCollisionMask { BULLET_COLLISION_MASK_MY_AVATAR };

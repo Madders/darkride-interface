@@ -33,6 +33,10 @@ public:
     std::vector<bytesAvailableCallback> byteUsers { };
     int numRetries { 0 };
     int maxRetries { MAX_RETRIES };
+    // a ruled script's download (ScriptCache::ruleFetch): its retries are ruled too
+    bool ruled { false };
+    QUrl ruleOrigin;
+    bool ruleWorldIsLocal { false };
 };
 
 /// Interface for loading scripts
@@ -46,6 +50,8 @@ class ScriptCache : public QObject, public Dependency {
 public:
     static const QString STATUS_INLINE;
     static const QString STATUS_CACHED;
+    /// Whether an entity's script property holds the script itself (code, not an address).
+    static bool isInlineScript(const QString& scriptOrURL);
     static bool isSuccessStatus(const QString& status) {
         return status == "Success" || status == STATUS_INLINE || status == STATUS_CACHED;
     }
@@ -58,7 +64,14 @@ public:
 
     void deleteScript(const QUrl& unnormalizedURL);
 
+    /// The next download of this URL is a ruled script's own (ScriptNetworkPolicy): it judges and pins each address
+    /// it goes to. A download several scripts wait for is ruled when any of them is.
+    void ruleFetch(const QUrl& url, const QUrl& origin, bool worldIsLocal);
+
 private:
+    void applyRule(ResourceRequest* request, const QUrl& url);
+    struct FetchRule { QUrl origin; bool worldIsLocal; };
+    QHash<QUrl, FetchRule> _fetchRules;   // under _containerLock
     void scriptContentAvailable(int maxRetries); // new version
     void request(const QUrl& url, contentAvailableCallback contentAvailable, bytesAvailableCallback bytesAvailable, bool forceDownload, int maxRetries);
     ScriptCache(QObject* parent = NULL);

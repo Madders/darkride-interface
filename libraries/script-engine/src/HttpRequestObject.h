@@ -27,6 +27,8 @@
 #include <QtNetwork/QNetworkReply>
 #include <QtNetwork/QNetworkRequest>
 
+#include <ScriptNetworkPolicy.h>
+
 class ScriptEngine;
 
 class HttpRequestObject : public QObject {
@@ -64,11 +66,18 @@ public:
     void setTimeout(int timeout) { _timeout = timeout; }
     /// Where the script that makes this request came from, and whether the network rule for a script's own requests
     /// (ScriptNetworkPolicy) holds here (a person's client); set by the factory.
-    void setOrigin(const QUrl& origin, bool ruled) { _origin = origin; _ruled = ruled; }
-    /// Whether the request may use any scheme (the user's own scripts), or only http, https and atp; set by the factory.
-    void setAnyScheme(bool anyScheme) { _anyScheme = anyScheme; }
+    void setOrigin(const QUrl& origin, bool ruled, bool worldIsLocal) {
+        _origin = origin;
+        _ruled = ruled;
+        _worldIsLocal = worldIsLocal;
+    }
     /// Where a refusal is logged (the script's own log).
     void setLogger(std::function<void(const QString&)> logger) { _logger = std::move(logger); }
+    /// Whether the requesting script is a world's whose engine is stopping or whose world was left
+    /// (ScriptEngine::isWorldEnding): a synchronous request stops waiting, and no answer reaches the script; set by
+    /// the factory.
+    void setEndingCheck(std::function<bool()> ending) { _ending = std::move(ending); }
+    bool isEnding() const { return _ending && _ending(); }
     int unsent() const { return UNSENT; }
     int opened() const { return OPENED; }
     int headersReceived() const { return HEADERS_RECEIVED; }
@@ -102,6 +111,8 @@ private:
     void abortRequest();
     /// Ends the request as refused by the network rule: a failed request, with the reason in the log.
     void refuse(const QString& reason);
+    /// A ruled request's redirect: the next hop judged and pinned as the first was.
+    void followRedirect(int status);
 
     QNetworkRequest _request;
     QNetworkReply* _reply { nullptr };
@@ -121,10 +132,17 @@ private:
     QTimer _timer;
     QUrl _origin;
     bool _ruled { false };
-    bool _anyScheme { true };
+    bool _worldIsLocal { false };   // the world the script is judged in (ScriptEngine::worldIsLocal), when it made the request
     bool _deciding { false };    // the network rule is still judging (a name lookup)
+    // a ruled request goes to the address the rule checked, each hop judged again: the hop's address by its name, the
+    // judgement it went out under, and how many redirects it has followed
+    QUrl _hopUrl;
+    ScriptNetworkPolicy::Decision _decision;
+    bool _byHand { false };
+    int _redirects { 0 };
     int _generation { 0 };       // abort() moves it on, so a judgement that comes late is dropped
     std::function<void(const QString&)> _logger;
+    std::function<bool()> _ending;
 };
 
 /// The "Http" global: makes requests for the script that asked.

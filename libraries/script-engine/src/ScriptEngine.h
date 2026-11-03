@@ -16,6 +16,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include <memory>
 #include <QtCore/QObject>
 #include <QtCore/QUrl>
 #include <QtCore/QSet>
@@ -176,8 +177,38 @@ public:
     /// running): the claim counts only when the engine loaded such a script itself; otherwise the engine's own
     /// answer. On this engine, which tracks the running entity script itself, the claim is not needed.
     virtual QUrl verifiedScriptOrigin(const QString& claimed) const { Q_UNUSED(claimed); return currentScriptOrigin(); }
+    /// Whether this engine's entity scripts may count as local: an entities engine on a client whose world is served
+    /// from this machine or its network, with the strict switch off. Held one way: once the engine has served a world
+    /// that isn't local, it never counts local again (an engine serves one world; the next world gets a new engine).
+    bool entityScriptsMayBeLocal() const;
+    /// Whether the world this engine's scripts are judged in is local, for the network rule: a client's entities engine
+    /// goes by its own world, held one way (entityScriptsMayBeLocal); any other engine by the world the client is in
+    /// now.
+    bool worldIsLocal() const;
+    /// An entity script's address as its rights go: which files here include and require may reach, and the origin
+    /// the network rule judges its requests by. On a client whose world isn't local, no entity script is local,
+    /// whatever its own address (a file here, one of the app's own scripts, an address on this machine or its
+    /// network), and such an address comes back as about:Entities. Any other engine's scripts, and addresses that
+    /// aren't local, keep their own.
+    QUrl effectiveSandbox(const QUrl& sandbox) const;
+    /// Why this engine won't run an entity script from this address, or empty: on a client whose world isn't local, a
+    /// file of this machine that isn't one of the app's own scripts.
+    QString entityScriptRefusal(const QString& entityScript) const;
+    /// The guard in front of every global of a world's entity engine on QtScript (the script API policy); made on
+    /// first use, null on any other engine.
+    class GuardedObjectClass* guardClass();
     /// Whether this engine runs on a person's client, where its scripts' requests are held to that rule.
     bool isClientSide() const { return _context == CLIENT_SCRIPT || _context == ENTITY_CLIENT_SCRIPT; }
+    /// Whether the network rule (ScriptNetworkPolicy) holds this engine's requests, sockets, includes and requires: a
+    /// client's engines always (judged by each script's origin and the world); the entity script server's always;
+    /// an agent's unless its assigned script is the operator's own (served by the domain server, or from this machine
+    /// or its network), decided once when the engine is made.
+    bool networkRuled() const {
+        return isClientSide() || _context == ENTITY_SERVER_SCRIPT || (_context == AGENT_SCRIPT && !_agentScriptIsLocal);
+    }
+    /// The origin the rule judges by. A server's engine's scripts count as from the network, whatever their own
+    /// address: a local one is no origin there. Elsewhere the origin itself.
+    QUrl ruledOrigin(const QUrl& origin) const;
    
     QList<EntityItemID> getListOfEntityScriptIDs();
 
@@ -202,6 +233,11 @@ public:
 
     // Stop any evaluating scripts and wait for the scripting thread to finish.
     virtual void waitTillDoneRunning();
+
+    /// From another thread, the call a stopped engine is still in is made to end (a script stuck in a loop), on the
+    /// engine's own thread within a second (a running script handles queued calls each second): its evaluation
+    /// aborted, or an error thrown into a signal handler's call. The WebAssembly engine's stop interrupts its call.
+    virtual void interruptRunningCall();
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // NOTE - these are NOT intended to be public interfaces available to scripts, the are only Q_INVOKABLE so we can
@@ -607,11 +643,6 @@ public:
      */
     Q_INVOKABLE virtual void unloadAllEntityScripts(bool blockingCall = false);
 
-    // Unloads the client entity scripts whose entities are no longer in the tree, on this engine's thread, after
-    // whatever loads are queued before it: a world left while its scripts were still being loaded (EntityTreeRenderer
-    // asks for it once the world's entities are erased).
-    Q_INVOKABLE void unloadEntityScriptsOfGoneEntities();
-
     /**jsdoc
      * Calls a method in an entity script.
      * @function Script.callEntityScriptMethod
@@ -680,6 +711,16 @@ public:
 
     // this is used by code in ScriptEngines.cpp during the "reload all" operation
     bool isStopping() const { return _isStopping; }
+    /// The id of the world whose scripts a client's entities engine runs (ScriptCaller::world() on its thread); set by
+    /// its maker before it runs. 0: none given (ScriptCaller::ANY_WORLD on its thread).
+    void setWorldId(int worldId) { _worldId = worldId; }
+    int getWorldId() const { return _worldId; }
+    /// Whether the world this engine runs the scripts of was left (ScriptCaller::retireWorld): its scripts' calls are
+    /// refused, and a wait of theirs (a synchronous request, Script.include, Script.require) ends, as when it stops.
+    bool worldWasLeft() const;
+    /// A world's entities engine (it has a world id) that is stopping or whose world was left: its scripts' requests
+    /// end and their answers are dropped (a synchronous one stops waiting). The visitor's own engines: never.
+    bool isWorldEnding() const { return _worldId != 0 && (isStopping() || worldWasLeft()); }
 
     bool isDebuggable() const { return _debuggable; }
 
@@ -983,12 +1024,15 @@ protected:
     void callWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, QScriptValue function, QScriptValue thisObject, QScriptValueList args);
 
     Context _context;
+    bool _agentScriptIsLocal { false };   // an agent's assigned script is the operator's own (networkRuled)
+    std::unique_ptr<class GuardedObjectClass> _guardClass;
     Type _type;
     QString _scriptContents;
     QString _parentURL;
     std::atomic<bool> _isFinished { false };
     std::atomic<bool> _isRunning { false };
     std::atomic<bool> _isStopping { false };
+    int _worldId { 0 };  // setWorldId
     bool _isInitialized { false };
     QHash<QTimer*, CallbackData> _timerFunctionMap;
     QSet<QUrl> _includedURLs;
@@ -996,6 +1040,7 @@ protected:
     int _goneEntityTimersStopped { 0 };         // entity scripts whose timers were stopped as their entities were gone,
     quint64 _goneEntityTimersLoggedAt { 0 };    // since this was last logged
     QHash<EntityItemID, EntityScriptDetails> _entityScripts;
+    mutable std::atomic<bool> _servedNonLocalWorld { false };   // entityScriptsMayBeLocal's one-way answer
     EntityScriptContentAvailableMap _contentAvailableQueue;
 
     bool _isThreaded { false };

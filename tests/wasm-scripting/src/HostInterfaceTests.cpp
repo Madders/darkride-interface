@@ -13,6 +13,7 @@
 #include <QtCore/QCborValue>
 
 #include <HostInterface.h>
+#include <ScriptCaller.h>
 #include <ObjectTable.h>
 #include <SignalRelay.h>
 #include <ValueCodec.h>
@@ -514,3 +515,161 @@ void HostInterfaceTests::testLog() {
 
 // TestObjects.h has no source file of its own, so its moc output is pulled in here.
 #include "moc_TestObjects.cpp"
+
+// The member gate (the script API policy for a world's scripts) holds at the host boundary itself: the module's
+// exports, reached exactly as a guest reaches them, with no shim in between. Nothing a guest does on its side can
+// reach a denied member.
+void HostInterfaceTests::testCheckedDeliveries() {
+    // a signal the gate checks at each delivery: the deliveries it holds back never reach the module, the others do
+    Fixture f;
+    QString error;
+    QVERIFY2(f.start(error), qPrintable(error));
+    HostInterface::MemberGate gate;
+    gate.allowsClass = [](const QMetaObject* meta) { return QByteArray(meta->className()) == "Probe"; };
+    gate.checksDelivery = [](const QMetaObject*, const QByteArray& name) { return name == "countChanged"; };
+    gate.holdsBackDelivery = [](const QMetaObject*, const QByteArray& name, const QVariantList& arguments) {
+        return name == "countChanged" && arguments.value(0).toInt() == 13;
+    };
+    f.host->setMemberGate(gate);
+    const int32_t probe = f.probeHandle();
+    const int32_t byName = f.connect(probe, "countChanged");
+    QVERIFY(byName > 0);
+    f.probe.setCount(13);
+    QCOMPARE(f.i32("events"), 0);
+    f.probe.setCount(4);
+    QCOMPARE(f.i32("events"), 1);
+    QCOMPARE(f.lastArguments().toList(), QVariantList { 4 });
+    // by its signature too
+    std::vector<WasmValue> results;
+    QVERIFY(f.instance->call("disconnect", { byName }, results, error));
+    const int32_t bySignature = f.connect(probe, "countChanged(int)");
+    QVERIFY(bySignature > 0);
+    f.probe.setCount(13);
+    QCOMPARE(f.i32("events"), 1);
+    f.probe.setCount(5);
+    QCOMPARE(f.i32("events"), 2);
+    // a signal the gate doesn't check: every delivery
+    QVERIFY(f.connect(probe, "positionChanged(glm::vec3)") > 0);
+    f.probe.setPosition(glm::vec3(13.0f));
+    QCOMPARE(f.i32("events"), 3);
+}
+
+void HostInterfaceTests::testMemberGate() {
+    Fixture f;
+    QString error;
+    QVERIFY2(f.start(error), qPrintable(error));
+    Other other;
+    f.objects.registerGlobal("Other", &other);
+
+    HostInterface::MemberGate gate;
+    gate.allowsClass = [](const QMetaObject* meta) { return QByteArray(meta->className()) == "Probe"; };   // default-deny: Other is not listed
+    gate.deniesMethod = [](const QMetaObject* meta, const QByteArray& name) { return QByteArray(meta->className()) == "Probe" && name == "scale"; };
+    gate.deniesPropertyWrite = [](const QMetaObject* meta, const QByteArray& name) { return QByteArray(meta->className()) == "Probe" && name == "count"; };
+    gate.deniesPropertyRead = [](const QMetaObject* meta, const QByteArray& name) { return QByteArray(meta->className()) == "Probe" && name == "label"; };
+    gate.deniesSignal = [](const QMetaObject* meta, const QByteArray& name) { return QByteArray(meta->className()) == "Probe" && name == "named"; };
+    gate.refusalLine = [](const QString& object, const QString& member) { return object + "." + member + " is for the visitor's own scripts"; };
+    f.host->setMemberGate(gate);
+
+    const int32_t probe = f.probeHandle();
+    const int32_t otherHandle = f.objects.global("Other");
+
+    // describe: the denied method and the unreadable property are not shown; the unwritable one says so
+    auto name = f.place(QVariant("Probe"));
+    QVariantMap description = f.unpack(f.i64("describe", { name.first, name.second })).toMap();
+    QStringList methodNames;
+    for (const QVariant& entry : description.value("methods").toList()) {
+        methodNames << entry.toMap().value("name").toString();
+    }
+    QVERIFY(methodNames.contains("add"));
+    QVERIFY(!methodNames.contains("scale"));
+    bool sawCount = false, sawLabel = false;
+    for (const QVariant& entry : description.value("properties").toList()) {
+        QVariantMap property = entry.toMap();
+        if (property.value("name") == "count") { sawCount = true; QCOMPARE(property.value("writable").toBool(), false); }
+        if (property.value("name") == "label") { sawLabel = true; }
+    }
+    QVERIFY(sawCount);
+    QVERIFY(!sawLabel);
+    QStringList signalNames;
+    for (const QVariant& entry : description.value("signals").toList()) {
+        signalNames << entry.toMap().value("name").toString();
+    }
+    QVERIFY(signalNames.contains("countChanged"));
+    QVERIFY(!signalNames.contains("named"));
+
+    // a denied signal: no connection by its name, its signature or its index; an allowed one connects
+    QCOMPARE(f.connect(probe, "named"), 0);
+    QCOMPARE(f.connect(probe, "named(QString,bool)"), 0);
+    QCOMPARE(f.connect(probe, QString("#%1").arg(Probe::staticMetaObject.indexOfSignal("named(QString,bool)"))), 0);
+    QVERIFY(f.connect(probe, "countChanged") != 0);
+    auto otherName = f.place(QVariant("Other"));
+    QVariantMap otherDescription = f.unpack(f.i64("describe", { otherName.first, otherName.second })).toMap();
+    QCOMPARE(otherDescription.value("class").toString(), QString("Other"));
+    QVERIFY(otherDescription.value("methods").toList().isEmpty());
+    QVERIFY(otherDescription.value("properties").toList().isEmpty());
+
+    // calls, in every form the boundary takes: by name, by index, by signature
+    QCOMPARE(f.call(probe, "add", { 2, 3 }), QVariant(5));
+    QVariantMap v { { "x", 1.0 }, { "y", 2.0 }, { "z", 3.0 } };
+    QVERIFY(errorMessage(f.call(probe, "scale", { v, 2 })).contains("Probe.scale is for the visitor's own scripts"));
+    const int scaleIndex = Probe::staticMetaObject.indexOfMethod("scale(glm::vec3,float)");
+    QVERIFY(scaleIndex >= 0);
+    QVERIFY(errorMessage(f.call(probe, QString("#%1").arg(scaleIndex), { v, 2 })).contains("is for the visitor's own scripts"));
+    QVERIFY(errorMessage(f.call(probe, "scale(glm::vec3,float)", { v, 2 })).contains("is for the visitor's own scripts"));
+
+    // properties: the unreadable one and the unwritable one
+    QVERIFY(errorMessage(f.get(probe, "label")).contains("Probe.label is for the visitor's own scripts"));
+    f.probe.setCount(7);
+    QCOMPARE(f.get(probe, "count"), QVariant(7));
+    QVERIFY(errorMessage(f.set(probe, "count", 9)).contains("Probe.count is for the visitor's own scripts"));
+    QCOMPARE(f.probe.count(), 7);
+
+    // a denied class: nothing to call, read or connect, whatever the name
+    QVERIFY(errorMessage(f.call(otherHandle, "objectName", {})).contains("is for the visitor's own scripts"));
+    QVERIFY(errorMessage(f.get(otherHandle, "objectName")).contains("is for the visitor's own scripts"));
+    QCOMPARE(f.connect(otherHandle, "destroyed"), 0);
+
+    // each refusal was logged as a warning
+    int warnings = 0;
+    for (const QString& line : f.logged) {
+        if (line.startsWith("2:") && line.contains("is for the visitor's own scripts")) {
+            warnings++;
+        }
+    }
+    QVERIFY(warnings >= 10);
+}
+
+void HostInterfaceTests::testWorldLeft() {
+    // security #32: a script of a world that was left gets nothing done through a gated host (calls, reads, writes,
+    // connects, on a handed-back object too), but for what the gate still allows it; undefined, no error
+    const int LEFT = 9201;
+    Fixture f;
+    QString error;
+    QVERIFY2(f.start(error), qPrintable(error));
+    HostInterface::MemberGate gate;
+    gate.allowsClass = [](const QMetaObject* meta) { return QByteArray(meta->className()) == "Probe"; };
+    gate.deniesMethod = [](const QMetaObject*, const QByteArray&) { return false; };
+    gate.deniesPropertyWrite = [](const QMetaObject*, const QByteArray&) { return false; };
+    gate.deniesPropertyRead = [](const QMetaObject*, const QByteArray&) { return false; };
+    gate.allowsAfterWorldLeft = [](const QMetaObject*, const QByteArray& name) { return name == "add"; };
+    f.host->setMemberGate(gate);
+    const int32_t probe = f.probeHandle();
+    f.probe.setCount(3);
+    const QVariant self = f.call(probe, "self", {});
+    {
+        ScriptCaller::WorldScope world(LEFT);
+        ScriptCaller::retireWorld(LEFT);
+        QVERIFY(!f.call(probe, "describeSelf", {}).isValid() || f.call(probe, "describeSelf", {}).isNull());
+        QVERIFY(!f.get(probe, "count").isValid() || f.get(probe, "count").isNull());
+        f.set(probe, "count", 9);
+        QCOMPARE(f.probe.count(), 3);
+        QCOMPARE(f.connect(probe, "countChanged"), 0);
+        QCOMPARE(f.call(probe, "add", { 2, 3 }), QVariant(5));
+    }
+    {
+        ScriptCaller::WorldScope world(LEFT + 1);
+        QCOMPARE(f.get(probe, "count"), QVariant(3));
+        QVERIFY(f.connect(probe, "countChanged") != 0);
+    }
+    Q_UNUSED(self);
+}

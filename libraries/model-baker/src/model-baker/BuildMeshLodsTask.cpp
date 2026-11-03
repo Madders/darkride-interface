@@ -96,16 +96,14 @@ namespace {
 
         const float* positions = reinterpret_cast<const float*>(hfmMesh.vertices.constData());
         const size_t vertexCount = (size_t)hfmMesh.vertices.size();
-        // the simplifier trusts its indices: a mesh with one naming a vertex it doesn't have keeps only its full detail
-        bool indicesInRange = true;
+        // a broken file may index vertices the mesh does not have; the simplifier trusts its indices, so such a
+        // mesh gets no levels
         for (const auto& source : fullParts) {
             for (uint32_t index : source) {
-                indicesInRange = indicesInRange && index < vertexCount;
+                if (index >= vertexCount) {
+                    return {};
+                }
             }
-        }
-        if (!indicesInRange) {
-            qCWarning(model_baker) << "Not making LODs for a mesh whose triangles name vertices it doesn't have";
-            return lods;
         }
         std::vector<float> weights;
         const std::vector<float> attributes = lodAttributes(hfmMesh, normals, weights);

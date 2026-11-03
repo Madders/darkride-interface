@@ -341,9 +341,6 @@ export class ButtonManager {
 		});
 
 		if (panel) {
-			// the panel's window and entity show this button's own page
-			handler.trusted = true;
-
 			// when window changes visibility
 			this.signalManager.connect(panel.window.visibleChanged, () => {
 				setVisible(panel.window.isVisible());
@@ -392,14 +389,15 @@ export class ButtonManager {
 				this.tablet.screenChanged,
 				(type: string, newCurrentUrl: string) => {
 					setVisible(newCurrentUrl == url);
-					// the tablet's events are this button's page's only while it shows that page
-					handler.trusted = newCurrentUrl == url;
 				},
 			);
 
+			// the tablet's events come from whatever page it shows: only this button's own page is heard
 			this.signalManager.connect(
 				this.tablet.webEventReceived,
-				handler.webEventReceived,
+				(message: string) => {
+					if (visible) handler.webEventReceived(message);
+				},
 			);
 		}
 

@@ -104,6 +104,9 @@ bool EntityItemProperties::constructFromBuffer(const unsigned char* data, int da
         return false;
     }
     tempEntity->readEntityDataFromBuffer(data, dataLength, args);
+    if (args.readFailed) {
+        return false;   // a field claims more than the buffer holds
+    }
     (*this) = tempEntity->getProperties();
     return true;
 }
@@ -269,13 +272,15 @@ QString EntityItemProperties::getComponentModeAsString(uint32_t mode) {
 }
 
 inline void addZoneCullingComponentMode(QHash<QString, ZoneCullingComponentMode>& lookup, ZoneCullingComponentMode mode) {
-    lookup[ZoneCullingModeHelpers::getNameForZoneCullingComponentMode(mode)] = mode;
+    // the lookup lowercases what it is given, so the key is lowercase too: "outsideNoLoad" has capitals, the others none
+    lookup[ZoneCullingModeHelpers::getNameForZoneCullingComponentMode(mode).toLower()] = mode;
 }
 const QHash<QString, ZoneCullingComponentMode> stringToZoneCullingComponentMode = [] {
     QHash<QString, ZoneCullingComponentMode> toReturn;
     addZoneCullingComponentMode(toReturn, ZoneCullingComponentMode::ZONE_CULLING_INHERIT);
     addZoneCullingComponentMode(toReturn, ZoneCullingComponentMode::ZONE_CULLING_OUTSIDE);
     addZoneCullingComponentMode(toReturn, ZoneCullingComponentMode::ZONE_CULLING_DISABLED);
+    addZoneCullingComponentMode(toReturn, ZoneCullingComponentMode::ZONE_CULLING_OUTSIDE_NO_LOAD);
     return toReturn;
 }();
 QString EntityItemProperties::getZoneCullingComponentModeAsString(uint32_t mode) {
@@ -1543,7 +1548,9 @@ EntityPropertyFlags EntityItemProperties::getChangedProperties() const {
  * @property {Entities.AvatarPriorityMode} avatarPriority="inherit" - Configures the priority of updates from avatars in the 
  *     zone to other clients.
  *
- * @property {Entities.ZoneCullingMode} zoneCulling="inherit" - Configures the culling mode of entities inside the zone.
+ * @property {Entities.ZoneCullingMode} zoneCullingMode="inherit" - Zone culling: while you stand in the zone, whether the
+ *     world's entities outside it are drawn and, with <code>"outsideNoLoad"</code>, downloaded (ZONE-CULLING.md). The
+ *     innermost zone whose mode is not <code>"inherit"</code> decides.
  * 
  * @example <caption>Create a zone that casts a red key light along the x-axis.</caption>
  * var zone = Entities.addEntity({
@@ -3839,8 +3846,18 @@ bool EntityItemProperties::decodeEntityEditPacket(const unsigned char* data, int
 
     // the first part of the data is an octcode, this is a required element of the edit packet format, but we don't
     // actually use it, we do need to skip it and read to the actual data we care about.
-    int octets = numberOfThreeBitSectionsInCode(data);
+    // the fixed head (octcode, last edited, entity id) must lie within the edit; later lengths are checked as read
+    if (bytesToRead < 1) {
+        return false;
+    }
+    int octets = numberOfThreeBitSectionsInCode(data, bytesToRead);
+    if (octets < 0) {
+        return false;
+    }
     int bytesToReadOfOctcode = (int)bytesRequiredForCodeLength(octets);
+    if ((int64_t)bytesToReadOfOctcode + (int64_t)sizeof(quint64) + NUM_BYTES_RFC4122_UUID > (int64_t)bytesToRead) {
+        return false;
+    }
 
     // we don't actually do anything with this octcode...
     dataAt += bytesToReadOfOctcode;
@@ -3892,6 +3909,9 @@ bool EntityItemProperties::decodeEntityEditPacket(const unsigned char* data, int
     EntityPropertyFlags propertyFlags = encodedPropertyFlags;
     dataAt += propertyFlags.getEncodedLength();
     processedBytes += propertyFlags.getEncodedLength();
+    if (processedBytes > bytesToRead) {
+        return false;
+    }
 
     READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_SIMULATION_OWNER, QByteArray, setSimulationOwner);
     READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_PARENT_ID, QUuid, setParentID);
@@ -3922,8 +3942,12 @@ bool EntityItemProperties::decodeEntityEditPacket(const unsigned char* data, int
     READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_FRAME, bool, setFrame);
     READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_TRACK_ID, QUuid, setTrackID);
     READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_TRACK_OFFSET, float, setTrackOffset);
-    properties.getGrab().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
-    properties.getVehicle().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
+    if (!properties.getGrab().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+        return false;   // a field claims more than the edit holds
+    }
+    if (!properties.getVehicle().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+        return false;   // a field claims more than the edit holds
+    }
 
     // Physics
     READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_DENSITY, float, setDensity);
@@ -3976,7 +4000,9 @@ bool EntityItemProperties::decodeEntityEditPacket(const unsigned char* data, int
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_COMPOUND_SHAPE_URL, QString, setCompoundShapeURL);
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_COLOR, u8vec3Color, setColor);
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_ALPHA, float, setAlpha);
-        properties.getPulse().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
+        if (!properties.getPulse().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+            return false;   // a field claims more than the edit holds
+        }
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_TEXTURES, QString, setTextures);
 
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_MAX_PARTICLES, quint32, setMaxParticles);
@@ -4036,7 +4062,11 @@ bool EntityItemProperties::decodeEntityEditPacket(const unsigned char* data, int
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_GROUP_CULLED, bool, setGroupCulled);
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_BLENDSHAPE_COEFFICIENTS, QString, setBlendshapeCoefficients);
 
-        properties.getAnimation().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
+        if (!properties.getAnimation().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+
+            return false;   // a field claims more than the edit holds
+
+        }
     }
 
     if (properties.getType() == EntityTypes::Light) {
@@ -4050,7 +4080,9 @@ bool EntityItemProperties::decodeEntityEditPacket(const unsigned char* data, int
     }
 
     if (properties.getType() == EntityTypes::Text) {
-        properties.getPulse().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
+        if (!properties.getPulse().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+            return false;   // a field claims more than the edit holds
+        }
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_BILLBOARD_MODE, BillboardMode, setBillboardMode);
 
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_TEXT, QString, setText);
@@ -4074,12 +4106,26 @@ bool EntityItemProperties::decodeEntityEditPacket(const unsigned char* data, int
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_SHAPE_TYPE, ShapeType, setShapeType);
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_COMPOUND_SHAPE_URL, QString, setCompoundShapeURL);
 
-        properties.getKeyLight().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
-        properties.getAmbientLight().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
-        properties.getSkybox().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
-        properties.getHaze().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
-        properties.getBloom().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
-        properties.getToneMapping().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
+        if (!properties.getKeyLight().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+
+            return false;   // a field claims more than the edit holds
+
+        }
+        if (!properties.getAmbientLight().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+            return false;   // a field claims more than the edit holds
+        }
+        if (!properties.getSkybox().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+            return false;   // a field claims more than the edit holds
+        }
+        if (!properties.getHaze().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+            return false;   // a field claims more than the edit holds
+        }
+        if (!properties.getBloom().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+            return false;   // a field claims more than the edit holds
+        }
+        if (!properties.getToneMapping().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+            return false;   // a field claims more than the edit holds
+        }
 
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_FLYING_ALLOWED, bool, setFlyingAllowed);
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_GHOSTING_ALLOWED, bool, setGhostingAllowed);
@@ -4098,7 +4144,9 @@ bool EntityItemProperties::decodeEntityEditPacket(const unsigned char* data, int
     if (properties.getType() == EntityTypes::Web) {
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_COLOR, u8vec3Color, setColor);
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_ALPHA, float, setAlpha);
-        properties.getPulse().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
+        if (!properties.getPulse().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+            return false;   // a field claims more than the edit holds
+        }
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_BILLBOARD_MODE, BillboardMode, setBillboardMode);
 
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_SOURCE_URL, QString, setSourceUrl);
@@ -4158,7 +4206,9 @@ bool EntityItemProperties::decodeEntityEditPacket(const unsigned char* data, int
         properties.getType() == EntityTypes::Sphere) {
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_COLOR, u8vec3Color, setColor);
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_ALPHA, float, setAlpha);
-        properties.getPulse().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
+        if (!properties.getPulse().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+            return false;   // a field claims more than the edit holds
+        }
 
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_SHAPE, QString, setShape);
     }
@@ -4180,7 +4230,9 @@ bool EntityItemProperties::decodeEntityEditPacket(const unsigned char* data, int
     if (properties.getType() == EntityTypes::Image) {
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_COLOR, u8vec3Color, setColor);
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_ALPHA, float, setAlpha);
-        properties.getPulse().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
+        if (!properties.getPulse().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+            return false;   // a field claims more than the edit holds
+        }
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_BILLBOARD_MODE, BillboardMode, setBillboardMode);
 
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_IMAGE_URL, QString, setImageURL);
@@ -4193,7 +4245,9 @@ bool EntityItemProperties::decodeEntityEditPacket(const unsigned char* data, int
     if (properties.getType() == EntityTypes::Grid) {
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_COLOR, u8vec3Color, setColor);
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_ALPHA, float, setAlpha);
-        properties.getPulse().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
+        if (!properties.getPulse().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+            return false;   // a field claims more than the edit holds
+        }
 
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_GRID_FOLLOW_CAMERA, bool, setFollowCamera);
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_MAJOR_GRID_EVERY, uint32_t, setMajorGridEvery);
@@ -4210,7 +4264,9 @@ bool EntityItemProperties::decodeEntityEditPacket(const unsigned char* data, int
 
     if (properties.getType() == EntityTypes::Gizmo) {
         READ_ENTITY_PROPERTY_TO_PROPERTIES(PROP_GIZMO_TYPE, GizmoType, setGizmoType);
-        properties.getRing().decodeFromEditPacket(propertyFlags, dataAt, processedBytes);
+        if (!properties.getRing().decodeFromEditPacket(propertyFlags, dataAt, processedBytes, bytesToRead)) {
+            return false;   // a field claims more than the edit holds
+        }
     }
 
     return valid;
