@@ -199,8 +199,12 @@ bool OffscreenSurface::eventFilter(QObject* originalDestination, QEvent* event) 
 #if defined(Q_OS_ANDROID)
         case QEvent::TouchBegin:
         case QEvent::TouchUpdate:
-        case QEvent::TouchEnd: {
+        case QEvent::TouchEnd:
+        case QEvent::TouchCancel: {
             QTouchEvent *originalEvent = static_cast<QTouchEvent *>(event);
+            if (originalEvent->touchPoints().isEmpty()) {
+                break;
+            }
             QEvent::Type fakeMouseEventType = QEvent::None;
             Qt::MouseButton fakeMouseButton = Qt::LeftButton;
             Qt::MouseButtons fakeMouseButtons = Qt::NoButton;
@@ -210,10 +214,14 @@ bool OffscreenSurface::eventFilter(QObject* originalDestination, QEvent* event) 
                     fakeMouseButtons = Qt::LeftButton;
                     break;
                 case QEvent::TouchUpdate:
+                    // a move changes no button: Qt Quick's flicking (a panel's page) reads a move that names one as
+                    // something else, and the phone's panels never scrolled
                     fakeMouseEventType = QEvent::MouseMove;
+                    fakeMouseButton = Qt::NoButton;
                     fakeMouseButtons = Qt::LeftButton;
                     break;
                 case QEvent::TouchEnd:
+                case QEvent::TouchCancel:
                     fakeMouseEventType = QEvent::MouseButtonRelease;
                     fakeMouseButtons = Qt::NoButton;
                     break;
@@ -221,11 +229,26 @@ bool OffscreenSurface::eventFilter(QObject* originalDestination, QEvent* event) 
                     Q_UNREACHABLE();
             }
             // Same case as OffscreenUi.cpp::eventFilter: touch events are always being accepted so we now use mouse events and consider one touch, touchPoints()[0].
-            QMouseEvent fakeMouseEvent(fakeMouseEventType, originalEvent->touchPoints()[0].pos(), fakeMouseButton, fakeMouseButtons, Qt::NoModifier);
+            // Its window and screen positions are the finger's (the constructor without them takes the screen's from
+            // the cursor, which a phone hasn't got), and its time the touch's, which flicking measures speed by.
+            const QTouchEvent::TouchPoint& point = originalEvent->touchPoints()[0];
+            QMouseEvent fakeMouseEvent(fakeMouseEventType, point.pos(), point.pos(), point.screenPos(), fakeMouseButton,
+                                       fakeMouseButtons, Qt::NoModifier, Qt::MouseEventSynthesizedByApplication);
+            fakeMouseEvent.setTimestamp(originalEvent->timestamp());
             fakeMouseEvent.ignore();
             if (QCoreApplication::sendEvent(_sharedObject->getWindow(), &fakeMouseEvent)) {
-                /*qInfo() << __FUNCTION__ << "sent fake touch event:" << fakeMouseEvent.type()
-                        << "_quickWindow handled it... accepted:" << fakeMouseEvent.isAccepted();*/
+                // what took each press and release, and the first moves of each touch, while scrolling is checked
+                static int movesLogged = 0;
+                if (fakeMouseEventType != QEvent::MouseMove) {
+                    movesLogged = 0;
+                }
+                if (fakeMouseEventType != QEvent::MouseMove || movesLogged++ < 3) {
+                    QQuickItem* grabber = _sharedObject->getWindow()->mouseGrabberItem();
+                    qCDebug(qmlLogging) << "Touch as mouse:" << fakeMouseEventType << point.pos() << "accepted"
+                                        << fakeMouseEvent.isAccepted() << "grabber"
+                                        << (grabber ? grabber->metaObject()->className() : "none")
+                                        << (grabber ? grabber->objectName() : QString());
+                }
                 return fakeMouseEvent.isAccepted();
             }
             break;
