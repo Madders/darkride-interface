@@ -647,6 +647,13 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
             if (!mGamepadConnected) {
                 updateGamepadConnected();
             }
+            // Start opens the phone's menu, as the Back button does
+            if (event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_START) {
+                if (event.getAction() == KeyEvent.ACTION_UP) {
+                    openAndroidActivity("Home", false);
+                }
+                return true;
+            }
             if (event.getRepeatCount() == 0 && (event.getAction() == KeyEvent.ACTION_DOWN ||
                     event.getAction() == KeyEvent.ACTION_UP)) {
                 nativeGamepadButton(event.getKeyCode(), event.getAction() == KeyEvent.ACTION_DOWN);

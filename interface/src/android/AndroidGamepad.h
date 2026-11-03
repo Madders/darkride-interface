@@ -3,8 +3,8 @@
 //  interface/src/android
 //
 //  A game controller paired with the phone (Bluetooth or USB), as the desktop's SDL2 gamepad: the same "GamePad"
-//  device with the standard inputs and controllers/xbox.json, so it moves, turns and jumps the avatar as on the
-//  desktop and scripts find it as Controller.Hardware.GamePad. The app has no SDL2: InterfaceActivity hands the
+//  device with the standard inputs, so scripts find it as Controller.Hardware.GamePad, but its own mapping
+//  (controllers/android_gamepad.json) to move, look, jump and run as on a console. The app has no SDL2: InterfaceActivity hands the
 //  controller's sticks, triggers, hat and buttons over (Android's thread), and the device takes them up each update
 //  (the main thread). While one is connected the on-screen joystick is hidden.
 //

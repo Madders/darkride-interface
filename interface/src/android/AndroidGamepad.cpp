@@ -104,7 +104,9 @@ controller::Input::NamedVector AndroidGamepad::getAvailableInputs() const {
 }
 
 QString AndroidGamepad::getDefaultMappingConfig() const {
-    static const QString MAPPING_JSON = PathUtils::resourcesPath() + "/controllers/xbox.json";
+    // the phone's own: the right stick looks around, A goes up and B down, the left trigger runs (xbox.json is for
+    // the desktop and VR, where the triggers click the hands and the right stick only rises and sinks)
+    static const QString MAPPING_JSON = PathUtils::resourcesPath() + "/controllers/android_gamepad.json";
     return MAPPING_JSON;
 }
 

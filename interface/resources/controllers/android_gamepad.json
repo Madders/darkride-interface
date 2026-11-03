@@ -1,0 +1,33 @@
+{
+    "name": "Android GamePad to Actions",
+    "channels": [
+        { "from": "GamePad.LY", "when": "!Application.CameraIndependent", "filters": { "type": "deadZone", "min": 0.05 }, "to": "Actions.TranslateZ" },
+        { "from": "GamePad.LX", "when": "!Application.CameraIndependent", "filters": { "type": "deadZone", "min": 0.05 }, "to": "Actions.TranslateX" },
+
+        { "from": "GamePad.RX", "when": "!Application.CameraIndependent", "filters": { "type": "deadZone", "min": 0.05 }, "to": "Actions.Yaw" },
+        { "from": "GamePad.RY", "when": "!Application.CameraIndependent", "filters": { "type": "deadZone", "min": 0.05 }, "to": "Actions.Pitch" },
+
+        { "from": "GamePad.DU", "when": "!Application.CameraIndependent", "to": "Actions.Forward" },
+        { "from": "GamePad.DD", "when": "!Application.CameraIndependent", "to": "Actions.Backward" },
+        { "from": "GamePad.DL", "when": "!Application.CameraIndependent", "to": "Actions.StrafeLeft" },
+        { "from": "GamePad.DR", "when": "!Application.CameraIndependent", "to": "Actions.StrafeRight" },
+
+        { "from": "GamePad.A", "peek": true, "to": "Actions.VERTICAL_UP" },
+        { "from": "GamePad.B", "peek": true, "to": "Actions.VERTICAL_DOWN" },
+
+        { "from": "GamePad.LT", "filters": [ { "type": "hysteresis", "min": 0.4, "max": 0.5 } ], "to": "Actions.SPRINT" },
+        { "from": "GamePad.LS", "to": "Actions.SPRINT" },
+
+        { "from": "GamePad.Back", "to": "Actions.CycleCamera" },
+
+        { "from": "GamePad.A", "to": "Standard.A" },
+        { "from": "GamePad.B", "to": "Standard.B" },
+        { "from": "GamePad.X", "to": "Standard.X" },
+        { "from": "GamePad.Y", "to": "Standard.Y" },
+        { "from": "GamePad.LB", "to": "Standard.LB" },
+        { "from": "GamePad.RB", "to": "Standard.RB" },
+
+        { "from": [ "Standard.A", "Standard.X" ], "to": "Actions.UiNavSelect" },
+        { "from": [ "Standard.B", "Standard.Y" ], "to": "Actions.UiNavBack" }
+    ]
+}
