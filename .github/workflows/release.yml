@@ -59,16 +59,16 @@ jobs:
       - uses: actions/checkout@v4
 
       # The JavaScript guest (darkride-js.wasm, see CopyJavaScriptGuest.cmake) isn't in the repository. A PRODUCTION
-      # build stops without it, and the others would run every script on QtScript: take the one in Caitlyn's 1.1.1
+      # build stops without it, and the others would run every script on QtScript: take the one in Caitlyn's 1.1.3.1
       # beta Linux server, checked against the SHA-256 in its release notes, to where the build looks for it.
       - name: JavaScript guest
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tarball=darkride-server-linux-x64-1.1.1-beta.tar.gz
-          gh release download v1.1.1-beta -R caitlynmeeks/darkride-interface -p "$tarball" -D "$RUNNER_TEMP"
-          (cd "$RUNNER_TEMP" && echo "847729a0f586d57d835a36214d6b917c4206f09d7abe1da381cb84642c8e5a2c  $tarball" > guest.sha256             && { if command -v sha256sum > /dev/null; then sha256sum -c guest.sha256; else shasum -a 256 -c guest.sha256; fi; })
+          tarball=darkride-server-linux-x64-1.1.3.1-beta.tar.gz
+          gh release download v1.1.3.1-beta -R caitlynmeeks/darkride-interface -p "$tarball" -D "$RUNNER_TEMP"
+          (cd "$RUNNER_TEMP" && echo "b9690f65a2409236a505b0f002871dad8fd2faa51428f66ebb4a0d590a23e7db  $tarball" > guest.sha256             && { if command -v sha256sum > /dev/null; then sha256sum -c guest.sha256; else shasum -a 256 -c guest.sha256; fi; })
           mkdir -p tools/wasm-js/build
           (cd "$RUNNER_TEMP" && tar -xzf "$tarball" -O server.AppDir/usr/bin/resources/wasm/darkride-js.wasm) > tools/wasm-js/build/darkride-js.wasm
           ls -l tools/wasm-js/build/darkride-js.wasm
@@ -190,16 +190,16 @@ jobs:
       - uses: actions/checkout@v4
 
       # The JavaScript guest (darkride-js.wasm, see CopyJavaScriptGuest.cmake) isn't in the repository. A PRODUCTION
-      # build stops without it, and the others would run every script on QtScript: take the one in Caitlyn's 1.1.1
+      # build stops without it, and the others would run every script on QtScript: take the one in Caitlyn's 1.1.3.1
       # beta Linux server, checked against the SHA-256 in its release notes, to where the build looks for it.
       - name: JavaScript guest
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tarball=darkride-server-linux-x64-1.1.1-beta.tar.gz
-          gh release download v1.1.1-beta -R caitlynmeeks/darkride-interface -p "$tarball" -D "$RUNNER_TEMP"
-          (cd "$RUNNER_TEMP" && echo "847729a0f586d57d835a36214d6b917c4206f09d7abe1da381cb84642c8e5a2c  $tarball" > guest.sha256             && { if command -v sha256sum > /dev/null; then sha256sum -c guest.sha256; else shasum -a 256 -c guest.sha256; fi; })
+          tarball=darkride-server-linux-x64-1.1.3.1-beta.tar.gz
+          gh release download v1.1.3.1-beta -R caitlynmeeks/darkride-interface -p "$tarball" -D "$RUNNER_TEMP"
+          (cd "$RUNNER_TEMP" && echo "b9690f65a2409236a505b0f002871dad8fd2faa51428f66ebb4a0d590a23e7db  $tarball" > guest.sha256             && { if command -v sha256sum > /dev/null; then sha256sum -c guest.sha256; else shasum -a 256 -c guest.sha256; fi; })
           mkdir -p tools/wasm-js/build
           (cd "$RUNNER_TEMP" && tar -xzf "$tarball" -O server.AppDir/usr/bin/resources/wasm/darkride-js.wasm) > tools/wasm-js/build/darkride-js.wasm
           ls -l tools/wasm-js/build/darkride-js.wasm
@@ -299,16 +299,16 @@ jobs:
       - uses: actions/checkout@v4
 
       # The JavaScript guest (darkride-js.wasm, see CopyJavaScriptGuest.cmake) isn't in the repository. A PRODUCTION
-      # build stops without it, and the others would run every script on QtScript: take the one in Caitlyn's 1.1.1
+      # build stops without it, and the others would run every script on QtScript: take the one in Caitlyn's 1.1.3.1
       # beta Linux server, checked against the SHA-256 in its release notes, to where the build looks for it.
       - name: JavaScript guest
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tarball=darkride-server-linux-x64-1.1.1-beta.tar.gz
-          gh release download v1.1.1-beta -R caitlynmeeks/darkride-interface -p "$tarball" -D "$RUNNER_TEMP"
-          (cd "$RUNNER_TEMP" && echo "847729a0f586d57d835a36214d6b917c4206f09d7abe1da381cb84642c8e5a2c  $tarball" > guest.sha256             && { if command -v sha256sum > /dev/null; then sha256sum -c guest.sha256; else shasum -a 256 -c guest.sha256; fi; })
+          tarball=darkride-server-linux-x64-1.1.3.1-beta.tar.gz
+          gh release download v1.1.3.1-beta -R caitlynmeeks/darkride-interface -p "$tarball" -D "$RUNNER_TEMP"
+          (cd "$RUNNER_TEMP" && echo "b9690f65a2409236a505b0f002871dad8fd2faa51428f66ebb4a0d590a23e7db  $tarball" > guest.sha256             && { if command -v sha256sum > /dev/null; then sha256sum -c guest.sha256; else shasum -a 256 -c guest.sha256; fi; })
           mkdir -p tools/wasm-js/build
           (cd "$RUNNER_TEMP" && tar -xzf "$tarball" -O server.AppDir/usr/bin/resources/wasm/darkride-js.wasm) > tools/wasm-js/build/darkride-js.wasm
           ls -l tools/wasm-js/build/darkride-js.wasm
@@ -468,16 +468,16 @@ jobs:
       - uses: actions/checkout@v4
 
       # The JavaScript guest (darkride-js.wasm, see CopyJavaScriptGuest.cmake) isn't in the repository. A PRODUCTION
-      # build stops without it, and the others would run every script on QtScript: take the one in Caitlyn's 1.1.1
+      # build stops without it, and the others would run every script on QtScript: take the one in Caitlyn's 1.1.3.1
       # beta Linux server, checked against the SHA-256 in its release notes, to where the build looks for it.
       - name: JavaScript guest
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tarball=darkride-server-linux-x64-1.1.1-beta.tar.gz
-          gh release download v1.1.1-beta -R caitlynmeeks/darkride-interface -p "$tarball" -D "$RUNNER_TEMP"
-          (cd "$RUNNER_TEMP" && echo "847729a0f586d57d835a36214d6b917c4206f09d7abe1da381cb84642c8e5a2c  $tarball" > guest.sha256             && { if command -v sha256sum > /dev/null; then sha256sum -c guest.sha256; else shasum -a 256 -c guest.sha256; fi; })
+          tarball=darkride-server-linux-x64-1.1.3.1-beta.tar.gz
+          gh release download v1.1.3.1-beta -R caitlynmeeks/darkride-interface -p "$tarball" -D "$RUNNER_TEMP"
+          (cd "$RUNNER_TEMP" && echo "b9690f65a2409236a505b0f002871dad8fd2faa51428f66ebb4a0d590a23e7db  $tarball" > guest.sha256             && { if command -v sha256sum > /dev/null; then sha256sum -c guest.sha256; else shasum -a 256 -c guest.sha256; fi; })
           mkdir -p tools/wasm-js/build
           (cd "$RUNNER_TEMP" && tar -xzf "$tarball" -O server.AppDir/usr/bin/resources/wasm/darkride-js.wasm) > tools/wasm-js/build/darkride-js.wasm
           ls -l tools/wasm-js/build/darkride-js.wasm
