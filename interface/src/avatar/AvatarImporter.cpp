@@ -23,7 +23,7 @@
 #include <QJsonObject>
 #include <QNetworkReply>
 #include <QNetworkRequest>
-#include <QRegExp>
+#include <QRegularExpression>
 #include <QUrl>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -89,7 +89,7 @@ HFMModel::Pointer readModel(const QString& path) {
     const QFileInfo info(path);
     const QString suffix = info.suffix().toLower();
     const QUrl url = QUrl::fromLocalFile(info.absoluteFilePath());
-    const QVariantHash mapping;
+    const hifi::VariantMultiHash mapping;
     if (suffix == "fbx") {
         return FBXSerializer().read(data, mapping, url);
     }
@@ -142,7 +142,7 @@ QString credit(const VRMInfo& vrm, const QString& name) {
 
 QString avatarName(const QString& path) {
     QString name = QFileInfo(path).completeBaseName();
-    name.replace(QRegExp("[^A-Za-z0-9_-]+"), "_");
+    name.replace(QRegularExpression("[^A-Za-z0-9_-]+"), "_");
     return name.isEmpty() ? QString("avatar") : name;
 }
 
@@ -699,7 +699,7 @@ void AvatarImporter::importFile(const QString& path) {
         // as the client reads it when it's worn: glTF by the Assimp loader, which knows a VRM's bones, face and springs
         HFMModel::Pointer wornModel = import->model;
         if (isGltf && suffix != "vrm" && !data.isEmpty()) {
-            HFMModel::Pointer assimpModel = AssimpSerializer().read(data, QVariantHash(), QUrl::fromLocalFile(import->path));
+            HFMModel::Pointer assimpModel = AssimpSerializer().read(data, hifi::VariantMultiHash(), QUrl::fromLocalFile(import->path));
             if (assimpModel) {
                 wornModel = assimpModel;
             }

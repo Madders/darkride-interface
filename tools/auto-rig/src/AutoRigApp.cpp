@@ -24,7 +24,7 @@
 #include <QImage>
 #include <QJsonObject>
 #include <QPainter>
-#include <QRegExp>
+#include <QRegularExpression>
 #include <QUrl>
 
 #include <AssimpSerializer.h>
@@ -55,7 +55,7 @@ static HFMModel::Pointer readModel(const QString& path) {
     const QFileInfo info(path);
     const QString suffix = info.suffix().toLower();
     const QUrl url = QUrl::fromLocalFile(info.absoluteFilePath());
-    const QVariantHash mapping;
+    const hifi::VariantMultiHash mapping;
     if (suffix == "fbx") {
         return FBXSerializer().read(data, mapping, url);
     }
@@ -381,7 +381,7 @@ AutoRigApp::AutoRigApp(int argc, char* argv[]) : QCoreApplication(argc, argv) {
             return;
         }
         const QByteArray data = file.readAll();
-        HFMModel::Pointer model = isGltf ? AssimpSerializer().read(data, QVariantHash(), QUrl::fromLocalFile(path)) : readModel(path);
+        HFMModel::Pointer model = isGltf ? AssimpSerializer().read(data, hifi::VariantMultiHash(), QUrl::fromLocalFile(path)) : readModel(path);
         if (!model) {
             fprintf(stderr, "could not read %s\n", qPrintable(path));
             _returnCode = 2;
@@ -553,7 +553,7 @@ AutoRigApp::AutoRigApp(int argc, char* argv[]) : QCoreApplication(argc, argv) {
             return;
         }
         QString name = parser.isSet(nameOption) ? parser.value(nameOption) : QFileInfo(inputPath).completeBaseName();
-        name.replace(QRegExp("[^A-Za-z0-9_-]+"), "_");
+        name.replace(QRegularExpression("[^A-Za-z0-9_-]+"), "_");
         const autorig::WrittenAvatar written =
             autorig::writeAvatar(*model, body, result, inputPath, parser.value(outputOption), name,
                                  parser.isSet(flipVOption)   ? autorig::FlipV::Always
