@@ -69,7 +69,7 @@ Darkride needs Qt 5.15.2 for MSVC, with **Qt WebEngine** and **Qt Script**. [aqt
 
 ```cmd
 python -m pip install aqtinstall
-python -m aqt install-qt windows desktop 5.15.2 win64_msvc2019_64 -m qtwebengine qtscript qtwebglplugin -O C:\Qt
+python -m aqt install-qt windows desktop 5.15.2 win64_msvc2019_64 -m qtwebengine qtwebglplugin -O C:\Qt
 ```
 
 This installs Qt into `C:\Qt\5.15.2\msvc2019_64`, where the build finds it.

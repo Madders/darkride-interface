@@ -18,7 +18,7 @@ mkdir -p "$DEST/lib" "$DEST/plugins"
 cp "$BUILD_DIR/domain-server/domain-server" "$DEST/"
 cp -rL "$BUILD_DIR/domain-server/resources" "$DEST/"
 cp "$BUILD_DIR/assignment-client/assignment-client" "$DEST/"
-# The JavaScript guest, which the build puts beside the assignment client; without it scripts run on QtScript.
+# The JavaScript guest, which the build puts beside the assignment client; without it no script can run.
 mkdir -p "$DEST/resources/wasm"
 cp "$BUILD_DIR/assignment-client/resources/wasm/darkride-js.wasm" "$DEST/resources/wasm/"
 if [ -d "$BUILD_DIR/assignment-client/plugins" ]; then

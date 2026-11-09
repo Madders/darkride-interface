@@ -21,7 +21,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
         build-essential ninja-build cmake git curl ca-certificates zip unzip tar pkg-config \
         autoconf automake libtool python3 nodejs patchelf \
-        qtbase5-dev qtbase5-private-dev qtdeclarative5-dev qtscript5-dev qtmultimedia5-dev \
+        qtbase5-dev qtbase5-private-dev qtdeclarative5-dev qtmultimedia5-dev \
         libqt5websockets5-dev libqt5webchannel5-dev libqt5xmlpatterns5-dev libqt5svg5-dev \
         libssl-dev zlib1g-dev libminizip-dev libgl1-mesa-dev libxxf86vm-dev libxi-dev libxrandr-dev \
         libasound2-dev libpulse-dev libudev-dev \
