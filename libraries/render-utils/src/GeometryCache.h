@@ -15,6 +15,7 @@
 #include "model-networking/ModelCache.h"
 
 #include <array>
+#include <atomic>
 
 #include <QMap>
 #include <QRunnable>
@@ -45,13 +46,20 @@ typedef QPair<Vec3Pair, Vec4Pair> Vec3PairVec4Pair;
 typedef QPair<Vec4Pair, glm::vec4> Vec4PairVec4;
 typedef QPair<Vec4Pair, Vec4Pair> Vec4PairVec4Pair;
 
-inline uint qHash(const Vec2FloatPairPair& v, uint seed) {
+// Qt 6 hashes with size_t seeds and results; Qt 5 with uint (Qt 6 has a QHashSeed class of its own, hence the name)
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+using GeometryHashSeed = size_t;
+#else
+using GeometryHashSeed = uint;
+#endif
+
+inline GeometryHashSeed qHash(const Vec2FloatPairPair& v, GeometryHashSeed seed) {
     // multiply by prime numbers greater than the possible size
     return qHash(v.first.first.x + 5009 * v.first.first.y + 5011 * v.first.second +
         5021 * v.second.first.x + 5023 * v.second.first.y + 5039 * v.second.second);
 }
 
-inline uint qHash(const Vec2Pair& v, uint seed) {
+inline GeometryHashSeed qHash(const Vec2Pair& v, GeometryHashSeed seed) {
     // multiply by prime numbers greater than the possible size
     return qHash(v.first.x + 5009 * v.first.y + 5011 * v.second.x + 5021 * v.second.y, seed);
 }
@@ -171,6 +179,12 @@ public:
     void bindWebBrowserProgram(gpu::Batch& batch, bool transparent, bool forward, bool sideBySide);
     gpu::PipelinePointer getWebBrowserProgram(bool transparent, bool forward, bool sideBySide);
     static std::map<std::tuple<bool, bool, bool>, gpu::PipelinePointer> _webPipelines;
+    // A web-browser program compiles on the GPU thread the first time a pipeline using it is set, which for the VR
+    // screen's first show was ~7 ms inside the slow frame. Asked from any thread (vr's headset-entry warm-up), the
+    // next frame's WarmWebBrowserPipelines job sets the opaque and the transparent web-browser pipelines of the render method
+    // in effect with nothing drawn, so the compile happens then. takeWebBrowserWarmup gives the request to one job.
+    static void warmWebBrowserPrograms();
+    static bool takeWebBrowserWarmup();
 
     static void initializeShapePipelines();
     render::ShapePipelinePointer getShapePipelinePointer(bool transparent, bool unlit, bool forward,

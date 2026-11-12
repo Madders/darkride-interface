@@ -36,8 +36,7 @@
 #include <QtConcurrent/QtConcurrent>
 #include <QtCore/QThreadPool>
 #include <QtCore/QBuffer>
-#include <QtMultimedia/QAudioInput>
-#include <QtMultimedia/QAudioOutput>
+#include "AudioQtCompat.h"
 
 #include <shared/QtHelpers.h>
 #include <ThreadHelpers.h>
@@ -105,7 +104,7 @@ QList<HifiAudioDeviceInfo> getAvailableDevices(QAudio::Mode mode, const QString&
 
     // NOTE: availableDevices() clobbers the Qt internal device list
     Lock lock(_deviceMutex);
-    auto devices = QAudioDeviceInfo::availableDevices(mode);
+    auto devices = hifi::audio::availableDevices(mode);
 
     HifiAudioDeviceInfo defaultDesktopDevice;
     QList<HifiAudioDeviceInfo> newDevices;
@@ -114,16 +113,16 @@ QList<HifiAudioDeviceInfo> getAvailableDevices(QAudio::Mode mode, const QString&
         // https://forum.qt.io/topic/11343/get-the-list-of-available-audio-devices-in-linux
         #ifdef Q_OS_LINUX
             if (
-                !device.deviceName().startsWith("alsa_output.", Qt::CaseInsensitive) &&
-                !device.deviceName().startsWith("alsa_input.", Qt::CaseInsensitive) &&
-                !device.deviceName().startsWith("default", Qt::CaseInsensitive)
+                !hifi::audio::deviceName(device).startsWith("alsa_output.", Qt::CaseInsensitive) &&
+                !hifi::audio::deviceName(device).startsWith("alsa_input.", Qt::CaseInsensitive) &&
+                !hifi::audio::deviceName(device).startsWith("default", Qt::CaseInsensitive)
             ) {
                 continue;
             }
         #endif
 
         newDevices.push_back(HifiAudioDeviceInfo(device, false, mode));
-        if (device.deviceName() == defDeviceName.trimmed()) {
+        if (hifi::audio::deviceName(device) == defDeviceName.trimmed()) {
             defaultDesktopDevice = HifiAudioDeviceInfo(device, true, mode, HifiAudioDeviceInfo::desktop);
         }
     }
@@ -131,7 +130,7 @@ QList<HifiAudioDeviceInfo> getAvailableDevices(QAudio::Mode mode, const QString&
     if (defaultDesktopDevice.getDevice().isNull()) {
         if (devices.size() > 0) {
             qCDebug(audioclient) << __FUNCTION__ << "Default device not found in list:" << defDeviceName
-                << "Setting Default to: " << devices.first().deviceName();
+                << "Setting Default to: " << hifi::audio::deviceName(devices.first());
             newDevices.push_front(HifiAudioDeviceInfo(devices.first(), true, mode, HifiAudioDeviceInfo::desktop));
         } else {
             //current audio list is empty for some reason.
@@ -144,7 +143,7 @@ QList<HifiAudioDeviceInfo> getAvailableDevices(QAudio::Mode mode, const QString&
     if (!hmdName.isNull()) {
         HifiAudioDeviceInfo hmdDevice;
         foreach(auto device, newDevices) {
-            if (device.getDevice().deviceName() == hmdName) {
+            if (hifi::audio::deviceName(device.getDevice()) == hmdName) {
                 hmdDevice = HifiAudioDeviceInfo(device.getDevice(), true, mode, HifiAudioDeviceInfo::hmd);
                 break;
             }
@@ -333,6 +332,12 @@ AudioClient::AudioClient() {
     // avoid putting a lock in the device callback
     assert(_localSamplesAvailable.is_lock_free());
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // Qt 5's multimedia module registered QAudio::Mode by name; our Qt 6 stand-in (AudioQtCompat.h) does it here,
+    // for the device signals and the invokeMethod calls that carry it between threads
+    qRegisterMetaType<QAudio::Mode>("QAudio::Mode");
+#endif
+
     // deprecate legacy settings
     {
         Setting::Handle<int>::Deprecated("maxFramesOverDesired", InboundAudioStream::MAX_FRAMES_OVER_DESIRED);
@@ -520,13 +525,13 @@ HifiAudioDeviceInfo defaultAudioDeviceForMode(QAudio::Mode mode, const QString& 
         auto audioClient = DependencyManager::get<AudioClient>();
         bool headsetOn = audioClient ? audioClient->isHeadsetPluggedIn() : false;
         QStringList inputNames;
-        for (QAudioDeviceInfo inputDevice : QAudioDeviceInfo::availableDevices(mode)) {
-            inputNames << inputDevice.deviceName();
+        for (const hifi::audio::Device& inputDevice : hifi::audio::availableDevices(mode)) {
+            inputNames << hifi::audio::deviceName(inputDevice);
         }
         qCDebug(audioclient) << "Android audio inputs:" << inputNames << "AEC:" << aecEnabled << "headset:" << headsetOn;
-        for (QAudioDeviceInfo inputDevice : QAudioDeviceInfo::availableDevices(mode)) {
-            if (((headsetOn || !aecEnabled) && inputDevice.deviceName() == VOICE_RECOGNITION) ||
-                ((!headsetOn && aecEnabled) && inputDevice.deviceName() == VOICE_COMMUNICATION)) {
+        for (const hifi::audio::Device& inputDevice : hifi::audio::availableDevices(mode)) {
+            if (((headsetOn || !aecEnabled) && hifi::audio::deviceName(inputDevice) == VOICE_RECOGNITION) ||
+                ((!headsetOn && aecEnabled) && hifi::audio::deviceName(inputDevice) == VOICE_COMMUNICATION)) {
                 return HifiAudioDeviceInfo(inputDevice, false, QAudio::AudioInput);
             }
         }
@@ -539,15 +544,15 @@ QString defaultAudioDeviceName(QAudio::Mode mode) {
     QString deviceName;
 
 #ifdef __APPLE__
-    QAudioDeviceInfo device;
+    hifi::audio::Device device;
     if (mode == QAudio::AudioInput) {
-        device = QAudioDeviceInfo::defaultInputDevice();
+        device = hifi::audio::defaultDevice(QAudio::AudioInput);
     } else {
-        device = QAudioDeviceInfo::defaultOutputDevice();
+        device = hifi::audio::defaultDevice(QAudio::AudioOutput);
     }
     if (!device.isNull()) {
-        if (!device.deviceName().isEmpty()) {
-            deviceName = device.deviceName();
+        if (!hifi::audio::deviceName(device).isEmpty()) {
+            deviceName = hifi::audio::deviceName(device);
         }
     } else {
         qDebug() << "QT's Default device is null, reverting to platoform code";
@@ -664,7 +669,7 @@ bool AudioClient::getNamedAudioDeviceForModeExists(QAudio::Mode mode, const QStr
 
 
 // attempt to use the native sample rate and channel count
-bool nativeFormatForAudioDevice(const QAudioDeviceInfo& audioDevice, QAudioFormat& audioFormat) {
+bool nativeFormatForAudioDevice(const hifi::audio::Device& audioDevice, QAudioFormat& audioFormat) {
 
     audioFormat = audioDevice.preferredFormat();
 
@@ -675,10 +680,7 @@ bool nativeFormatForAudioDevice(const QAudioDeviceInfo& audioDevice, QAudioForma
         return false;
     }
 
-    audioFormat.setCodec("audio/pcm");
-    audioFormat.setSampleSize(16);
-    audioFormat.setSampleType(QAudioFormat::SignedInt);
-    audioFormat.setByteOrder(QAudioFormat::LittleEndian);
+    hifi::audio::setSignedInt16(audioFormat);
 
     if (!audioDevice.isFormatSupported(audioFormat)) {
         qCWarning(audioclient) << "The native format is" << audioFormat << "but isFormatSupported() failed.";
@@ -697,7 +699,7 @@ bool nativeFormatForAudioDevice(const QAudioDeviceInfo& audioDevice, QAudioForma
     return true;
 }
 
-bool adjustedFormatForAudioDevice(const QAudioDeviceInfo& audioDevice,
+bool adjustedFormatForAudioDevice(const hifi::audio::Device& audioDevice,
                                   const QAudioFormat& desiredAudioFormat,
                                   QAudioFormat& adjustedAudioFormat) {
 
@@ -813,10 +815,7 @@ void AudioClient::start() {
 
     // set up the desired audio format
     _desiredInputFormat.setSampleRate(AudioConstants::SAMPLE_RATE);
-    _desiredInputFormat.setSampleSize(16);
-    _desiredInputFormat.setCodec("audio/pcm");
-    _desiredInputFormat.setSampleType(QAudioFormat::SignedInt);
-    _desiredInputFormat.setByteOrder(QAudioFormat::LittleEndian);
+    hifi::audio::setSignedInt16(_desiredInputFormat);
     _desiredInputFormat.setChannelCount(1);
 
     _desiredOutputFormat = _desiredInputFormat;
@@ -1084,7 +1083,7 @@ bool AudioClient::switchAudioDevice(QAudio::Mode mode, const HifiAudioDeviceInfo
     auto device = deviceInfo;
     if (deviceInfo.getDevice().isNull()) {
         qCDebug(audioclient) << __FUNCTION__ << " switching to null device :" 
-            << deviceInfo.deviceName() << " : " << deviceInfo.getDevice().deviceName();
+            << deviceInfo.deviceName() << " : " << hifi::audio::deviceName(deviceInfo.getDevice());
     }
 
     if (mode == QAudio::AudioInput) {
@@ -1856,7 +1855,7 @@ static bool isBluetoothDevice(const QString& name) {
 // meter. Only on macOS for now; elsewhere every microphone stays open, as before.
 static bool releaseInputWhileMuted(const HifiAudioDeviceInfo& inputDeviceInfo) {
 #ifdef __APPLE__
-    return !inputDeviceInfo.getDevice().isNull() && isBluetoothDevice(inputDeviceInfo.getDevice().deviceName());
+    return !inputDeviceInfo.getDevice().isNull() && isBluetoothDevice(hifi::audio::deviceName(inputDeviceInfo.getDevice()));
 #else
     return false;
 #endif
@@ -1907,7 +1906,7 @@ void AudioClient::setAcousticEchoCancellation(bool enable, bool emitSignal) {
 
 bool AudioClient::setIsStereoInput(bool isStereoInput) {
     bool stereoInputChanged = false;
-    if (_isStereoInput != isStereoInput && _inputDeviceInfo.getDevice().supportedChannelCounts().contains(2)) {
+    if (_isStereoInput != isStereoInput && hifi::audio::supportsChannelCount(_inputDeviceInfo.getDevice(), 2)) {
         _isStereoInput = isStereoInput;
         stereoInputChanged = true;
 
@@ -1972,8 +1971,8 @@ void AudioClient::outputFormatChanged() {
 bool AudioClient::switchInputToAudioDevice(const HifiAudioDeviceInfo inputDeviceInfo, bool isShutdownRequest) {
     Q_ASSERT_X(QThread::currentThread() == thread(), Q_FUNC_INFO, "Function invoked on wrong thread");
 
-    qCDebug(audioclient) << __FUNCTION__ << "_inputDeviceInfo: [" << _inputDeviceInfo.deviceName() << ":" << _inputDeviceInfo.getDevice().deviceName() 
-        << "-- inputDeviceInfo:" << inputDeviceInfo.deviceName() << ":" << inputDeviceInfo.getDevice().deviceName() << "]";
+    qCDebug(audioclient) << __FUNCTION__ << "_inputDeviceInfo: [" << _inputDeviceInfo.deviceName() << ":" << hifi::audio::deviceName(_inputDeviceInfo.getDevice()) 
+        << "-- inputDeviceInfo:" << inputDeviceInfo.deviceName() << ":" << hifi::audio::deviceName(inputDeviceInfo.getDevice()) << "]";
     bool supportedFormat = false;
 
     // NOTE: device start() uses the Qt internal device list
@@ -1995,7 +1994,7 @@ bool AudioClient::switchInputToAudioDevice(const HifiAudioDeviceInfo inputDevice
         _audioInput = NULL;
         _numInputCallbackBytes = 0;
 
-        _inputDeviceInfo.setDevice(QAudioDeviceInfo());
+        _inputDeviceInfo.setDevice(hifi::audio::Device());
     }
 
     if (_dummyAudioInput) {
@@ -2033,7 +2032,7 @@ bool AudioClient::switchInputToAudioDevice(const HifiAudioDeviceInfo inputDevice
         (_noAudioInput || (_muted && releaseInputWhileMuted(inputDeviceInfo)));
 
     if (!inputDeviceInfo.getDevice().isNull() && !releaseMicrophone) {
-        qCDebug(audioclient) << "The audio input device" << inputDeviceInfo.deviceName() << ":" << inputDeviceInfo.getDevice().deviceName() << "is available.";
+        qCDebug(audioclient) << "The audio input device" << inputDeviceInfo.deviceName() << ":" << hifi::audio::deviceName(inputDeviceInfo.getDevice()) << "is available.";
       
         //do not update UI that we're changing devices if default or same device
         _inputDeviceInfo = inputDeviceInfo;
@@ -2048,8 +2047,8 @@ bool AudioClient::switchInputToAudioDevice(const HifiAudioDeviceInfo inputDevice
                 && _inputFormat.sampleRate() != _desiredInputFormat.sampleRate()) {
                 qCDebug(audioclient) << "Attemping to create a resampler for input format to network format.";
 
-                assert(_inputFormat.sampleSize() == 16);
-                assert(_desiredInputFormat.sampleSize() == 16);
+                assert(hifi::audio::sampleBits(_inputFormat) == 16);
+                assert(hifi::audio::sampleBits(_desiredInputFormat) == 16);
                 int channelCount = (_inputFormat.channelCount() == 2 && _desiredInputFormat.channelCount() == 2) ? 2 : 1;
 
                 _inputToNetworkResampler = new AudioSRC(_inputFormat.sampleRate(), _desiredInputFormat.sampleRate(), channelCount);
@@ -2064,9 +2063,16 @@ bool AudioClient::switchInputToAudioDevice(const HifiAudioDeviceInfo inputDevice
 
             // if the user wants stereo but this device can't provide then bail
             if (!_isStereoInput || _inputFormat.channelCount() == 2) {
-                _audioInput = new QAudioInput(_inputDeviceInfo.getDevice(), _inputFormat, this);
+                _audioInput = new hifi::audio::Source(_inputDeviceInfo.getDevice(), _inputFormat, this);
                 _numInputCallbackBytes = calculateNumberOfInputCallbackBytes(_inputFormat);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+                // Qt 6's buffer size is the whole buffer between the device and us, not Qt 5's size of one delivery:
+                // ours (5 to 10 ms) is no bigger than one delivery from the device, and what doesn't fit is lost. Qt's
+                // default (250 ms) holds any delivery, and handleMicAudioInput empties it on every readyRead, so it adds
+                // no delay.
+#else
                 _audioInput->setBufferSize(_numInputCallbackBytes);
+#endif
                 // different audio input devices may have different volumes
                 emit inputVolumeChanged(_audioInput->volume());
 
@@ -2077,7 +2083,7 @@ bool AudioClient::switchInputToAudioDevice(const HifiAudioDeviceInfo inputDevice
 #if defined(Q_OS_ANDROID)
                 if (_audioInput) {
                     _shouldRestartInputSetup = true;
-                    connect(_audioInput, &QAudioInput::stateChanged, this, &AudioClient::audioInputStateChanged);
+                    connect(_audioInput, &hifi::audio::Source::stateChanged, this, &AudioClient::audioInputStateChanged);
                 }
 #endif
                 _inputDevice = _audioInput->start();
@@ -2106,7 +2112,7 @@ bool AudioClient::switchInputToAudioDevice(const HifiAudioDeviceInfo inputDevice
             supportedFormat = true;
         } else {
             qCDebug(audioclient) << "Audio input device is not available, using dummy input.";
-            _inputDeviceInfo.setDevice(QAudioDeviceInfo());
+            _inputDeviceInfo.setDevice(hifi::audio::Device());
         }
         emit deviceChanged(QAudio::AudioInput, _inputDeviceInfo);
 
@@ -2229,8 +2235,8 @@ void AudioClient::noteAwakening() {
 bool AudioClient::switchOutputToAudioDevice(const HifiAudioDeviceInfo outputDeviceInfo, bool isShutdownRequest) {
     Q_ASSERT_X(QThread::currentThread() == thread(), Q_FUNC_INFO, "Function invoked on wrong thread");
     
-    qCDebug(audioclient) << __FUNCTION__ << "_outputdeviceInfo: [" << _outputDeviceInfo.deviceName() << ":" << _outputDeviceInfo.getDevice().deviceName()
-        << "-- outputDeviceInfo:" << outputDeviceInfo.deviceName() << ":" << outputDeviceInfo.getDevice().deviceName() << "]";
+    qCDebug(audioclient) << __FUNCTION__ << "_outputdeviceInfo: [" << _outputDeviceInfo.deviceName() << ":" << hifi::audio::deviceName(_outputDeviceInfo.getDevice())
+        << "-- outputDeviceInfo:" << outputDeviceInfo.deviceName() << ":" << hifi::audio::deviceName(outputDeviceInfo.getDevice()) << "]";
     bool supportedFormat = false;
 
     // NOTE: device start() uses the Qt internal device list
@@ -2282,7 +2288,7 @@ bool AudioClient::switchOutputToAudioDevice(const HifiAudioDeviceInfo outputDevi
         delete[] _localOutputMixBuffer;
         _localOutputMixBuffer = NULL;
         
-        _outputDeviceInfo.setDevice(QAudioDeviceInfo());
+        _outputDeviceInfo.setDevice(hifi::audio::Device());
     }
 
     // cleanup any resamplers
@@ -2307,7 +2313,7 @@ bool AudioClient::switchOutputToAudioDevice(const HifiAudioDeviceInfo outputDevi
     }
 
     if (!outputDeviceInfo.getDevice().isNull()) {
-        qCDebug(audioclient) << "The audio output device" << outputDeviceInfo.deviceName() << ":" << outputDeviceInfo.getDevice().deviceName() << "is available.";
+        qCDebug(audioclient) << "The audio output device" << outputDeviceInfo.deviceName() << ":" << hifi::audio::deviceName(outputDeviceInfo.getDevice()) << "is available.";
         
         //do not update UI that we're changing devices if default or same device
         _outputDeviceInfo = outputDeviceInfo;
@@ -2322,8 +2328,8 @@ bool AudioClient::switchOutputToAudioDevice(const HifiAudioDeviceInfo outputDevi
                 && _desiredOutputFormat.sampleRate() != _outputFormat.sampleRate()) {
                 qCDebug(audioclient) << "Attemping to create a resampler for network format to output format.";
 
-                assert(_desiredOutputFormat.sampleSize() == 16);
-                assert(_outputFormat.sampleSize() == 16);
+                assert(hifi::audio::sampleBits(_desiredOutputFormat) == 16);
+                assert(hifi::audio::sampleBits(_outputFormat) == 16);
 
                 _networkToOutputResampler = new AudioSRC(_desiredOutputFormat.sampleRate(), _outputFormat.sampleRate(), OUTPUT_CHANNEL_COUNT);
                 _localToOutputResampler = new AudioSRC(_desiredOutputFormat.sampleRate(), _outputFormat.sampleRate(), OUTPUT_CHANNEL_COUNT);
@@ -2367,16 +2373,23 @@ bool AudioClient::switchOutputToAudioDevice(const HifiAudioDeviceInfo outputDevi
 #endif
             if (!started) {
                 // setup our general output device for audio-mixer audio
-                _audioOutput = new QAudioOutput(_outputDeviceInfo.getDevice(), _outputFormat, this);
+                _audioOutput = new hifi::audio::Sink(_outputDeviceInfo.getDevice(), _outputFormat, this);
                 _audioOutput->setBufferSize(requestedSize);
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+                // Qt 6's sink has no notify(): the same once-a-second check from a timer the sink owns, so it goes with it
+                auto notifyTimer = new QTimer(_audioOutput);
+                connect(notifyTimer, &QTimer::timeout, this, &AudioClient::outputNotify);
+                notifyTimer->start(1000);
+#else
                 connect(_audioOutput, &QAudioOutput::notify, this, &AudioClient::outputNotify);
+#endif
 
                 // start the output device
                 _audioOutputIODevice.start();
                 _audioOutput->start(&_audioOutputIODevice);
 
-#if defined(Q_OS_ANDROID)
+#if defined(Q_OS_ANDROID) && QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
                 {
                     // the device takes a whole period at a time (40 ms with Qt's OpenSL output): the jitter buffer aims
                     // for at least that, and a couple of frames more, or every late packet leaves it short
@@ -2389,9 +2402,14 @@ bool AudioClient::switchOutputToAudioDevice(const HifiAudioDeviceInfo outputDevi
                 }
 #endif
                 // restrict device callback to _outputPeriod samples
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+                // Qt 6's sink reports no period: a device read is never more than the whole buffer
+                _outputPeriod = _audioOutput->bufferSize() / AudioConstants::SAMPLE_SIZE;
+#else
                 _outputPeriod = _audioOutput->periodSize() / AudioConstants::SAMPLE_SIZE;
                 // device callback may exceed reported period, so double it to avoid stutter
                 _outputPeriod *= 2;
+#endif
             }
 
             // initialize mix buffers
@@ -2404,7 +2422,13 @@ bool AudioClient::switchOutputToAudioDevice(const HifiAudioDeviceInfo outputDevi
 
             // local period should be at least twice the output period,
             // in case two device reads happen before more data can be read (worst case)
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+            // on Qt 6 the output period is already the whole buffer: not doubled, so local sounds react as fast as on
+            // Qt 5 (the stream's size is how far ahead they're queued)
+            int localPeriod = _outputPeriod;
+#else
             int localPeriod = _outputPeriod * 2;
+#endif
             // round up to an exact multiple of networkPeriod
             localPeriod = ((localPeriod + networkPeriod - 1) / networkPeriod) * networkPeriod;
             // this ensures lowest latency without stutter from underrun
@@ -2427,7 +2451,7 @@ bool AudioClient::switchOutputToAudioDevice(const HifiAudioDeviceInfo outputDevi
             localAudioLock.unlock();
 
             // setup a loopback audio output device
-            _loopbackAudioOutput = new QAudioOutput(outputDeviceInfo.getDevice(), _outputFormat, this);
+            _loopbackAudioOutput = new hifi::audio::Sink(outputDeviceInfo.getDevice(), _outputFormat, this);
 
             _timeSinceLastReceived.start();
 

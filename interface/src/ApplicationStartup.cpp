@@ -20,6 +20,7 @@
 #include <shared/NsightHelpers.h>
 #include <QtGui/QWindow>
 #include <gl/OffscreenGLCanvas.h>
+#include <gpu/Texture.h>
 #include "ApplicationServices.h"
 #include "ApplicationConstants.h"
 #include "ClientOptions.h"
@@ -33,7 +34,9 @@
 #include <QtGui/QDesktopServices>
 #include <QtQml/QQmlContext>
 #include <QtQuick/QQuickWindow>
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 #include <QtWidgets/QDesktopWidget>
+#endif
 #include <QFontDatabase>
 #include <gl/GLHelpers.h>
 #include <shared/QtHelpers.h>
@@ -91,9 +94,12 @@
 #include "scripting/RenderScriptingInterface.h"
 #if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
 #endif
+#include "ui/Panels.h"
 #include "ui/DialogsManager.h"
 #include "ui/LoginDialog.h"
+#include "ui/QuitCheck.h"
 #include "ui/Keyboard.h"
+#include "ui/VrScreen.h"
 #include "Util.h"
 #include <GPUIdent.h>
 #include <PickManager.h>
@@ -143,7 +149,11 @@ public:
         return staticInstance;
     }
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    bool nativeEventFilter(const QByteArray &eventType, void* msg, qintptr* result) Q_DECL_OVERRIDE {
+#else
     bool nativeEventFilter(const QByteArray &eventType, void* msg, long* result) Q_DECL_OVERRIDE {
+#endif
         if (eventType == "windows_generic_MSG") {
             MSG* message = (MSG*)msg;
 
@@ -369,7 +379,11 @@ const bool DEFAULT_BYPASS_SCRIPT_THROTTLING = false;
 
 Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bool runningMarkerExisted) :
     QApplication(argc, argv),
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    _window(new MainWindow(nullptr)),   // Qt 6 has no desktop widget; shutdown deletes the window itself
+#else
     _window(new MainWindow(desktop())),
+#endif
     _sessionRunTimer(startupTimer),
 #ifndef Q_OS_ANDROID
     _logger(new FileLogger(this)),
@@ -655,9 +669,32 @@ void Application::connectServices() {
     connect(&domainHandler, &DomainHandler::redirectToErrorDomainURL, &_domainSession, &DomainSession::goToErrorDomainURL);
     connect(&domainHandler, &DomainHandler::resetting, &_domainSession, &DomainSession::resettingDomain);
     connect(&_domainSession, &DomainSession::worldLoadingChanged, this, &Application::worldLoadingChanged);   // relayed likewise
-    connect(&_domainSession, &DomainSession::interstitialModeChanged, this, &Application::interstitialModeChanged);   // relayed: the Window scripting interface connects to Application in the essentials stage, before the session exists
+    connect(&_domainSession, &DomainSession::interstitialModeChanged, this, &Application::interstitialModeChanged);
+    // (the two relays above: the Window scripting interface connects to Application in the essentials stage, before the
+    // session exists)
+    connect(&_domainSession, &DomainSession::physicsEnabledChanged, this, [this](bool physicsEnabled) {
+        // entry 29 step 2a: the render tasks warm their programs while the loading screen is up, not while a world is
+        // presented. Keyed to the arrival gate itself (physics on = the world presented), since interstitialModeChanged
+        // fires only with the domain's interstitial setting or whole-world loading, so the pause never ran by default.
+        // The main view's jobs by their full paths: every view task carries a warm-up job (the second camera, the
+        // mirrors), and a bare name found one of those, which never runs (item 53's trace, 2026-11-08).
+        if (auto engine = getRenderEngine()) {
+            static const char* const WARM_UP_JOBS[] = {
+                "RenderMainView.DeferredForwardSwitch.RenderForwardTask.WarmForwardPipelines",
+                "RenderMainView.DeferredForwardSwitch.RenderDeferredTask.WarmDeferredPipelines" };
+            for (const char* name : WARM_UP_JOBS) {
+                if (auto config = dynamic_cast<render::Job::Config*>(engine->getConfiguration()->getConfig(name))) {
+                    config->setEnabled(!physicsEnabled);
+                }
+            }
+        }
+        // entry 33: the texture engine's loading boost (allocate and upload in turns, larger budgets) runs while the
+        // loading screen is up and stops the frame the world is presented; the engine's normal rule and caps are back
+        gpu::Texture::setTransferBoost(!physicsEnabled);
+    });
     connect(&domainHandler, &DomainHandler::connectedToDomain, &_display, &Display::updateWindowTitle);
     connect(&domainHandler, &DomainHandler::connectedToDomain, this, [] { StartupProfiler::instant("connected to a domain"); });
+    connect(&domainHandler, &DomainHandler::connectedToDomain, this, [this] { getRefreshRateManager().noteArrival(); });   // the governor's arrival grace (entry 28)
     connect(&domainHandler, &DomainHandler::disconnectedFromDomain, &_display, &Display::updateWindowTitle);
     connect(&domainHandler, &DomainHandler::disconnectedFromDomain, this, [this]() {
         auto entityScriptingInterface = DependencyManager::get<EntityScriptingInterface>();
@@ -982,7 +1019,8 @@ void Application::setupInterface() {
     StartupProfiler::phase("constructor: chat started");
     // Darkride chat (libraries/chat) follows the account from here: signed in to chat while it is signed in; and the
     // friends, for the requests waiting (the bar's People badge)
-    DependencyManager::get<ChatService>()->start();
+    // (with "keep me signed in" off, what chat kept here is someone's who chose not to be remembered: it goes first)
+    DependencyManager::get<ChatService>()->start(Setting::Handle<bool>(KEEP_ME_LOGGED_IN_SETTING_NAME, true).get());
     DependencyManager::get<FriendsService>()->start();
     // the requests asked more often while the app is in front
     DependencyManager::get<FriendsService>()->setInFront(applicationState() == Qt::ApplicationActive);
@@ -1034,6 +1072,8 @@ void Application::startEntityProcessing() {
     updateHeartbeat();
 
     connect(this, SIGNAL(aboutToQuit()), this, SLOT(onAboutToQuit()));
+    // the window's close button asks about what isn't saved first; a session's end never asks (ui/QuitCheck.h)
+    quitcheck::install();
 
     // FIXME -- I'm a little concerned about this.
     connect(myAvatar->getSkeletonModel().get(), &SkeletonModel::skeletonLoaded,
@@ -1554,9 +1594,13 @@ void Application::installOperators() {
     // was not made on a client script's thread (RenderableWebEntityItem.cpp)
     render::entities::WebEntityRenderer::setTrustedQmlUrls({ TabletScriptingInterface::QML, LOGIN_DIALOG.toString(),
                                                               AVATAR_INPUTS_BAR_QML.toString(), BUBBLE_ICON_QML.toString() });
-    render::entities::WebEntityRenderer::setAcquireWebSurfaceOperator([=](const QString& url, bool htmlContent, QSharedPointer<OffscreenQmlSurface>& webSurface, bool& cachedWebSurface) {
+    render::entities::WebEntityRenderer::setAcquireWebSurfaceOperator([=](const QString& url, bool htmlContent, bool appOwned, QSharedPointer<OffscreenQmlSurface>& webSurface, bool& cachedWebSurface) {
         bool isTablet = url == TabletScriptingInterface::QML;
-        if (htmlContent) {
+        if (!htmlContent && VrScreen::isPieceUrl(url)) {
+            // the VR screen's pieces: made ahead at headset entry and kept paused while hidden (a surface pool, ui/VrScreen.h)
+            webSurface = DependencyManager::get<VrScreen>()->takeSurface(url);
+            cachedWebSurface = false;
+        } else if (htmlContent) {
             webSurface = DependencyManager::get<OffscreenQmlSurfaceCache>()->acquire(render::entities::WebEntityRenderer::QML);
             cachedWebSurface = true;
             auto rootItemLoadedFunctor = [url, webSurface] {
@@ -1578,15 +1622,18 @@ void Application::installOperators() {
                     delete webSurface;
                 });
             });
-            auto rootItemLoadedFunctor = [webSurface, url, isTablet] {
-                Application::setupQmlSurface(webSurface->getSurfaceContext(), isTablet || url == LOGIN_DIALOG.toString() || url == AVATAR_INPUTS_BAR_QML.toString() ||
-                   url == BUBBLE_ICON_QML.toString());
+            // the app's objects in reach: only for the app's own QML, on a Web entity no world made
+            auto rootItemLoadedFunctor = [webSurface, url, isTablet, appOwned] {
+                Application::setupQmlSurface(webSurface->getSurfaceContext(), appOwned && (isTablet || url == LOGIN_DIALOG.toString() ||
+                   url == AVATAR_INPUTS_BAR_QML.toString() || url == BUBBLE_ICON_QML.toString() || Panels::isScreenSlotUrl(url)));
             };
             if (webSurface->getRootItem()) {
                 rootItemLoadedFunctor();
             } else {
                 QObject::connect(webSurface.data(), &hifi::qml::OffscreenSurface::rootContextCreated, rootItemLoadedFunctor);
             }
+            // the tablet in the hand: the app's own tablet only on a Web entity no world made
+            webSurface->setAppTablet(isTablet && appOwned);
             webSurface->load(url);
             cachedWebSurface = false;
         }
@@ -1597,6 +1644,18 @@ void Application::installOperators() {
         webSurface->setMaxFps(isTablet ? TABLET_FPS : DEFAULT_MAX_FPS);
     });
     render::entities::WebEntityRenderer::setReleaseWebSurfaceOperator([=](QSharedPointer<OffscreenQmlSurface>& webSurface, bool& cachedWebSurface, std::vector<QMetaObject::Connection>& connections) {
+        // the VR screen's pieces keep their surfaces, paused, for the next show (ui/VrScreen.h); the Web entity's own
+        // connections go, as for a cached surface, and the next renderer makes its own
+        auto vrScreen = DependencyManager::get<VrScreen>();
+        if (!cachedWebSurface && vrScreen && vrScreen->keepSurface(webSurface)) {
+            for (auto& connection : connections) {
+                QObject::disconnect(connection);
+            }
+            connections.clear();
+            webSurface.reset();
+            return;
+        }
+
         QQuickItem* rootItem = webSurface->getRootItem();
 
         // Fix for crash in QtWebEngineCore when rapidly switching domains

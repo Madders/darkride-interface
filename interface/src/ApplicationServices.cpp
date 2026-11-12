@@ -41,6 +41,9 @@
 #include <PathUtils.h>
 #include <PickManager.h>
 #include <PointerManager.h>
+#include <RealClicks.h>
+#include <WorldPicks.h>
+#include <ScriptCaller.h>
 #include <Preferences.h>
 #include <RecordingScriptingInterface.h>
 #include <ResourceManager.h>
@@ -89,9 +92,10 @@
 #include "scripting/DiskCacheScriptingInterface.h"
 #include "avatar/AvatarThumbnails.h"
 #include "ui/Skins.h"
-#include "ui/MetaverseRequests.h"
 #include "ui/PanelTheme.h"
+#include "ui/CodeEditor.h"
 #include "ui/Panels.h"
+#include "ui/VrScreen.h"
 #include "chat/FriendsScriptingInterface.h"
 #include "scripting/HMDScriptingInterface.h"
 #include "scripting/KeyboardScriptingInterface.h"
@@ -106,6 +110,8 @@
 #include "ui/StandAloneJSConsole.h"
 #include "ui/TabletScriptingInterface.h"
 #include "ui/ToolbarScriptingInterface.h"
+#include "make/MakeLink.h"
+#include "make/MakeDock.h"
 
 // the controller's state names (Application's state device reads them too)
 const QString STATE_IN_HMD = "InHMD";
@@ -224,6 +230,77 @@ void registerApplicationServices(int listenPort, const QString& defaultScriptsOv
     DependencyManager::set<AssetMappingsScriptingInterface>();
     DependencyManager::set<DomainConnectionModel>();
 
+    // security finding #54, with editor-ui: the tablet opens a world's page only within a short while after a real
+    // press on one of the world's entities (RealClicks). A real press (the desktop mouse, the app's lasers) reaches
+    // mousePressOnEntity on an unmarked thread; a press a world's script sends in (Entities.sendMousePressOnEntity)
+    // is emitted on that world's own thread, where ScriptCaller says so, and doesn't count; nor does a trigger of a
+    // pointer a world's script made (a mapping could drive it). The direct connection keeps the emitting thread, so
+    // the check reads it; the registry is thread-safe and touches no UI.
+    {
+        auto entities = DependencyManager::get<EntityScriptingInterface>();
+        QObject::connect(entities.data(), &EntityScriptingInterface::mousePressOnEntity, entities.data(),
+                         [](const EntityItemID& entityID, const PointerEvent& event) {
+            if (ScriptCaller::isWorld()) {
+                return;
+            }
+            auto pointers = DependencyManager::get<PointerManager>();
+            if (pointers && pointers->isWorldPointer(event.getID())) {
+                return;
+            }
+            RealClicks::note(entityID);
+        }, Qt::DirectConnection);
+        RealClicks::setOwnershipCheck([](const QUuid& entityID) {
+            auto entities = DependencyManager::get<EntityScriptingInterface>();
+            return entities && entities->worldMayUse(entityID);
+        });
+        // What a world's script reads through its own picks and pointers (WorldPicks): asked on the script's
+        // thread, where forWorldRead answers for the calling world. Set here, before any script engine starts. An
+        // id known to be an entity's (a pick hit it) that is no longer in the tree is not readable; an id that is
+        // no entity's is left to the pick.
+        WorldPicks::setReadCheck([](const QUuid& entityID, bool isEntity) {
+            auto entities = DependencyManager::get<EntityScriptingInterface>();
+            if (!entities) {
+                return false;
+            }
+            if (isEntity) {
+                auto tree = entities->getEntityTree();
+                EntityItemPointer entity;
+                if (tree) {
+                    tree->withReadLock([&] { entity = tree->findEntityByEntityItemID(EntityItemID(entityID)); });
+                }
+                if (!entity) {
+                    return false;
+                }
+            }
+            return entityID.isNull() || !entities->forWorldRead(entityID).isNull();
+        });
+        // What a pick made by a world's script passes through (WorldPicks::castPastHidden): the app's and the
+        // visitor's own local entities. Asked on the main thread, so by the entity; one that can't be found is hidden.
+        WorldPicks::setHiddenCheck([](const QUuid& entityID) {
+            auto entities = DependencyManager::get<EntityScriptingInterface>();
+            auto tree = entities ? entities->getEntityTree() : EntityTreePointer();
+            if (!tree) {
+                return true;
+            }
+            EntityItemPointer entity;
+            tree->withReadLock([&] { entity = tree->findEntityByEntityItemID(EntityItemID(entityID)); });
+            return !entity || (entity->isLocalEntity() && entity->getLocalOwner() != entity::LocalOwner::WORLD);
+        });
+        // A pointer a world's script made delivers its hover and trigger events only into the world's own entities
+        // (Pointer::worldTarget): a domain entity, or one a world's script made. Asked on the main thread, so by the
+        // entity itself, not by the caller; an id that isn't an entity is not the world's.
+        Pointer::setWorldTargetCheck([](const QUuid& entityID) {
+            auto entities = DependencyManager::get<EntityScriptingInterface>();
+            auto tree = entities ? entities->getEntityTree() : EntityTreePointer();
+            if (!tree || entityID.isNull()) {
+                return false;
+            }
+            EntityItemPointer entity;
+            tree->withReadLock([&] { entity = tree->findEntityByEntityItemID(EntityItemID(entityID)); });
+            return entity && entity->isMadeByWorld();
+        });
+    }
+
 
     // Speech recognition where the platform has it; discoverability (the metaverse's where-are-you); Darkride chat and the
 // account's friends; the scene API; the
@@ -262,6 +339,8 @@ void registerApplicationServices(int listenPort, const QString& defaultScriptsOv
     // Bookmarks and snapshots, the resource manager, selection, the editor and its impostor baker, text to speech,
     // chat, the disk cache API.
     DependencyManager::set<AvatarBookmarks>();
+    // Make's link to the builder's Claude Code: nothing listens or runs until the person connects
+    DependencyManager::set<MakeLink>();
     DependencyManager::set<LocationBookmarks>();
     DependencyManager::set<Snapshot>();
     DependencyManager::set<ResourceManager>();
@@ -272,11 +351,13 @@ void registerApplicationServices(int listenPort, const QString& defaultScriptsOv
     DependencyManager::set<TTSScriptingInterface>();
     DependencyManager::set<ChatScriptingInterface>();
     DependencyManager::set<DiskCacheScriptingInterface>();
-    DependencyManager::set<MetaverseRequests>();   // the QML panels' metaverse API calls
     DependencyManager::set<AvatarThumbnails>();    // the QML panels' avatar pictures
     DependencyManager::set<PanelTheme>();          // the QML panels' colour scheme
     DependencyManager::set<Skins>();               // skins (ui/Skins.h), put on once the main window exists
     DependencyManager::set<Panels>();              // the window's panels by name (ui/Panels.h)
+    DependencyManager::set<CodeEditor>();          // the Code panel's document (ui/CodeEditor.h), after Build mode's
+    DependencyManager::set<MakeDock>();            // the Make dock's one object (make/MakeDock.h), after MakeLink's
+    DependencyManager::set<VrScreen>();            // the VR screen's headset side (ui/VrScreen.h)
     PanelTheme::registerWithQml();
 
 

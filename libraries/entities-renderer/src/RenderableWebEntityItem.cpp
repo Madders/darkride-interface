@@ -11,7 +11,11 @@
 
 #include <QtCore/QTimer>
 #include <QtGui/QOpenGLContext>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#include <QtGui/QPointingDevice>
+#else
 #include <QtGui/QTouchDevice>
+#endif
 #include <QtQuick/QQuickItem>
 #include <QtQuick/QQuickWindow>
 #include <QtQml/QQmlContext>
@@ -35,7 +39,7 @@ using namespace render::entities;
 const QString WebEntityRenderer::QML = "Web3DSurface.qml";
 const char* WebEntityRenderer::URL_PROPERTY = "url";
 
-std::function<void(QString, bool, QSharedPointer<OffscreenQmlSurface>&, bool&)> WebEntityRenderer::_acquireWebSurfaceOperator = nullptr;
+std::function<void(QString, bool, bool, QSharedPointer<OffscreenQmlSurface>&, bool&)> WebEntityRenderer::_acquireWebSurfaceOperator = nullptr;
 std::function<void(QSharedPointer<OffscreenQmlSurface>&, bool&, std::vector<QMetaObject::Connection>&)> WebEntityRenderer::_releaseWebSurfaceOperator = nullptr;
 
 static int MAX_WINDOW_SIZE = 4096;
@@ -49,9 +53,28 @@ static uint64_t MAX_NO_RENDER_INTERVAL = 30 * USECS_PER_SECOND;
 static std::atomic<uint32_t> _currentWebCount(0);
 static const uint32_t MAX_CONCURRENT_WEB_VIEWS = 20;
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+// Qt 6: a pointing device is made with its properties, once the application exists (it registers itself)
+static OffscreenTouchDevice& touchDevice() {
+    static QPointingDevice* device = new QPointingDevice("WebEntityRendererTouchDevice", 0, QInputDevice::DeviceType::TouchScreen,
+                                                        QPointingDevice::PointerType::Finger, QInputDevice::Capability::Position, 4, 0);
+    return *device;
+}
+#else
 static QTouchDevice _touchDevice;
+static QTouchDevice& touchDevice() { return _touchDevice; }
+#endif
 
 QStringList WebEntityRenderer::_trustedQmlUrls;
+QSet<QUuid> WebEntityRenderer::_appSurfaces;
+
+void WebEntityRenderer::setAppSurface(const QUuid& entityID, bool appSurface) {
+    if (appSurface) {
+        _appSurfaces.insert(entityID);
+    } else {
+        _appSurfaces.remove(entityID);
+    }
+}
 
 // a web page's address: what a Web entity that is not the app's own may show
 static bool isWebPageUrl(const QString& urlString) {
@@ -86,10 +109,12 @@ WebEntityRenderer::ContentType WebEntityRenderer::getContentType(const QString& 
 WebEntityRenderer::WebEntityRenderer(const EntityItemPointer& entity) : Parent(entity) {
     static std::once_flag once;
     std::call_once(once, [&]{
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         _touchDevice.setCapabilities(QTouchDevice::Position);
         _touchDevice.setType(QTouchDevice::TouchScreen);
         _touchDevice.setName("WebEntityRendererTouchDevice");
         _touchDevice.setMaximumTouchPoints(4);
+#endif
     });
     _geometryId = DependencyManager::get<GeometryCache>()->allocateID();
 
@@ -97,7 +122,13 @@ WebEntityRenderer::WebEntityRenderer(const EntityItemPointer& entity) : Parent(e
     _texture->setSource(__FUNCTION__);
 
     _contentType = ContentType::HtmlContent;
-    buildWebSurface(entity, "");
+    // The app's own QML surfaces (the VR screen's pieces, listed by setAppSurface before their renderer is made) get theirs
+    // at the first update: a placeholder web view made here for them was only thrown away there, and at the VR screen's
+    // first show (an empty web-view cache) it made two new web views, 2.6 ms each on the main thread, plus the empty
+    // address's "Invalid empty URL" at every show
+    if (!_appSurfaces.contains(entity->getID())) {
+        buildWebSurface(entity, "");
+    }
 
     _timer.setInterval(MSECS_PER_SECOND);
     connect(&_timer, &QTimer::timeout, this, &WebEntityRenderer::onTimeout);
@@ -171,8 +202,9 @@ void WebEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& scene
         // the local ones it makes from C++ for its own QML surfaces (the login dialog, the avatar inputs bar, the
         // bubble icon, listed by the app at start). Every other Web entity, a world's, another avatar's, or a local
         // one a world's entity script made, shows a web page (http, https, data, about) or nothing: not QML, the
-        // app's own UI language with the app's objects in reach, and not a page from the visitor's own files.
-        const bool trusted = entity->isLocalEntity() &&
+        // app's own UI language with the app's objects in reach, and not a page from the visitor's own files. QML only
+        // on an entity the app made: only the app may show its own interface.
+        const bool trusted = entity->isLocalEntity() && !entity->isMadeByWorld() &&
             (entity->getLocalSafeContext() || _trustedQmlUrls.contains(newSourceURL));
         const bool refused = !trusted && newContentType != ContentType::NoContent && !isWebPageUrl(newSourceURL);
         if (refused) {
@@ -260,7 +292,11 @@ void WebEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& scene
                 {
                     auto contextPosition = entity->getWorldPosition();
                     if (_contextPosition != contextPosition) {
-                        _webSurface->getSurfaceContext()->setContextProperty("globalPosition", vec3toVariant(contextPosition));
+                        // not on the app's own surfaces: nothing there reads it, and a surface carried on a ride would
+                        // write it every frame and sync every frame (performance, the VR screen's timing run)
+                        if (_countedWebView) {
+                            _webSurface->getSurfaceContext()->setContextProperty("globalPosition", vec3toVariant(contextPosition));
+                        }
                         _contextPosition = contextPosition;
                     }
                 }
@@ -364,16 +400,21 @@ void WebEntityRenderer::doRender(RenderArgs* args) {
 
 void WebEntityRenderer::buildWebSurface(const EntityItemPointer& entity, const QString& newSourceURL) {
     
+    const bool appSurface = _appSurfaces.contains(entity->getID());
     auto entityTreeRenderer = DependencyManager::get<EntityTreeRenderer>();
-    if (entityTreeRenderer->getDisableWebEntities()) return;
+    if (!appSurface && entityTreeRenderer->getDisableWebEntities()) return;
 
-    if (_currentWebCount >= MAX_CONCURRENT_WEB_VIEWS) {
+    if (!appSurface && _currentWebCount >= MAX_CONCURRENT_WEB_VIEWS) {
         qWarning() << "Too many concurrent web views to create new view";
         return;
     }
 
-    ++_currentWebCount;
-    WebEntityRenderer::acquireWebSurface(newSourceURL, _contentType == ContentType::HtmlContent, _webSurface, _cachedWebSurface);
+    _countedWebView = !appSurface;
+    if (_countedWebView) {
+        ++_currentWebCount;
+    }
+    const bool appOwned = entity->isLocalEntity() && !entity->isMadeByWorld();
+    WebEntityRenderer::acquireWebSurface(newSourceURL, _contentType == ContentType::HtmlContent, appOwned, _webSurface, _cachedWebSurface);
     _fadeStartTime = usecTimestampNow();
     _webSurface->resume();
 
@@ -402,7 +443,10 @@ void WebEntityRenderer::destroyWebSurface() {
         _contentType = ContentType::NoContent;
 
         if (webSurface) {
-            --_currentWebCount;
+            if (_countedWebView) {
+                --_currentWebCount;
+                _countedWebView = false;
+            }
             WebEntityRenderer::releaseWebSurface(webSurface, _cachedWebSurface, _connections);
         }
     });
@@ -431,7 +475,7 @@ void WebEntityRenderer::hoverEnterEntity(const PointerEvent& event) {
         if (_webSurface) {
             PointerEvent webEvent = event;
             webEvent.setPos2D(event.getPos2D() * (METERS_TO_INCHES * _dpi));
-            _webSurface->hoverBeginEvent(webEvent, _touchDevice);
+            _webSurface->hoverBeginEvent(webEvent, touchDevice());
         }
     });
 }
@@ -451,7 +495,7 @@ void WebEntityRenderer::hoverLeaveEntity(const PointerEvent& event) {
         if (_webSurface) {
             PointerEvent webEvent = event;
             webEvent.setPos2D(event.getPos2D() * (METERS_TO_INCHES * _dpi));
-            _webSurface->hoverEndEvent(webEvent, _touchDevice);
+            _webSurface->hoverEndEvent(webEvent, touchDevice());
         }
     });
 }
@@ -473,7 +517,7 @@ void WebEntityRenderer::handlePointerEvent(const PointerEvent& event) {
 void WebEntityRenderer::handlePointerEventAsTouch(const PointerEvent& event) {
     PointerEvent webEvent = event;
     webEvent.setPos2D(event.getPos2D() * (METERS_TO_INCHES * _dpi));
-    _webSurface->handlePointerEvent(webEvent, _touchDevice);
+    _webSurface->handlePointerEvent(webEvent, touchDevice());
 }
 
 void WebEntityRenderer::handlePointerEventAsMouse(const PointerEvent& event) {
@@ -511,7 +555,13 @@ void WebEntityRenderer::handlePointerEventAsMouse(const PointerEvent& event) {
             return;
     }
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // as the surface's own mouse device, never as the real mouse (OffscreenQmlSurface::mouseDevice)
+    QMouseEvent mouseEvent(type, windowPoint, windowPoint, windowPoint, button, buttons, event.getKeyboardModifiers(),
+                           _webSurface->mouseDevice());
+#else
     QMouseEvent mouseEvent(type, windowPoint, windowPoint, windowPoint, button, buttons, event.getKeyboardModifiers());
+#endif
     QCoreApplication::sendEvent(_webSurface->getWindow(), &mouseEvent);
 }
 

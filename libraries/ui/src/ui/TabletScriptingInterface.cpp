@@ -8,15 +8,24 @@
 
 #include "TabletScriptingInterface.h"
 
+#include <QtCore/QCoreApplication>
+#include <QtCore/QDateTime>
 #include <QtCore/QThread>
+
+#include <chrono>
+#include <mutex>
+#include <set>
 #include <QtQml/QQmlProperty>
 
+#include <shared/GlobalAppProperties.h>
 #include <shared/QtHelpers.h>
 #include <shared/LocalFileAccessGate.h>
 #include <PathUtils.h>
 #include <DependencyManager.h>
 #include <AccountManager.h>
 #include <RegisteredMetaTypes.h>
+#include <ScriptCaller.h>
+#include <RealClicks.h>
 
 #include "../QmlWindowClass.h"
 #include "../OffscreenUi.h"
@@ -434,7 +443,7 @@ bool TabletProxy::isMessageDialogOpen() {
     }
 
     QVariant result;
-    QMetaObject::invokeMethod(_qmlTabletRoot, "isDialogOpen",Qt::DirectConnection,
+    QMetaObject::invokeMethod(_qmlTabletRoot.data(), "isDialogOpen",Qt::DirectConnection,
         Q_RETURN_ARG(QVariant, result));
     return result.toBool();
 }
@@ -449,7 +458,7 @@ void TabletProxy::closeDialog() {
         return;
     }
 
-    QMetaObject::invokeMethod(_qmlTabletRoot, "closeDialog");
+    QMetaObject::invokeMethod(_qmlTabletRoot.data(), "closeDialog");
 }
 
 void TabletProxy::emitWebEvent(const QVariant& msg) {
@@ -498,14 +507,31 @@ void TabletProxy::setQmlTabletRoot(OffscreenQmlSurface* qmlOffscreenSurface) {
         return;
     }
 
+    // the surface before this one no longer speaks for the tablet
+    if (_qmlOffscreenSurface && _qmlOffscreenSurface != qmlOffscreenSurface) {
+        QObject::disconnect(_qmlOffscreenSurface.data(), nullptr, this, nullptr);
+        if (_qmlTabletRoot) {
+            QObject::disconnect(_qmlTabletRoot.data(), nullptr, this, nullptr);
+        }
+    }
+
     _qmlOffscreenSurface = qmlOffscreenSurface;
     _qmlTabletRoot = qmlOffscreenSurface ? qmlOffscreenSurface->getRootItem() : nullptr;
     if (_qmlTabletRoot && _qmlOffscreenSurface) {
-        QObject::connect(_qmlOffscreenSurface, SIGNAL(webEventReceived(QVariant)), this, SLOT(emitWebEvent(QVariant)));
-        QObject::connect(_qmlTabletRoot, SIGNAL(screenChanged(QVariant, QVariant)), this, SIGNAL(screenChanged(QVariant, QVariant)));
+        // the root never outlives its surface here: when the surface goes (the tablet in the hand is put away), the
+        // tablet has no root until the next one registers
+        // (an earlier surface's connection is dropped above when another registers: this one is the tablet's own)
+        connect(_qmlOffscreenSurface.data(), &QObject::destroyed, this, [this] {
+            _qmlOffscreenSurface = nullptr;
+            _qmlTabletRoot = nullptr;
+            _state = State::Uninitialized;
+            _currentPathLoaded = "";
+        });
+        QObject::connect(_qmlOffscreenSurface.data(), SIGNAL(webEventReceived(QVariant)), this, SLOT(emitWebEvent(QVariant)));
+        QObject::connect(_qmlTabletRoot.data(), SIGNAL(screenChanged(QVariant, QVariant)), this, SIGNAL(screenChanged(QVariant, QVariant)));
 
         // forward qml surface events to interface js
-        connect(_qmlOffscreenSurface, &OffscreenQmlSurface::fromQml, [this](QVariant message) {
+        connect(_qmlOffscreenSurface.data(), &OffscreenQmlSurface::fromQml, this, [this](QVariant message) {
             if (message.canConvert<QJSValue>()) {
                 emit fromQml(qvariant_cast<QJSValue>(message).toVariant());
             } else if (message.canConvert<QString>()) {
@@ -516,19 +542,19 @@ void TabletProxy::setQmlTabletRoot(OffscreenQmlSurface* qmlOffscreenSurface) {
         });
 
         if (_toolbarMode) {
-            QMetaObject::invokeMethod(_qmlTabletRoot, "loadSource", Q_ARG(const QVariant&, QVariant(TABLET_HOME_SOURCE_URL)));
+            QMetaObject::invokeMethod(_qmlTabletRoot.data(), "loadSource", Q_ARG(const QVariant&, QVariant(TABLET_HOME_SOURCE_URL)));
         }
 
         // force to the tablet to go to the homescreen
         loadHomeScreen(true);
 
-        QMetaObject::invokeMethod(_qmlTabletRoot, "setUsername", Q_ARG(const QVariant&, QVariant(getUsername())));
+        QMetaObject::invokeMethod(_qmlTabletRoot.data(), "setUsername", Q_ARG(const QVariant&, QVariant(getUsername())));
 
         // hook up username changed signal.
         auto accountManager = DependencyManager::get<AccountManager>();
         QObject::connect(accountManager.data(), &AccountManager::profileChanged, [this]() {
             if (_qmlTabletRoot) {
-                QMetaObject::invokeMethod(_qmlTabletRoot, "setUsername", Q_ARG(const QVariant&, QVariant(getUsername())));
+                QMetaObject::invokeMethod(_qmlTabletRoot.data(), "setUsername", Q_ARG(const QVariant&, QVariant(getUsername())));
             }
         });
 
@@ -538,18 +564,21 @@ void TabletProxy::setQmlTabletRoot(OffscreenQmlSurface* qmlOffscreenSurface) {
             } else if (_initialPath.second == State::Web) {
                 QVariant webUrl = _initialPath.first;
                 QVariant scriptUrl = _initialWebPathParams.first;
-                gotoWebScreen(webUrl.toString(), scriptUrl.toString(), _initialWebPathParams.second);
+                // straight to the load (not gotoWebScreen: this thread is nobody's world), keeping the page's kind
+                loadHTMLSourceOnTopImpl(webUrl.toString(), scriptUrl.toString(), _initialWebPathParams.second,
+                                        hifi::scripting::isLocalAccessSafeThread(), _initialWorldPage);
             }
             _initialScreen = false;
             _initialPath.first = "";
             _initialPath.second = State::Uninitialized;
             _initialWebPathParams.first = "";
             _initialWebPathParams.second = false;
+            _initialWorldPage = false;
         }
 
         if (_showRunningScripts) {
             //show Tablet. Make sure, setShown implemented in TabletRoot.qml
-            QMetaObject::invokeMethod(_qmlTabletRoot, "setShown", Q_ARG(const QVariant&, QVariant(true)));
+            QMetaObject::invokeMethod(_qmlTabletRoot.data(), "setShown", Q_ARG(const QVariant&, QVariant(true)));
         }
     } else {
         _state = State::Uninitialized;
@@ -636,7 +665,10 @@ void TabletProxy::loadQMLOnTop(const QVariant& path) {
     loadQMLOnTopImpl(path, localSafeContext);
 }
 
-void TabletProxy::returnToPreviousAppImpl(bool localSafeContext) {
+void TabletProxy::returnToPreviousAppImpl(bool localSafeContext, bool fromWorld) {
+    if (fromWorld && !worldMayLoadPage()) {
+        return;
+    }
     if (QThread::currentThread() != thread()) {
         qCWarning(uiLogging) << __FUNCTION__ << "may not be called directly by scripts";
         return;
@@ -655,7 +687,9 @@ void TabletProxy::returnToPreviousAppImpl(bool localSafeContext) {
             hifi::scripting::setLocalAccessSafeThread(true);
         }
         QMetaObject::invokeMethod(root, "returnToPreviousApp");
-        QMetaObject::invokeMethod(root, "setShown", Q_ARG(const QVariant&, QVariant(true)));
+        if (!(fromWorld && QCoreApplication::instance()->property(hifi::properties::HMD).toBool())) {
+            QMetaObject::invokeMethod(root, "setShown", Q_ARG(const QVariant&, QVariant(true)));
+        }
         hifi::scripting::setLocalAccessSafeThread(false);
     } else {
         qCDebug(uiLogging) << "tablet cannot load QML because _qmlTabletRoot is null";
@@ -664,13 +698,14 @@ void TabletProxy::returnToPreviousAppImpl(bool localSafeContext) {
 
 void TabletProxy::returnToPreviousApp() {
     bool localSafeContext = hifi::scripting::isLocalAccessSafeThread();
+    const bool fromWorld = ScriptCaller::isWorld();   // read on the calling thread, before any hop (as worldPageAllowed)
     qDebug() << "TabletProxy::returnToPreviousApp -> localSafeContext: " << localSafeContext;
     if (QThread::currentThread() != thread()) {
-        QMetaObject::invokeMethod(this, "returnToPreviousAppImpl", Q_ARG(bool, localSafeContext));
+        QMetaObject::invokeMethod(this, "returnToPreviousAppImpl", Q_ARG(bool, localSafeContext), Q_ARG(bool, fromWorld));
         return;
     }
 
-    returnToPreviousAppImpl(localSafeContext);
+    returnToPreviousAppImpl(localSafeContext, fromWorld);
 }
 
 void TabletProxy::loadQMLSource(const QVariant& path, bool resizable) {
@@ -820,8 +855,8 @@ void TabletProxy::loadHomeScreen(bool forceOntoHomeScreen) {
 
     if ((_state != State::Home && _state != State::Uninitialized) || forceOntoHomeScreen) {
         if (!_toolbarMode && _qmlTabletRoot) {
-            QMetaObject::invokeMethod(_qmlTabletRoot, "loadSource", Q_ARG(const QVariant&, QVariant(TABLET_HOME_SOURCE_URL)));
-            QMetaObject::invokeMethod(_qmlTabletRoot, "playButtonClickSound");
+            QMetaObject::invokeMethod(_qmlTabletRoot.data(), "loadSource", Q_ARG(const QVariant&, QVariant(TABLET_HOME_SOURCE_URL)));
+            QMetaObject::invokeMethod(_qmlTabletRoot.data(), "playButtonClickSound");
         } else if (_toolbarMode && _desktopWindow) {
             // close desktop window
             if (_desktopWindow->asQuickItem()) {
@@ -834,6 +869,49 @@ void TabletProxy::loadHomeScreen(bool forceOntoHomeScreen) {
     }
 }
 
+// A page a world's script opens in the visitor's tablet (ScriptCaller, read on the calling thread before any hop): a web
+// page only (http or https), with nothing injected into it and in the usual web view, not the other web base, and
+// only within a short while after the visitor's real click on one of the world's entities (RealClicks; that click is
+// used up: one page per click). worldPage says it's a world's: the QML shows it as its own screen type, so no app
+// wires to it, and drops its EventBridge when it navigates. The visitor's own scripts and the app keep every form.
+// False: refused, and logged (the click refusal once per world).
+static const std::chrono::milliseconds WORLD_PAGE_CLICK_AGE { 2000 };
+
+static bool worldPageAllowed(const char* member, const QString& url, QString& injectedJavaScriptUrl, bool& loadOtherBase,
+                             bool& worldPage) {
+    worldPage = ScriptCaller::isWorld();
+    if (!worldPage) {
+        return true;
+    }
+    const QString scheme = QUrl(url).scheme().toLower();
+    if (scheme != "http" && scheme != "https") {
+        qCWarning(uiLogging).noquote() << QString("Tablet %1: a world's script opens only http and https pages, not %2")
+                                              .arg(member, url.left(200));
+        return false;
+    }
+    if (!RealClicks::takeForCaller(WORLD_PAGE_CLICK_AGE)) {
+        static std::mutex loggedMutex;
+        static std::set<int> loggedWorlds;
+        std::lock_guard<std::mutex> lock(loggedMutex);
+        if (loggedWorlds.insert(ScriptCaller::world()).second) {
+            qCWarning(uiLogging).noquote() << QString("Tablet %1: a world's page opens only within %2 s of the visitor's click "
+                                                      "on one of the world's entities (logged once per world); refused: %3")
+                                                  .arg(member).arg(WORLD_PAGE_CLICK_AGE.count() / 1000.0).arg(url.left(200));
+        }
+        return false;
+    }
+    if (!injectedJavaScriptUrl.isEmpty() || loadOtherBase) {
+        static std::once_flag logged;
+        std::call_once(logged, [member] {
+            qCWarning(uiLogging).noquote() << QString("Tablet %1: a world's page opens without an injected script or the "
+                                                      "other web base (logged once)").arg(member);
+        });
+        injectedJavaScriptUrl.clear();
+        loadOtherBase = false;
+    }
+    return true;
+}
+
 void TabletProxy::gotoWebScreen(const QString& url) {
     gotoWebScreen(url, "");
 }
@@ -844,25 +922,55 @@ void TabletProxy::loadWebScreenOnTop(const QVariant& url) {
 
 void TabletProxy::loadWebScreenOnTop(const QVariant& url, const QString& injectJavaScriptUrl) {
     bool localSafeContext = hifi::scripting::isLocalAccessSafeThread();
+    QString injected = injectJavaScriptUrl;
+    bool loadOtherBase = false;
+    bool worldPage = false;
+    if (!worldPageAllowed("loadWebScreenOnTop", url.toString(), injected, loadOtherBase, worldPage)) {
+        return;
+    }
     if (QThread::currentThread() != thread()) {
-        QMetaObject::invokeMethod(this, "loadHTMLSourceOnTopImpl", Q_ARG(QString, url.toString()), Q_ARG(QString, injectJavaScriptUrl), Q_ARG(bool, false), Q_ARG(bool, localSafeContext));
+        QMetaObject::invokeMethod(this, "loadHTMLSourceOnTopImpl", Q_ARG(QString, url.toString()), Q_ARG(QString, injected), Q_ARG(bool, false), Q_ARG(bool, localSafeContext), Q_ARG(bool, worldPage));
         return;
     }
 
-    loadHTMLSourceOnTopImpl(url.toString(), injectJavaScriptUrl, false, localSafeContext);
+    loadHTMLSourceOnTopImpl(url.toString(), injected, false, localSafeContext, worldPage);
 }
 
 void TabletProxy::gotoWebScreen(const QString& url, const QString& injectedJavaScriptUrl, bool loadOtherBase) {
     bool localSafeContext = hifi::scripting::isLocalAccessSafeThread();
+    QString injected = injectedJavaScriptUrl;
+    bool worldPage = false;
+    if (!worldPageAllowed("gotoWebScreen", url, injected, loadOtherBase, worldPage)) {
+        return;
+    }
     if (QThread::currentThread() != thread()) {
-        QMetaObject::invokeMethod(this, "loadHTMLSourceOnTopImpl", Q_ARG(QString, url), Q_ARG(QString, injectedJavaScriptUrl), Q_ARG(bool, loadOtherBase), Q_ARG(bool, localSafeContext));
+        QMetaObject::invokeMethod(this, "loadHTMLSourceOnTopImpl", Q_ARG(QString, url), Q_ARG(QString, injected), Q_ARG(bool, loadOtherBase), Q_ARG(bool, localSafeContext), Q_ARG(bool, worldPage));
         return;
     }
 
-    loadHTMLSourceOnTopImpl(url, injectedJavaScriptUrl, loadOtherBase, localSafeContext);
+    loadHTMLSourceOnTopImpl(url, injected, loadOtherBase, localSafeContext, worldPage);
 }
 
-void TabletProxy::loadHTMLSourceOnTopImpl(const QString& url, const QString& injectedJavaScriptUrl, bool loadOtherBase, bool localSafeContext) {
+bool TabletProxy::worldMayLoadPage() {
+    // a world's scripts may load a few pages, not keep loading them (security's rule for the VR screen, as for its dialogs)
+    static const int MAX_LOADS = 3;
+    static const qint64 WINDOW_MSECS = 10 * 1000;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    while (!_worldPageLoads.isEmpty() && now - _worldPageLoads.first() > WINDOW_MSECS) {
+        _worldPageLoads.removeFirst();
+    }
+    if (_worldPageLoads.size() >= MAX_LOADS) {
+        qCDebug(uiLogging) << "tablet: a world's page load refused, too many in" << WINDOW_MSECS / 1000 << "s";
+        return false;
+    }
+    _worldPageLoads.append(now);
+    return true;
+}
+
+void TabletProxy::loadHTMLSourceOnTopImpl(const QString& url, const QString& injectedJavaScriptUrl, bool loadOtherBase, bool localSafeContext, bool worldPage) {
+    if (worldPage && !worldMayLoadPage()) {
+        return;
+    }
     QObject* root = nullptr;
     if (!_toolbarMode && _qmlTabletRoot) {
         root = _qmlTabletRoot;
@@ -877,9 +985,13 @@ void TabletProxy::loadHTMLSourceOnTopImpl(const QString& url, const QString& inj
         if (loadOtherBase) {
             QMetaObject::invokeMethod(root, "loadTabletWebBase", Q_ARG(const QVariant&, QVariant(url)), Q_ARG(const QVariant&, QVariant(injectedJavaScriptUrl)));
         } else {
-            QMetaObject::invokeMethod(root, "loadWebBase", Q_ARG(const QVariant&, QVariant(url)), Q_ARG(const QVariant&, QVariant(injectedJavaScriptUrl)));
+            QMetaObject::invokeMethod(root, "loadWebBase", Q_ARG(const QVariant&, QVariant(url)), Q_ARG(const QVariant&, QVariant(injectedJavaScriptUrl)), Q_ARG(const QVariant&, QVariant(worldPage)));
         }
-        QMetaObject::invokeMethod(root, "setShown", Q_ARG(const QVariant&, QVariant(true)));
+        // in the headset a world's page loads unseen, until the visitor goes to it (the VR screen's tab; security's
+        // rule: no world brings the screen up by itself)
+        if (!(worldPage && QCoreApplication::instance()->property(hifi::properties::HMD).toBool())) {
+            QMetaObject::invokeMethod(root, "setShown", Q_ARG(const QVariant&, QVariant(true)));
+        }
         if (_toolbarMode && _desktopWindow) {
             QMetaObject::invokeMethod(root, "setResizable", Q_ARG(const QVariant&, QVariant(false)));
         }
@@ -894,6 +1006,7 @@ void TabletProxy::loadHTMLSourceOnTopImpl(const QString& url, const QString& inj
         _initialPath.second = State::Web;
         _initialWebPathParams.first = injectedJavaScriptUrl;
         _initialWebPathParams.second = loadOtherBase;
+        _initialWorldPage = worldPage;
         _initialScreen = true;
     }
 }
@@ -934,7 +1047,7 @@ void TabletProxy::emitScriptEvent(const QVariant& msg) {
     }
 
     if (!_toolbarMode && _qmlOffscreenSurface) {
-        QMetaObject::invokeMethod(_qmlOffscreenSurface, "emitScriptEvent", Qt::AutoConnection, Q_ARG(QVariant, msg));
+        QMetaObject::invokeMethod(_qmlOffscreenSurface.data(), "emitScriptEvent", Qt::AutoConnection, Q_ARG(QVariant, msg));
     } else if (_toolbarMode && _desktopWindow) {
         QMetaObject::invokeMethod(_desktopWindow, "emitScriptEvent", Qt::AutoConnection, Q_ARG(QVariant, msg));
     }
@@ -947,7 +1060,7 @@ void TabletProxy::sendToQml(const QVariant& msg) {
     }
 
     if (!_toolbarMode && _qmlOffscreenSurface) {
-        QMetaObject::invokeMethod(_qmlOffscreenSurface, "sendToQml", Qt::AutoConnection, Q_ARG(QVariant, msg));
+        QMetaObject::invokeMethod(_qmlOffscreenSurface.data(), "sendToQml", Qt::AutoConnection, Q_ARG(QVariant, msg));
     } else if (_toolbarMode && _desktopWindow) {
         QMetaObject::invokeMethod(_desktopWindow, "sendToQml", Qt::AutoConnection, Q_ARG(QVariant, msg));
     }
@@ -960,7 +1073,7 @@ OffscreenQmlSurface* TabletProxy::getTabletSurface() {
         return result;
     }
 
-    return _qmlOffscreenSurface;
+    return _qmlOffscreenSurface.data();
 }
 
 
@@ -979,6 +1092,10 @@ void TabletProxy::unfocus() {
     }
 }
 
+
+QQuickItem* TabletProxy::getToolbarWindowItem() const {
+    return _toolbarMode && _desktopWindow ? _desktopWindow->asQuickItem() : nullptr;
+}
 
 QQuickItem* TabletProxy::getQmlTablet() const {
     if (!_qmlTabletRoot) {

@@ -49,6 +49,7 @@
 #include "TextureIndex.h"
 #include <Trace.h>
 #include <StatTracker.h>
+#include <ResourceSizeLimit.h>
 
 #include <TextureMeta.h>
 
@@ -624,6 +625,7 @@ void NetworkTexture::makeRequest() {
         }
 
         _ktxResourceState = LOADING_INITIAL_DATA;
+        _ktxHighMipsAskedByPosition = false;
 
         // Add a fragment to the base url so we can identify the section of the ktx being requested when debugging
         // The actual requested url is _activeUrl and will not contain the fragment
@@ -772,6 +774,9 @@ void NetworkTexture::startRequestForNextMipLevel() {
     }
 }
 
+// the most bytes the seven smallest mips of a KTX take: what the first load asks for from the file's end
+static const int HIGH_MIP_MAX_SIZE = 5516;
+
 // Load mips in the range [low, high] (inclusive)
 void NetworkTexture::startMipRangeRequest(uint16_t low, uint16_t high) {
     if (_ktxMipRequest) {
@@ -791,7 +796,6 @@ void NetworkTexture::startMipRangeRequest(uint16_t low, uint16_t high) {
 
     _ktxMipLevelRangeInFlight = { low, high };
     if (isHighMipRequest) {
-        static const int HIGH_MIP_MAX_SIZE = 5516;
         // This is a special case where we load the high 7 mips
         ByteRange range;
         range.fromInclusive = -HIGH_MIP_MAX_SIZE;
@@ -823,6 +827,34 @@ void NetworkTexture::ktxInitialDataRequestFinished() {
 
     Q_ASSERT(_ktxResourceState == LOADING_INITIAL_DATA);
     Q_ASSERT_X(_ktxHeaderRequest && _ktxMipRequest, __FUNCTION__, "Request should not be null while in ktxInitialDataRequestFinished");
+
+    // The smallest mips are asked for as the file's last bytes ("bytes=-N"), and some hosts refuse that form of range
+    // though they serve ordinary ones (501 from GitHub's raw file host). The header's answer gave the file's size, so
+    // the same bytes are asked for once more by their positions.
+    if (!_ktxHighMipsAskedByPosition && _ktxHeaderRequest->getResult() == ResourceRequest::Success &&
+        _ktxMipRequest->getResult() != ResourceRequest::Success && _ktxHeaderRequest->getRangeRequestSuccessful()) {
+        // the size is the host's word: only one a texture download may have is used (0 = the answer did not give one)
+        const uint64_t saidSize = _ktxHeaderRequest->getTotalSizeOfResource();
+        const int64_t totalSize = saidSize <= (uint64_t)ResourceSizeLimit::forPath(_activeUrl.path()) ? (int64_t)saidSize : 0;
+        auto byPosition = totalSize > 0 ? DependencyManager::get<ResourceManager>()->createResourceRequest(
+            this, _activeUrl, true, -1, "NetworkTexture::ktxInitialDataRequestFinished") : nullptr;
+        if (byPosition) {
+            qCDebug(networking).noquote() << "The host refused the range for the last bytes of" << _url.toDisplayString()
+                << "(status" << _ktxMipRequest->getStatusCode() << "); asking by position in its" << totalSize << "bytes";
+            _ktxHighMipsAskedByPosition = true;
+            _ktxMipRequest->disconnect(this);
+            _ktxMipRequest->deleteLater();
+            _ktxMipRequest = byPosition;
+
+            ByteRange range;
+            range.fromInclusive = std::max<int64_t>(0, totalSize - HIGH_MIP_MAX_SIZE);
+            range.toExclusive = totalSize;
+            _ktxMipRequest->setByteRange(range);
+            connect(_ktxMipRequest, &ResourceRequest::finished, this, &NetworkTexture::ktxInitialDataRequestFinished);
+            _ktxMipRequest->send();
+            return;
+        }
+    }
 
     PROFILE_ASYNC_END(resource, "Resource:" + getType(), QString::number(_requestID), {
         { "from_cache", _ktxHeaderRequest->loadedFromCache() },
@@ -1008,15 +1040,21 @@ void NetworkTexture::handleFinishedInitialLoad() {
             return;
         }
 
+        // the header's bytes must all be there before any field is read; then its identifier, formats, dimensions,
+        // faces and mip count must be ones a texture can have (isValid logs what is wrong and never throws)
+        if (static_cast<size_t>(ktxHeaderData.size()) < ktx::KTX_HEADER_SIZE) {
+            NetworkTexture::handBackImage(static_cast<NetworkTexture*>(resource.data()), nullptr, 0, 0);
+            return;
+        }
         auto header = reinterpret_cast<const ktx::Header*>(ktxHeaderData.data());
 
-        if (!ktx::checkIdentifier(header->identifier)) {
+        if (!header->isValid()) {
             NetworkTexture::handBackImage(static_cast<NetworkTexture*>(resource.data()), nullptr, 0, 0);
             return;
         }
 
-        auto kvSize = header->bytesOfKeyValueData;
-        if (kvSize > (ktxHeaderData.size() - ktx::KTX_HEADER_SIZE)) {
+        size_t kvSize = header->bytesOfKeyValueData;
+        if (kvSize > (static_cast<size_t>(ktxHeaderData.size()) - ktx::KTX_HEADER_SIZE)) {
             NetworkTexture::handBackImage(static_cast<NetworkTexture*>(resource.data()), nullptr, 0, 0);
             return;
         }
@@ -1102,7 +1140,8 @@ void NetworkTexture::handleFinishedInitialLoad() {
             // TODO Move image offset calculation to ktx ImageDescriptor
             for (int level = static_cast<int>(images.size()) - 1; level >= 0; --level) {
                 auto& image = images[level];
-                if (image._imageSize > imageSizeRemaining) {
+                // each stored level is its size field plus its bytes: both must be inside what remains
+                if (image._imageSize + ktx::IMAGE_SIZE_WIDTH > imageSizeRemaining) {
                     break;
                 }
                 ktxData -= image._imageSize;
@@ -1146,32 +1185,42 @@ void NetworkTexture::loadMetaContent(const QByteArray& content) {
         return;
     }
 
+    // An ambient map needs its irradiance (the spherical harmonics the diffuse lighting reads). A baked KTX carries it
+    // only when it was baked as an ambient map; a sky baked as a skybox has none, and a zone borrowing that sky as its
+    // ambient map lit the world with the built-in sphere instead: pale and flat (Darkside on Windows, 2026-11-08, whose
+    // GPU took the BPTC variant of the built-in aurora sky; the Mac, with no BPTC, took the original and computed the
+    // irradiance). So an ambient map is made from the original image whenever the meta names one, on every platform,
+    // and the irradiance is computed on load. A refinement for later: take a baked variant when it carries the key.
+    const bool ambientFromOriginal = _type == image::TextureUsage::AMBIENT_TEXTURE && !meta.original.isEmpty();
+
     auto& backend = DependencyManager::get<TextureCache>()->getGPUContext()->getBackend();
-    for (auto pair : meta.availableTextureTypes) {
-        gpu::Element elFormat;
+    if (!ambientFromOriginal) {
+        for (auto pair : meta.availableTextureTypes) {
+            gpu::Element elFormat;
 
-        if (gpu::Texture::getCompressedFormat(pair.first, elFormat)) {
-            if (backend->supportedTextureFormat(elFormat)) {
-                auto url = pair.second;
-                if (url.fileName().endsWith(TEXTURE_META_EXTENSION)) {
-                    continue;
-                }
+            if (gpu::Texture::getCompressedFormat(pair.first, elFormat)) {
+                if (backend->supportedTextureFormat(elFormat)) {
+                    auto url = pair.second;
+                    if (url.fileName().endsWith(TEXTURE_META_EXTENSION)) {
+                        continue;
+                    }
 
-                _currentlyLoadingResourceType = ResourceType::KTX;
-                _activeUrl = _activeUrl.resolved(url);
-                auto textureCache = DependencyManager::get<TextureCache>();
-                auto self = _self.lock();
-                if (!self) {
+                    _currentlyLoadingResourceType = ResourceType::KTX;
+                    _activeUrl = _activeUrl.resolved(url);
+                    auto textureCache = DependencyManager::get<TextureCache>();
+                    auto self = _self.lock();
+                    if (!self) {
+                        return;
+                    }
+                    QMetaObject::invokeMethod(this, "attemptRequest", Qt::QueuedConnection);
                     return;
                 }
-                QMetaObject::invokeMethod(this, "attemptRequest", Qt::QueuedConnection);
-                return;
             }
         }
     }
 
 #ifndef Q_OS_ANDROID
-    if (!meta.uncompressed.isEmpty()) {
+    if (!ambientFromOriginal && !meta.uncompressed.isEmpty()) {
         _currentlyLoadingResourceType = ResourceType::KTX;
         _activeUrl = _activeUrl.resolved(meta.uncompressed);
 

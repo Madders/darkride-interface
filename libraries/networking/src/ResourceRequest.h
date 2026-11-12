@@ -96,7 +96,7 @@ public:
     QUrl getRelativePathUrl() const { return _relativePathURL; }
     bool loadedFromCache() const { return _loadedFromCache; }
     bool getRangeRequestSuccessful() const { return _rangeRequestSuccessful; }
-    bool getTotalSizeOfResource() const { return _totalSizeOfResource; }
+    uint64_t getTotalSizeOfResource() const { return _totalSizeOfResource; }
     QString getWebMediaType() const { return _webMediaType; }
     void setFailOnRedirect(bool failOnRedirect) { _failOnRedirect = failOnRedirect; }
 
@@ -105,6 +105,8 @@ public:
     /// The download is a script's own request, held to the network rule (ScriptNetworkPolicy) by this origin and
     /// world: an HTTP download then judges each address it goes to and connects only to the checked one.
     void setNetworkRule(const QUrl& origin, bool worldIsLocal) { _ruled = true; _ruleOrigin = origin; _ruleWorldIsLocal = worldIsLocal; }
+    bool isNetworkRuled() const { return _ruled; }
+    QUrl networkRuleOrigin() const { return _ruleOrigin; }
 
     static QString toHttpDateString(uint64_t msecsSinceEpoch);
 public slots:

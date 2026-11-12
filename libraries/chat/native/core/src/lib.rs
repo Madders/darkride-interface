@@ -55,7 +55,7 @@
 use std::{
     collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -249,8 +249,24 @@ async fn run(config: Config, events: EventSink, mut queue: mpsc::UnboundedReceiv
         let state = state.clone();
         let busy = busy.clone();
         let work = async move {
+            // the session this command runs in, to ask about if it fails
+            let client = state.client().ok();
             if let Err(e) = Box::pin(handle(&state, &op, &command)).await {
-                state.emit(json!({ "event": "error", "op": op, "message": format!("{e:#}") }));
+                let message = format!("{e:#}");
+                // a sign-in's refusal, and anything to do with a line being sent, always shows: a line must never go
+                // without a sign
+                let quiet_kind = !matches!(op.as_str(), "login_jwt" | "send" | "edit" | "react" | "delete");
+                let ended = match &client {
+                    Some(client) if quiet_kind => refused_for_ended_session(&e) || session_ended(client).await,
+                    _ => false,
+                };
+                if ended {
+                    // the server ended the session while this was on its way: the session watcher signs out and the
+                    // app signs in again, so this isn't an error of its own to show ("Couldn't open: … 401 …")
+                    tracing::debug!("{op} refused, the session has ended: {message}");
+                } else {
+                    state.emit(json!({ "event": "error", "op": op, "message": message }));
+                }
             }
             busy.fetch_sub(1, Ordering::SeqCst);
         };
@@ -427,19 +443,78 @@ async fn handle(state: &Arc<State>, op: &str, command: &Value) -> Result<()> {
     }
 }
 
-async fn build_client(state: &State) -> Result<Client> {
+async fn build_client(state: &State, store: &Path) -> Result<Client> {
     std::fs::create_dir_all(&state.config.data_dir)?;
     Ok(Client::builder()
         .homeserver_url(&state.config.homeserver)
-        .sqlite_store(state.config.data_dir.join("store"), None)
+        .sqlite_store(store, None)
         .build()
         .await?)
+}
+
+/// names the store a sign-in made when "store" couldn't be deleted for it, for the next start's restore
+const STORE_NAME_FILE: &str = "store-name";
+
+fn is_store_name(name: &str) -> bool {
+    name == "store" || name.strip_prefix("store-").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// the kept session's store: "store", or the one store-name names
+fn store_dir(state: &State) -> PathBuf {
+    let dir = &state.config.data_dir;
+    match std::fs::read_to_string(dir.join(STORE_NAME_FILE)) {
+        Ok(name) if is_store_name(name.trim()) => dir.join(name.trim()),
+        _ => dir.join("store"),
+    }
+}
+
+/// Deletes every store in the folder but keep, and says which stay (on Windows, one with a file still open) and why
+fn remove_stores(dir: &Path, keep: Option<&Path>) -> Vec<(PathBuf, std::io::Error)> {
+    let mut left = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else { return left };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if is_store_name(&entry.file_name().to_string_lossy()) && path.is_dir() && Some(path.as_path()) != keep {
+            if let Err(e) = std::fs::remove_dir_all(&path) {
+                if path.exists() {
+                    left.push((path, e));
+                }
+            }
+        }
+    }
+    left
+}
+
+/// A new sign-in is a new device: nothing an earlier one left in the folder (its session, keys, stored messages,
+/// files) is any use to it, and the next person at this computer shouldn't find it. A store that can't be deleted
+/// never stops the sign-in (it made the crypto store refuse every one, 11-08): a new store goes beside it, named in
+/// store-name for the next start, and the old one goes at the next sign-in or sign-out.
+fn fresh_store(state: &State) -> PathBuf {
+    let dir = &state.config.data_dir;
+    let _ = std::fs::remove_file(state.session_file());
+    let _ = std::fs::remove_file(dir.join(STORE_NAME_FILE));
+    let _ = std::fs::remove_dir_all(dir.join("media"));
+    let left = remove_stores(dir, None);
+    if !left.iter().any(|(path, _)| path.ends_with("store")) {
+        return dir.join("store");
+    }
+    for (path, e) in &left {
+        state.emit(json!({ "event": "error", "op": "store", "message": format!("an earlier store stays in {}: {e}; signing in with a new one", path.display()) }));
+    }
+    let millis = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    let name = format!("store-{millis}");
+    let _ = std::fs::create_dir_all(dir);
+    let _ = std::fs::write(dir.join(STORE_NAME_FILE), &name);
+    dir.join(name)
 }
 
 async fn restore(state: &Arc<State>) -> Result<bool> {
     let Ok(saved) = std::fs::read_to_string(state.session_file()) else { return Ok(false) };
     let session: MatrixSession = serde_json::from_str(&saved).context("the kept session")?;
-    let client = build_client(state).await?;
+    let store = store_dir(state);
+    // a store an earlier sign-in couldn't delete (store-name names the newer one): gone now that nothing has it open
+    let _ = remove_stores(&state.config.data_dir, Some(&store));
+    let client = build_client(state, &store).await?;
     client.restore_session(session).await?;
     started(state, client).await?;
     Ok(true)
@@ -450,7 +525,14 @@ async fn login_jwt(state: &Arc<State>, token: &str) -> Result<()> {
         return Err(anyhow!("already signed in"));
     }
     state.emit(json!({ "event": "state", "state": "starting" }));
-    let client = build_client(state).await?;
+    let store = fresh_store(state);
+    let client = match build_client(state, &store).await {
+        Ok(client) => client,
+        Err(e) => {
+            state.emit(json!({ "event": "state", "state": "signed_out" }));
+            return Err(e);
+        }
+    };
     let mut data = matrix_sdk::ruma::serde::JsonObject::new();
     data.insert("token".into(), token.into());
     let login = client
@@ -459,9 +541,10 @@ async fn login_jwt(state: &Arc<State>, token: &str) -> Result<()> {
         .initial_device_display_name(&state.config.device_name)
         .await;
     if let Err(e) = login {
-        // refused: the stores made for it go too (the client first, which holds them open)
+        // refused: the store made for it goes too (the client first, which holds it open)
         drop(client);
-        let _ = std::fs::remove_dir_all(state.config.data_dir.join("store"));
+        let _ = std::fs::remove_dir_all(&store);
+        let _ = std::fs::remove_file(state.config.data_dir.join(STORE_NAME_FILE));
         state.emit(json!({ "event": "state", "state": "signed_out" }));
         return Err(e.into());
     }
@@ -524,11 +607,19 @@ async fn started(state: &Arc<State>, client: Client) -> Result<()> {
         }
     }));
 
-    // a session the server has ended (signed out elsewhere, the account closed): signed out here too
+    // a session the server has ended (signed out elsewhere, the account closed, its device removed): signed out here
+    // too. The SDK's channel for these keeps one change, so when two requests are refused at once (a send and the
+    // sync) this falls behind ("lagged"); the change it then reads is the newest one, so it carries on, never stops
+    // there, or the app would stay "ready" with every request refused
     let session_state = state.clone();
     let mut changes = client.subscribe_to_session_changes();
     tasks.push(tokio::spawn(async move {
-        while let Ok(change) = changes.recv().await {
+        loop {
+            let change = match changes.recv().await {
+                Ok(change) => change,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             if let SessionChange::UnknownToken(_) = change {
                 let state = session_state.clone();
                 // from a task of its own: forgetting stops this one
@@ -1028,6 +1119,36 @@ async fn fetch_media(state: &Arc<State>, command: &Value) -> Result<String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// Whether a request was refused because the server no longer knows this session's access token (it ended the
+/// session: signed out everywhere, a password change, an admin): the SDK's own error, with the server's error kind,
+/// among the error's causes. Never a match on the text, which could quote anything. Some of the SDK's wrappers pass
+/// their inner error's message on but not the error itself, so session_ended asks the server when this can't tell.
+fn refused_for_ended_session(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        let kind = if let Some(http) = cause.downcast_ref::<matrix_sdk::HttpError>() {
+            http.client_api_error_kind()
+        } else if let Some(sdk) = cause.downcast_ref::<matrix_sdk::Error>() {
+            sdk.client_api_error_kind()
+        } else {
+            None
+        };
+        unknown_token(kind)
+    })
+}
+
+/// Whether the server has ended this session: it refuses the session's token (one small request, made only after
+/// something has failed)
+async fn session_ended(client: &Client) -> bool {
+    match client.whoami().await {
+        Err(e) => unknown_token(e.client_api_error_kind()),
+        Ok(_) => false,
+    }
+}
+
+fn unknown_token(kind: Option<&matrix_sdk::ruma::api::error::ErrorKind>) -> bool {
+    matches!(kind, Some(matrix_sdk::ruma::api::error::ErrorKind::UnknownToken(_)))
+}
+
 /// Signed out: everything stopped and waited for (Windows can't remove files still open), the server told when asked
 /// (it forgets the device), then the session, the stores (keys too) and the fetched media, gone from the folder
 async fn forget(state: &Arc<State>, tell_server: bool) {
@@ -1052,10 +1173,10 @@ async fn forget(state: &Arc<State>, tell_server: bool) {
     let _ = std::fs::remove_file(state.session_file());
     // the pictures and files fetched for this account go too: the next person on this computer shouldn't find them
     let _ = std::fs::remove_dir_all(state.config.data_dir.join("media"));
-    let store = state.config.data_dir.join("store");
-    if let Err(e) = std::fs::remove_dir_all(&store) {
-        if store.exists() {
-            state.emit(json!({ "event": "error", "op": "logout", "message": format!("the chat's store stays in {}: {e}", store.display()) }));
-        }
+    let _ = std::fs::remove_file(state.config.data_dir.join(STORE_NAME_FILE));
+    // on Windows a store's files can stay open in this process until the library stops: the viewer deletes the
+    // folder again once it has (ChatService::forgetChatData)
+    for (store, e) in remove_stores(&state.config.data_dir, None) {
+        state.emit(json!({ "event": "error", "op": "logout", "message": format!("the chat's store stays in {}: {e}", store.display()) }));
     }
 }

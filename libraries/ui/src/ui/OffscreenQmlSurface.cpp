@@ -14,7 +14,11 @@
 #include <gl/Config.h>
 
 #include <QtGui/QOpenGLContext>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#include <QtOpenGL/QOpenGLFunctions_4_1_Core>   // the OpenGL module in Qt 6
+#else
 #include <QtGui/QOpenGLFunctions_4_1_Core>
+#endif
 #include <QtWidgets/QWidget>
 #include <QtQml/QtQml>
 #include <QtQml/QQmlEngine>
@@ -26,9 +30,15 @@
 #include <QtCore/QThread>
 #include <QtCore/QMutex>
 #include <QtCore/QWaitCondition>
+#include <QtMultimedia/QMediaPlayer>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#include <QtMultimedia/QAudioDevice>
+#include <QtMultimedia/QAudioOutput>
+#include <QtMultimedia/QMediaDevices>
+#else
 #include <QtMultimedia/QMediaService>
 #include <QtMultimedia/QAudioOutputSelectorControl>
-#include <QtMultimedia/QMediaPlayer>
+#endif
 #include <QtGui/QInputMethodEvent>
 #include <shared/NsightHelpers.h>
 #include <shared/GlobalAppProperties.h>
@@ -193,6 +203,37 @@ AudioHandler::AudioHandler(OffscreenQmlSurface* surface, const QString& deviceNa
 }
 
 void AudioHandler::run() {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // Qt 6 has no media service or output selector: each player's QAudioOutput takes the device, found by its
+    // description among the outputs, set on the player's own thread
+    QAudioDevice target;
+    for (const QAudioDevice& candidate : QMediaDevices::audioOutputs()) {
+        if (candidate.description() == _newTargetDevice) {
+            target = candidate;
+            break;
+        }
+    }
+    if (target.isNull()) {
+        qDebug() << "QML Audio: no output device named" << _newTargetDevice;
+        return;
+    }
+    for (auto player : _players) {
+        QMetaObject::invokeMethod(player, [player, target] {
+            auto mediaState = player->playbackState();
+            if (QAudioOutput* out = player->audioOutput()) {
+                out->setDevice(target);
+            }
+            // if multimedia was paused, it will start playing automatically after changing audio device
+            // this will reset it back to a paused state
+            if (mediaState == QMediaPlayer::PausedState) {
+                player->pause();
+            } else if (mediaState == QMediaPlayer::StoppedState) {
+                player->stop();
+            }
+        }, Qt::QueuedConnection);
+    }
+    qDebug() << "QML Audio changed to " << _newTargetDevice;
+#else
     for (auto player : _players) {
         auto mediaState = player->state();
         QMediaService* svc = player->service();
@@ -225,6 +266,7 @@ void AudioHandler::run() {
         }
     }
     qDebug() << "QML Audio changed to " << _newTargetDevice;
+#endif
 }
 
 bool OffscreenQmlSurface::viewportFocused = true;
@@ -376,7 +418,8 @@ void OffscreenQmlSurface::onRootCreated() {
     _audioOutputUpdateTimer.setSingleShot(true);
 #endif
 
-    if (getRootItem()->objectName() == "tabletRoot") {
+    // the system tablet's root: only a surface the app made for its own tablet (setAppTablet)
+    if (_appTablet && getRootItem()->objectName() == "tabletRoot") {
         getSurfaceContext()->setContextProperty("tabletRoot", QVariant::fromValue(getRootItem()));
         auto tabletScriptingInterface = DependencyManager::get<TabletScriptingInterface>();
         tabletScriptingInterface->setQmlTabletRoot("com.highfidelity.interface.tablet.system", this);
@@ -450,13 +493,27 @@ PointerEvent::EventType OffscreenQmlSurface::choosePointerEventType(QEvent::Type
     }
 }
 
-void OffscreenQmlSurface::hoverBeginEvent(const PointerEvent& event, class QTouchDevice& device) {
+void OffscreenQmlSurface::hoverBeginEvent(const PointerEvent& event, OffscreenTouchDevice& device) {
     handlePointerEvent(event, device);
     _activeTouchPoints[event.getID()].hovering = true;
 }
 
-void OffscreenQmlSurface::hoverEndEvent(const PointerEvent& event, class QTouchDevice& device) {
+void OffscreenQmlSurface::hoverEndEvent(const PointerEvent& event, OffscreenTouchDevice& device) {
     _activeTouchPoints[event.getID()].hovering = false;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // Qt 6: a pointer that leaves the surface with its button down ends its press here, where it last was. A desktop
+    // mouse dragged off a Web entity is released over something else, and no release would reach this surface: its
+    // button or slider would stay pressed. (A laser's trigger end still comes back afterwards: a release with nothing
+    // pressed, which does nothing.)
+    if (_activeTouchPoints[event.getID()].pressed && getRootItem() && !isPaused()) {
+        const QPointF lastPoint = _activeTouchPoints[event.getID()].touchPoint.scenePosition();
+        QMouseEvent mouseEvent(QEvent::MouseButtonRelease, lastPoint, lastPoint, lastPoint, Qt::LeftButton, Qt::NoButton,
+                               event.getKeyboardModifiers(), mouseDevice());
+        mouseEvent.ignore();
+        QCoreApplication::sendEvent(getWindow(), &mouseEvent);
+        _activeTouchPoints[event.getID()].pressed = false;
+    }
+#endif
     // Send a fake mouse move event if
     // - the event told us to
     // - we aren't pressing with this ID
@@ -470,7 +527,25 @@ void OffscreenQmlSurface::hoverEndEvent(const PointerEvent& event, class QTouchD
     }
 }
 
-bool OffscreenQmlSurface::handlePointerEvent(const PointerEvent& event, class QTouchDevice& device, bool release) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+// Qt 6 keeps a mouse's pressed point and the item that grabbed it on the event's DEVICE, not on the window. A mouse event
+// made without a device is the primary mouse's: a page pressed that way holds the real mouse's grab, and the next real
+// mouse release anywhere in the application (the desktop overlay forwards its own, in the overlay's coordinates) is
+// delivered to that page, at the wrong place, before the release meant for it. So each surface sends the mouse events
+// it makes as a device of its own.
+QPointingDevice* OffscreenQmlSurface::mouseDevice() {
+    Q_ASSERT(QThread::currentThread() == thread());   // made as a child of the surface
+    if (!_mouseDevice) {
+        _mouseDevice = new QPointingDevice("OffscreenQmlSurfaceMouse", 0, QInputDevice::DeviceType::Mouse,
+                                           QPointingDevice::PointerType::Generic,
+                                           QInputDevice::Capability::Position | QInputDevice::Capability::Hover, 1, 3,
+                                           QString(), QPointingDeviceUniqueId(), this);
+    }
+    return _mouseDevice;
+}
+#endif
+
+bool OffscreenQmlSurface::handlePointerEvent(const PointerEvent& event, OffscreenTouchDevice& device, bool release) {
 
     // Ignore mouse interaction if we're paused
     if (!getRootItem() || isPaused()) {
@@ -479,13 +554,28 @@ bool OffscreenQmlSurface::handlePointerEvent(const PointerEvent& event, class QT
 
     QPointF windowPoint(event.getPos2D().x, event.getPos2D().y);
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // Qt 6: the point's state and position live on a QEventPoint, the event takes the points at construction
+    const auto PRESSED = QEventPoint::Pressed;
+    const auto RELEASED = QEventPoint::Released;
+    const auto MOVED = QEventPoint::Updated;
+    QEventPoint::State state = QEventPoint::Stationary;
+    const bool movedFromLast = _activeTouchPoints.count(event.getID())
+                               && windowPoint != _activeTouchPoints[event.getID()].touchPoint.scenePosition();
+#else
+    const auto PRESSED = Qt::TouchPointPressed;
+    const auto RELEASED = Qt::TouchPointReleased;
+    const auto MOVED = Qt::TouchPointMoved;
     Qt::TouchPointState state = Qt::TouchPointStationary;
+    const bool movedFromLast = _activeTouchPoints.count(event.getID())
+                               && windowPoint != _activeTouchPoints[event.getID()].touchPoint.pos();
+#endif
     if (event.getType() == PointerEvent::Press && event.getButton() == PointerEvent::PrimaryButton) {
-        state = Qt::TouchPointPressed;
+        state = PRESSED;
     } else if (event.getType() == PointerEvent::Release && event.getButton() == PointerEvent::PrimaryButton) {
-        state = Qt::TouchPointReleased;
-    } else if (_activeTouchPoints.count(event.getID()) && windowPoint != _activeTouchPoints[event.getID()].touchPoint.pos()) {
-        state = Qt::TouchPointMoved;
+        state = RELEASED;
+    } else if (movedFromLast) {
+        state = MOVED;
     }
 
     // Remove the touch point if:
@@ -493,7 +583,7 @@ bool OffscreenQmlSurface::handlePointerEvent(const PointerEvent& event, class QT
     // - this was a release event and we aren't still hovering
     auto touchPoint = _activeTouchPoints.find(event.getID());
     bool removeTouchPoint =
-        release || (touchPoint != _activeTouchPoints.end() && !touchPoint->second.hovering && state == Qt::TouchPointReleased);
+        release || (touchPoint != _activeTouchPoints.end() && !touchPoint->second.hovering && state == RELEASED);
     QEvent::Type touchType = QEvent::TouchUpdate;
     if (_activeTouchPoints.empty()) {
         // If the first active touch point is being created, send a begin
@@ -503,6 +593,18 @@ bool OffscreenQmlSurface::handlePointerEvent(const PointerEvent& event, class QT
         touchType = QEvent::TouchEnd;
     }
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    {
+        QEventPoint point(event.getID(), state, windowPoint, windowPoint);
+        _activeTouchPoints[event.getID()].touchPoint = point;
+        if (state == PRESSED) {
+            _activeTouchPoints[event.getID()].pressed = true;
+        } else if (state == RELEASED) {
+            _activeTouchPoints[event.getID()].pressed = false;
+        }
+    }
+    Q_UNUSED(device);
+#else
     {
         QTouchEvent::TouchPoint point;
         point.setId(event.getID());
@@ -510,9 +612,9 @@ bool OffscreenQmlSurface::handlePointerEvent(const PointerEvent& event, class QT
         point.setPos(windowPoint);
         point.setScreenPos(windowPoint);
         _activeTouchPoints[event.getID()].touchPoint = point;
-        if (state == Qt::TouchPointPressed) {
+        if (state == PRESSED) {
             _activeTouchPoints[event.getID()].pressed = true;
-        } else if (state == Qt::TouchPointReleased) {
+        } else if (state == RELEASED) {
             _activeTouchPoints[event.getID()].pressed = false;
         }
     }
@@ -534,6 +636,7 @@ bool OffscreenQmlSurface::handlePointerEvent(const PointerEvent& event, class QT
         touchEvent.setTimestamp((ulong)QDateTime::currentMSecsSinceEpoch());
         touchEvent.ignore();
     }
+#endif
 
     // Send mouse events to the surface so that HTML dialog elements work with mouse press and hover.
     //
@@ -552,8 +655,13 @@ bool OffscreenQmlSurface::handlePointerEvent(const PointerEvent& event, class QT
     bool eventsAccepted = true;
 
     if (event.getType() == PointerEvent::Move) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        QMouseEvent mouseEvent(QEvent::MouseMove, windowPoint, windowPoint, windowPoint, button, buttons,
+                               event.getKeyboardModifiers(), mouseDevice());
+#else
         QMouseEvent mouseEvent(QEvent::MouseMove, windowPoint, windowPoint, windowPoint, button, buttons,
                                event.getKeyboardModifiers());
+#endif
         // TODO - this line necessary for the QML Tooltop to work (which is not currently being used), but it causes interface to crash on launch on a fresh install
         // need to investigate into why this crash is happening.
         //_qmlContext->setContextProperty("lastMousePosition", windowPoint);
@@ -564,6 +672,24 @@ bool OffscreenQmlSurface::handlePointerEvent(const PointerEvent& event, class QT
         }
     }
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // Qt 6: a touch event made here and sent straight to the window reaches its items at (0, 0), not at its point (vr's
+    // touch-check, 2026-11-10: every press of a laser or a desktop mouse on a Web entity in "touch" input landed at the
+    // page's top-left corner, QML and web pages alike, while the mouse move sent above was in place). So the press and the
+    // release go as mouse events at the point, as "mouse" input sends them, and no touch events are sent. They go as this
+    // surface's own mouse device (mouseDevice()), never as the real mouse.
+    if (state == PRESSED || state == RELEASED) {
+        QMouseEvent mouseEvent(state == PRESSED ? QEvent::MouseButtonPress : QEvent::MouseButtonRelease, windowPoint,
+                               windowPoint, windowPoint, Qt::LeftButton, state == PRESSED ? Qt::LeftButton : Qt::NoButton,
+                               event.getKeyboardModifiers(), mouseDevice());
+        mouseEvent.ignore();
+        if (QCoreApplication::sendEvent(getWindow(), &mouseEvent)) {
+            eventSent = true;
+            eventsAccepted &= mouseEvent.isAccepted();
+        }
+    }
+    Q_UNUSED(touchType);
+#else
     if (touchType == QEvent::TouchBegin) {
         _touchBeginAccepted = QCoreApplication::sendEvent(getWindow(), &touchEvent);
         if (_touchBeginAccepted) {
@@ -576,6 +702,7 @@ bool OffscreenQmlSurface::handlePointerEvent(const PointerEvent& event, class QT
             eventsAccepted &= touchEvent.isAccepted();
         }
     }
+#endif
 
     if (removeTouchPoint) {
         _activeTouchPoints.erase(event.getID());
@@ -687,6 +814,16 @@ void OffscreenQmlSurface::lowerKeyboard() {
     }
 }
 
+// Qt 6's web view has a drawing item from QtWebEngineCore, which is built without C++ type information: a dynamic_cast
+// on it reads a null pointer and crashes, at the first web page (rendering's run 16). qobject_cast doesn't need that.
+static QQuickItem* toQuickItem(QObject* object) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    return qobject_cast<QQuickItem*>(object);
+#else
+    return dynamic_cast<QQuickItem*>(object);
+#endif
+}
+
 void OffscreenQmlSurface::setKeyboardRaised(QObject* object, bool raised, bool numeric, bool passwordField) {
     qCDebug(uiLogging) << "setKeyboardRaised: " << object << ", raised: " << raised << ", numeric: " << numeric
                        << ", password: " << passwordField;
@@ -705,7 +842,7 @@ void OffscreenQmlSurface::setKeyboardRaised(QObject* object, bool raised, bool n
     if (!android || hmd) {
         // if HMD is being worn, allow keyboard to open.  allow it to close, HMD or not.
         if (!raised || hmd) {
-            QQuickItem* item = dynamic_cast<QQuickItem*>(object);
+            QQuickItem* item = toQuickItem(object);
             if (!item) {
                 return;
             }
@@ -736,7 +873,7 @@ void OffscreenQmlSurface::setKeyboardRaised(QObject* object, bool raised, bool n
 
                     return;
                 }
-                item = dynamic_cast<QQuickItem*>(item->parentItem());
+                item = toQuickItem(item->parentItem());
             }
         }
     }
@@ -757,7 +894,7 @@ void OffscreenQmlSurface::emitWebEvent(const QVariant& message) {
         const QString LOWER_KEYBOARD = "_LOWER_KEYBOARD";
         const QString RAISE_KEYBOARD_NUMERIC_PASSWORD = "_RAISE_KEYBOARD_NUMERIC_PASSWORD";
         const QString RAISE_KEYBOARD_PASSWORD = "_RAISE_KEYBOARD_PASSWORD";
-        QString messageString = message.type() == QVariant::String ? message.toString() : "";
+        QString messageString = message.userType() == QMetaType::QString ? message.toString() : "";
         if (messageString.left(RAISE_KEYBOARD.length()) == RAISE_KEYBOARD) {
             bool numeric = (messageString == RAISE_KEYBOARD_NUMERIC || messageString == RAISE_KEYBOARD_NUMERIC_PASSWORD);
             bool passwordField = (messageString == RAISE_KEYBOARD_PASSWORD || messageString == RAISE_KEYBOARD_NUMERIC_PASSWORD);

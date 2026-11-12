@@ -35,7 +35,6 @@
 
 #include <QEventLoop>
 #include <QProcessEnvironment>
-#include <QScriptSyntaxCheckResult>
 #include <QThreadPool>
 #include <QTimer>
 #include <QSet>
@@ -195,8 +194,10 @@ render::ItemID EntityTreeRenderer::renderableIdForEntityId(const EntityItemID& i
 int EntityTreeRenderer::_entitiesScriptEngineCount = 0;
 
 void EntityTreeRenderer::resetEntitiesScriptEngine() {
+    // one series of ids with every other engine that runs a world's scripts (an avatar's: ScriptCaller::newWorld)
+    _entitiesScriptEngineCount = ScriptCaller::newWorld();
     _entitiesScriptEngine = scriptEngineFactory(ScriptEngine::ENTITY_CLIENT_SCRIPT, NO_SCRIPT,
-                                                QString("about:Entities %1").arg(++_entitiesScriptEngineCount));
+                                                QString("about:Entities %1").arg(_entitiesScriptEngineCount));
     ScriptEngine* engine = _entitiesScriptEngine.data();
     // what this engine's scripts make outside it is tagged with this id (ScriptCaller::world()), and goes when it stops
     engine->setWorldId(_entitiesScriptEngineCount);
@@ -495,7 +496,6 @@ void EntityTreeRenderer::clear() {
 
 void EntityTreeRenderer::reloadEntityScripts() {
     _entitiesScriptEngine->unloadAllEntityScripts();
-    _entitiesScriptEngine->resetModuleCache();
     for (const auto& entry : _entitiesInScene) {
         const auto& renderer = entry.second;
         const auto& entity = renderer->getEntity();
@@ -1762,8 +1762,8 @@ bool EntityTreeRenderer::webEntityTouchBegin(int touchID, const QPointF& positio
     }
     PickRay ray = _viewState->computePickRay(position.x(), position.y());
     auto entityScriptingInterface = DependencyManager::get<EntityScriptingInterface>();
-    RayToEntityIntersectionResult rayPickResult = entityScriptingInterface->findRayIntersection(ray, true, QScriptValue(),
-                                                                                               QScriptValue(), true);
+    RayToEntityIntersectionResult rayPickResult = entityScriptingInterface->findRayIntersectionVector(ray, true, QVector<QUuid>(),
+                                                                                                     QVector<QUuid>(), true, false);
     EntityItemPointer entity;
     if (!rayPickResult.intersects || !(entity = getTree()->findEntityByID(rayPickResult.entityID)) ||
         entity->getType() != EntityTypes::Web) {

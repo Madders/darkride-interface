@@ -8,6 +8,7 @@
 
 #include "PickScriptingInterface.h"
 
+#include <WorldPicks.h>
 #include <QVariant>
 #include "GLMHelpers.h"
 
@@ -420,24 +421,12 @@ QVector<unsigned int> PickScriptingInterface::getPicks() const {
 }
 
 QVariantMap PickScriptingInterface::getPrevPickResult(unsigned int uid) {
-    QVariantMap result;
-    auto pickResult = DependencyManager::get<PickManager>()->getPrevPickResult(uid);
-    if (pickResult) {
-        result = pickResult->toVariantMap();
-    }
-    return result;
+    // as the caller may read it: for a world's script, a hit on an entity it may not read is no hit
+    return WorldPicks::resultForCaller(DependencyManager::get<PickManager>()->getPrevPickResult(uid));
 }
 
 void PickScriptingInterface::setPrecisionPicking(unsigned int uid, bool precisionPicking) {
     DependencyManager::get<PickManager>()->setPrecisionPicking(uid, precisionPicking);
-}
-
-void PickScriptingInterface::setIgnoreItems(unsigned int uid, const QScriptValue& ignoreItems) {
-    DependencyManager::get<PickManager>()->setIgnoreItems(uid, qVectorQUuidFromScriptValue(ignoreItems));
-}
-
-void PickScriptingInterface::setIncludeItems(unsigned int uid, const QScriptValue& includeItems) {
-    DependencyManager::get<PickManager>()->setIncludeItems(uid, qVectorQUuidFromScriptValue(includeItems));
 }
 
 void PickScriptingInterface::setIgnoreItemsVector(unsigned int uid, const QVector<QUuid>& ignoreItems) {
@@ -460,29 +449,13 @@ bool PickScriptingInterface::isMouse(unsigned int uid) {
     return DependencyManager::get<PickManager>()->isMouse(uid);
 }
 
-QScriptValue pickTypesToScriptValue(QScriptEngine* engine, const PickQuery::PickType& pickType) {
-    return pickType;
-}
-
-void pickTypesFromScriptValue(const QScriptValue& object, PickQuery::PickType& pickType) {
-    pickType = static_cast<PickQuery::PickType>(object.toUInt16());
-}
-
-void PickScriptingInterface::registerMetaTypes(QScriptEngine* engine) {
-    // PickType through the engine's registration, so that every script engine sees it (on QtScript the same plain
-    // object of the types' values as before)
+void PickScriptingInterface::registerPickType(ScriptEngine* engine) {
     QVariantMap pickTypes;
     auto metaEnum = QMetaEnum::fromType<PickQuery::PickType>();
     for (int i = 0; i < PickQuery::PickType::NUM_PICK_TYPES; ++i) {
         pickTypes[metaEnum.key(i)] = metaEnum.value(i);
     }
-    if (auto scriptEngine = qobject_cast<ScriptEngine*>(engine)) {
-        scriptEngine->registerGlobalValue("PickType", pickTypes);
-    } else {
-        engine->globalObject().setProperty("PickType", engine->toScriptValue(pickTypes));
-    }
-
-    qScriptRegisterMetaType(engine, pickTypesToScriptValue, pickTypesFromScriptValue);
+    engine->registerGlobalValue("PickType", pickTypes);
 }
 
 unsigned int PickScriptingInterface::getPerFrameTimeBudget() const {
@@ -537,6 +510,8 @@ void PickScriptingInterface::setParentTransform(std::shared_ptr<PickQuery> pick,
             NestableType nestableType = sharedNestablePointer->getNestableType();
             if (nestableType == NestableType::Avatar) {
                 pick->parentTransform = std::make_shared<AvatarTransformNode>(std::static_pointer_cast<Avatar>(sharedNestablePointer), parentJointIndex);
+            } else if (!WorldPicks::callerMayRead(parentUuid, nestableType == NestableType::Entity)) {
+                // a world's script parents its pick only to an entity it may read: this pick gets no parent
             } else if (nestableType == NestableType::Entity) {
                 pick->parentTransform = std::make_shared<EntityTransformNode>(std::static_pointer_cast<EntityItem>(sharedNestablePointer), parentJointIndex);
             } else {

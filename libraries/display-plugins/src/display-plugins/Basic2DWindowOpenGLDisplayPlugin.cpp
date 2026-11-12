@@ -15,7 +15,11 @@
 #include <QScreen>
 #include <QtGui/QWindow>
 #include <QtGui/QGuiApplication>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#include <QtGui/QAction>
+#else
 #include <QtWidgets/QAction>
+#endif
 
 #include <ui-plugins/PluginContainer.h>
 #include <PathUtils.h>
@@ -114,7 +118,7 @@ void Basic2DWindowOpenGLDisplayPlugin::loadVirtualPad() {
             auto usage = gpu::Texture::Usage::Builder().withColor().withAlpha();
             _virtualPadStickTexture->setUsage(usage.build());
             _virtualPadStickTexture->setStoredMipFormat(gpu::Element(gpu::VEC4, gpu::NUINT8, gpu::RGBA));
-            _virtualPadStickTexture->assignStoredMip(0, image.byteCount(), image.constBits());
+            _virtualPadStickTexture->assignStoredMip(0, (size_t)image.sizeInBytes(), image.constBits());
             _virtualPadStickTexture->setAutoGenerateMips(true);
         }
     }
@@ -138,7 +142,7 @@ void Basic2DWindowOpenGLDisplayPlugin::loadVirtualPad() {
             auto usage = gpu::Texture::Usage::Builder().withColor().withAlpha();
             _virtualPadStickBaseTexture->setUsage(usage.build());
             _virtualPadStickBaseTexture->setStoredMipFormat(gpu::Element(gpu::VEC4, gpu::NUINT8, gpu::RGBA));
-            _virtualPadStickBaseTexture->assignStoredMip(0, image.byteCount(), image.constBits());
+            _virtualPadStickBaseTexture->assignStoredMip(0, (size_t)image.sizeInBytes(), image.constBits());
             _virtualPadStickBaseTexture->setAutoGenerateMips(true);
         }
     }
@@ -275,7 +279,7 @@ Basic2DWindowOpenGLDisplayPlugin::VirtualPadButton::VirtualPadButton(qreal pixel
             auto usage = gpu::Texture::Usage::Builder().withColor().withAlpha();
             _texture->setUsage(usage.build());
             _texture->setStoredMipFormat(gpu::Element(gpu::VEC4, gpu::NUINT8, gpu::RGBA));
-            _texture->assignStoredMip(0, image.byteCount(), image.constBits());
+            _texture->assignStoredMip(0, (size_t)image.sizeInBytes(), image.constBits());
             _texture->setAutoGenerateMips(true);
         }
     }

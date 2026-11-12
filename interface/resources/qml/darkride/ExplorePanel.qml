@@ -42,7 +42,7 @@ Page {
 
     readonly property var kinds: ["popular", "liked", "private"]
     readonly property string tabSetting: "io.darkride.explorePanel.tab"
-    readonly property string protocol: Window.protocolSignature()
+    readonly property string protocol: WindowScriptingInterface.protocolSignature()
 
     // what a failed metaverse request tells the player: the metaverse's own words where it wrote them for people (its
     // rule, 10-28: a 409, a 429, or a 400/403/404 whose message is a sentence, not "Forbidden" or "Not Found"; its
@@ -315,12 +315,36 @@ Page {
             AddressManager.handleLookupString(where);
             return true;
         }
+        // where you already are: a world's own server by its id (the domain you're in), an instance by the one Explore's
+        // "here" holds. A hop there changes no world, so nothing would end its wait (onDomainChanged): "Hopping…" stayed
+        // and every other Hop was greyed until the loading screen's Cancel (servers' users' reports, 1.1.4.1)
+        function isHere(world, instance) {
+            if (instance) {
+                return here.current !== null && !!here.current.instance &&
+                    (here.current.instance.id === instance.id || here.current.instance.address === instance.address);
+            }
+            return !!world.id && String(world.id).toLowerCase() === here.domainId().toLowerCase();
+        }
+        // a Hop to where you are takes you to its start at once: no loading screen, no hop under way
+        function goToStart(where) {
+            Tablet.playSound(TabletEnums.TabletOpen);
+            root.closePanel();
+            AddressManager.handleLookupString(where);
+        }
         function joinWorld(world) {
+            if (isHere(world, null)) {
+                goToStart(world.id + (world.path || ""));
+                return;
+            }
             hoppingWorld = world.id;
             hopStart(world);
             AddressManager.handleLookupString(world.id + (world.path || ""));
         }
         function joinInstance(world, instance) {
+            if (isHere(world, instance)) {
+                goToStart(instance.address);
+                return;
+            }
             hoppingWorld = world.id;
             hopStart(world);
             AddressManager.handleLookupString(instance.address);
@@ -408,7 +432,7 @@ Page {
     // AddressManager lives on the network thread, and QML may not connect to an object on another thread (the client
     // aborts), so a world change is heard from Window and the history is read when it may have changed
     Connections {
-        target: Window
+        target: WindowScriptingInterface
         function onDomainChanged() { explore.hoppingWorld = ""; here.refresh(); history.refresh(); }
         // the loading screen's Cancel: a hop that hasn't left stops there (a new instance's late address is dropped by
         // the screen), one that has goes back, which changes the world anyway
@@ -571,7 +595,7 @@ Page {
             action: true
             label: "Copy Link"
             onClicked: {
-                Window.copyToClipboard(here.current.instance.address);
+                WindowScriptingInterface.copyToClipboard(here.current.instance.address);
                 here.status = "Copied " + here.current.instance.address + ".";
             }
         }
@@ -678,7 +702,10 @@ Page {
             visible: height > 0
             RoundedImage {
                 id: worldPicture
-                anchors.fill: parent
+                // its own size from the start, not the row's: a picture loads only once it has a size (RoundedImage),
+                // and the row opens only once the picture is there, so filling the row it never loaded
+                width: parent.width
+                height: parent.width * 0.42
                 roundBottom: false
                 source: card.world.id ? explore.picture(card.world.id) : ""
                 opacity: card.compatible ? 1 : 0.45
