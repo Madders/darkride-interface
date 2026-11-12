@@ -86,6 +86,20 @@ cp "$QT_ANDROID/src/android/templates/res/values/libs.xml" "$DEPLOY/res/values/"
 "$QT_ANDROID/bin/androiddeployqt" --input /work/deployment-settings.json --output "$DEPLOY" \
     --android-platform "android-$TARGET_SDK" --jdk "${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}" --aux-mode --verbose
 
+# The JavaScript guest (darkride-js.wasm, which every script runs in since 1.1.4) in the assets, where the script engine
+# looks on Android (WasmScriptEngine::javascriptGuestPath): the one the build took (cmake/macros/CopyJavaScriptGuest.cmake)
+JS_GUEST=$(find "$BUILD" -path '*/resources/wasm/darkride-js.wasm' 2>/dev/null | head -1)
+if [ -z "$JS_GUEST" ]; then
+    JS_GUEST=$(ls "$BUILD"/downloads/darkride-js-*.wasm 2>/dev/null | sort | tail -1 || true)
+fi
+if [ -z "$JS_GUEST" ]; then
+    echo "No JavaScript guest (darkride-js.wasm) in $BUILD: no script could run on the phone" >&2
+    exit 1
+fi
+mkdir -p "$DEPLOY/assets/wasm"
+cp "$JS_GUEST" "$DEPLOY/assets/wasm/darkride-js.wasm"
+echo "JavaScript guest: $JS_GUEST"
+
 # the NDK's C++ runtime, which everything links and auxiliary mode doesn't copy
 cp "$NDK_LIBS/aarch64-linux-android/libc++_shared.so" "$DEPLOY/libs/$ABI/"
 

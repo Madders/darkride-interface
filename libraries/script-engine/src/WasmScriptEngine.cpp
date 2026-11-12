@@ -210,6 +210,14 @@ QString WasmScriptEngine::javascriptGuestPath() {
     if (!fromEnvironment.isEmpty()) {
         return fromEnvironment;
     }
+#if defined(Q_OS_ANDROID)
+    // Android: in the APK's assets (android/docker/package-apk.sh puts it there), read through Qt's asset file engine;
+    // the application's folder is the APK's native library folder, which has no resources
+    const QString inAssets = "assets:/wasm/darkride-js.wasm";
+    if (QFileInfo::exists(inAssets)) {
+        return inAssets;
+    }
+#endif
     const QString applicationDir = QCoreApplication::applicationDirPath();
     const QStringList candidates {
         applicationDir + "/../Resources/wasm/darkride-js.wasm",  // an application bundle
