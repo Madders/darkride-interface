@@ -47,7 +47,7 @@ function themedIconColor(slot, colorKey) {
 }
 
 function init() {
-    actionbar = new QmlFragment({
+    actionbar = QmlFragment.create({
         qml: "hifi/ActionBar.qml"
     });
     backButton = actionbar.addButton({
@@ -94,7 +94,7 @@ function init() {
     });
     panelsButton.entered.connect(onBackPressed);
     panelsButton.clicked.connect(onPanelsClicked);
-    panelChooser = new QmlFragment({
+    panelChooser = QmlFragment.create({
         qml: "hifi/PanelChooser.qml"
     });
 

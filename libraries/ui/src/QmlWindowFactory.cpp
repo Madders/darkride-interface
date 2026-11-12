@@ -8,12 +8,14 @@
 
 #include "QmlWindowFactory.h"
 
+#include "QmlFragmentClass.h"
 #include "QmlWebWindowClass.h"
 #include "QmlWindowClass.h"
 
 QObject* QmlWindowFactory::create(const QVariantMap& properties) {
     QmlWindowClass* window = _kind == WebWindow ? QmlWebWindowClass::createWebWindow(properties, _restricted)
-                                                : QmlWindowClass::createWindow(properties, _restricted);
+                           : _kind == Fragment ? QmlFragmentClass::createFragment(properties, _restricted)
+                                               : QmlWindowClass::createWindow(properties, _restricted);
     if (window) {
         // the window lives on the main thread; it goes when the script's engine goes, as before
         connect(this, &QObject::destroyed, window, &QObject::deleteLater);

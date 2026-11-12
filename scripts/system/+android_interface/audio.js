@@ -40,7 +40,7 @@ function themedIconColor(slot, colorKey) {
 }
 
 function init() {
-    audiobar = new QmlFragment({
+    audiobar = QmlFragment.create({
         qml: "hifi/AudioBar.qml"
     });
 

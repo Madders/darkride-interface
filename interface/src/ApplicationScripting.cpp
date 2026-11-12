@@ -376,6 +376,9 @@ void Application::registerScriptEngineWithApplicationServices(const ScriptEngine
     scriptEngine->registerGlobalObject("OverlayWindow", new QmlWindowFactory(QmlWindowFactory::Window, !clientScript, scriptEngine.data()));
 #if !defined(Q_OS_ANDROID)
     scriptEngine->registerGlobalObject("OverlayWebWindow", new QmlWindowFactory(QmlWindowFactory::WebWindow, !clientScript, scriptEngine.data()));
+#else
+    // the phone's bars (scripts/system/+android_interface): QmlFragment.create({ qml: ... })
+    scriptEngine->registerGlobalObject("QmlFragment", new QmlWindowFactory(QmlWindowFactory::Fragment, !clientScript, scriptEngine.data()));
 #endif
 
     scriptEngine->registerGlobalObject("Menu", MenuScriptingInterface::getInstance());

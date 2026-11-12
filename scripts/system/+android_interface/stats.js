@@ -16,7 +16,7 @@ var statsbar;
 var statsButton;
 
 function init() {
-    statsbar = new QmlFragment({
+    statsbar = QmlFragment.create({
         qml: "hifi/StatsBar.qml"
     });
 

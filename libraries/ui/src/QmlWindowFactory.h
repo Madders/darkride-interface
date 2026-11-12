@@ -6,7 +6,9 @@
 //  with a create method, registered under the constructor's name through FunctionTwins, so that the engine
 //  gives a module (and the JavaScript shim, which wraps it back into a constructor) a way to open the QML and
 //  web windows a QtScript script opened with `new OverlayWindow(...)`. The windows it makes live until the
-//  factory is told to dispose of them or the script's engine is gone.
+//  factory is told to dispose of them or the script's engine is gone. On Android the phone's bars are made the
+//  same way, under the name QmlFragment (QmlFragmentClass; the shim has no constructor for it, so a script calls
+//  QmlFragment.create({ qml: ... })).
 //
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
@@ -21,7 +23,7 @@
 class QmlWindowFactory : public QObject {
     Q_OBJECT
 public:
-    enum Kind { Window, WebWindow };
+    enum Kind { Window, WebWindow, Fragment };
 
     QmlWindowFactory(Kind kind, bool restricted, QObject* parent = nullptr) : QObject(parent), _kind(kind), _restricted(restricted) {}
 
