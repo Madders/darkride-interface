@@ -51,6 +51,9 @@ public:
 
     // the phone's back (on Android's UI thread): closes the QML panel showing, and says whether there was one
     static bool back();
+    // the phone's Back key as Qt has it (main thread): closes the Panels chooser or the panel showing, and says whether
+    // there was one; if not, the app's own Back (its Settings over the world, else Places) is for Android to do
+    static bool backKey();
     // the app's web panel has closed (on Android's UI thread)
     static void webPanelClosed(const QString& name);
 

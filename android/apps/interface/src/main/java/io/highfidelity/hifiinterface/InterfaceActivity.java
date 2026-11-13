@@ -491,8 +491,19 @@ public class InterfaceActivity extends QtActivity implements WebViewFragment.OnW
 
     public void openAndroidActivity(String activityName, boolean backToScene, HashMap args) {
         switch (activityName) {
+            case "Back":
+                // the phone's Back, which Qt has (no panel was showing over the world)
+                runOnUiThread(this::onBackPressed);
+                break;
             case "Home":
             case "Privacy Policy":
+                // what shows over the world doesn't wait there for the next world
+                nativeClosePanel();
+                runOnUiThread(() -> {
+                    if (mSettingsPanel != null) {
+                        hideSettingsPanel();
+                    }
+                });
                 nativeBeforeEnterBackground();
                 Intent intent = new Intent(this, MainActivity.class);
                 intent.putExtra(MainActivity.EXTRA_FRAGMENT, activityName);

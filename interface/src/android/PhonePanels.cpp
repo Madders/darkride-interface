@@ -228,6 +228,31 @@ bool PhonePanels::back() {
     return true;
 }
 
+bool PhonePanels::backKey() {
+    // the Panels chooser (hifi/+android_interface/PanelChooser.qml, the bar's fragment), over the world
+    auto offscreenUi = DependencyManager::get<OffscreenUi>();
+    if (offscreenUi && offscreenUi->getRootItem()) {
+        auto chooser = offscreenUi->getRootItem()->findChild<QQuickItem*>("panelChooser");
+        if (chooser && chooser->isVisible()) {
+            chooser->setVisible(false);
+            return true;
+        }
+    }
+    if (!thePanels) {
+        return false;
+    }
+    // a web panel over a QML one goes first
+    if (!thePanels->_webShowing.isEmpty()) {
+        thePanels->close(thePanels->_webShowing);
+        return true;
+    }
+    if (!thePanels->_showing.isEmpty()) {
+        thePanels->close(thePanels->_showing);
+        return true;
+    }
+    return false;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_io_highfidelity_hifiinterface_web_WebPanel_nativeClosed(JNIEnv*, jclass, jstring name) {
     PhonePanels::webPanelClosed(QAndroidJniObject(name).toString());

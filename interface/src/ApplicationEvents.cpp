@@ -58,6 +58,7 @@
 #if defined(Q_OS_ANDROID)
 #include <android/log.h>
 #include "AndroidHelper.h"
+#include "android/PhonePanels.h"
 #endif
 #if defined(Q_OS_MACOS)
 #include "AppNapDisabler.h"
@@ -596,8 +597,12 @@ void Application::keyReleaseEvent(QKeyEvent* event) {
 
 #if defined(Q_OS_ANDROID)
     if (event->key() == Qt::Key_Back) {
+        // the phone's Back (Qt takes it, so the activity's onBackPressed isn't called): what shows over the world
+        // closes first, a panel here or the app's Settings (Android's "Back"), and only then the world goes to Places
         event->accept();
-        AndroidHelper::instance().requestActivity("Home", false);
+        if (!PhonePanels::backKey()) {
+            AndroidHelper::instance().requestActivity("Back", false);
+        }
     }
 #endif
     // while a sign-in page is shown, no script hears keys; the release still reaches the keyboard device

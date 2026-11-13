@@ -20,6 +20,8 @@ public class SplashActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // a world to go straight to (a hifi:// link that started the app): no Places or sign-in screen after loading
+        mStartInDomain = getIntent().getBooleanExtra(EXTRA_START_IN_DOMAIN, false);
         MenuOrientation.apply(this);
         setContentView(R.layout.activity_splash);
         Theme theme = ThemeManager.get(this);

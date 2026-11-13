@@ -18,6 +18,7 @@ import "../../darkride/panel"
 
 Item {
     id: chooser
+    objectName: "panelChooser"   // the phone's Back closes it (PhonePanels::backKey)
     x: 0
     y: 0
     width: parent ? parent.width : 0
